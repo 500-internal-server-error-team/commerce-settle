@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: live-settle
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets:
+          - gateway:9091
+          - seller:9091
+          - payment-api:9091
+          - payment-worker:9091
+          - settlement:9091
+          - finance-mock:9091

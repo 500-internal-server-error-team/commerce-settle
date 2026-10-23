@@ -1,0 +1,284 @@
+name: live-settle
+
+x-app: &app
+  restart: unless-stopped
+  environment: &app-env
+    JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=65 -XX:ActiveProcessorCount=2
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    SPRING_DATA_REDIS_HOST: redis
+    SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+    SPRING_DATA_REDIS_TIMEOUT: 2s
+    SPRING_DATA_REDIS_CONNECT_TIMEOUT: 2s
+    SPRING_DATA_REDIS_REPOSITORIES_ENABLED: 'false'
+    MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+    MANAGEMENT_TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0.1}
+    SPRING_REACTOR_CONTEXT_PROPAGATION: auto
+    TZ: Asia/Seoul
+  depends_on: &app-deps
+    redis:
+      condition: service_healthy
+    zipkin:
+      condition: service_healthy
+  mem_limit: 512m
+  healthcheck:
+    test: [CMD, curl, --fail, --silent, http://localhost:9091/actuator/health]
+    interval: 10s
+    timeout: 5s
+    retries: 18
+    start_period: 45s
+  networks: [backend]
+
+services:
+  redis:
+    image: redis:8.10.2-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+    command:
+      - sh
+      - -c
+      - exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --maxmemory 128mb --maxmemory-policy noeviction
+    mem_limit: 256m
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -qx PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+
+  zipkin:
+    image: openzipkin/zipkin:3.6.1
+    environment:
+      STORAGE_TYPE: mem
+      MEM_MAX_SPANS: 10000
+      JAVA_OPTS: -Xms64m -Xmx192m
+    mem_limit: 384m
+    ports:
+      - 127.0.0.1:${ZIPKIN_PORT:-9411}:9411
+    networks: [backend]
+
+  k6:
+    image: grafana/k6:2.3.0
+    profiles: [tools]
+    command: [run, /scripts/bootstrap.js]
+    environment:
+      BASE_URL: http://gateway:8080
+      RATE: ${K6_RATE:-10}
+      DURATION_SECONDS: ${K6_DURATION_SECONDS:-10}
+      PRE_ALLOCATED_VUS: ${K6_PRE_ALLOCATED_VUS:-20}
+      MAX_VUS: ${K6_MAX_VUS:-20}
+    mem_limit: 256m
+    volumes:
+      - ./tests/load:/scripts:ro
+    networks: [backend]
+
+  postgres:
+    build:
+      context: .
+      dockerfile: infra/postgres/Dockerfile
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python3 scripts/init_env.py}
+      SELLER_DB_PASSWORD: ${SELLER_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      PAYMENT_DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      SETTLEMENT_DB_PASSWORD: ${SETTLEMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      FINANCE_MOCK_DB_PASSWORD: ${FINANCE_MOCK_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      TZ: Asia/Seoul
+    mem_limit: 512m
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -h 127.0.0.1 -U postgres -d postgres]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+
+  kafka:
+    image: apache/kafka:4.2.2
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+    mem_limit: 1g
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: [CMD-SHELL, /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+    networks: [backend]
+
+  gateway:
+    <<: *app
+    build:
+      context: .
+      args:
+        MODULE: gateway
+    ports:
+      - 127.0.0.1:${GATEWAY_PORT:-8080}:8080
+    depends_on:
+      <<: *app-deps
+      seller:
+        condition: service_healthy
+      payment-api:
+        condition: service_healthy
+      settlement:
+        condition: service_healthy
+
+  seller:
+    <<: *app
+    build:
+      context: .
+      args:
+        MODULE: seller
+    environment:
+      <<: *app-env
+      DB_URL: jdbc:postgresql://postgres:5432/seller
+      DB_USERNAME: seller
+      DB_PASSWORD: ${SELLER_DB_PASSWORD:?Run python3 scripts/init_env.py}
+    depends_on:
+      <<: *app-deps
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  payment-api:
+    <<: *app
+    build:
+      context: .
+      args:
+        MODULE: payment
+    environment:
+      <<: *app-env
+      PAYMENT_ROLE: api
+      DB_URL: jdbc:postgresql://postgres:5432/payment
+      DB_USERNAME: payment
+      DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
+    depends_on:
+      <<: *app-deps
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  payment-worker:
+    <<: *app
+    build:
+      context: .
+      args:
+        MODULE: payment
+    environment:
+      <<: *app-env
+      PAYMENT_ROLE: worker
+      SPRINGDOC_API_DOCS_ENABLED: 'false'
+      DB_URL: jdbc:postgresql://postgres:5432/payment
+      DB_USERNAME: payment
+      DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
+    depends_on:
+      <<: *app-deps
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  settlement:
+    <<: *app
+    build:
+      context: .
+      args:
+        MODULE: settlement
+    environment:
+      <<: *app-env
+      DB_URL: jdbc:postgresql://postgres:5432/settlement
+      DB_USERNAME: settlement
+      DB_PASSWORD: ${SETTLEMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
+    depends_on:
+      <<: *app-deps
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  finance-mock:
+    <<: *app
+    build:
+      context: .
+      args:
+        MODULE: finance-mock
+    environment:
+      <<: *app-env
+      DB_URL: jdbc:postgresql://postgres:5432/finance_mock
+      DB_USERNAME: finance_mock
+      DB_PASSWORD: ${FINANCE_MOCK_DB_PASSWORD:?Run python3 scripts/init_env.py}
+    depends_on:
+      <<: *app-deps
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    profiles: [observability]
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - 127.0.0.1:${PROMETHEUS_PORT:-9090}:9090
+    networks: [backend]
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    profiles: [observability]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Run python3 scripts/init_env.py}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - 127.0.0.1:${GRAFANA_PORT:-3000}:3000
+    depends_on: [prometheus]
+    networks: [backend]
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    profiles: [observability]
+    environment:
+      KAFKA_CLUSTERS_0_NAME: live-settle-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    ports:
+      - 127.0.0.1:${KAFKA_UI_PORT:-8081}:8080
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks: [backend]
+
+networks:
+  backend:
+
+volumes:
+  redis-data:
+  postgres-data:
+  kafka-data:
+  prometheus-data:
+  grafana-data:
