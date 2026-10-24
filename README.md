@@ -89,7 +89,8 @@ Java 21 · Spring Boot · Spring Cloud Gateway · PostgreSQL·Flyway · Kafka ·
 - [서비스·DB·코드 경계](docs/architecture.md)
 - [DB 변경 절차](docs/migrations.md)
 - [협업 규칙](CONTRIBUTING.md)
-- [프로젝트 초안·문제 후보·역할 배분안](docs/proposal.md)
+- [프로젝트 초안·검증 목표·역할 배분안](docs/proposal.md)
+- [상세 설계 초안·범위와 가정·예상 질문](docs/design.md)
 
 ## 참고
 
