@@ -2,6 +2,65 @@
 
 업무 설계는 [README](../README.md#서비스-설계)를 기준으로 하며, 여기서는 초기 실행 구성과 코드 배치를 정의합니다. 업무 책임은 구현할 설계이며 현재 실행 기반의 기동·명세 라우팅과 구분합니다.
 
+## 인프라 구조도
+
+[Compose 설정](../compose.yml)을 기준으로 한 로컬 개발·CI 구성입니다. AWS 배포 구성은 별도 설계 대상입니다. [CI](../.github/workflows/ci.yml)도 같은 Compose로 빈 볼륨 기동·검증·데이터 유지 재기동을 검사하도록 구성돼 있습니다.
+
+### 컨테이너와 저장소
+
+```mermaid
+flowchart TB
+    C["호스트의 브라우저·검증 도구"] -->|"127.0.0.1:8080"| G
+    subgraph HOST["개발 PC 또는 CI Runner"]
+        subgraph NET["Docker Compose · backend 네트워크"]
+            G["Gateway"]
+            A["HTTP 업무 앱<br/>seller · payment-api · settlement"]
+            W["payment-worker"]
+            F["finance-mock"]
+            D[("PostgreSQL<br/>1개 컨테이너 · 업무 DB 4개")]
+            K[("Kafka<br/>단일 브로커")]
+            R[("Redis<br/>AOF 저장")]
+            L["k6 · tools 선택"]
+            G -->|"HTTP 라우팅"| A
+            A -->|"소유 DB"| D
+            W -->|"payment DB"| D
+            F -->|"finance_mock DB"| D
+            A -->|"설정 연결"| K
+            W -->|"설정 연결"| K
+            A -->|"공통 연결"| R
+            W -->|"공통 연결"| R
+            W -. "PG 연동 예정" .-> F
+            A -. "지급 연동 예정" .-> F
+            L -->|"내부 HTTP"| G
+        end
+    end
+```
+
+실선은 현재 설정된 주요 연결, 점선은 구현할 금융 연동입니다. HTTP 라우팅 대상은 `seller`·`payment-api`·`settlement`이며 Worker·Mock은 Gateway에 공개하지 않습니다. 점선의 PG 호출은 Payment Worker, 지급 호출은 Settlement의 책임입니다. Kafka 연결과 업무 이벤트·SAGA 구현도 구분합니다. 공통 Redis 설정은 Gateway·Finance Mock에도 전달되며, 그림에는 업무 앱·Worker의 연결을 대표해서 표시합니다.
+
+PostgreSQL의 업무 DB는 `seller`·`payment`·`settlement`·`finance_mock` 네 개이며 하나의 컨테이너 안에서 계정·스키마를 분리합니다. Payment API와 Worker는 같은 `payment` DB를 사용합니다. 물리 DB 네 대나 고가용성 구성을 뜻하지 않습니다.
+
+PostgreSQL·Kafka·Redis는 각각 `postgres-data`·`kafka-data`·`redis-data` 볼륨을 사용합니다. 모든 컨테이너는 같은 `backend` 네트워크에 연결되며, 이 네트워크를 외부 통신까지 차단하는 방화벽으로 간주하지 않습니다. 호스트에 게시한 포트와 접근 범위는 [네트워크와 관측](#네트워크와-관측)을 따릅니다.
+
+### 관측 구성
+
+```mermaid
+flowchart LR
+    J["Java 앱 6개<br/>관리 포트 9091"] -->|"HTTP 추적"| Z["Zipkin · 9411<br/>메모리 저장"]
+    subgraph OBS["observability 프로필 · 선택 실행"]
+        P["Prometheus · 9090"]
+        G["Grafana · 3000"]
+        U["Kafka UI · 8081"]
+    end
+    P -->|"메트릭 수집"| J
+    G -->|"조회"| P
+    U -->|"9092"| K["Kafka"]
+```
+
+[Prometheus 설정](../infra/prometheus/prometheus.yml)은 Gateway·Seller·Payment API·Payment Worker·Settlement·Finance Mock의 `/actuator/prometheus`를 15초마다 수집합니다. Grafana는 [내부 Prometheus 주소](../infra/grafana/provisioning/datasources/prometheus.yml)를 조회합니다.
+
+Prometheus·Grafana는 각각 `prometheus-data`·`grafana-data` 볼륨을 사용하고, Zipkin 추적은 재시작하면 사라집니다. 그림의 관측 도구 포트는 호스트에 게시한 기본 포트이며 모두 루프백에 바인딩됩니다. 앱 관리 포트 9091·DB·Kafka·Redis는 호스트에 게시하지 않습니다.
+
 ## 실행 단위
 
 | Gradle 모듈 | Compose 실행 이름 | 역할·소유 DB |
