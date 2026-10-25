@@ -42,6 +42,26 @@ PostgreSQL의 업무 DB는 `seller`·`payment`·`settlement`·`finance_mock` 네
 
 PostgreSQL·Kafka·Redis는 각각 `postgres-data`·`kafka-data`·`redis-data` 볼륨을 사용합니다. 모든 컨테이너는 같은 `backend` 네트워크에 연결되며, 이 네트워크를 외부 통신까지 차단하는 방화벽으로 간주하지 않습니다. 호스트에 게시한 포트와 접근 범위는 [네트워크와 관측](#네트워크와-관측)을 따릅니다.
 
+### PG 대역 3종 설계
+
+다음은 `finance-mock` 안에 구현할 논리 PG 3종과 지급 기관 대역입니다. 현재 Compose의 Mock 컨테이너 수를 늘린 그림이 아니며 PG별 거래·멱등키·지표를 구분하는 설계입니다. 지연·실패확률·원 PG 조회/환불 규칙의 기준은 [PG 3종과 장애 시나리오](design.md#pg-3종과-장애-시나리오)입니다.
+
+```mermaid
+flowchart LR
+    W["Payment Worker"] --> A
+    W --> B
+    W --> C
+    S["Settlement"] --> P
+    subgraph MOCK["finance-mock · 구현 예정"]
+        A["PG A"]
+        B["PG B"]
+        C["PG C"]
+        P["지급 기관 대역"]
+    end
+```
+
+PG 선택은 결제 시도에 고정하며, 미확정이면 같은 PG로 조회합니다. 환불도 승인된 원 PG로 요청합니다. 한 Mock 프로세스 안의 세 PG는 실제 PG 기관의 독립적인 인프라 장애 격리를 재현하지 않습니다.
+
 ### 관측 구성
 
 ```mermaid
