@@ -64,6 +64,8 @@ Payment API와 Worker는 같은 모듈·DB를 사용하며 각각 확장하는 �
 
 판매자 2만 곳을 가정한 CSV로 균등 분산과 상위 1%에 결제 70%가 몰리는 부하를 비교합니다. 지연 p95·p99, 정산 반영 지연, Kafka lag, DB·발생기 자원과 `dropped_iterations`를 함께 기록합니다. 종료 후 PG·Payment·Settlement를 대조해 누락·중복·금액 불일치를 검증합니다. `finance-mock`의 지연·실패율은 시험용 가정이며 실제 PG 성능을 뜻하지 않습니다.
 
+[PG 3종 시험 설정](docs/design.md#pg-3종과-장애-시나리오)은 PG별 응답 지연·확정 실패확률을 달리하고, 성공 후 응답 지연·유실·조회 장애를 별도 시나리오로 구분합니다. [PG 대역 구조도](docs/architecture.md#pg-대역-3종-설계)는 한 Mock 안의 PG A·B·C와 지급 대역을 보여줍니다. 현재는 구현 안내이며 PG 동작·설정·업무 부하 스크립트가 구현됐다는 뜻은 아닙니다.
+
 ## 실행
 
 Java 21, Docker·Compose v2, Python 3가 필요합니다.
