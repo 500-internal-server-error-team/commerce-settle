@@ -95,6 +95,7 @@ Java 21 · Spring Boot · Spring Cloud Gateway · PostgreSQL·Flyway · Kafka ·
 기술 버전은 [build.gradle](build.gradle)·[Compose](compose.yml)·[앱 Dockerfile](Dockerfile)·[DB Dockerfile](infra/postgres/Dockerfile)을 기준으로 합니다. `.env`는 Git에서 제외하며 비밀번호는 환경 초기화 스크립트로 생성합니다.
 
 - [실행·접속·종료·검증](docs/development.md)
+- [인프라 구조도·컨테이너·관측 구성](docs/architecture.md#인프라-구조도)
 - [서비스·DB·코드 경계](docs/architecture.md)
 - [DB 변경 절차](docs/migrations.md)
 - [협업 규칙](CONTRIBUTING.md)
