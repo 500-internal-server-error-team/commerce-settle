@@ -1,0 +1,14 @@
+services:
+  gateway:
+    healthcheck: &startup-health
+      start_interval: 1s
+  seller:
+    healthcheck: *startup-health
+  payment-api:
+    healthcheck: *startup-health
+  payment-worker:
+    healthcheck: *startup-health
+  settlement:
+    healthcheck: *startup-health
+  finance-mock:
+    healthcheck: *startup-health

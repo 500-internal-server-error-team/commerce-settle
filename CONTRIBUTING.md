@@ -217,4 +217,6 @@ HTTP 오류는 [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 `appli
 
 Gradle 캐시와 같은 PR의 이전 실행 취소를 사용합니다. CI의 Gradle 작업은 기존 worker 상한 2개 안에서 모듈을 병렬 실행합니다. 정적 검사와 빌드는 같은 Gradle 데몬을 재사용하고, Compose 기동 전에 데몬을 종료합니다. 매 실행의 불필요한 `clean`은 생략하고, 문서 변경에도 필수 검사를 유지합니다. 검사 생략이나 높은 부하의 성능 시험을 기본 CI 최적화 수단으로 삼지 않습니다.
 
+CI는 [Compose 추가 설정](.github/compose.ci.yml)으로 앱의 초기 상태를 1초 간격으로 확인합니다. 상태 확인 명령·유예 시간·재시도·제한 시간은 기본 Compose 설정을 유지합니다. smoke 결과는 즉시 출력해 구간별 대기를 확인합니다.
+
 개발자는 [실행·검증·종료 방법](docs/development.md)으로 같은 검사를 로컬에서 재현합니다.
