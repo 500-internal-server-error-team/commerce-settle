@@ -18,7 +18,6 @@ jobs:
     timeout-minutes: 25
     env:
       COMPOSE_PROJECT_NAME: commerce-settle-ci
-      COMPOSE_FILE: compose.yml:.github/compose.ci.yml
       PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,15 +30,23 @@ jobs:
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
       - name: Verify local settings generator
         run: python3 scripts/test_init_env.py
-      - name: Check Java formatting and Checkstyle (main and test)
-        run: ./gradlew --daemon --parallel --continue spotlessCheck checkstyleMain checkstyleTest
+      - name: Initialize local settings
+        run: python3 scripts/init_env.py
+      - name: Check Java style and pull runtime images
+        run: |
+          docker compose --profile tools pull --ignore-buildable &
+          image_pull_pid=$!
+          style_status=0
+          ./gradlew --daemon --parallel --continue spotlessCheck checkstyleMain checkstyleTest || style_status=$?
+          image_pull_status=0
+          wait "$image_pull_pid" || image_pull_status=$?
+          test "$style_status" -eq 0
+          test "$image_pull_status" -eq 0
       - name: Run tests, architecture checks and package all applications
         run: ./gradlew --daemon --parallel --continue build
       - name: Stop Gradle daemons before starting the stack
         if: always()
         run: ./gradlew --stop
-      - name: Initialize local settings
-        run: python3 scripts/init_env.py
       - name: Start the stack from empty volumes
         run: docker compose up -d --build --wait --wait-timeout 300
       - name: Verify service, database and messaging boundaries
