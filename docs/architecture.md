@@ -20,11 +20,11 @@ PostgreSQL·Kafka·Redis는 각각 `postgres-data`·`kafka-data`·`redis-data` �
 
 ### PG 대역 3종 설계
 
-다음은 `finance-mock` 안에 구현할 논리 PG 3종과 지급 기관 대역입니다. 현재 Compose의 Mock 컨테이너 수를 늘린 그림이 아니며 PG별 거래·멱등키·지표를 구분하는 설계입니다. 지연·실패확률·원 PG 조회/환불 규칙의 기준은 [PG 3종과 장애 시나리오](design.md#pg-3종과-장애-시나리오)입니다.
+다음은 `finance-mock` 안에 구현할 논리 PG 3종·간편결제 1종과 지급 기관 대역입니다. 같은 Spring Boot 앱의 거래 영역이며 Compose 컨테이너를 늘리지 않습니다. 신용카드·체크카드·상품권은 PG A/B/C 중 한 곳을, 간편결제는 `EASY_PAY`만 호출합니다. [PG 시험 설정](design.md#pg-3종과-장애-시나리오)과 [간편결제·상품권 대역](design.md#간편결제상품권-대역)을 따릅니다.
 
-![금융 Mock 내부의 PG와 지급 API](diagrams/payment-providers.svg)
+![금융 모의 서버의 PG·간편결제·지급 API](diagrams/payment-providers.svg)
 
-PG 선택은 결제 시도에 고정하며, 미확정이면 같은 PG로 조회합니다. 환불도 승인된 원 PG로 요청합니다. 한 Mock 프로세스 안의 세 PG는 실제 PG 기관의 독립적인 인프라 장애 격리를 재현하지 않습니다.
+외부 수단·대역은 결제 시도에 고정하며 미확정 조회·환불도 원거래로 보냅니다. 마일리지 전액 결제는 외부 대역을 호출하지 않습니다. 하나의 Mock 프로세스는 실제 금융기관의 독립적인 인프라 장애 격리를 재현하지 않습니다.
 
 ### 관측 구성
 
@@ -43,15 +43,15 @@ Prometheus·Grafana는 각각 `prometheus-data`·`grafana-data` 볼륨을 사용
 | Gradle 모듈 | Compose 실행 이름 | 역할·소유 DB |
 | --- | --- | --- |
 | `gateway` | `gateway` | 공개 경로 라우팅·Swagger UI, DB 없음 |
-| `seller` | `seller` | 커머스: 구매자·판매자 계정/인증, 상품·주문·재고·쿠폰·배송지, `seller` DB·계정 |
-| `payment` | `payment-api` | 결제 요청·조회 역할, `payment` DB·계정 |
-| `payment` | `payment-worker` | PG 호출·후속 작업 역할, 같은 `payment` DB·계정 |
+| `seller` | `seller` | 커머스: 계정/인증·상품·주문·재고·쿠폰·배송지·선착순 이벤트, `seller` DB·계정 |
+| `payment` | `payment-api` | 결제·마일리지·환불 요청/조회 역할, `payment` DB·계정 |
+| `payment` | `payment-worker` | PG·간편결제 호출·후속 작업 역할, 같은 `payment` DB·계정 |
 | `settlement` | `settlement` | 원장·예약·정산·지급, `settlement` DB·계정 |
-| `finance-mock` | `finance-mock` | 외부 PG·지급 API 모의 서버, `finance_mock` DB·계정 |
+| `finance-mock` | `finance-mock` | 외부 PG·간편결제·지급 API 모의 서버, `finance_mock` DB·계정 |
 
 Payment 두 실행은 같은 jar·DB를 사용하고 `PAYMENT_ROLE=api|worker`로 메트릭 태그를 구분합니다. 실제 역할별 Bean 활성화와 업무 처리 로직은 구현해야 합니다.
 
-기존 `seller` 모듈·실행·DB·패키지 이름을 유지한 채 커머스 책임을 구현하는 안입니다. 회원·인증 도메인은 구매자와 판매자의 별도 가입·로그인을 소유하고, 상품·주문·쿠폰 도메인과 같은 서비스 안에 둡니다. 주문·재고·쿠폰 예약을 같은 DB 트랜잭션에서 확정하기 위한 선택이며 계정 종류마다 서버를 나누지는 않습니다. 계정·권한 관계는 [사용자와 거래 주체](design.md#사용자와-거래-주체)를 따릅니다.
+기존 `seller` 모듈·실행·DB·패키지 이름을 유지합니다. 회원·인증·상품·주문·쿠폰·선착순 이벤트는 같은 커머스 서비스에 두고 주문·재고·쿠폰·이벤트 수량 예약을 같은 DB 트랜잭션으로 처리합니다. 마일리지 잔액·예약·원장은 Payment 안에 두어 금융 결제 상태와 원자 저장합니다. [데이터 소유권](design.md#4-서비스-경계와-원천-데이터)과 [계정·권한](design.md#사용자와-거래-주체)을 따르며 신규 앱·DB는 추가하지 않습니다.
 
 PostgreSQL 컨테이너 1대에서 DB·계정·스키마를 분리합니다. 계정은 자기 DB에만 연결할 수 있고, 다른 서비스 DB에 대한 CONNECT 권한은 없습니다. 애플리케이션에는 자기 DB 자격만 주며, Flyway가 각 스키마를 관리합니다. 개발용 공용 PostgreSQL 컨테이너는 독립 운영 DB의 장애 격리를 제공하지 않습니다.
 

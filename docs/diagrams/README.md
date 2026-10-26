@@ -6,7 +6,7 @@ GitHub 문서는 SVG를 표시합니다. 같은 이름의 HTML이 편집 원본�
 | --- | --- | --- |
 | 서비스 설계 | [services.html](services.html) | [services.svg](services.svg) |
 | 애플리케이션과 인프라 | [runtime.html](runtime.html) | [runtime.svg](runtime.svg) |
-| PG 대역 설계 | [payment-providers.html](payment-providers.html) | [payment-providers.svg](payment-providers.svg) |
+| PG·간편결제·지급 대역 | [payment-providers.html](payment-providers.html) | [payment-providers.svg](payment-providers.svg) |
 | 관측과 부하 도구 | [observability.html](observability.html) | [observability.svg](observability.svg) |
 
 ## 로고 출처
@@ -18,4 +18,4 @@ GitHub 문서는 SVG를 표시합니다. 같은 이름의 HTML이 편집 원본�
 - [Provectus Kafka UI v0.7.2](https://github.com/provectus/kafka-ui/blob/v0.7.2/documentation/images/kafka-ui-logo.png) — 프로젝트 로고, Apache-2.0 저장소.
 - 브라우저와 모의 금융 API는 제품 로고가 없는 일반 도형입니다.
 
-HTML은 Google Fonts의 Geist·Geist Mono·Instrument Serif를 사용합니다. 외부 폰트를 불러오지 않는 SVG 뷰어에서는 시스템 글꼴로 대체됩니다.
+HTML은 Google Fonts의 Geist·Geist Mono를 사용합니다. 외부 폰트를 불러오지 않는 SVG 뷰어에서는 시스템 글꼴로 대체됩니다.
