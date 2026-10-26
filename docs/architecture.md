@@ -2,6 +2,8 @@
 
 업무 설계는 [README](../README.md#서비스-설계)를 기준으로 하며, 여기서는 초기 실행 구성과 코드 배치를 정의합니다. 업무 책임은 구현할 설계이며 현재 실행 기반의 기동·명세 라우팅과 구분합니다.
 
+[기능 API와 서비스 이벤트](api.md), [서비스별 ERD·컬럼·제약](data-model.md), [업무 정책](policies.md)을 구현 계약으로 사용합니다. ERD는 커머스 3개 뷰·Payment·Settlement·Finance Mock·서비스별 메시지/멱등성 뷰로 나누며 서비스 간 SQL join이나 물리 FK를 추가하지 않습니다.
+
 ## 인프라 구조도
 
 [Compose 설정](../compose.yml)을 기준으로 한 로컬 개발·CI 구성입니다. AWS 배포 구성은 별도 설계 대상입니다. [CI](../.github/workflows/ci.yml)도 같은 Compose로 빈 볼륨 기동·검증·데이터 유지 재기동을 검사하도록 구성돼 있습니다.
