@@ -1,4 +1,4 @@
-name: live-settle
+name: commerce-settle
 
 x-app: &app
   restart: unless-stopped
@@ -264,7 +264,7 @@ services:
     image: provectuslabs/kafka-ui:v0.7.2
     profiles: [observability]
     environment:
-      KAFKA_CLUSTERS_0_NAME: live-settle-local
+      KAFKA_CLUSTERS_0_NAME: commerce-settle-local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
     ports:
       - 127.0.0.1:${KAFKA_UI_PORT:-8081}:8080

@@ -73,7 +73,7 @@ def main():
     redis_cli = ["exec", "-T", "redis", "sh", "-c",
                  'export REDISCLI_AUTH="$REDIS_PASSWORD"; exec redis-cli --raw "$@"',
                  "redis-smoke"]
-    key = "live-settle:bootstrap:smoke:" + uuid.uuid4().hex
+    key = "commerce-settle:bootstrap:smoke:" + uuid.uuid4().hex
     value = uuid.uuid4().hex
     try:
         assert compose(*redis_cli, "SET", key, value, "EX", "60").stdout.strip() == "OK"
