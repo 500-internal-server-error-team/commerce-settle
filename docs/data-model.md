@@ -858,6 +858,11 @@
 | `id` | `uuid` | PK; 서버 생성 |
 | `consumer` | `varchar(100)` | 업무 값 |
 | `event_id` | `uuid` | 업무 값 |
+| `event_type` | `varchar(80)` | 업무 값 |
+| `event_version` | `integer` | 업무 값 |
+| `occurred_at` | `timestamptz` | 업무 값 |
+| `payload` | `jsonb` | 업무 값 |
+| `next_run_at` | `timestamptz?` | 업무 값 |
 | `aggregate_id` | `uuid` | 업무 값 |
 | `aggregate_version` | `bigint` | 업무 값 |
 | `status` | `varchar(24)` | 업무 값 |
@@ -866,7 +871,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(consumer,event_id). 영속 작업 저장과 함께 처리. 의존성 대기를 유실·완료로 취급하지 않음.
+**제약:** UNIQUE(consumer,event_id). status=RECEIVED/WAITING/APPLIED/REVIEW_REQUIRED. WAITING은 원 event_type/version/occurred_at/payload와 다음 재판정 시각을 보존해 Kafka ack·재시작 뒤에도 로컬에서 재개. payload에 금융 계약 외의 주소/인증 비밀값 금지.
 
 **인덱스:** (status,created_at,id).
 
