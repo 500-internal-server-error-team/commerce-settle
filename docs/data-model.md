@@ -1,6 +1,6 @@
 # 데이터 모델
 
-서비스별 PostgreSQL 설계입니다. 물리 FK는 만들지 않고 아래 관계를 애플리케이션에서 검증합니다. 식별자는 서버 생성 UUID, 금액·누적 수량은 bigint, 시각은 UTC `timestamptz`입니다. `?`는 nullable, 나머지 컬럼은 NOT NULL입니다. 숫자 버전은 0부터 시작하고 조건부 갱신마다 증가합니다. 실제 Flyway migration은 아직 없으며 [DB 변경 정책](migrations.md)을 따릅니다.
+서비스별 PostgreSQL 설계입니다. 물리 FK는 만들지 않고 아래 관계를 애플리케이션에서 검증합니다. 공통 시간 컬럼은 [시간 정보와 감사 기록](architecture.md#시간-정보와-감사-기록)에 따라 채웁니다. 생성/수정 시각과 행위 감사 로그는 별개입니다. 식별자는 서버 생성 UUID, 금액·누적 수량은 bigint, 시각은 UTC `timestamptz`입니다. `?`는 nullable, 나머지 컬럼은 NOT NULL입니다. 숫자 버전은 0부터 시작하고 조건부 갱신마다 증가합니다. 실제 Flyway migration은 아직 없으며 [DB 변경 정책](migrations.md)을 따릅니다.
 
 아래 컬럼·제약·인덱스가 기준이고 ERD는 주요 필드와 관계를 요약합니다. 각 뷰는 같은 DB 안의 관계를 보여주며 외부 서비스 ID는 값으로만 저장합니다. 주소·연락처는 별도 암호화 사본이고 금융 이벤트에 포함하지 않습니다.
 
@@ -819,9 +819,110 @@
 
 **인덱스:** UNIQUE(provider_id,scenario_version).
 
-## 메시지·멱등성
+## 거래 알림
 
-![메시지·멱등성 ERD](diagrams/erd-integration.svg)
+![거래 알림 ERD](diagrams/erd-notifications.svg)
+
+네 테이블은 커머스 `seller` DB 소유입니다. 알림 전용 DB나 물리 FK를 만들지 않습니다. [거래 알림 정책](policies.md#거래-알림)이 종류·수신자·묶음·재시도 기준입니다.
+
+### notification_deliveries
+
+소유: `seller`. 거래 알림과 발송 작업.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id` | `uuid` | PK; deliveryId이자 모의 수신 멱등키 |
+| `kind` | `varchar(40)` | 정책의 거래 알림 종류 |
+| `recipient_kind` | `varchar(16)` | BUYER/SELLER |
+| `recipient_id` | `uuid` | 종류에 맞는 계정 ID; 논리 참조 |
+| `channel` | `varchar(24)` | MOCK_KAKAO 고정 |
+| `dedup_key` | `varchar(200)` | 단건=원업무 ID, 판매 묶음=UTC 구간 시작 |
+| `item_count` | `integer` | 중복 제외 항목 수; 1 이상 |
+| `first_occurred_at` | `timestamptz` | 항목 중 가장 이른 발생 시각 |
+| `total_amount` | `bigint` | 판매 묶음의 주문 결제액 합계; 그 외 0 |
+| `template_version` | `varchar(32)` | 최초 렌더 때 고정 |
+| `title` | `varchar(120)` | 안내 제목 |
+| `body` | `varchar(1000)` | 모의 안내 본문; COLLECTING이면 빈 값 |
+| `status` | `varchar(24)` | COLLECTING/PENDING/SENDING/UNKNOWN/RETRY/SENT/REVIEW_REQUIRED |
+| `bucket_start` | `timestamptz?` | 판매 묶음만 사용 |
+| `bucket_end` | `timestamptz?` | 시작+1분; 닫힌 본문은 불변 |
+| `attempt_count` | `integer` | 전체 시도 일련번호; 재처리 때 초기화 금지 |
+| `retry_count` | `integer` | 현재 라운드의 SEND/LOOKUP 횟수 0..10 |
+| `next_run_at` | `timestamptz` | 다음 마감/발송/조회 시각 |
+| `lease_token` | `uuid?` | 작업 임대마다 새 값 |
+| `lease_until` | `timestamptz?` | 임대 만료 |
+| `last_error_code` | `varchar(80)?` | 민감값 없는 실패 코드 |
+| `sent_at` | `timestamptz?` | 원모의 수신 ACCEPTED 확인 시각 |
+| `created_at` | `timestamptz` | 생성 |
+| `updated_at` | `timestamptz` | 갱신 |
+| `version` | `bigint` | 낙관적 버전 |
+
+**제약:** UNIQUE(channel,kind,recipient_kind,recipient_id,dedup_key). recipient_kind에 맞는 계정을 검증하며 수신처는 mock:<종류>:<ID>로 계산한다. SALE_COMPLETED만 COLLECTING과 1분 구간을 사용한다. 마감 시 행 잠금 아래 항목 추가를 차단하고 본문·템플릿·합계를 고정한다. 같은 계정의 동일 구간에 열린 묶음 하나만 존재한다. 그 외 종류의 bucket 값은 NULL이다. SENT에는 sent_at 필수. lease_token과 lease_until은 함께 설정/해제한다. attempt_count/retry_count>=0, retry_count<=10.
+
+**인덱스:** (status,next_run_at,lease_until,id); (recipient_kind,recipient_id,created_at DESC,id DESC).
+
+### notification_items
+
+소유: `seller`. 원거래별 알림 항목.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id` | `uuid` | PK |
+| `delivery_id` | `uuid` | →notification_deliveries.id |
+| `source_service` | `varchar(16)` | seller/payment/settlement |
+| `source_event_id` | `uuid` | 수신 eventId 또는 로컬 전이에서 생성한 고정 ID |
+| `kind` | `varchar(40)` | 알림 종류 |
+| `business_ref` | `uuid` | 원주문/요청/결제/환불/배치/지급 ID |
+| `recipient_kind` | `varchar(16)` | BUYER/SELLER |
+| `recipient_id` | `uuid` | 계정 ID |
+| `occurred_at` | `timestamptz` | 원업무 발생 시각 |
+| `payload` | `jsonb` | 해당 수신자에게 허용된 거래·금액·잔액 사본 |
+| `created_at` | `timestamptz` | 커머스 최초 접수 시각 |
+
+**제약:** UNIQUE(source_service,kind,business_ref,recipient_kind,recipient_id). delivery와 종류·수신자가 같아야 한다. 항목·묶음 연결·item_count/first_occurred_at/total_amount 갱신은 한 트랜잭션으로 저장하며 중복이면 집계도 증가시키지 않는다. 목록 조회는 저장 집계를 사용하고 항목별 추가 조회를 만들지 않는다. 판매자 항목/본문에는 구매자 지갑 잔액을 복사하지 않는다. Payment의 원본 Inbox payload는 내부 복구 전용이다. 결제 business_ref=paymentId, 환불=refundId, 반품=requestId, 발송/구매확정/미결제 취소/판매=orderId, 정산/지급조치=batchId, 지급완료=payoutId.
+
+**인덱스:** (delivery_id,occurred_at,id); (source_event_id).
+
+### notification_attempts
+
+소유: `seller`. 발송·조회·운영 재처리 이력.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id` | `uuid` | PK |
+| `delivery_id` | `uuid` | →notification_deliveries.id |
+| `attempt_no` | `integer` | 발송의 전체 단조 증가 일련번호 |
+| `operation` | `varchar(16)` | SEND/LOOKUP/REPLAY |
+| `status` | `varchar(24)` | RUNNING/SUCCEEDED/RETRYABLE_FAILURE/PERMANENT_FAILURE/UNKNOWN |
+| `started_at` | `timestamptz` | 시작 |
+| `finished_at` | `timestamptz?` | 종료 |
+| `error_code` | `varchar(80)?` | 오류 코드 |
+| `operator_ref` | `varchar(100)?` | REPLAY 실행 서비스 자격의 운영자 |
+| `reason` | `varchar(200)?` | REPLAY 사유 |
+
+**제약:** UNIQUE(delivery_id,attempt_no), attempt_no>=1. REPLAY는 operator_ref/reason 필수이며 원키·본문을 바꾸지 않고 retry_count만 0으로 재개한다. SEND/LOOKUP 시작과 delivery 임대·카운트 갱신을 원자 저장한다. 만료된 RUNNING은 UNKNOWN으로 남기고 LOOKUP부터 재개한다.
+
+**인덱스:** (delivery_id,attempt_no); (status,started_at).
+
+### notification_mock_receipts
+
+소유: `seller`. 모의 수신 원결과.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id` | `uuid` | PK |
+| `delivery_id` | `uuid` | →notification_deliveries.id; 모의 수신 멱등키 |
+| `request_hash` | `char(64)` | 수신자·종류·템플릿·고정 본문의 canonical SHA-256 |
+| `result` | `varchar(16)` | ACCEPTED/REJECTED; 첫 확정 결과 불변 |
+| `processed_at` | `timestamptz` | 모의 수신 결과 최초 저장 시각 |
+
+**제약:** UNIQUE(delivery_id). 원키+같은 해시는 기존 결과를 반환하고 다른 해시는 충돌로 거절한다. 모의 수신 어댑터는 호출자 임대와 별도 DB 트랜잭션으로 먼저 커밋한다. 응답 유실 뒤에도 수신 결과를 조회할 수 있다. 실제 카카오 수신/읽음 이력이 아니다.
+
+**인덱스:** UNIQUE(delivery_id).
+
+## 메시지·멱등성·감사
+
+![메시지·멱등성·감사 ERD](diagrams/erd-integration.svg)
 
 ### outbox
 
@@ -900,6 +1001,29 @@
 
 **인덱스:** (expires_at); (resource_id).
 
+### audit_logs
+
+소유: `각 서비스 DB`. 주요 변경의 실행 주체·행위 기록이며 금융 원장을 대신하지 않습니다. 커머스·Payment·Settlement·Finance Mock이 자기 DB에 각각 저장합니다.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id` | `uuid` | PK; 서버 생성 |
+| `actor_kind` | `varchar(16)` | BUYER/SELLER/SERVICE/OPERATOR/SYSTEM |
+| `actor_ref` | `varchar(100)` | 검증한 계정 UUID·서비스/운영자/배치 식별자; 이메일 금지 |
+| `action` | `varchar(80)` | ORDER_CREATED/REFUND_REQUESTED/PAYMENT_CONFIRMED/MILEAGE_DEBIT/PAYOUT_SUCCEEDED/NOTIFICATION_REPLAY 등 허용 목록 |
+| `aggregate_type` | `varchar(50)` | 기록 대상 종류 |
+| `aggregate_id` | `uuid` | 원주문/거래/작업 ID; 논리 참조 |
+| `before_status` | `varchar(32)?` | 최초 생성이면 NULL |
+| `after_status` | `varchar(32)?` | 잔액 변화 등 상태 없는 행위이면 NULL |
+| `reason_code` | `varchar(80)?` | 거절·보상·운영 처리 사유 코드 |
+| `event_id` | `uuid?` | 수신 이벤트이면 원 eventId |
+| `correlation_id` | `varchar(100)` | 요청/이벤트/배치의 비밀값 없는 추적 ID |
+| `occurred_at` | `timestamptz` | 해당 서비스에서 변경한 UTC 시각 |
+
+**제약:** 추가 전용이며 UPDATE/DELETE API를 만들지 않는다. 업무 변경·감사 행을 같은 트랜잭션으로 저장하고 둘 다 롤백한다. 멱등 재요청은 기존 결과를 반환하며 상태 변경 감사 행을 다시 만들지 않는다. 실제 운영 재처리는 새 실행 행위를 기록한다. 원금액 변화의 근거는 원결제·마일리지/정산 원장을 참조한다. 전체 요청/응답·주소·전화번호·비밀번호·토큰·자유 형식 본문을 저장하지 않는다. 인증 실패는 별도 보안 로그이며 성공한 업무 감사 행으로 위장하지 않는다.
+
+**인덱스:** (aggregate_type,aggregate_id,occurred_at,id); (actor_kind,actor_ref,occurred_at,id); (correlation_id).
+
 ## 트랜잭션과 관계
 
 - `buyer_accounts/seller_accounts`는 독립 계정이다. `auth_sessions`의 actor_kind+actor_id가 해당 테이블을 선택한다. 로그인/복구 토큰 목적을 섞지 않는다.
@@ -909,6 +1033,7 @@
 - 정산 항목은 결제당 하나, 지급은 배치당 하나이다. 활성 정산 예약은 항목당 하나여서 환불과 지급이 동시에 선점할 수 없다. partial UNIQUE로 보호하고 모든 상태/금액을 같은 DB에서 검사한다.
 - 정산 원장은 SOURCE(E/M)와 ALLOCATION(판매자/수수료)의 두 측을 분리한다. 각 측의 합계가 T이고 환불 뒤 0으로 상쇄된다. 두 측을 합쳐 매출을 두 배로 세지 않는다. reversal_of는 원원장 항목당 한 번이다.
 - outbox/inbox/idempotency_records 정의는 seller/payment/settlement/finance_mock 각각에 적용한다. 서비스 간 공유 테이블이나 SQL join은 만들지 않는다. inbox의 event_id는 발신 outbox id와 논리적으로 대응하며 여러 consumer가 각각 수신할 수 있다.
+- 로컬 주문 전이·알림 항목, 외부 알림 Inbox·항목은 각각 커머스 한 트랜잭션에 저장한다. 알림 모의 수신은 별도 트랜잭션으로 기록하고 금융 DB를 갱신하지 않는다.
 - PK/UNIQUE/CHECK는 DB 제약으로, 합계·참조·다중 행 전이는 행 잠금/조건부 갱신·동일 트랜잭션으로 구현한다. ERD의 관계선은 FK constraint가 있다는 뜻이 아니다.
 
 ## 저장 상태와 전이
@@ -920,6 +1045,7 @@
 | 외부 시도 | PENDING→PROCESSING→APPROVED/DECLINED/UNKNOWN. M 전액이면 attempt 없음. |
 | 금융 환불 | RESERVING→EXTERNAL_PENDING→RESTORING→INTERNAL_PENDING→COMPLETED. 외부 거절은 COMPENSATING→DECLINED, 결과 불명은 UNKNOWN. 상태만으로 커머스 복구까지 완료했다고 표시하지 않는다. |
 | 정산 항목 | WAITING_CONFIRMATION/PAYABLE→REFUND_RESERVED→REFUNDED. 지급은 PAYABLE→PAYOUT_RESERVED→PAID만 허용. 보상은 previous_item_status와 최신 구매확정/환불 정보를 대조해 조건부 복귀. |
+| 거래 알림 | 판매 COLLECTING→PENDING, 나머지 PENDING→SENDING→SENT/RETRY/UNKNOWN/REVIEW_REQUIRED. UNKNOWN은 원수신 조회부터 재개. SENT는 모의 수신 확인이며 금융 성공 상태를 바꾸지 않는다. |
 | 쿠폰·이벤트·예약 | [정책](policies.md)의 상태와 시각 조건을 함께 적용한다. 상태를 덮어써 사용/복원 이력을 지우지 않는다. |
 
 ## 구현 시 검증
