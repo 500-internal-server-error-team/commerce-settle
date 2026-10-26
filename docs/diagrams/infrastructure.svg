@@ -108,84 +108,92 @@
   </g>
   <g id="gateway" data-node="true" data-box="272,212,240,56">
     <rect x="272" y="212" width="240" height="56" rx="5" fill="#ffffff" stroke="#64748b" stroke-width="1.5" />
-    <use href="#logo-springboot" x="284" y="229" width="22" height="22" aria-hidden="true" />
-    <text x="316" y="246" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">API Gateway</text>
+    <use href="#logo-springboot" x="284" y="229" width="22" height="22" aria-hidden="true" transform="translate(0 0)" />
+    <text x="316" y="246" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start" transform="translate(0 -2.5)">API Gateway</text>
   </g>
   <g id="business-apps" data-node="true" data-box="272,340,400,168" data-apps="seller,payment-api,payment-worker,settlement,finance-mock" data-notification-app="seller" data-mock-kakao="local" data-public-routes="seller,payment-api,settlement">
     <rect x="272" y="340" width="400" height="168" rx="5" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
-    <g data-app="seller">
-      <use href="#logo-springboot" x="284" y="348" width="22" height="22" aria-hidden="true" />
-      <text x="316" y="364" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">커머스</text>
-      <text x="316" y="382" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">거래 알림 · 카카오 모의 발송</text>
-    </g>
-    <g data-app="payment-api">
-      <use href="#logo-springboot" x="284" y="398" width="22" height="22" aria-hidden="true" />
-      <text x="316" y="414" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">결제 API</text>
-      <text x="316" y="432" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">payment-worker와 DB 공유</text>
-    </g>
-    <g data-app="payment-worker">
-      <use href="#logo-springboot" x="484" y="398" width="22" height="22" aria-hidden="true" />
-      <text x="516" y="414" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">결제 Worker</text>
-      <text x="516" y="432" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">비동기 금융 처리</text>
-    </g>
-    <g data-app="settlement">
-      <use href="#logo-springboot" x="284" y="450" width="22" height="22" aria-hidden="true" />
-      <text x="316" y="466" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">정산</text>
-      <text x="316" y="484" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">정산·지급</text>
-    </g>
-    <g data-app="finance-mock">
-      <use href="#logo-springboot" x="484" y="450" width="22" height="22" aria-hidden="true" />
-      <text x="516" y="466" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">금융 모의 서버</text>
-      <text x="516" y="484" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">PG A·B·C · 간편결제 · 지급</text>
+    <g data-align-content="card" transform="translate(0 5)">
+      <g data-app="seller">
+        <use href="#logo-springboot" x="284" y="348" width="22" height="22" aria-hidden="true" transform="translate(0 9)" />
+        <text x="316" y="364" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">커머스</text>
+        <text x="316" y="382" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">거래 알림 · 카카오 모의 발송</text>
+      </g>
+      <g data-app="payment-api">
+        <use href="#logo-springboot" x="284" y="398" width="22" height="22" aria-hidden="true" transform="translate(0 9.5)" />
+        <text x="316" y="414" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">결제 API</text>
+        <text x="316" y="432" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">payment-worker와 DB 공유</text>
+      </g>
+      <g data-app="payment-worker">
+        <use href="#logo-springboot" x="484" y="398" width="22" height="22" aria-hidden="true" transform="translate(0 9)" />
+        <text x="516" y="414" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">결제 Worker</text>
+        <text x="516" y="432" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">비동기 금융 처리</text>
+      </g>
+      <g data-app="settlement">
+        <use href="#logo-springboot" x="284" y="450" width="22" height="22" aria-hidden="true" transform="translate(0 9)" />
+        <text x="316" y="466" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">정산</text>
+        <text x="316" y="484" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">정산·지급</text>
+      </g>
+      <g data-app="finance-mock">
+        <use href="#logo-springboot" x="484" y="450" width="22" height="22" aria-hidden="true" transform="translate(0 9)" />
+        <text x="516" y="466" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">금융 모의 서버</text>
+        <text x="516" y="484" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">PG A·B·C · 간편결제 · 지급</text>
+      </g>
     </g>
   </g>
   <g id="postgres" data-node="true" data-box="736,212,192,100" data-databases="seller,payment,settlement,finance_mock" data-payment-shared="payment-api,payment-worker">
     <rect x="736" y="212" width="192" height="100" rx="5" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
-    <use href="#logo-postgresql" x="748" y="222" width="22" height="22" aria-hidden="true" />
-    <text x="780" y="238" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">PostgreSQL</text>
-    <text x="752" y="260" font-size="10" font-weight="400" font-family="Geist Mono, SFMono-Regular, monospace" fill="#526176" text-anchor="start">seller · payment</text>
-    <text x="752" y="278" font-size="10" font-weight="400" font-family="Geist Mono, SFMono-Regular, monospace" fill="#526176" text-anchor="start">settlement · finance_mock</text>
-    <text x="752" y="298" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">1 컨테이너 · 업무 DB 4개</text>
+    <g data-align-content="card" transform="translate(0 1.5)">
+      <use href="#logo-postgresql" x="748" y="222" width="22" height="22" aria-hidden="true" transform="translate(0 2)" />
+      <text x="780" y="238" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">PostgreSQL</text>
+      <text x="752" y="260" font-size="10" font-weight="400" font-family="Geist Mono, SFMono-Regular, monospace" fill="#526176" text-anchor="start">seller · payment</text>
+      <text x="752" y="278" font-size="10" font-weight="400" font-family="Geist Mono, SFMono-Regular, monospace" fill="#526176" text-anchor="start">settlement · finance_mock</text>
+      <text x="752" y="298" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">1 컨테이너 · 업무 DB 4개</text>
+    </g>
   </g>
   <g id="kafka" data-node="true" data-box="736,344,192,56">
     <rect x="736" y="344" width="192" height="56" rx="5" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
-    <use href="#logo-apachekafka" x="748" y="356" width="22" height="22" aria-hidden="true" />
-    <text x="780" y="369" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Apache Kafka</text>
-    <text x="780" y="386" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">이벤트 발행·소비</text>
+    <use href="#logo-apachekafka" x="748" y="356" width="22" height="22" aria-hidden="true" transform="translate(0 5)" />
+    <text x="780" y="369" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start" transform="translate(0 -1)">Apache Kafka</text>
+    <text x="780" y="386" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start" transform="translate(0 -1)">이벤트 발행·소비</text>
   </g>
   <g id="redis" data-node="true" data-box="736,448,192,56">
     <rect x="736" y="448" width="192" height="56" rx="5" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
-    <use href="#logo-redis" x="748" y="460" width="22" height="22" aria-hidden="true" />
-    <text x="780" y="474" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Redis</text>
-    <text x="780" y="491" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">앱 6개 연결</text>
+    <use href="#logo-redis" x="748" y="460" width="22" height="22" aria-hidden="true" transform="translate(0 5.5)" />
+    <text x="780" y="474" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start" transform="translate(0 -2)">Redis</text>
+    <text x="780" y="491" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start" transform="translate(0 -2)">앱 6개 연결</text>
   </g>
   <text x="240" y="603" font-size="11" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">관측 도구</text>
   <g id="observability" data-node="true" data-box="240,620,688,160" data-tools="prometheus,grafana,zipkin,resource-collection,kafka-ui,alertmanager">
     <rect x="240" y="620" width="688" height="160" rx="5" fill="#ffffff" stroke="#64748b" stroke-width="1.2" />
-    <use href="#logo-prometheus" x="256" y="634" width="22" height="22" aria-hidden="true" />
-    <text x="288" y="650" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Prometheus</text>
-    <text x="288" y="668" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">메트릭 수집·경보 평가</text>
-    <use href="#logo-grafana" x="472" y="634" width="22" height="22" aria-hidden="true" />
-    <text x="504" y="650" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Grafana</text>
-    <text x="504" y="668" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">Prometheus 조회</text>
-    <use href="#logo-zipkin" x="688" y="634" width="22" height="22" aria-hidden="true" />
-    <text x="720" y="650" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Zipkin</text>
-    <text x="720" y="668" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">HTTP 추적</text>
-    <use href="#logo-resource" x="256" y="708" width="22" height="22" aria-hidden="true" />
-    <text x="288" y="724" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">자원 수집</text>
-    <text x="288" y="742" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">호스트·컨테이너 지표</text>
-    <use href="#logo-kafkaui" x="472" y="708" width="22" height="22" aria-hidden="true" />
-    <text x="504" y="724" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Kafka UI</text>
-    <text x="504" y="742" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">토픽 조회</text>
-    <use href="#logo-prometheus" x="688" y="708" width="22" height="22" aria-hidden="true" />
-    <text x="720" y="724" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Alertmanager</text>
-    <text x="720" y="742" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">경보 묶음·복구 통지</text>
+    <g data-align-content="card" transform="translate(0 8)">
+      <use href="#logo-prometheus" x="256" y="634" width="22" height="22" aria-hidden="true" transform="translate(0 10)" />
+      <text x="288" y="650" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Prometheus</text>
+      <text x="288" y="668" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">메트릭 수집·경보 평가</text>
+      <use href="#logo-grafana" x="472" y="634" width="22" height="22" aria-hidden="true" transform="translate(0 10)" />
+      <text x="504" y="650" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Grafana</text>
+      <text x="504" y="668" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">Prometheus 조회</text>
+      <use href="#logo-zipkin" x="688" y="634" width="22" height="22" aria-hidden="true" transform="translate(0 10)" />
+      <text x="720" y="650" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Zipkin</text>
+      <text x="720" y="668" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">HTTP 추적</text>
+      <use href="#logo-resource" x="256" y="708" width="22" height="22" aria-hidden="true" transform="translate(0 9)" />
+      <text x="288" y="724" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">자원 수집</text>
+      <text x="288" y="742" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">호스트·컨테이너 지표</text>
+      <use href="#logo-kafkaui" x="472" y="708" width="22" height="22" aria-hidden="true" transform="translate(0 10)" />
+      <text x="504" y="724" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Kafka UI</text>
+      <text x="504" y="742" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">토픽 조회</text>
+      <use href="#logo-prometheus" x="688" y="708" width="22" height="22" aria-hidden="true" transform="translate(0 10)" />
+      <text x="720" y="724" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Alertmanager</text>
+      <text x="720" y="742" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">경보 묶음·복구 통지</text>
+    </g>
   </g>
   <g id="slack" data-node="true" data-box="984,692,120,64">
     <rect x="984" y="692" width="120" height="64" rx="5" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
-    <use href="#logo-slack" x="996" y="708" width="22" height="22" aria-hidden="true" />
-    <text x="1028" y="725" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Slack</text>
-    <text x="996" y="747" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">경보·복구</text>
+    <g data-align-content="card" transform="translate(0 -4)">
+      <use href="#logo-slack" x="996" y="708" width="22" height="22" aria-hidden="true" transform="translate(0 1.5)" />
+      <text x="1028" y="725" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">Slack</text>
+      <text x="996" y="747" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">경보·복구</text>
+    </g>
   </g>
   <rect data-label-for="browser-gateway" x="400" y="89" width="48" height="14" fill="#ffffff" />
   <text x="424.0" y="99" font-size="9" font-weight="400" font-family="Geist Mono, SFMono-Regular, monospace" fill="#526176" text-anchor="middle" data-label-for="browser-gateway">HTTP</text>
