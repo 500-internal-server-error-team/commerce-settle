@@ -100,6 +100,30 @@ HTTP 오류는 [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 `appli
 - `status`는 실제 HTTP 상태와 일치시킵니다. 응답·로그에 비밀번호·토큰·결제 수단 정보·검증에 실패한 원문 값을 노출하지 않습니다. 응답에는 SQL·스택 트레이스·내부 주소를 넣지 않습니다. 서버 오류는 민감값을 제거한 예외·오류 코드·추적 ID로 기록합니다.
 - MVC 서비스와 WebFlux Gateway는 각 실행 경계에서 같은 형식을 검증합니다. Gateway 필터·인증 경로의 오류까지 다루며, MVC 예외 처리기 하나로 모두 처리한다고 가정하지 않습니다. 구현은 Spring의 [MVC](https://docs.spring.io/spring-framework/reference/6.2/web/webmvc/mvc-ann-rest-exceptions.html)·[WebFlux](https://docs.spring.io/spring-framework/reference/6.2/web/webflux/ann-rest-exceptions.html) `ProblemDetail` 지원을 사용합니다.
 
+### 로그
+
+다음은 앱 로그의 구현 계약입니다. UTF-8 **한 줄 JSON**을 stdout으로 출력하고 시각은 UTC로 통일합니다. 별도 인코더 없이 Spring Boot의 [내장 Logstash JSON](https://docs.spring.io/spring-boot/3.5/reference/features/logging.html#features.logging.structured.logstash)을 사용합니다(`logging.structured.format.console=logstash`). 현재 적용 상태는 [로그 수집](docs/architecture.md#로그-수집)을 따릅니다.
+
+| 필드 | 기준 |
+| --- | --- |
+| `@timestamp`, `level`, `message` | UTC ISO 8601 시각, 로그 등급, 짧은 설명. Logstash 기본 필드는 유지합니다. |
+| `service`, `role`, `env` | 서버 설정에서 추가하는 앱·실행 역할·환경. 메트릭과 같은 값을 사용하며 Payment의 `api`·`worker`를 구분합니다. |
+| `event` | 자체 로그의 고정 작업명. 예: `payment.authorize`, `refund.execute`, `settlement.payout`, `notification.send`. 프레임워크 로그에는 강제하지 않습니다. |
+| `traceId`, `spanId` | 실제 추적 문맥이 있을 때만 기록합니다. 없는 값을 만들지 않습니다. |
+| 업무 식별자 | 해당 `orderId`, `paymentId`, `refundId`, `payoutId`, `deliveryId`와 비동기 처리의 `eventId`·`jobId`만 필요한 만큼 기록합니다. |
+| 처리 문맥 | `result`는 기존 상태·처리 결과, `durationMs`는 소요 시간입니다. 외부 호출은 `providerId`·`cycleId`·`attempt`, HTTP는 `method`·경로 템플릿 `route`·`httpStatus`, 오류는 정의된 `errorCode`를 해당할 때만 추가합니다. |
+
+- 고정 필드는 Boot의 `logging.structured.json.add`, 작업 필드는 SLF4J 구조화 key-value로 추가합니다. 추적·업무 문맥은 HTTP·Kafka·Job 경계에서 전파하고 처리 후 정리합니다. 재전달의 `eventId`는 유지하며 새 추적으로 재시도해도 업무 ID로 연결합니다. 없는 필드는 생략합니다.
+- 업무 완료는 DB 커밋 후 기록하고 접수·외부 응답과 구분합니다. **타임아웃은 `result=UNKNOWN`**이며 확정 실패로 기록하지 않습니다. 상태 변화·미확정·복구 기록은 추적 샘플링과 관계없이 남깁니다.
+- 정상 완료·예상한 업무 거절은 `INFO`, 미확정·재시도는 `WARN`, 재시도 소진·불변식 위반·예상 밖 장애는 `ERROR`입니다. 반복 조회·중복 무시·진단은 `DEBUG`로 두고 기본 등급은 `INFO`입니다. 예외는 처리 경계 한 곳에서 기록합니다.
+- 개인정보·비밀번호·토큰·계좌/카드 정보·멱등키 원문·요청/응답/PG 원문·자유 입력은 기록하지 않습니다. 정해진 필드만 직렬화하며 줄바꿈은 JSON으로 이스케이프합니다. 예외 메시지와 `stack_trace`도 정제하고, 스택은 `ERROR`에서 최대 4,096자로 제한합니다. 로그는 진단용이며 [행위 감사와 금융 원장](docs/architecture.md#시간-정보와-감사-기록)을 대체하지 않습니다.
+
+업무 필드 중심의 출력 예입니다.
+
+```json
+{"@timestamp":"2026-10-26T06:00:00Z","level":"WARN","service":"payment","role":"worker","env":"local","event":"payment.authorize","message":"PG 응답을 확인하지 못함","result":"UNKNOWN","paymentId":"a38f71bc-3899-4b31-a2ea-762b234c7d71","providerId":"PG_B","traceId":"0123456789abcdef0123456789abcdef","durationMs":5000}
+```
+
 ### 패키지·이름·파일 추가
 
 - 모듈·실행 이름과 클래스별 위치는 [서비스 내부 분류](docs/architecture.md#서비스-내부-분류)를 기준으로 합니다. 같은 역할에 `model`·`entity`·`dto` 등 여러 분류를 혼용하지 않습니다.
