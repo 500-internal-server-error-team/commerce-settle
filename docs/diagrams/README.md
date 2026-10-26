@@ -8,6 +8,15 @@ GitHub 문서는 SVG를 표시합니다. 같은 이름의 HTML이 편집 원본�
 | 애플리케이션과 인프라 | [runtime.html](runtime.html) | [runtime.svg](runtime.svg) |
 | PG·간편결제·지급 대역 | [payment-providers.html](payment-providers.html) | [payment-providers.svg](payment-providers.svg) |
 | 관측과 부하 도구 | [observability.html](observability.html) | [observability.svg](observability.svg) |
+| 계정·상품 ERD | [erd-accounts.html](erd-accounts.html) | [erd-accounts.svg](erd-accounts.svg) |
+| 주문·선착순 이벤트 ERD | [erd-orders.html](erd-orders.html) | [erd-orders.svg](erd-orders.svg) |
+| 쿠폰 ERD | [erd-coupons.html](erd-coupons.html) | [erd-coupons.svg](erd-coupons.svg) |
+| 결제·마일리지 ERD | [erd-payment.html](erd-payment.html) | [erd-payment.svg](erd-payment.svg) |
+| 정산·지급 ERD | [erd-settlement.html](erd-settlement.html) | [erd-settlement.svg](erd-settlement.svg) |
+| 금융 Mock ERD | [erd-finance.html](erd-finance.html) | [erd-finance.svg](erd-finance.svg) |
+| 메시지·멱등성 ERD | [erd-integration.html](erd-integration.html) | [erd-integration.svg](erd-integration.svg) |
+
+ERD의 전체 컬럼·타입·제약·인덱스는 [데이터 모델](../data-model.md)이 소유합니다. 그림의 `→`와 관계선은 논리 참조이며 DB FK constraint를 의미하지 않습니다. 메시지 뷰의 Outbox→Inbox는 발신/소비 관계이고 각 서비스 DB에 별도로 저장합니다.
 
 ## 로고 출처
 
