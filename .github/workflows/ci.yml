@@ -13,7 +13,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-smoke:
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - name: Verify local settings generator
+        run: python3 scripts/test_init_env.py
+      - name: Check Java style, tests and architecture
+        run: ./gradlew --no-daemon --parallel --continue check
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verification-reports
+          path: |
+            **/build/reports/tests/
+            **/build/reports/checkstyle/
+            **/build/test-results/test/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+  runtime:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -27,12 +55,8 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
-      - name: Verify local settings generator
-        run: python3 scripts/test_init_env.py
-      - name: Check Java formatting and Checkstyle (main and test)
-        run: ./gradlew --no-daemon --continue spotlessCheck checkstyleMain checkstyleTest
-      - name: Run tests, architecture checks and package all applications
-        run: ./gradlew --no-daemon --continue build
+      - name: Package all applications
+        run: ./gradlew --no-daemon --parallel --continue assemble
       - name: Initialize local settings
         run: python3 scripts/init_env.py
       - name: Start the stack from empty volumes
@@ -46,17 +70,6 @@ jobs:
           docker compose down
           docker compose up -d --wait --wait-timeout 300
           python3 scripts/smoke.py
-      - name: Upload verification reports
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: verification-reports
-          path: |
-            **/build/reports/tests/
-            **/build/reports/checkstyle/
-            **/build/test-results/test/*.xml
-          if-no-files-found: ignore
-          retention-days: 7
       - name: Show service diagnostics on failure
         if: failure()
         run: |
@@ -65,3 +78,17 @@ jobs:
       - name: Clean up CI containers and test volumes
         if: always()
         run: docker compose --profile observability --profile tools down -v --remove-orphans
+
+  build-and-smoke:
+    if: ${{ always() }}
+    needs: [quality, runtime]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require all verification jobs to succeed
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          RUNTIME_RESULT: ${{ needs.runtime.result }}
+        run: |
+          test "$QUALITY_RESULT" = success
+          test "$RUNTIME_RESULT" = success
