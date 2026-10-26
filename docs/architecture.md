@@ -1,12 +1,12 @@
 # 서비스와 코드 경계
 
-업무 설계는 [README](../README.md#서비스-설계)를 기준으로 하며, 여기서는 초기 실행 구성과 코드 배치를 정의합니다. 업무 책임은 구현할 설계이며 현재 실행 기반의 기동·명세 라우팅과 구분합니다.
+구조도는 업무·알림·관측 연동을 완성한 목표 구조를 보여줍니다. 실제 구현 상태는 본문에서 설명하며 그림의 선 종류로 구분하지 않습니다. 업무 책임은 [README](../README.md#서비스-설계), 현재 실행 설정은 Compose와 각 앱 설정이 기준입니다.
 
 [기능 API와 서비스 이벤트](api.md), [서비스별 ERD·컬럼·제약](data-model.md), [업무 정책](policies.md)을 구현 계약으로 사용합니다. ERD는 커머스 계정/주문/쿠폰/알림 뷰·Payment·Settlement·Finance Mock·서비스별 메시지/멱등성/감사 뷰로 나누며 서비스 간 SQL join이나 물리 FK를 추가하지 않습니다.
 
 ## 인프라 구조도
 
-[Compose 설정](../compose.yml)을 기준으로 한 로컬 개발·CI 구성입니다. AWS 배포 구성은 별도 설계 대상입니다. [CI](../.github/workflows/ci.yml)도 같은 Compose로 빈 볼륨 기동·검증·데이터 유지 재기동을 검사하도록 구성돼 있습니다.
+[Compose 설정](../compose.yml)을 기반으로 업무 연동을 갖춘 로컬 개발·CI 목표 구성입니다. AWS 배포 구성은 별도 설계 대상입니다. [CI](../.github/workflows/ci.yml)도 같은 Compose로 빈 볼륨 기동·검증·데이터 유지 재기동을 검사하도록 구성돼 있습니다.
 
 ### 애플리케이션과 인프라
 
@@ -46,7 +46,7 @@ k6는 브라우저를 조작하지 않는 HTTP 부하 도구입니다. 현재는
 
 Prometheus·Grafana는 각각 `prometheus-data`·`grafana-data` 볼륨을 사용하고, Zipkin 추적은 재시작하면 사라집니다. 관측 도구의 호스트 포트는 [네트워크와 관측](#네트워크와-관측)을 따르며 모두 루프백에 바인딩됩니다. 앱 관리 포트 9091·DB·Kafka·Redis는 호스트에 게시하지 않습니다.
 
-추가 설계인 Alertmanager·자원 수집·Slack은 점선으로 구분합니다. Prometheus가 경보를 평가하고 Alertmanager가 묶음·중복 억제·복구 통지를 Slack으로 전달합니다. Linux node_exporter·cAdvisor는 자원 수집 후보이며 Mac 호스트 관측과 구분합니다. 현재 Compose에는 이 추가 구성이 없습니다. [운영 알람 정책](policies.md#운영-알람)이 임계값·등급·조치 기준입니다.
+목표 관측 구조에서는 Prometheus가 경보를 평가하고 Alertmanager가 묶음·중복 억제·복구 통지를 Slack으로 전달합니다. Linux node_exporter·cAdvisor는 자원 수집 후보이며 Mac 호스트 관측과 구분합니다. 현재 Compose에는 이 추가 구성이 없습니다. [운영 알람 정책](policies.md#운영-알람)이 임계값·등급·조치 기준입니다.
 
 다이어그램의 [SVG와 로고 출처](diagrams/README.md)를 함께 관리합니다.
 
