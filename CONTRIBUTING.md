@@ -84,7 +84,7 @@ HTTP 오류는 [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 `appli
 
 ```json
 {
-  "type": "urn:live-settle:error:common-validation-failed",
+  "type": "urn:commerce-settle:error:common-validation-failed",
   "title": "잘못된 요청",
   "status": 400,
   "detail": "입력값을 확인해 주세요.",

@@ -1,4 +1,4 @@
-# live-settle
+# commerce-settle
 
 **구매자의 주문·결제·환불과 판매자 정산을 연결하는 커머스 MSA 플랫폼**
 
@@ -92,8 +92,8 @@ Payment API와 Worker는 같은 모듈·DB를 사용하며 각각 확장하는 �
 Java 21, Docker·Compose v2, Python 3가 필요합니다.
 
 ```bash
-git clone https://github.com/500-internal-server-error-team/live-settle.git
-cd live-settle
+git clone https://github.com/500-internal-server-error-team/commerce-settle.git
+cd commerce-settle
 git switch develop
 python3 scripts/init_env.py
 ./gradlew --continue clean build
