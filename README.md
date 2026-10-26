@@ -24,18 +24,9 @@
 
 ## 서비스 설계
 
-```mermaid
-flowchart LR
-    C["구매자 · 판매자 화면"] --> G["Gateway"]
-    G --> S["커머스 · seller 모듈"]
-    G --> P["Payment · API / Worker"]
-    G --> T["Settlement"]
-    P <-->|"명령 · 결과"| K["Kafka"]
-    K <-->|"결제 결과 · 환불 예약"| T
-    S <-->|"주문 · 결제 요청 / 결과"| K
-    P <-->|"승인 · 환불 · 조회"| M["Finance Mock · PG / 지급"]
-    T <-->|"지급 · 조회"| M
-```
+다음은 구현할 업무 흐름입니다. 녹색 Spring Boot 로고가 있는 구성 요소는 우리 애플리케이션이며, Kafka는 별도 메시지 브로커입니다. 구매자·판매자 화면과 업무 연동은 아직 구현하지 않았습니다.
+
+![서비스 설계](docs/diagrams/services.svg)
 
 | 서비스 | 책임·데이터 소유권 |
 | --- | --- |

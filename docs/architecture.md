@@ -8,35 +8,11 @@
 
 ### 컨테이너와 저장소
 
-```mermaid
-flowchart TB
-    C["호스트의 브라우저·검증 도구"] -->|"127.0.0.1:8080"| G
-    subgraph HOST["개발 PC 또는 CI Runner"]
-        subgraph NET["Docker Compose · backend 네트워크"]
-            G["Gateway"]
-            A["HTTP 업무 앱<br/>seller · payment-api · settlement"]
-            W["payment-worker"]
-            F["finance-mock"]
-            D[("PostgreSQL<br/>1개 컨테이너 · 업무 DB 4개")]
-            K[("Kafka<br/>단일 브로커")]
-            R[("Redis<br/>AOF 저장")]
-            L["k6 · tools 선택"]
-            G -->|"HTTP 라우팅"| A
-            A -->|"소유 DB"| D
-            W -->|"payment DB"| D
-            F -->|"finance_mock DB"| D
-            A -->|"설정 연결"| K
-            W -->|"설정 연결"| K
-            A -->|"공통 연결"| R
-            W -->|"공통 연결"| R
-            W -. "PG 연동 예정" .-> F
-            A -. "지급 연동 예정" .-> F
-            L -->|"내부 HTTP"| G
-        end
-    end
-```
+![Spring Boot 애플리케이션과 데이터 인프라](diagrams/runtime.svg)
 
-실선은 현재 설정된 주요 연결, 점선은 구현할 금융 연동입니다. HTTP 라우팅 대상은 `seller`·`payment-api`·`settlement`이며 Worker·Mock은 Gateway에 공개하지 않습니다. 점선의 PG 호출은 Payment Worker, 지급 호출은 Settlement의 책임입니다. Kafka 연결과 업무 이벤트·SAGA 구현도 구분합니다. 공통 Redis 설정은 Gateway·Finance Mock에도 전달되며, 그림에는 업무 앱·Worker의 연결을 대표해서 표시합니다.
+Spring Boot 영역의 여섯 실행은 우리가 빌드하는 애플리케이션입니다. PostgreSQL·Kafka·Redis는 별도 인프라 컨테이너입니다. Gateway를 제외한 다섯 실행에 DB·Kafka 연결이 설정돼 있으며, Redis 연결 설정은 여섯 실행 모두에 전달됩니다.
+
+`payment-api`와 `payment-worker`는 같은 `payment` 모듈의 jar를 각각 실행하고 같은 DB를 사용합니다. 현재 `PAYMENT_ROLE`은 메트릭 태그 구분에 사용되며, 결제 접수·작업 소비·PG 호출은 구현 전입니다. Worker와 `finance-mock`은 Gateway의 공개 라우팅 대상에 포함하지 않습니다.
 
 PostgreSQL의 업무 DB는 `seller`·`payment`·`settlement`·`finance_mock` 네 개이며 하나의 컨테이너 안에서 계정·스키마를 분리합니다. Payment API와 Worker는 같은 `payment` DB를 사용합니다. 물리 DB 네 대나 고가용성 구성을 뜻하지 않습니다.
 
@@ -46,40 +22,21 @@ PostgreSQL·Kafka·Redis는 각각 `postgres-data`·`kafka-data`·`redis-data` �
 
 다음은 `finance-mock` 안에 구현할 논리 PG 3종과 지급 기관 대역입니다. 현재 Compose의 Mock 컨테이너 수를 늘린 그림이 아니며 PG별 거래·멱등키·지표를 구분하는 설계입니다. 지연·실패확률·원 PG 조회/환불 규칙의 기준은 [PG 3종과 장애 시나리오](design.md#pg-3종과-장애-시나리오)입니다.
 
-```mermaid
-flowchart LR
-    W["Payment Worker"] --> A
-    W --> B
-    W --> C
-    S["Settlement"] --> P
-    subgraph MOCK["finance-mock · 구현 예정"]
-        A["PG A"]
-        B["PG B"]
-        C["PG C"]
-        P["지급 기관 대역"]
-    end
-```
+![금융 Mock 내부의 PG와 지급 API](diagrams/payment-providers.svg)
 
 PG 선택은 결제 시도에 고정하며, 미확정이면 같은 PG로 조회합니다. 환불도 승인된 원 PG로 요청합니다. 한 Mock 프로세스 안의 세 PG는 실제 PG 기관의 독립적인 인프라 장애 격리를 재현하지 않습니다.
 
 ### 관측 구성
 
-```mermaid
-flowchart LR
-    J["Java 앱 6개<br/>관리 포트 9091"] -->|"HTTP 추적"| Z["Zipkin · 9411<br/>메모리 저장"]
-    subgraph OBS["observability 프로필 · 선택 실행"]
-        P["Prometheus · 9090"]
-        G["Grafana · 3000"]
-        U["Kafka UI · 8081"]
-    end
-    P -->|"메트릭 수집"| J
-    G -->|"조회"| P
-    U -->|"9092"| K["Kafka"]
-```
+![관측과 부하 도구](diagrams/observability.svg)
 
 [Prometheus 설정](../infra/prometheus/prometheus.yml)은 Gateway·Seller·Payment API·Payment Worker·Settlement·Finance Mock의 `/actuator/prometheus`를 15초마다 수집합니다. Grafana는 [내부 Prometheus 주소](../infra/grafana/provisioning/datasources/prometheus.yml)를 조회합니다.
 
-Prometheus·Grafana는 각각 `prometheus-data`·`grafana-data` 볼륨을 사용하고, Zipkin 추적은 재시작하면 사라집니다. 그림의 관측 도구 포트는 호스트에 게시한 기본 포트이며 모두 루프백에 바인딩됩니다. 앱 관리 포트 9091·DB·Kafka·Redis는 호스트에 게시하지 않습니다.
+k6는 브라우저를 조작하지 않는 HTTP 부하 도구입니다. 현재는 Gateway의 Seller 명세를 반복 조회하며 결제 업무를 실행하지 않습니다. Prometheus·Grafana·Kafka UI는 `observability`, k6는 `tools` 프로필에서 실행합니다.
+
+Prometheus·Grafana는 각각 `prometheus-data`·`grafana-data` 볼륨을 사용하고, Zipkin 추적은 재시작하면 사라집니다. 관측 도구의 호스트 포트는 [네트워크와 관측](#네트워크와-관측)을 따르며 모두 루프백에 바인딩됩니다. 앱 관리 포트 9091·DB·Kafka·Redis는 호스트에 게시하지 않습니다.
+
+다이어그램의 [HTML 원본과 로고 출처](diagrams/README.md)를 함께 관리합니다.
 
 ## 실행 단위
 
@@ -92,7 +49,7 @@ Prometheus·Grafana는 각각 `prometheus-data`·`grafana-data` 볼륨을 사용
 | `settlement` | `settlement` | 원장·예약·정산·지급, `settlement` DB·계정 |
 | `finance-mock` | `finance-mock` | 외부 PG·지급 API 모의 서버, `finance_mock` DB·계정 |
 
-Payment 두 실행은 같은 jar·DB를 사용하며 `PAYMENT_ROLE=api|worker`로 실행 역할·메트릭 태그를 구분합니다.
+Payment 두 실행은 같은 jar·DB를 사용하고 `PAYMENT_ROLE=api|worker`로 메트릭 태그를 구분합니다. 실제 역할별 Bean 활성화와 업무 처리 로직은 구현해야 합니다.
 
 기존 `seller` 모듈·실행·DB·패키지 이름을 유지한 채 커머스 책임을 구현하는 안입니다. 회원·인증 도메인은 구매자와 판매자의 별도 가입·로그인을 소유하고, 상품·주문·쿠폰 도메인과 같은 서비스 안에 둡니다. 주문·재고·쿠폰 예약을 같은 DB 트랜잭션에서 확정하기 위한 선택이며 계정 종류마다 서버를 나누지는 않습니다. 계정·권한 관계는 [사용자와 거래 주체](design.md#사용자와-거래-주체)를 따릅니다.
 
@@ -187,7 +144,7 @@ Prometheus는 6개 실행의 JVM·프로세스·HTTP 메트릭을 수집합니�
 
 ## Redis·Zipkin·k6
 
-Redis는 내부 네트워크에서 비밀번호로 연결합니다. 개발용 단일 Redis와 자격을 공유하므로 키 접두사는 보안 격리가 아닙니다. 키는 `live-settle:<domain>:<purpose>:<id>`로 구분하고 TTL·무효화·장애 시 동작은 해당 도메인 담당자가 설계합니다. 금액·멱등성의 최종 정합성을 캐시만으로 보장하지 않습니다. 128MB·noeviction 설정은 메모리 초과 쓰기를 거절하므로 사용량을 관측해야 합니다.
+Redis는 내부 네트워크에서 비밀번호로 연결합니다. AOF는 Redis의 변경 내역을 디스크에 기록해 재시작 때 복원하는 영속화 방식이며, `redis-data` 볼륨에 보존합니다. 결제·정산의 기준 데이터를 Redis에 저장한다는 뜻은 아닙니다. 개발용 단일 Redis와 자격을 공유하므로 키 접두사는 보안 격리가 아닙니다. 키는 `live-settle:<domain>:<purpose>:<id>`로 구분하고 TTL·무효화·장애 시 동작은 해당 도메인 담당자가 설계합니다. 금액·멱등성의 최종 정합성을 캐시만으로 보장하지 않습니다. 128MB·noeviction 설정은 메모리 초과 쓰기를 거절하므로 사용량을 관측해야 합니다.
 
 Zipkin은 Micrometer·OpenTelemetry의 HTTP 추적을 수집합니다. 샘플링 기본값은 10%이며 환경 변수로 조정합니다. smoke는 sampled `traceparent`로 Gateway CLIENT→Seller SERVER의 부모 관계를 확인합니다. Kafka 업무 이벤트의 추적 전파는 Producer·Consumer 구현 시 검증합니다. 개발용 메모리 저장소는 최대 10,000개 span을 보관하며 재시작하면 추적이 사라집니다.
 
