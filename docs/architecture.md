@@ -6,7 +6,7 @@
 
 [Compose 설정](../compose.yml)을 기준으로 한 로컬 개발·CI 구성입니다. AWS 배포 구성은 별도 설계 대상입니다. [CI](../.github/workflows/ci.yml)도 같은 Compose로 빈 볼륨 기동·검증·데이터 유지 재기동을 검사하도록 구성돼 있습니다.
 
-### 컨테이너와 저장소
+### 애플리케이션과 인프라
 
 ![Spring Boot 애플리케이션과 데이터 인프라](diagrams/runtime.svg)
 

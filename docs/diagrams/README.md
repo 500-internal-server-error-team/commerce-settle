@@ -5,7 +5,7 @@ GitHub 문서는 SVG를 표시합니다. 같은 이름의 HTML이 편집 원본�
 | 도식 | 편집 원본 | 문서 이미지 |
 | --- | --- | --- |
 | 서비스 설계 | [services.html](services.html) | [services.svg](services.svg) |
-| 실행 구성 | [runtime.html](runtime.html) | [runtime.svg](runtime.svg) |
+| 애플리케이션과 인프라 | [runtime.html](runtime.html) | [runtime.svg](runtime.svg) |
 | PG 대역 설계 | [payment-providers.html](payment-providers.html) | [payment-providers.svg](payment-providers.svg) |
 | 관측과 부하 도구 | [observability.html](observability.html) | [observability.svg](observability.svg) |
 
