@@ -334,8 +334,8 @@
 | `funder` | `varchar(16)` | PLATFORM/SELLER; 종류에서 서버가 결정 |
 | `seller_id` | `uuid?` | SELLER에만 필요 |
 | `product_id` | `uuid?` | SELLER의 지정 상품; null이면 판매자 전체 |
-| `grade` | `varchar(16)?` | GRADE의 BRONZE/SILVER/GOLD |
-| `target_month` | `date?` | GRADE/SELLER 혜택 월의 첫날 |
+| `grade` | `varchar(16)?` | GRADE 선정자에게 적용할 BRONZE/SILVER/GOLD 혜택 |
+| `target_month` | `date?` | GRADE 혜택 월의 첫날; WELCOME/SELLER는 null |
 | `name` | `varchar(80)` | 표시명 |
 | `discount_amount` | `bigint` | 정액 할인 |
 | `min_order_amount` | `bigint` | 적용 전 최소 상품대금 |
@@ -343,7 +343,7 @@
 | `allowed_methods` | `varchar(24)[]` | 승인된 CREDIT_CARD/DEBIT_CARD/EASY_PAY |
 | `pg_cost_ceiling_bps` | `integer` | PG 비용 상한; 기본 400bp |
 | `other_cost_allowance` | `bigint` | 주문당 기타 비용 충당액; 기본 1,000원 |
-| `issuance_limit` | `integer` | 발급 수 한도; SELLER는 최대 100 |
+| `issuance_limit` | `integer` | 캠페인 발급 수 한도; 공통 100장 상한 없음 |
 | `issued_count` | `integer` | 누적 발급 수 |
 | `total_budget` | `bigint` | 명목 할인 예산 |
 | `committed_budget` | `bigint` | 발급했으나 아직 사용하지 않은 약속액 |
@@ -355,9 +355,9 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | 낙관적 버전 |
 
-**제약:** 할인액>0, 할인액<min_order_amount<=10000000, 0<=issued_count<=issuance_limit. 예산·약속액·사용 누계 비음수, committed_budget+consumed_budget<=total_budget. WELCOME/GRADE는 funder=PLATFORM이고 seller_id/product_id는 null; SELLER는 funder=SELLER이고 seller_id 필수. grade는 GRADE에만 필요하고 target_month는 GRADE/SELLER에 필수. 상품 소유·사용 수단·손익 하한·최소 정산액을 발급 전에 검증합니다. 월 캠페인은 종류·판매자/등급·대상월별 한 개를 승인하며 발급 뒤 조건을 변경하지 않습니다.
+**제약:** 할인액>0, 할인액<min_order_amount<=10000000, 0<=issued_count<=issuance_limit. 예산·약속액·사용 누계 비음수, committed_budget+consumed_budget<=total_budget. WELCOME/GRADE는 funder=PLATFORM이고 seller_id/product_id는 null; SELLER는 funder=SELLER이고 seller_id 필수. grade와 target_month는 GRADE에만 필요하고 나머지 종류는 null입니다. 상품 소유·사용 수단·손익 하한·최소 정산액을 발급 전에 검증합니다. GRADE는 등급·대상월별 한 캠페인이며, 판매자는 같은 월에도 여러 캠페인을 만들 수 있습니다. 발급 뒤 조건을 변경하지 않습니다.
 
-**인덱스:** (seller_id,status,created_at,id); (kind,target_month,status). 활성 WELCOME 캠페인은 전체 한 개, GRADE는 (grade,target_month), SELLER는 (seller_id,target_month)에 각각 부분 UNIQUE.
+**인덱스:** (seller_id,status,created_at,id); (kind,target_month,status). 활성 WELCOME 캠페인은 전체 한 개, GRADE는 (grade,target_month)에 부분 UNIQUE. SELLER의 월별 UNIQUE는 두지 않습니다.
 
 ### buyer_coupons
 
@@ -372,12 +372,12 @@
 | `funder` | `varchar(16)` | PLATFORM/SELLER |
 | `seller_id` | `uuid?` | SELLER에만 값 |
 | `product_id` | `uuid?` | SELLER 지정 상품 |
-| `target_month` | `date?` | 월별 혜택의 발급 업무 키 |
+| `target_month` | `date?` | GRADE의 발급 업무 키; WELCOME/SELLER는 null |
 | `discount_amount` | `bigint` | 원할인 사본 |
 | `min_order_amount` | `bigint` | 최소 상품대금 사본 |
 | `allowed_methods` | `varchar(24)[]` | 사용 수단 사본 |
 | `valid_from` | `timestamptz` | 사용 시작 |
-| `expires_at` | `timestamptz` | 웰컴=가입+14일, 월 쿠폰=다음 달 1일 00:00 KST |
+| `expires_at` | `timestamptz` | WELCOME=가입+14일, GRADE=다음 달 1일 00:00 KST, SELLER=템플릿 종료 |
 | `status` | `varchar(16)` | ISSUED/RESERVED/USED/EXPIRED |
 | `reserved_order_id` | `uuid?` | →orders.id |
 | `used_order_id` | `uuid?` | →orders.id |
@@ -385,7 +385,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | 낙관적 버전 |
 
-**제약:** UNIQUE(template_id,buyer_id).WELCOME는 buyer_id, GRADE는 (buyer_id,target_month), SELLER는 (seller_id,buyer_id,target_month)에 종류별 부분 UNIQUE. 발급과 예산 약속액 확보는 같은 트랜잭션입니다. 원할인·부담자·기간·수단은 불변이며 상태와 시각을 함께 검사합니다. 재가입·캠페인 교체로 발급 이력을 지우지 않습니다.
+**제약:** UNIQUE(template_id,buyer_id). WELCOME는 buyer_id, GRADE는 (buyer_id,target_month)에 종류별 부분 UNIQUE. SELLER는 캠페인별 유일성만 적용하고 다른 캠페인의 쿠폰도 발급할 수 있습니다. 발급 수 증가·예산 약속액 확보·쿠폰 저장은 같은 트랜잭션입니다. 원할인·부담자·기간·수단은 불변이며 상태와 시각을 함께 검사합니다. 재가입·캠페인 교체로 발급 이력을 지우지 않습니다.
 
 **인덱스:** (buyer_id,status,expires_at,id); UNIQUE(reserved_order_id) WHERE NOT NULL; UNIQUE(used_order_id) WHERE NOT NULL.
 
@@ -412,23 +412,25 @@
 
 ### coupon_issue_runs
 
-소유: `seller`. 월별 대상 고정과 재시작 가능한 발급 작업.
+소유: `seller`. 플랫폼 월간 우수고객의 대상 고정과 재시작 가능한 발급 작업. 판매자 자유 발급은 포함하지 않습니다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
 | `id` | `uuid` | PK |
 | `target_month` | `date` | UNIQUE; 혜택 월 첫날 |
 | `cutoff_at` | `timestamptz` | 대상 구매확정 반영 마감 |
+| `target_count` | `integer?` | 동점자 포함 선정 인원; 대상 고정 전 null |
+| `cutoff_spend` | `bigint?` | 선정 대상의 최저 E 합계; 대상 고정 전·대상 없음은 null |
 | `status` | `varchar(24)` | PREPARING/ISSUING/COMPLETED/REVIEW_REQUIRED/EXPIRED |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | 낙관적 버전 |
 
-같은 월의 재실행은 기존 run을 재개합니다. 대상·순서를 다시 계산하거나 완료한 대상에 추가 발급하지 않습니다.
+같은 월의 재실행은 기존 run을 재개합니다. 플랫폼 전체 E 합계>0인 구매자의 금액 순위 100위까지 동점자를 포함해 저장합니다. 대상 고정 뒤 target_count는 대상 행 수와 같고 cutoff_spend는 그 최저 금액입니다. 대상이 없으면 0/null로 완료합니다. 등급별 전체 대상의 예산·발급 수 한도를 확보하기 전에는 ISSUING으로 전이하지 않으며, 재실행 시 대상·순위를 다시 계산하지 않습니다.
 
 ### coupon_issue_targets
 
-소유: `seller`. 같은 회차의 등급·판매자 발급 대상과 처리 결과.
+소유: `seller`. 같은 회차의 플랫폼 월간 우수고객과 처리 결과.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -437,14 +439,14 @@
 | `template_id` | `uuid` | →coupon_templates.id |
 | `buyer_id` | `uuid` | →buyer_accounts.id |
 | `external_spend` | `bigint` | 고정한 대상 기간의 E 합계 |
-| `rank_no` | `integer?` | SELLER의 1~100위 |
+| `rank_no` | `integer` | E 합계 내림차순 RANK; 1~100, 동점은 같은 순위 |
 | `buyer_coupon_id` | `uuid?` | 처리된 원쿠폰 |
 | `status` | `varchar(24)` | PENDING/ISSUED/EXPIRED/REVIEW_REQUIRED |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | 낙관적 버전 |
 
-**제약:** UNIQUE(run_id,template_id,buyer_id), UNIQUE(buyer_coupon_id) WHERE buyer_coupon_id IS NOT NULL. 월별 마감의 불변 확정·취소 이력으로 대상과 합계를 고정합니다. 만료 뒤 재개는 새 쿠폰을 만들지 않고 EXPIRED로 종결합니다. 대상 저장과 상태 재개, 발급·예산 약속액 선점을 검증합니다.
+**제약:** UNIQUE(run_id,buyer_id), UNIQUE(buyer_coupon_id) WHERE buyer_coupon_id IS NOT NULL. template_id는 해당 월·등급의 GRADE 캠페인이며 external_spend>0, 1<=rank_no<=100입니다. 동점자 때문에 행 수가 100을 넘을 수 있습니다. 월별 마감의 불변 확정·취소 이력으로 대상과 합계를 고정합니다. 만료 뒤 재개는 새 쿠폰을 만들지 않고 EXPIRED로 종결합니다. 대상 저장과 상태 재개, 발급·예산 약속액 선점을 검증합니다.
 
 ## 결제·마일리지
 
