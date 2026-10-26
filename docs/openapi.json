@@ -9831,6 +9831,868 @@
           }
         }
       }
+    },
+    "/api/notifications": {
+      "get": {
+        "operationId": "get_api_notifications",
+        "summary": "본인 거래 알림 목록",
+        "tags": [
+          "seller"
+        ],
+        "x-owner-service": "seller",
+        "x-actor": "BUYER|SELLER",
+        "x-implemented": false,
+        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "security": [
+          {
+            "accountSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/notifications/{notificationId}": {
+      "get": {
+        "operationId": "get_api_notifications_notificationId",
+        "summary": "본인 거래 알림 조회",
+        "tags": [
+          "seller"
+        ],
+        "x-owner-service": "seller",
+        "x-actor": "BUYER|SELLER",
+        "x-implemented": false,
+        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "security": [
+          {
+            "accountSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "notificationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Notification"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/notification-deliveries": {
+      "get": {
+        "operationId": "get_internal_notification_deliveries",
+        "summary": "운영 발송 목록",
+        "tags": [
+          "seller"
+        ],
+        "x-owner-service": "seller",
+        "x-actor": "OPERATOR",
+        "x-implemented": false,
+        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "COLLECTING",
+                "PENDING",
+                "SENDING",
+                "UNKNOWN",
+                "RETRY",
+                "SENT",
+                "REVIEW_REQUIRED"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationDeliveryPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/notification-deliveries/{deliveryId}": {
+      "get": {
+        "operationId": "get_internal_notification_deliveries_deliveryId",
+        "summary": "운영 발송 조회",
+        "tags": [
+          "seller"
+        ],
+        "x-owner-service": "seller",
+        "x-actor": "OPERATOR",
+        "x-implemented": false,
+        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deliveryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationDelivery"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/notification-deliveries/{deliveryId}/attempts": {
+      "get": {
+        "operationId": "get_internal_notification_deliveries_deliveryId_attempts",
+        "summary": "발송·조회·재처리 이력",
+        "tags": [
+          "seller"
+        ],
+        "x-owner-service": "seller",
+        "x-actor": "OPERATOR",
+        "x-implemented": false,
+        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "deliveryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationAttemptPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/notification-deliveries/{deliveryId}/replays": {
+      "post": {
+        "operationId": "post_internal_notification_deliveries_deliveryId_replays",
+        "summary": "원알림 재처리",
+        "tags": [
+          "seller"
+        ],
+        "x-owner-service": "seller",
+        "x-actor": "OPERATOR",
+        "x-implemented": false,
+        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deliveryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "재처리 접수; 발송 완료 아님",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationDelivery"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "운영 발송 조회 경로",
+                "schema": {
+                  "type": "string",
+                  "format": "uri-reference"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationReplayRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/notification-mock/receipts/{deliveryId}": {
+      "get": {
+        "operationId": "get_internal_notification_mock_receipts_deliveryId",
+        "summary": "모의 수신 원결과 조회",
+        "tags": [
+          "seller"
+        ],
+        "x-owner-service": "seller",
+        "x-actor": "OPERATOR",
+        "x-implemented": false,
+        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "deliveryId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MockNotificationReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -15056,6 +15918,880 @@
               "eventType",
               "payload"
             ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "eventId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "eventVersion": {
+                "const": 1
+              },
+              "occurredAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "aggregateId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "aggregateVersion": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "eventType": {
+                "const": "PaymentNoticeRequested"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/PaymentNoticeRequestedPayload"
+              }
+            },
+            "required": [
+              "eventId",
+              "eventVersion",
+              "occurredAt",
+              "aggregateId",
+              "aggregateVersion",
+              "eventType",
+              "payload"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "eventId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "eventVersion": {
+                "const": 1
+              },
+              "occurredAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "aggregateId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "aggregateVersion": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "eventType": {
+                "const": "SettlementNoticeRequested"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/SettlementNoticeRequestedPayload"
+              }
+            },
+            "required": [
+              "eventId",
+              "eventVersion",
+              "occurredAt",
+              "aggregateId",
+              "aggregateVersion",
+              "eventType",
+              "payload"
+            ]
+          }
+        ]
+      },
+      "Notification": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "PAYMENT_COMPLETED",
+              "SHIPMENT_STARTED",
+              "PURCHASE_CONFIRMED",
+              "CANCELLATION_COMPLETED",
+              "RETURN_REQUESTED",
+              "RETURN_DECIDED",
+              "REFUND_COMPLETED",
+              "SALE_COMPLETED",
+              "SETTLEMENT_READY",
+              "PAYOUT_COMPLETED",
+              "PAYOUT_ACTION_REQUIRED",
+              "REFUND_ACTION_REQUIRED"
+            ]
+          },
+          "channel": {
+            "const": "MOCK_KAKAO"
+          },
+          "isMock": {
+            "const": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "COLLECTING",
+              "PENDING",
+              "SENDING",
+              "UNKNOWN",
+              "RETRY",
+              "SENT",
+              "REVIEW_REQUIRED"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "itemCount": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sentAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "channel",
+          "isMock",
+          "status",
+          "title",
+          "body",
+          "itemCount",
+          "occurredAt",
+          "createdAt",
+          "sentAt"
+        ],
+        "description": "인증된 같은 종류·ID의 계정만 조회. COLLECTING의 body는 빈 문자열이며 마감 후 고정. SENT는 모의 수신 기록 확인, 실제 카카오 전달 아님. 발생 시각은 항목 중 가장 이른 시각.",
+        "examples": [
+          {
+            "id": "99000000-0000-4000-8000-000000000001",
+            "kind": "REFUND_COMPLETED",
+            "channel": "MOCK_KAKAO",
+            "isMock": true,
+            "status": "SENT",
+            "title": "환불 완료",
+            "body": "10월 26일 03:00 UTC 거래: 외부 결제 7,000원 환불, 마일리지 2,000점 복원. 복원 직후 잔액 5,000점. 모의 발송입니다.",
+            "itemCount": 1,
+            "occurredAt": "2026-10-26T03:00:00Z",
+            "createdAt": "2026-10-26T03:00:01Z",
+            "sentAt": "2026-10-26T03:00:02Z"
+          }
+        ]
+      },
+      "NotificationPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Notification"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "totalElements": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "totalPages": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "size",
+          "totalElements",
+          "totalPages"
+        ]
+      },
+      "NotificationDelivery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "notification": {
+            "$ref": "#/components/schemas/Notification"
+          },
+          "recipientKind": {
+            "enum": [
+              "BUYER",
+              "SELLER"
+            ],
+            "type": "string"
+          },
+          "recipientId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "dedupKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "attemptCount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "retryCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "nextRunAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "leaseUntil": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastErrorCode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "notification",
+          "recipientKind",
+          "recipientId",
+          "dedupKey",
+          "attemptCount",
+          "retryCount",
+          "nextRunAt",
+          "leaseUntil",
+          "lastErrorCode",
+          "version"
+        ],
+        "description": "운영자 전용. 원수신처는 mock:<종류>:<계정 UUID>. 본문·키·수신자 수정 불가."
+      },
+      "NotificationDeliveryPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationDelivery"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "totalElements": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "totalPages": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "size",
+          "totalElements",
+          "totalPages"
+        ]
+      },
+      "NotificationAttempt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deliveryId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "attemptNo": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "SEND",
+              "LOOKUP",
+              "REPLAY"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "RUNNING",
+              "SUCCEEDED",
+              "RETRYABLE_FAILURE",
+              "PERMANENT_FAILURE",
+              "UNKNOWN"
+            ]
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorCode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operatorRef": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "deliveryId",
+          "attemptNo",
+          "operation",
+          "status",
+          "startedAt",
+          "finishedAt",
+          "errorCode",
+          "operatorRef",
+          "reason"
+        ],
+        "description": "REPLAY는 operatorRef·reason 필수. 조회·발송 결과는 도메인 거래 상태에 영향 없음."
+      },
+      "NotificationAttemptPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationAttempt"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "totalElements": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "totalPages": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "size",
+          "totalElements",
+          "totalPages"
+        ]
+      },
+      "MockNotificationReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "deliveryId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestHash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "ACCEPTED",
+              "REJECTED"
+            ]
+          },
+          "processedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "isMock": {
+            "const": true
+          }
+        },
+        "required": [
+          "deliveryId",
+          "requestHash",
+          "result",
+          "processedAt",
+          "isMock"
+        ],
+        "description": "모의 수신부가 별도 트랜잭션으로 저장한 원결과. deliveryId별 불변. 기록 없음은 404이며 성공으로 추정하지 않음."
+      },
+      "NotificationReplayRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "expectedVersion",
+          "reason"
+        ],
+        "description": "원 deliveryId·수신자·본문 고정. REVIEW_REQUIRED/RETRY/UNKNOWN에서만 새 라운드 접수. SENT·COLLECTING·PENDING·유효 임대는 409. UNKNOWN은 조회부터 재개."
+      },
+      "PaymentNoticeRequestedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "PAYMENT_COMPLETED",
+              "REFUND_COMPLETED"
+            ]
+          },
+          "businessRef": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentCycleId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orderId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "buyerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sellerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "refundId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "totalAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 10000000
+          },
+          "externalAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "mileageAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "mileageBalanceAfter": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "walletVersion": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "processedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "kind",
+          "businessRef",
+          "paymentId",
+          "paymentCycleId",
+          "orderId",
+          "buyerId",
+          "sellerId",
+          "refundId",
+          "totalAmount",
+          "externalAmount",
+          "mileageAmount",
+          "mileageBalanceAfter",
+          "walletVersion",
+          "processedAt"
+        ],
+        "description": "businessRef는 결제=paymentId, 환불=refundId. 결제 refundId=null, 환불 refundId 필수. 금액·잔액·지갑 버전은 해당 결제/복원 원장과 같은 트랜잭션의 사본. 타인 지갑의 잔액을 포함하지 않음. 마일리지 미사용이면 잔액/지갑 버전은 함께 null 가능. 사용/복원이 있으면 둘 다 필수.",
+        "examples": [
+          {
+            "kind": "REFUND_COMPLETED",
+            "businessRef": "99000000-0000-4000-8000-000000000002",
+            "paymentId": "99000000-0000-4000-8000-000000000003",
+            "paymentCycleId": "99000000-0000-4000-8000-000000000004",
+            "orderId": "99000000-0000-4000-8000-000000000005",
+            "buyerId": "99000000-0000-4000-8000-000000000006",
+            "sellerId": "99000000-0000-4000-8000-000000000007",
+            "refundId": "99000000-0000-4000-8000-000000000002",
+            "totalAmount": 9000,
+            "externalAmount": 7000,
+            "mileageAmount": 2000,
+            "mileageBalanceAfter": 5000,
+            "walletVersion": 4,
+            "processedAt": "2026-10-26T03:00:00Z"
+          }
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "PAYMENT_COMPLETED"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "refundId": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "REFUND_COMPLETED"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "refundId": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "mileageAmount": {
+                  "minimum": 1
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "mileageBalanceAfter": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "walletVersion": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        ]
+      },
+      "SettlementNoticeRequestedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "SETTLEMENT_READY",
+              "PAYOUT_COMPLETED",
+              "PAYOUT_ACTION_REQUIRED"
+            ]
+          },
+          "businessRef": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "batchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payoutId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sellerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "productId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cycleNo": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "cutoffAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "succeededAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reasonCode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "businessRef",
+          "batchId",
+          "payoutId",
+          "sellerId",
+          "productId",
+          "cycleNo",
+          "cutoffAt",
+          "amount",
+          "succeededAt",
+          "reasonCode"
+        ],
+        "description": "businessRef는 PAYOUT_COMPLETED=payoutId, 나머지=batchId. 지급 완료만 payoutId·원대역 succeededAt 필수. 조치 필요만 reasonCode 필수. READY는 마감/예정 회차 안내이며 지급 성공 아님. 부족 재원은 FUNDING_INSUFFICIENT, 확정 거절은 PROVIDER_DECLINED.",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "PAYOUT_COMPLETED"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payoutId": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "succeededAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "reasonCode": {
+                  "type": "null"
+                },
+                "amount": {
+                  "minimum": 1
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "succeededAt": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "kind": {
+                  "const": "PAYOUT_ACTION_REQUIRED"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "reasonCode": {
+                  "enum": [
+                    "FUNDING_INSUFFICIENT",
+                    "PROVIDER_DECLINED"
+                  ]
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "reasonCode": {
+                  "type": "null"
+                }
+              }
+            }
           }
         ]
       }
@@ -15288,6 +17024,30 @@
       "key": "paymentId",
       "schema": {
         "$ref": "#/components/schemas/PurchaseConfirmedPayload"
+      },
+      "version": 1
+    },
+    {
+      "name": "PaymentNoticeRequested",
+      "producer": "payment",
+      "consumers": [
+        "seller-notifications"
+      ],
+      "key": "paymentId",
+      "schema": {
+        "$ref": "#/components/schemas/PaymentNoticeRequestedPayload"
+      },
+      "version": 1
+    },
+    {
+      "name": "SettlementNoticeRequested",
+      "producer": "settlement",
+      "consumers": [
+        "seller-notifications"
+      ],
+      "key": "batchId",
+      "schema": {
+        "$ref": "#/components/schemas/SettlementNoticeRequestedPayload"
       },
       "version": 1
     }

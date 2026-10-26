@@ -71,6 +71,13 @@ type은 `feat`, `fix`, `refactor`, `docs`, `test`, `style`, `build`, `ci`, `chor
 - 목록은 `items`, `page`, `size`, `totalElements`, `totalPages`를 반환합니다. `page`는 0 이상, `size`는 1~100·기본 20으로 검증하며 정렬 필드는 허용 목록으로 제한합니다. 동일한 정렬 값에는 ID를 추가해 순서를 고정합니다.
 - 구매자·판매자 API의 `Idempotency-Key`는 인증된 계정 종류·계정 ID·작업별로 구분합니다. 내부 명령의 업무 키는 발신 서비스·업무 종류와 함께 식별합니다. 같은 키·본문의 재요청은 기존 처리로 연결하고, 같은 키에 다른 본문이 오면 `409`로 거절합니다. 원문 본문이나 키를 로그에 남기지 않습니다.
 
+### 검증 경계
+
+- MVC 요청 DTO는 Jakarta Bean Validation의 `@NotNull`, `@Size`, `@Positive` 등으로 형식·범위를 선언하고 Controller의 `@Valid`로 실행합니다. 경로·쿼리·메서드 파라미터는 해당 Spring MVC 검증 경로에서 검사합니다. Gateway는 WebFlux 경계에서 별도로 검사합니다.
+- `@Valid`는 권한·가격·잔액·쿠폰 유효기간·환불 기한·상태 전이를 보장하지 않습니다. 응용 서비스는 인증 주체·소유권·참조·멱등성·트랜잭션을 조율하고, 도메인의 생성자·의미 있는 메서드는 금액/상태 불변식을 보호합니다. Kafka·배치 경로도 같은 도메인 검증을 거칩니다.
+- DB는 `NOT NULL`·`UNIQUE`·`CHECK`·조건부 갱신으로 최종 경합을 막습니다. 외부 서비스/DB 조회를 DTO validator에 넣지 않습니다. `ddl-auto=validate`는 JPA 매핑과 DB 스키마의 일치 검사이며 요청/업무 검증과 다릅니다.
+- 입력 오류는 `400`+필드별 errors, 상태·버전·업무 충돌은 `409`, 역할 오류는 `403`, 타인 리소스는 `404`로 구분합니다. 정적 제약과 [OpenAPI](docs/openapi.json)의 필수값·범위를 함께 갱신합니다.
+
 ### 오류
 
 HTTP 오류는 [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 `application/problem+json`을 사용합니다. `type`, `title`, `status`, `detail`, `instance`에 `code`와 실제 추적의 `traceId`를 추가합니다. 입력 검증 실패에는 `errors`의 `field`·`reason`을 포함합니다.
