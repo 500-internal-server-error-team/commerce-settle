@@ -22,32 +22,32 @@
       <rect x="2" y="4" width="20" height="16" rx="2" />
       <path d="M2 9h20M5 6.5h.1M8 6.5h.1" />
     </symbol>
-    <marker id="arrow-http" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse">
-      <path d="M0 0 8 3 0 6Z" fill="#2563eb" />
+    <marker id="arrow-http" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto-start-reverse" markerUnits="userSpaceOnUse" viewBox="0 0 8 6">
+      <path d="M0 0 8 3 0 6Z" fill="#1e3a8a" />
     </marker>
-    <marker id="arrow-event" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse">
-      <path d="M0 0 8 3 0 6Z" fill="#7c3aed" />
+    <marker id="arrow-event" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto-start-reverse" markerUnits="userSpaceOnUse" viewBox="0 0 8 6">
+      <path d="M0 0 8 3 0 6Z" fill="#c56b00" />
     </marker>
   </defs>
   <rect width="880" height="424" fill="#ffffff" />
-  <path id="browser-gateway" data-edge="true" d="M144 204 H192" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-http)" data-flow="http" />
+  <path id="browser-gateway" data-edge="true" d="M144 204 H192" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-http)" data-flow="http" />
   <rect x="148.0" y="182" width="40" height="14" fill="#ffffff" data-label-for="browser-gateway" />
-  <text x="168" y="192" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#2563eb" font-weight="400" text-anchor="middle" data-label-for="browser-gateway">HTTP</text>
-  <path id="gateway-commerce" data-edge="true" d="M224 176 V100 Q224 92 232 92 H400" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-http)" data-flow="http" />
-  <path id="gateway-payment-api" data-edge="true" d="M336 204 H400" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-http)" data-flow="http" />
-  <path id="gateway-settlement" data-edge="true" d="M256 232 V308 Q256 316 264 316 H400" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-http)" data-flow="http" />
-  <path id="commerce-events" data-edge="true" d="M544 92 H688" fill="none" stroke="#7c3aed" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-event)" marker-start="url(#arrow-event)" data-flow="event" stroke-dasharray="6 4" />
+  <text x="168" y="192" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#334155" font-weight="400" text-anchor="middle" data-label-for="browser-gateway">HTTP</text>
+  <path id="gateway-commerce" data-edge="true" d="M224 176 V100 Q224 92 232 92 H400" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-http)" data-flow="http" />
+  <path id="gateway-payment-api" data-edge="true" d="M336 204 H400" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-http)" data-flow="http" />
+  <path id="gateway-settlement" data-edge="true" d="M256 232 V308 Q256 316 264 316 H400" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-http)" data-flow="http" />
+  <path id="commerce-events" data-edge="true" d="M544 92 H688" fill="none" stroke="#c56b00" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-event)" marker-start="url(#arrow-event)" data-flow="event" stroke-dasharray="8 5" />
   <rect x="594" y="70" width="60" height="14" fill="#ffffff" data-label-for="commerce-events" />
-  <text x="624" y="80" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#7c3aed" font-weight="400" text-anchor="middle" data-label-for="commerce-events">주문·결제</text>
-  <path id="payment-events" data-edge="true" d="M544 192 H616 Q624 192 624 184 V152 Q624 144 632 144 H736 Q744 144 744 136 V120" fill="none" stroke="#7c3aed" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-event)" marker-start="url(#arrow-event)" data-flow="event" stroke-dasharray="6 4" />
-  <path id="worker-events" data-edge="true" d="M800 120 V176" fill="none" stroke="#7c3aed" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-event)" marker-start="url(#arrow-event)" data-flow="event" stroke-dasharray="6 4" />
-  <path id="settlement-events" data-edge="true" d="M544 300 H576 Q584 300 584 292 V200 a8 8 0 0 1 0 -16 V100 a8 8 0 0 1 0 -16 V32 Q584 24 592 24 H808 Q816 24 816 32 V64" fill="none" stroke="#7c3aed" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-event)" marker-start="url(#arrow-event)" data-flow="event" stroke-dasharray="6 4" />
-  <path id="worker-pg" data-edge="true" d="M800 232 V288" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-http)" data-flow="http" />
+  <text x="624" y="80" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#334155" font-weight="400" text-anchor="middle" data-label-for="commerce-events">주문·결제</text>
+  <path id="payment-events" data-edge="true" d="M544 192 H616 Q624 192 624 184 V152 Q624 144 632 144 H736 Q744 144 744 136 V120" fill="none" stroke="#c56b00" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-event)" marker-start="url(#arrow-event)" data-flow="event" stroke-dasharray="8 5" />
+  <path id="worker-events" data-edge="true" d="M800 120 V176" fill="none" stroke="#c56b00" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-event)" marker-start="url(#arrow-event)" data-flow="event" stroke-dasharray="8 5" />
+  <path id="settlement-events" data-edge="true" d="M544 300 H576 Q584 300 584 292 V200 a8 8 0 0 1 0 -16 V100 a8 8 0 0 1 0 -16 V32 Q584 24 592 24 H808 Q816 24 816 32 V64" fill="none" stroke="#c56b00" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-event)" marker-start="url(#arrow-event)" data-flow="event" stroke-dasharray="8 5" />
+  <path id="worker-pg" data-edge="true" d="M800 232 V288" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-http)" data-flow="http" />
   <rect x="808" y="253" width="60" height="14" fill="#ffffff" data-label-for="worker-pg" />
-  <text x="838.0" y="263" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#2563eb" font-weight="400" text-anchor="middle" data-label-for="worker-pg">승인·환불</text>
-  <path id="settlement-payout" data-edge="true" d="M544 332 H688" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-http)" data-flow="http" />
+  <text x="838.0" y="263" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#334155" font-weight="400" text-anchor="middle" data-label-for="worker-pg">승인·환불</text>
+  <path id="settlement-payout" data-edge="true" d="M544 332 H688" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow-http)" data-flow="http" />
   <rect x="598.0" y="310" width="36" height="14" fill="#ffffff" data-label-for="settlement-payout" />
-  <text x="616" y="320" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#2563eb" font-weight="400" text-anchor="middle" data-label-for="settlement-payout">지급</text>
+  <text x="616" y="320" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#334155" font-weight="400" text-anchor="middle" data-label-for="settlement-payout">지급</text>
   <g id="browser" data-node="true" data-box="32,176,112,56" data-tech="component">
     <rect x="32" y="176" width="112" height="56" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <g data-align-content="card" transform="translate(0 2)">
@@ -93,9 +93,9 @@
   </g>
   <g data-legend="flows">
     <line x1="32" x2="848.0" y1="376" y2="376" stroke="#e2e8f0" stroke-width="0.8" />
-    <line data-flow="http" x1="40" x2="80" y1="396" y2="396" stroke="#2563eb" stroke-width="1.8" />
+    <line data-flow="http" x1="40" x2="80" y1="396" y2="396" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" />
     <text x="92" y="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">HTTP 호출</text>
-    <line data-flow="event" x1="240" x2="280" y1="396" y2="396" stroke="#7c3aed" stroke-width="1.8" stroke-dasharray="6 4" />
+    <line data-flow="event" x1="240" x2="280" y1="396" y2="396" stroke="#c56b00" stroke-width="2.2" stroke-dasharray="8 5" stroke-linecap="round" />
     <text x="292" y="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">Kafka 이벤트</text>
     <use href="#logo-springboot" x="440" y="386" width="20" height="20" />
     <text x="472" y="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">Spring Boot 앱</text>

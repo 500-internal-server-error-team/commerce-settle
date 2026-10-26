@@ -24,7 +24,7 @@ Spring Boot 영역의 여섯 실행은 우리가 빌드하는 애플리케이션
 
 `payment-api`와 `payment-worker`는 같은 `payment` 모듈의 jar를 각각 실행하고 같은 DB를 사용합니다. 현재 `PAYMENT_ROLE`은 메트릭 태그 구분에 사용되며, 결제 접수·작업 소비·PG 호출은 구현 전입니다. Worker와 `finance-mock`은 Gateway의 공개 라우팅 대상에 포함하지 않습니다.
 
-DB 접근은 **Spring Data JPA → Hibernate → JDBC 드라이버 → PostgreSQL**을 거칩니다. 구조도는 앱이 사용하는 Spring Data JPA로 표시합니다. JDBC는 하위 연결 기술이며 별도 서비스가 아닙니다.
+DB 접근은 Spring Data JPA를 사용합니다.
 
 PostgreSQL의 업무 DB는 `seller`·`payment`·`settlement`·`finance_mock` 네 개이며 하나의 컨테이너 안에서 계정·스키마를 분리합니다. Payment API와 Worker는 같은 `payment` DB를 사용합니다. 물리 DB 네 대나 고가용성 구성을 뜻하지 않습니다.
 

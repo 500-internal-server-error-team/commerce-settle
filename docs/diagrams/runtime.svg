@@ -28,11 +28,11 @@
     <symbol id="logo-redis" viewBox="0 0 24 24" fill="#FF4438">
       <path d="M22.71 13.145c-1.66 2.092-3.452 4.483-7.038 4.483-3.203 0-4.397-2.825-4.48-5.12.701 1.484 2.073 2.685 4.214 2.63 4.117-.133 6.94-3.852 6.94-7.239 0-4.05-3.022-6.972-8.268-6.972-3.752 0-8.4 1.428-11.455 3.685C2.59 6.937 3.885 9.958 4.35 9.626c2.648-1.904 4.748-3.13 6.784-3.744C8.12 9.244.886 17.05 0 18.425c.1 1.261 1.66 4.648 2.424 4.648.232 0 .431-.133.664-.365a100.49 100.49 0 0 0 5.54-6.765c.222 3.104 1.748 6.898 6.014 6.898 3.819 0 7.604-2.756 9.33-8.965.2-.764-.73-1.361-1.261-.73zm-4.349-5.013c0 1.959-1.926 2.922-3.685 2.922-.941 0-1.664-.247-2.235-.568 1.051-1.592 2.092-3.225 3.21-4.973 1.972.334 2.71 1.43 2.71 2.619z" />
     </symbol>
-    <marker id="arrow-store" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse">
+    <marker id="arrow-store" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto-start-reverse" markerUnits="userSpaceOnUse" viewBox="0 0 8 6">
       <path d="M0 0 8 3 0 6Z" fill="#0f766e" />
     </marker>
-    <marker id="arrow-event" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse">
-      <path d="M0 0 8 3 0 6Z" fill="#7c3aed" />
+    <marker id="arrow-event" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto-start-reverse" markerUnits="userSpaceOnUse" viewBox="0 0 8 6">
+      <path d="M0 0 8 3 0 6Z" fill="#c56b00" />
     </marker>
   </defs>
   <rect width="880" height="420" fill="#ffffff" />
@@ -49,9 +49,9 @@
     <rect x="16" y="240" width="848" height="120" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
     <text x="32" y="266" font-size="12" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">데이터 인프라</text>
   </g>
-  <path id="apps-postgres" data-edge="true" d="M 360,192 L 360,224 Q 360,232 352,232 L 256,232 Q 248,232 248,240 L 248,288" fill="none" stroke="#0f766e" stroke-width="1.8" marker-end="url(#arrow-store)" stroke-linejoin="round" stroke-linecap="round" data-flow="store" stroke-dasharray="8 3 2 3" />
-  <path id="apps-kafka" data-edge="true" d="M 440,192 L 440,288" fill="none" stroke="#7c3aed" stroke-width="1.8" marker-end="url(#arrow-event)" stroke-linejoin="round" stroke-linecap="round" data-flow="event" stroke-dasharray="6 4" />
-  <path id="apps-redis" data-edge="true" d="M 748,208 L 748,248 Q 748,256 740,256 L 712,256 Q 704,256 704,264 L 704,288" fill="none" stroke="#0f766e" stroke-width="1.8" marker-end="url(#arrow-store)" stroke-linejoin="round" stroke-linecap="round" data-flow="store" stroke-dasharray="8 3 2 3" />
+  <path id="apps-postgres" data-edge="true" d="M 360,192 L 360,224 Q 360,232 352,232 L 256,232 Q 248,232 248,240 L 248,288" fill="none" stroke="#0f766e" stroke-width="2.2" marker-end="url(#arrow-store)" stroke-linejoin="round" stroke-linecap="round" data-flow="store" stroke-dasharray="12 4 2 4" />
+  <path id="apps-kafka" data-edge="true" d="M 440,192 L 440,288" fill="none" stroke="#c56b00" stroke-width="2.2" marker-end="url(#arrow-event)" stroke-linejoin="round" stroke-linecap="round" data-flow="event" stroke-dasharray="8 5" />
+  <path id="apps-redis" data-edge="true" d="M 748,208 L 748,248 Q 748,256 740,256 L 712,256 Q 704,256 704,264 L 704,288" fill="none" stroke="#0f766e" stroke-width="2.2" marker-end="url(#arrow-store)" stroke-linejoin="round" stroke-linecap="round" data-flow="store" stroke-dasharray="12 4 2 4" />
   <g id="gateway" data-node="true" data-logo="springboot" data-tech="spring-boot" data-box="32,124,120,44">
     <title>API Gateway · gateway</title>
     <rect x="32" y="124" width="120" height="44" rx="4" fill="#ffffff" stroke="#64748b" stroke-width="1.5" />
@@ -116,16 +116,16 @@
     <text x="656" y="320.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">Redis</text>
   </g>
   <rect data-label-for="apps-postgres" x="248" y="210" width="104" height="14" fill="#ffffff" />
-  <text data-label-for="apps-postgres" x="300.0" y="220" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#0f766e" text-anchor="middle">Spring Data JPA</text>
+  <text data-label-for="apps-postgres" x="300.0" y="220" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#334155" text-anchor="middle">JDBC</text>
   <rect data-label-for="apps-kafka" x="448" y="216" width="52" height="14" fill="#ffffff" />
-  <text data-label-for="apps-kafka" x="474.0" y="226" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#7c3aed" text-anchor="middle">이벤트</text>
+  <text data-label-for="apps-kafka" x="474.0" y="226" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#334155" text-anchor="middle">이벤트</text>
   <rect data-label-for="apps-redis" x="756" y="216" width="44" height="14" fill="#ffffff" />
-  <text data-label-for="apps-redis" x="778.0" y="226" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#0f766e" text-anchor="middle">Redis</text>
+  <text data-label-for="apps-redis" x="778.0" y="226" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#334155" text-anchor="middle">Redis</text>
   <g data-legend="flows">
     <line x1="32" x2="848.0" y1="372" y2="372" stroke="#e2e8f0" stroke-width="0.8" />
-    <line data-flow="store" x1="40" x2="80" y1="392" y2="392" stroke="#0f766e" stroke-width="1.8" stroke-dasharray="8 3 2 3" />
+    <line data-flow="store" x1="40" x2="80" y1="392" y2="392" stroke="#0f766e" stroke-width="2.2" stroke-dasharray="12 4 2 4" stroke-linecap="round" />
     <text x="92" y="396" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">DB·Redis 접근</text>
-    <line data-flow="event" x1="240" x2="280" y1="392" y2="392" stroke="#7c3aed" stroke-width="1.8" stroke-dasharray="6 4" />
+    <line data-flow="event" x1="240" x2="280" y1="392" y2="392" stroke="#c56b00" stroke-width="2.2" stroke-dasharray="8 5" stroke-linecap="round" />
     <text x="292" y="396" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">Kafka 이벤트</text>
   </g>
 </svg>
