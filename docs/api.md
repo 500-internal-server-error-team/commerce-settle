@@ -42,6 +42,7 @@
 | POST | `/api/sellers/me/coupon-templates` | 쿠폰 템플릿 등록 | SELLER | `CouponTemplateCreate` | `CouponTemplate` | 201 |
 | GET | `/api/sellers/me/coupon-templates` | 쿠폰 템플릿 목록 | SELLER | `—` | `CouponTemplatePage` | 200 |
 | POST | `/api/sellers/me/coupon-templates/{templateId}/closure` | 쿠폰 신규 발급 종료 | SELLER | `VersionRequest` | `CouponTemplate` | 200 |
+| POST | `/api/sellers/me/coupon-templates/{templateId}/issues` | 구매자에게 판매자 쿠폰 발급 | SELLER | `CouponIssueRequest` | `BuyerCoupon` | 201 |
 | GET | `/api/buyers/me/coupons` | 본인 쿠폰 목록 | BUYER | `—` | `BuyerCouponPage` | 200 |
 | POST | `/api/sellers/me/events` | 이름을 정해 이벤트 등록 | SELLER | `EventCreate` | `Event` | 201 |
 | PUT | `/api/sellers/me/events/{eventId}` | 미공개 이벤트 변경 | SELLER | `EventUpdate` | `Event` | 200 |
@@ -111,8 +112,8 @@
 
 ## 쿠폰 사용 순서
 
-1. 내부 운영자가 웰컴·등급 캠페인의 예산·조건을 승인합니다. 판매자는 자기 월 캠페인만 생성하며 서버가 SELLER 종류·부담자를 지정합니다. 구매자를 임의로 지정해 발급하는 API는 없습니다.
-2. 가입 시 유효한 웰컴 캠페인이 있으면 계정당 한 장과 예산 약속액을 원자 저장합니다. 월 작업은 고정한 구매확정 합계로 등급 대상·판매자 상위 최대 100명을 정하고, 대상 전체 예산을 확보한 뒤 재시작 가능한 발급을 수행합니다.
+1. 내부 운영자가 웰컴·월간 우수고객 캠페인의 예산·조건을 승인합니다. 판매자는 자기 캠페인의 대상·기간·수량·예산을 정하고 issues API로 구매자에게 발급합니다. 서버가 SELLER 종류·부담자를 지정하며 동일 템플릿·구매자 중복을 차단합니다.
+2. 가입 시 유효한 웰컴 캠페인이 있으면 계정당 한 장과 예산 약속액을 원자 저장합니다. 월 작업은 플랫폼 전체의 고정한 구매확정 E 합계로 상위 100위와 동점자 전원을 정합니다. 선정자에게 구매액별 할인액을 적용하고, targetCount·cutoffSpend와 대상 전체의 예산·발급 수 한도를 고정한 뒤 발급합니다. 판매자 쿠폰은 이 월 작업과 무관합니다.
 3. BuyerCoupon은 kind·funder·선택적 sellerId·사용 가능 수단·기한을 보여줍니다. OrderQuoteRequest와 OrderCreate는 쿠폰 ID 한 개만 받고 마일리지를 함께 사용할 수 없습니다. 지원하지 않는 입력 조합은 400, 실제 쿠폰의 만료·상품·소유·금액/수단 조건 위반은 409입니다.
 4. 응답·내부 컨텍스트·결제 이벤트는 총할인 couponAmount와 sellerCouponAmount(S)·platformCouponAmount(P)·settlementBaseAmount(B)를 구분합니다. 클라이언트가 할인 부담자나 금액을 지정하지 않습니다. `B=G−S=T+P=E+M+P`, 수수료는 B의 15%입니다.
 5. 예약·미확정·전액 환불은 원쿠폰과 최초 E/M/P·수수료·판매자 몫을 기준으로 한 번씩 처리합니다. 발급 예산과 판매자에게 실제 지급할 현금을 따로 확인합니다. 종류·기간·금액·예산의 기준은 [쿠폰 정책](policies.md#쿠폰)을 따릅니다.
