@@ -1,1 +1,92 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="880" height="272" viewBox="0 0 880 272" role="img" aria-labelledby="title desc"><title id="title">PG·간편결제·지급 대역</title><desc id="desc">결제 Worker와 정산은 Spring Boot 앱이다. PG A·B·C, 간편결제와 지급 API는 하나의 Spring Boot 금융 Mock 앱 내부에 구현할 논리 대역이며 각각 별도 앱이나 실제 금융 기관이 아니다.</desc><defs><style>@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap');</style><marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse"><path d="M0 0 8 3 0 6Z" fill="#607084" /></marker><marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse"><path d="M0 0 8 3 0 6Z" fill="#607084" /></marker><marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse"><path d="M0 0 8 3 0 6Z" fill="#356b94" /></marker><symbol id="logo-springboot" viewBox="0 0 24 24" fill="#6DB33F"><path d="m23.693 10.7058-4.73-8.1844c-.4094-.7106-1.4166-1.2942-2.2402-1.2942H7.2725c-.819 0-1.8308.5836-2.2402 1.2942L.307 10.7058c-.4095.7106-.4095 1.873 0 2.5837l4.7252 8.189c.4094.7107 1.4166 1.2943 2.2402 1.2943h9.455c.819 0 1.826-.5836 2.2402-1.2942l4.7252-8.189c.4095-.7107.4095-1.8732 0-2.5838zM10.9763 5.7547c0-.5365.4377-.9742.9742-.9742s.9742.4377.9742.9742v5.8217c0 .5366-.4377.9742-.9742.9742s-.9742-.4376-.9742-.9742zm.9742 12.4294c-3.6427 0-6.6077-2.965-6.6077-6.6077.0047-2.0896.993-4.0521 2.6685-5.304a.8657.8657 0 0 1 1.2142.1788.8657.8657 0 0 1-.1788 1.2143c-2.1602 1.6048-2.612 4.6592-1.0072 6.8194 1.6049 2.1603 4.6593 2.612 6.8195 1.0072 1.2378-.9177 1.9673-2.372 1.9673-3.9157a4.8972 4.8972 0 0 0-1.9861-3.925c-.386-.2824-.466-.8284-.1836-1.2143.2824-.386.8283-.466 1.2143-.1835 1.6895 1.2471 2.6826 3.2238 2.6873 5.3228 0 3.6474-2.965 6.6077-6.6077 6.6077z" /></symbol><symbol id="logo-provider" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="1.5"><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M2 10h20M5 15h5" /></symbol><symbol id="logo-wallet" viewBox="0 0 24 24"><g fill="none" stroke="#64748b" stroke-width="1.6"><rect x="2.5" y="6" width="19" height="15" rx="2" /><path d="M4 6V3h15v3M21 11h-7v5h7" /><circle cx="17" cy="13.5" r=".7" /></g></symbol></defs><rect width="880" height="272" fill="#ffffff" /><g id="finance-mock-app" data-zone="finance-mock-app" data-box="328,16,536,240"><rect x="328" y="16" width="536" height="240" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" /><use href="#logo-springboot" x="344" y="28" width="18" height="18" aria-hidden="true" /><text x="372" y="42" font-size="12" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">금융 모의 서버</text></g><path id="worker-pg-a" data-edge="true" d="M 156,112 L 232,112 Q 240,112 240,104 L 240,98 Q 240,90 248,90 L 384,90" fill="none" stroke="#356b94" stroke-width="1.2" marker-end="url(#arrow-link)" stroke-linejoin="round" stroke-linecap="round" /><path id="worker-pg-b" data-edge="true" d="M 156,124 L 264,124 Q 272,124 272,132 L 272,142 Q 272,150 280,150 L 384,150" fill="none" stroke="#356b94" stroke-width="1.2" marker-end="url(#arrow-link)" stroke-linejoin="round" stroke-linecap="round" /><path id="worker-pg-c" data-edge="true" d="M 156,136 L 216,136 Q 224,136 224,144 L 224,202 Q 224,210 232,210 L 384,210" fill="none" stroke="#356b94" stroke-width="1.2" marker-end="url(#arrow-link)" stroke-linejoin="round" stroke-linecap="round" /><path id="settlement-payout" data-edge="true" d="M 92,236 L 584,236 Q 592,236 592,228 L 592,218 Q 592,210 600,210 L 656,210" fill="none" stroke="#356b94" stroke-width="1.2" marker-end="url(#arrow-link)" stroke-linejoin="round" stroke-linecap="round" /><path id="worker-easy-pay" data-edge="true" d="M 86,100 V 66 Q 86,58 94,58 H 620 Q 628,58 628,66 V 82 Q 628,90 636,90 H 656" fill="none" stroke="#356b94" stroke-width="1.2" marker-end="url(#arrow-link)" stroke-linejoin="round" stroke-linecap="round" /><g id="payment-worker" data-node="true" data-logo="springboot" data-tech="spring-boot" data-box="16,100,140,48"><title>결제 Worker · payment-worker</title><rect x="16" y="100" width="140" height="48" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><use href="#logo-springboot" x="24" y="113.0" width="22" height="22" aria-hidden="true" /><text x="56" y="128.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">결제 Worker</text></g><g id="settlement" data-node="true" data-logo="springboot" data-tech="spring-boot" data-box="16,212,76,48"><title>정산 · settlement</title><rect x="16" y="212" width="76" height="48" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><use href="#logo-springboot" x="24" y="225.0" width="22" height="22" aria-hidden="true" /><text x="56" y="240.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">정산</text></g><g id="pg-a" data-node="true" data-logo="provider" data-tech="mock-endpoint" data-box="384,72,80,36"><title>PG A · pg-a</title><rect x="384" y="72" width="80" height="36" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><use href="#logo-provider" x="392" y="79.0" width="22" height="22" aria-hidden="true" /><text x="424" y="94.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">PG A</text></g><g id="pg-b" data-node="true" data-logo="provider" data-tech="mock-endpoint" data-box="384,132,80,36"><title>PG B · pg-b</title><rect x="384" y="132" width="80" height="36" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><use href="#logo-provider" x="392" y="139.0" width="22" height="22" aria-hidden="true" /><text x="424" y="154.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">PG B</text></g><g id="pg-c" data-node="true" data-logo="provider" data-tech="mock-endpoint" data-box="384,192,80,36"><title>PG C · pg-c</title><rect x="384" y="192" width="80" height="36" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><use href="#logo-provider" x="392" y="199.0" width="22" height="22" aria-hidden="true" /><text x="424" y="214.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">PG C</text></g><g id="easy-pay" data-node="true" data-logo="wallet" data-tech="mock-endpoint" data-box="656,72,112,36"><title>간편결제 · easy-pay</title><rect x="656" y="72" width="112" height="36" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><use href="#logo-wallet" x="664" y="79" width="22" height="22" aria-hidden="true" /><text x="696" y="94" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b">간편결제</text></g><g id="payout" data-node="true" data-logo="provider" data-tech="mock-endpoint" data-box="656,192,104,36"><title>지급 API · payout</title><rect x="656" y="192" width="104" height="36" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><use href="#logo-provider" x="664" y="199.0" width="22" height="22" aria-hidden="true" /><text x="696" y="214.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">지급 API</text></g></svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="332" viewBox="0 0 880 332" role="img" aria-labelledby="title desc">
+  <title id="title">PG·간편결제·지급 대역</title>
+  <desc id="desc">결제 Worker와 정산은 Spring Boot 앱이다. PG A·B·C, 간편결제와 지급 API는 하나의 Spring Boot 금융 Mock 앱 내부에 구현할 논리 대역이며 각각 별도 앱이나 실제 금융 기관이 아니다.</desc>
+  <defs>
+    <style>@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap');</style>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse">
+      <path d="M0 0 8 3 0 6Z" fill="#607084" />
+    </marker>
+    <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse">
+      <path d="M0 0 8 3 0 6Z" fill="#607084" />
+    </marker>
+    <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse">
+      <path d="M0 0 8 3 0 6Z" fill="#356b94" />
+    </marker>
+    <symbol id="logo-springboot" viewBox="0 0 24 24" fill="#6DB33F">
+      <path d="m23.693 10.7058-4.73-8.1844c-.4094-.7106-1.4166-1.2942-2.2402-1.2942H7.2725c-.819 0-1.8308.5836-2.2402 1.2942L.307 10.7058c-.4095.7106-.4095 1.873 0 2.5837l4.7252 8.189c.4094.7107 1.4166 1.2943 2.2402 1.2943h9.455c.819 0 1.826-.5836 2.2402-1.2942l4.7252-8.189c.4095-.7107.4095-1.8732 0-2.5838zM10.9763 5.7547c0-.5365.4377-.9742.9742-.9742s.9742.4377.9742.9742v5.8217c0 .5366-.4377.9742-.9742.9742s-.9742-.4376-.9742-.9742zm.9742 12.4294c-3.6427 0-6.6077-2.965-6.6077-6.6077.0047-2.0896.993-4.0521 2.6685-5.304a.8657.8657 0 0 1 1.2142.1788.8657.8657 0 0 1-.1788 1.2143c-2.1602 1.6048-2.612 4.6592-1.0072 6.8194 1.6049 2.1603 4.6593 2.612 6.8195 1.0072 1.2378-.9177 1.9673-2.372 1.9673-3.9157a4.8972 4.8972 0 0 0-1.9861-3.925c-.386-.2824-.466-.8284-.1836-1.2143.2824-.386.8283-.466 1.2143-.1835 1.6895 1.2471 2.6826 3.2238 2.6873 5.3228 0 3.6474-2.965 6.6077-6.6077 6.6077z" />
+    </symbol>
+    <symbol id="logo-provider" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="1.5">
+      <rect x="2" y="5" width="20" height="14" rx="2" />
+      <path d="M2 10h20M5 15h5" />
+    </symbol>
+    <symbol id="logo-wallet" viewBox="0 0 24 24">
+      <g fill="none" stroke="#64748b" stroke-width="1.6">
+        <rect x="2.5" y="6" width="19" height="15" rx="2" />
+        <path d="M4 6V3h15v3M21 11h-7v5h7" />
+        <circle cx="17" cy="13.5" r=".7" />
+      </g>
+    </symbol>
+    <marker id="arrow-http" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse">
+      <path d="M0 0 8 3 0 6Z" fill="#2563eb" />
+    </marker>
+  </defs>
+  <rect width="880" height="332" fill="#ffffff" />
+  <g id="finance-mock-app" data-zone="finance-mock-app" data-box="328,16,536,240">
+    <rect x="328" y="16" width="536" height="240" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <use href="#logo-springboot" x="344" y="28" width="18" height="18" aria-hidden="true" />
+    <text x="372" y="42" font-size="12" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">금융 모의 서버</text>
+  </g>
+  <path id="worker-pg-a" data-edge="true" d="M 156,112 L 232,112 Q 240,112 240,104 L 240,98 Q 240,90 248,90 L 384,90" fill="none" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-http)" stroke-linejoin="round" stroke-linecap="round" data-flow="http" />
+  <path id="worker-pg-b" data-edge="true" d="M 156,124 L 264,124 Q 272,124 272,132 L 272,142 Q 272,150 280,150 L 384,150" fill="none" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-http)" stroke-linejoin="round" stroke-linecap="round" data-flow="http" />
+  <path id="worker-pg-c" data-edge="true" d="M 156,136 L 216,136 Q 224,136 224,144 L 224,202 Q 224,210 232,210 L 384,210" fill="none" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-http)" stroke-linejoin="round" stroke-linecap="round" data-flow="http" />
+  <path id="settlement-payout" data-edge="true" d="M 92,236 L 584,236 Q 592,236 592,228 L 592,218 Q 592,210 600,210 L 656,210" fill="none" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-http)" stroke-linejoin="round" stroke-linecap="round" data-flow="http" />
+  <path id="worker-easy-pay" data-edge="true" d="M 86,100 V 66 Q 86,58 94,58 H 620 Q 628,58 628,66 V 82 Q 628,90 636,90 H 656" fill="none" stroke="#2563eb" stroke-width="1.8" marker-end="url(#arrow-http)" stroke-linejoin="round" stroke-linecap="round" data-flow="http" />
+  <g id="payment-worker" data-node="true" data-logo="springboot" data-tech="spring-boot" data-box="16,100,140,48">
+    <title>결제 Worker · payment-worker</title>
+    <rect x="16" y="100" width="140" height="48" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
+    <use href="#logo-springboot" x="24" y="113.0" width="22" height="22" aria-hidden="true" />
+    <text x="56" y="128.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">결제 Worker</text>
+  </g>
+  <g id="settlement" data-node="true" data-logo="springboot" data-tech="spring-boot" data-box="16,212,76,48">
+    <title>정산 · settlement</title>
+    <rect x="16" y="212" width="76" height="48" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
+    <use href="#logo-springboot" x="24" y="225.0" width="22" height="22" aria-hidden="true" />
+    <text x="56" y="240.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">정산</text>
+  </g>
+  <g id="pg-a" data-node="true" data-logo="provider" data-tech="mock-endpoint" data-box="384,72,80,36">
+    <title>PG A · pg-a</title>
+    <rect x="384" y="72" width="80" height="36" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
+    <use href="#logo-provider" x="392" y="79.0" width="22" height="22" aria-hidden="true" />
+    <text x="424" y="94.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">PG A</text>
+  </g>
+  <g id="pg-b" data-node="true" data-logo="provider" data-tech="mock-endpoint" data-box="384,132,80,36">
+    <title>PG B · pg-b</title>
+    <rect x="384" y="132" width="80" height="36" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
+    <use href="#logo-provider" x="392" y="139.0" width="22" height="22" aria-hidden="true" />
+    <text x="424" y="154.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">PG B</text>
+  </g>
+  <g id="pg-c" data-node="true" data-logo="provider" data-tech="mock-endpoint" data-box="384,192,80,36">
+    <title>PG C · pg-c</title>
+    <rect x="384" y="192" width="80" height="36" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
+    <use href="#logo-provider" x="392" y="199.0" width="22" height="22" aria-hidden="true" />
+    <text x="424" y="214.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">PG C</text>
+  </g>
+  <g id="easy-pay" data-node="true" data-logo="wallet" data-tech="mock-endpoint" data-box="656,72,112,36">
+    <title>간편결제 · easy-pay</title>
+    <rect x="656" y="72" width="112" height="36" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
+    <use href="#logo-wallet" x="664" y="79" width="22" height="22" aria-hidden="true" />
+    <text x="696" y="94" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b">간편결제</text>
+  </g>
+  <g id="payout" data-node="true" data-logo="provider" data-tech="mock-endpoint" data-box="656,192,104,36">
+    <title>지급 API · payout</title>
+    <rect x="656" y="192" width="104" height="36" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
+    <use href="#logo-provider" x="664" y="199.0" width="22" height="22" aria-hidden="true" />
+    <text x="696" y="214.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">지급 API</text>
+  </g>
+  <g data-legend="flows">
+    <line x1="32" x2="848.0" y1="284" y2="284" stroke="#e2e8f0" stroke-width="0.8" />
+    <line data-flow="http" x1="40" x2="80" y1="304" y2="304" stroke="#2563eb" stroke-width="1.8" />
+    <text x="92" y="308" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">HTTP 호출</text>
+  </g>
+</svg>
