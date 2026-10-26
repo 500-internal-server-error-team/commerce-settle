@@ -22,7 +22,7 @@
         "x-owner-service": "seller",
         "x-actor": "PUBLIC",
         "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "구매자 계정 생성과 유효한 웰컴 캠페인의 한 장 발급·예산 약속을 같은 로컬 트랜잭션에서 처리한다. 예산 소진 시 가입은 가능하지만 쿠폰 발급을 보장하지 않으며 가입 전 캠페인 조건을 안내한다.",
         "security": [],
         "parameters": [],
         "responses": {
@@ -2680,7 +2680,7 @@
         "x-owner-service": "seller",
         "x-actor": "SELLER",
         "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "서버가 kind=SELLER, funder=SELLER와 인증된 sellerId를 결정한다. 월 경계·상품 소유·할인 후 최소 20,000원·최소 정산액·전체 대상 예산·PG 비용/손익 하한을 검증해 승인한다. 임의 구매자에게 수동 발급하지 않는다.",
         "security": [
           {
             "accountSession": []
@@ -2800,11 +2800,19 @@
               "example": {
                 "name": "오픈 기념 1천원",
                 "productId": null,
-                "discountAmount": 1000,
-                "minOrderAmount": 10000,
-                "issuanceLimit": 1000,
-                "validFrom": "2026-11-01T00:00:00Z",
-                "validUntil": "2026-12-01T00:00:00Z"
+                "discountAmount": 3000,
+                "minOrderAmount": 23000,
+                "issuanceLimit": 100,
+                "validFrom": "2026-10-31T15:00:00Z",
+                "validUntil": "2026-11-30T15:00:00Z",
+                "targetMonth": "2026-11",
+                "totalBudget": 300000,
+                "minSellerNetAmount": 17000,
+                "allowedMethods": [
+                  "CREDIT_CARD",
+                  "DEBIT_CARD",
+                  "EASY_PAY"
+                ]
               }
             }
           }
@@ -2924,147 +2932,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/sellers/me/coupon-templates/{templateId}/issues": {
-      "post": {
-        "operationId": "post_api_sellers_me_coupon_templates_templateId_issues",
-        "summary": "구매자에게 쿠폰 발급",
-        "tags": [
-          "seller"
-        ],
-        "x-owner-service": "seller",
-        "x-actor": "SELLER",
-        "x-implemented": false,
-        "description": "본인템플릿/유효기간/발급한도/구매자존재확인; 구매자당1장. 발급카운터와쿠폰/이력을원자저장.",
-        "security": [
-          {
-            "accountSession": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "templateId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "리소스 생성",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BuyerCoupon"
-                }
-              }
-            },
-            "headers": {
-              "Location": {
-                "description": "생성 리소스 또는 비동기 처리 조회 경로",
-                "schema": {
-                  "type": "string",
-                  "format": "uri-reference"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "형식·값 오류",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "인증 필요/만료",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "역할·서비스 권한 없음",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "없거나 타인 소유",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "상태·버전·기한·잔액·멱등 충돌",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "요청 제한",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "일시적 저장/외부 장애",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CouponIssueRequest"
               }
             }
           }
@@ -4439,7 +4306,7 @@
         "x-owner-service": "seller",
         "x-actor": "BUYER",
         "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약. 쿠폰과 마일리지 병용·지원하지 않는 수단을 거절하고 할인 부담별 사본과 예산 예약을 보존한다.",
         "security": [
           {
             "accountSession": []
@@ -4550,7 +4417,7 @@
         "x-owner-service": "seller",
         "x-actor": "BUYER",
         "x-implemented": false,
-        "description": "원자주문/주소/재고/쿠폰/이벤트예약·Outbox. 이벤트참여를별도HTTP명령으로중복생성하지않음. 결제는비동기.",
+        "description": "원자주문/주소/재고/쿠폰/이벤트예약·Outbox. 이벤트참여를별도HTTP명령으로중복생성하지않음. 결제는비동기. 쿠폰과 마일리지 병용·지원하지 않는 수단을 거절하고 할인 부담별 사본과 예산 예약을 보존한다.",
         "security": [
           {
             "accountSession": []
@@ -4586,18 +4453,21 @@
                   "quantity": 1,
                   "eventId": null,
                   "paymentId": null,
-                  "grossAmount": 10000,
-                  "couponAmount": 1000,
-                  "totalAmount": 9000,
-                  "mileageAmount": 2000,
-                  "externalAmount": 7000,
+                  "grossAmount": 23000,
+                  "couponAmount": 3000,
+                  "totalAmount": 20000,
+                  "mileageAmount": 0,
+                  "externalAmount": 20000,
                   "status": "PAYMENT_PENDING",
                   "fulfillmentStatus": "UNSHIPPED",
                   "paymentConfirmedAt": null,
                   "refundDeadlineAt": null,
                   "purchaseConfirmedAt": null,
                   "version": 0,
-                  "createdAt": "2026-11-01T00:00:00Z"
+                  "createdAt": "2026-11-01T00:00:00Z",
+                  "sellerCouponAmount": 0,
+                  "platformCouponAmount": 3000,
+                  "settlementBaseAmount": 23000
                 }
               }
             },
@@ -4694,11 +4564,11 @@
                 "quantity": 1,
                 "eventId": null,
                 "buyerCouponId": "00000000-0000-4000-8000-000000000004",
-                "mileageAmount": 2000,
+                "mileageAmount": 0,
                 "addressId": "00000000-0000-4000-8000-000000000005",
                 "expectedProductVersion": 0,
                 "expectedEventVersion": null,
-                "expectedTotalAmount": 9000,
+                "expectedTotalAmount": 20000,
                 "externalMethod": "CREDIT_CARD",
                 "methodAccountRef": "mock-card-1"
               }
@@ -10693,6 +10563,381 @@
           }
         }
       }
+    },
+    "/internal/coupon-templates": {
+      "post": {
+        "operationId": "post_internal_coupon_templates",
+        "summary": "플랫폼 쿠폰 캠페인 승인",
+        "tags": [
+          "seller"
+        ],
+        "x-owner-service": "seller",
+        "x-actor": "OPERATOR",
+        "x-implemented": false,
+        "description": "내부 운영자 권한·멱등키·캠페인 예산·발급 업무 유일성을 검사한다. 구매자·판매자 세션으로 호출할 수 없고 Gateway에 공개하지 않는다.",
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "리소스 생성",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CouponTemplate"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "생성 리소스 또는 비동기 처리 조회 경로",
+                "schema": {
+                  "type": "string",
+                  "format": "uri-reference"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlatformCouponTemplateCreate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/coupon-issue-runs": {
+      "post": {
+        "operationId": "post_internal_coupon_issue_runs",
+        "summary": "월 쿠폰 발급 작업 생성·재개",
+        "tags": [
+          "seller"
+        ],
+        "x-owner-service": "seller",
+        "x-actor": "OPERATOR",
+        "x-implemented": false,
+        "description": "내부 운영자 권한·멱등키·캠페인 예산·발급 업무 유일성을 검사한다. 구매자·판매자 세션으로 호출할 수 없고 Gateway에 공개하지 않는다.",
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "발급 작업 접수; 발급 완료 아님",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CouponIssueRun"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "생성 리소스 또는 비동기 처리 조회 경로",
+                "schema": {
+                  "type": "string",
+                  "format": "uri-reference"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CouponIssueRunCreate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/coupon-issue-runs/{runId}": {
+      "get": {
+        "operationId": "get_internal_coupon_issue_runs_runId",
+        "summary": "월 쿠폰 발급 작업 조회",
+        "tags": [
+          "seller"
+        ],
+        "x-owner-service": "seller",
+        "x-actor": "OPERATOR",
+        "x-implemented": false,
+        "description": "내부 운영자만 고정한 월 회차의 상태를 조회한다.",
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회·처리 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CouponIssueRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -11490,7 +11735,7 @@
           "issuanceLimit": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 10000
+            "maximum": 100
           },
           "validFrom": {
             "type": "string",
@@ -11499,6 +11744,36 @@
           "validUntil": {
             "type": "string",
             "format": "date-time"
+          },
+          "targetMonth": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+          },
+          "totalBudget": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          },
+          "minSellerNetAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000
+          },
+          "allowedMethods": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "CREDIT_CARD",
+                "DEBIT_CARD",
+                "EASY_PAY"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 3,
+            "uniqueItems": true
           }
         },
         "required": [
@@ -11508,8 +11783,13 @@
           "minOrderAmount",
           "issuanceLimit",
           "validFrom",
-          "validUntil"
-        ]
+          "validUntil",
+          "targetMonth",
+          "totalBudget",
+          "minSellerNetAmount",
+          "allowedMethods"
+        ],
+        "description": "서버가 kind=SELLER, funder=SELLER와 인증된 sellerId를 결정한다. 월 경계·상품 소유·할인 후 최소 20,000원·최소 정산액·전체 대상 예산·PG 비용/손익 하한을 검증해 승인한다. 임의 구매자에게 수동 발급하지 않는다."
       },
       "CouponTemplate": {
         "type": "object",
@@ -11561,8 +11841,15 @@
             "format": "uuid"
           },
           "sellerId": {
-            "type": "string",
-            "format": "uuid"
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "issuedCount": {
             "type": "integer",
@@ -11579,6 +11866,85 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "WELCOME",
+              "GRADE",
+              "SELLER"
+            ]
+          },
+          "funder": {
+            "type": "string",
+            "enum": [
+              "PLATFORM",
+              "SELLER"
+            ]
+          },
+          "targetMonth": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "allowedMethods": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "CREDIT_CARD",
+                "DEBIT_CARD",
+                "EASY_PAY"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 3,
+            "uniqueItems": true
+          },
+          "grade": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "BRONZE",
+                  "SILVER",
+                  "GOLD"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "totalBudget": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          },
+          "committedBudget": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          },
+          "consumedBudget": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 9223372036854775807
+          },
+          "minSellerNetAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000
           }
         },
         "required": [
@@ -11593,21 +11959,18 @@
           "sellerId",
           "issuedCount",
           "status",
-          "version"
-        ]
-      },
-      "CouponIssueRequest": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "buyerId": {
-            "type": "string",
-            "format": "uuid"
-          }
-        },
-        "required": [
-          "buyerId"
-        ]
+          "version",
+          "kind",
+          "funder",
+          "targetMonth",
+          "allowedMethods",
+          "grade",
+          "totalBudget",
+          "committedBudget",
+          "consumedBudget",
+          "minSellerNetAmount"
+        ],
+        "description": "WELCOME/GRADE는 PLATFORM 부담이고 sellerId/productId=null. SELLER는 SELLER 부담이고 sellerId 필수. 같은 계정의 WELCOME는 한 번, GRADE는 월 한 번, SELLER는 판매자별 월 한 번. 발급 조건·약속 예산·만료는 사본으로 보존한다."
       },
       "BuyerCoupon": {
         "type": "object",
@@ -11622,8 +11985,15 @@
             "format": "uuid"
           },
           "sellerId": {
-            "type": "string",
-            "format": "uuid"
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "productId": {
             "anyOf": [
@@ -11674,6 +12044,46 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "WELCOME",
+              "GRADE",
+              "SELLER"
+            ]
+          },
+          "funder": {
+            "type": "string",
+            "enum": [
+              "PLATFORM",
+              "SELLER"
+            ]
+          },
+          "targetMonth": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "allowedMethods": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "CREDIT_CARD",
+                "DEBIT_CARD",
+                "EASY_PAY"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 3,
+            "uniqueItems": true
           }
         },
         "required": [
@@ -11687,8 +12097,13 @@
           "validFrom",
           "expiresAt",
           "status",
-          "version"
-        ]
+          "version",
+          "kind",
+          "funder",
+          "targetMonth",
+          "allowedMethods"
+        ],
+        "description": "WELCOME/GRADE는 PLATFORM 부담이고 sellerId/productId=null. SELLER는 SELLER 부담이고 sellerId 필수. 같은 계정의 WELCOME는 한 번, GRADE는 월 한 번, SELLER는 판매자별 월 한 번. 발급 조건·약속 예산·만료는 사본으로 보존한다."
       },
       "EventCreate": {
         "type": "object",
@@ -11954,6 +12369,22 @@
             "format": "int64",
             "minimum": 0,
             "maximum": 10000000
+          },
+          "externalMethod": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "CREDIT_CARD",
+                  "DEBIT_CARD",
+                  "GIFT_CERTIFICATE",
+                  "EASY_PAY"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -11961,8 +12392,39 @@
           "quantity",
           "eventId",
           "buyerCouponId",
-          "mileageAmount"
-        ]
+          "mileageAmount",
+          "externalMethod"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "buyerCouponId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "buyerCouponId"
+              ]
+            },
+            "then": {
+              "properties": {
+                "mileageAmount": {
+                  "const": 0
+                },
+                "externalMethod": {
+                  "type": "string",
+                  "enum": [
+                    "CREDIT_CARD",
+                    "DEBIT_CARD",
+                    "EASY_PAY"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "description": "쿠폰 사용 시 mileageAmount=0이고 승인한 카드/간편결제만 허용한다. 서버는 종류·부담자·상품·시각·예산 예약·금액을 검증한다."
       },
       "OrderQuote": {
         "type": "object",
@@ -12018,6 +12480,27 @@
           "asOf": {
             "type": "string",
             "format": "date-time"
+          },
+          "sellerCouponAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "S: 판매자 부담 할인"
+          },
+          "platformCouponAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "P: 플랫폼 부담 지원"
+          },
+          "settlementBaseAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "B=G-S: 수수료·정산 기준"
           }
         },
         "required": [
@@ -12028,9 +12511,12 @@
           "externalAmount",
           "productVersion",
           "eventVersion",
-          "asOf"
+          "asOf",
+          "sellerCouponAmount",
+          "platformCouponAmount",
+          "settlementBaseAmount"
         ],
-        "description": "미확정 미리보기. 주문 생성 시 서버가 다시 계산하고 버전/예상 금액 불일치는409."
+        "description": "미확정 미리보기. 주문 생성 시 서버가 다시 계산하고 버전/예상 금액 불일치는409. G-S=B=T+P=E+M+P, couponAmount=S+P. 수수료는 B의 15%, 쿠폰 사용 시 M=0."
       },
       "OrderCreate": {
         "type": "object",
@@ -12142,7 +12628,36 @@
           "externalMethod",
           "methodAccountRef"
         ],
-        "description": "E>0일 때 externalMethod/methodAccountRef 필수; E=0일 때 두 값은null. 이벤트 수량은1. providerId는 서버가 호환 가능한 대역 중 선택."
+        "description": "E>0일 때 externalMethod/methodAccountRef 필수; E=0일 때 두 값은null. 이벤트 수량은1. providerId는 서버가 호환 가능한 대역 중 선택. 쿠폰 사용 시 mileageAmount=0이고 승인한 카드/간편결제만 허용한다. 서버는 종류·부담자·상품·시각·예산 예약·금액을 검증한다.",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "buyerCouponId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "buyerCouponId"
+              ]
+            },
+            "then": {
+              "properties": {
+                "mileageAmount": {
+                  "const": 0
+                },
+                "externalMethod": {
+                  "type": "string",
+                  "enum": [
+                    "CREDIT_CARD",
+                    "DEBIT_CARD",
+                    "EASY_PAY"
+                  ]
+                }
+              }
+            }
+          }
+        ]
       },
       "Order": {
         "type": "object",
@@ -12287,6 +12802,27 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "sellerCouponAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "S: 판매자 부담 할인"
+          },
+          "platformCouponAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "P: 플랫폼 부담 지원"
+          },
+          "settlementBaseAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "B=G-S: 수수료·정산 기준"
           }
         },
         "required": [
@@ -12309,8 +12845,12 @@
           "refundDeadlineAt",
           "purchaseConfirmedAt",
           "version",
-          "createdAt"
-        ]
+          "createdAt",
+          "sellerCouponAmount",
+          "platformCouponAmount",
+          "settlementBaseAmount"
+        ],
+        "description": "G-S=B=T+P=E+M+P, couponAmount=S+P. 수수료는 B의 15%, 쿠폰 사용 시 M=0."
       },
       "SellerOrder": {
         "type": "object",
@@ -12619,6 +13159,18 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "platformCouponAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000
+          },
+          "settlementBaseAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000
           }
         },
         "required": [
@@ -12632,8 +13184,11 @@
           "providerId",
           "confirmedAt",
           "version",
-          "createdAt"
-        ]
+          "createdAt",
+          "platformCouponAmount",
+          "settlementBaseAmount"
+        ],
+        "description": "B=T+P=E+M+P. 수수료=floor(B*15/100), 판매자 순액=B-수수료. 플랫폼 지원은 실제 지급 재원을 확인한다."
       },
       "PaymentAttempt": {
         "type": "object",
@@ -12957,6 +13512,18 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "platformCouponAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000
+          },
+          "settlementBaseAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000
           }
         },
         "required": [
@@ -12975,8 +13542,11 @@
           "status",
           "purchaseConfirmedAt",
           "version",
-          "createdAt"
-        ]
+          "createdAt",
+          "platformCouponAmount",
+          "settlementBaseAmount"
+        ],
+        "description": "B=T+P=E+M+P. 수수료=floor(B*15/100), 판매자 순액=B-수수료. 플랫폼 지원은 실제 지급 재원을 확인한다."
       },
       "SettlementBatch": {
         "type": "object",
@@ -13308,6 +13878,27 @@
           "paymentWaitUntil": {
             "type": "string",
             "format": "date-time"
+          },
+          "sellerCouponAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "S: 판매자 부담 할인"
+          },
+          "platformCouponAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "P: 플랫폼 부담 지원"
+          },
+          "settlementBaseAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "B=G-S: 수수료·정산 기준"
           }
         },
         "required": [
@@ -13325,9 +13916,12 @@
           "settlementAnchorAt",
           "status",
           "policyVersion",
-          "paymentWaitUntil"
+          "paymentWaitUntil",
+          "sellerCouponAmount",
+          "platformCouponAmount",
+          "settlementBaseAmount"
         ],
-        "description": "신뢰한서비스용불변주문사본. 주소/연락처/비밀번호/로그인토큰 없음."
+        "description": "신뢰한서비스용불변주문사본. 주소/연락처/비밀번호/로그인토큰 없음. G-S=B=T+P=E+M+P, couponAmount=S+P. 수수료는 B의 15%, 쿠폰 사용 시 M=0."
       },
       "SettlementContext": {
         "type": "object",
@@ -13374,7 +13968,8 @@
           "productId",
           "settlementAnchorAt",
           "policyVersion"
-        ]
+        ],
+        "description": "payment의 platformCouponAmount(P)·settlementBaseAmount(B)와 최초 feeAmount·sellerNetAmount를 사용한다. E+M+P=B=feeAmount+sellerNetAmount를 대조한다."
       },
       "MockApproval": {
         "type": "object",
@@ -14493,6 +15088,27 @@
                 "type": "null"
               }
             ]
+          },
+          "sellerCouponAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "S: 판매자 부담 할인"
+          },
+          "platformCouponAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "P: 플랫폼 부담 지원"
+          },
+          "settlementBaseAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "B=G-S: 수수료·정산 기준"
           }
         },
         "required": [
@@ -14512,8 +15128,12 @@
           "policyVersion",
           "paymentWaitUntil",
           "externalMethod",
-          "methodAccountRef"
-        ]
+          "methodAccountRef",
+          "sellerCouponAmount",
+          "platformCouponAmount",
+          "settlementBaseAmount"
+        ],
+        "description": "G-S=B=T+P=E+M+P, couponAmount=S+P. 수수료는 B의 15%, 쿠폰 사용 시 M=0."
       },
       "PaymentAcceptedPayload": {
         "type": "object",
@@ -14689,6 +15309,27 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 32
+          },
+          "sellerCouponAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "S: 판매자 부담 할인"
+          },
+          "platformCouponAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "P: 플랫폼 부담 지원"
+          },
+          "settlementBaseAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000,
+            "description": "B=G-S: 수수료·정산 기준"
           }
         },
         "required": [
@@ -14708,8 +15349,12 @@
           "feeAmount",
           "sellerNetAmount",
           "confirmedAt",
-          "policyVersion"
-        ]
+          "policyVersion",
+          "sellerCouponAmount",
+          "platformCouponAmount",
+          "settlementBaseAmount"
+        ],
+        "description": "G-S=B=T+P=E+M+P, couponAmount=S+P. 수수료는 B의 15%, 쿠폰 사용 시 M=0."
       },
       "PaymentDeclinedPayload": {
         "type": "object",
@@ -16794,6 +17439,164 @@
             }
           }
         ]
+      },
+      "PlatformCouponTemplateCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "discountAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 10000000
+          },
+          "minOrderAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 10000000
+          },
+          "issuanceLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "validUntil": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "targetMonth": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "totalBudget": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 9223372036854775807
+          },
+          "allowedMethods": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "CREDIT_CARD",
+                "DEBIT_CARD",
+                "EASY_PAY"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 3,
+            "uniqueItems": true
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "WELCOME",
+              "GRADE"
+            ]
+          },
+          "grade": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "BRONZE",
+                  "SILVER",
+                  "GOLD"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "discountAmount",
+          "minOrderAmount",
+          "issuanceLimit",
+          "validFrom",
+          "validUntil",
+          "targetMonth",
+          "totalBudget",
+          "allowedMethods",
+          "kind",
+          "grade"
+        ],
+        "description": "내부 운영자만 플랫폼 재원으로 승인한다. WELCOME의 grade/targetMonth는 null, GRADE는 둘 다 필요. 실제 재원·사용 수단·손익 조건을 검증한 뒤 발급 가능하다."
+      },
+      "CouponIssueRunCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "targetMonth": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+          }
+        },
+        "required": [
+          "targetMonth"
+        ],
+        "description": "혜택 월의 기존 작업을 재개하며 동일 월의 대상·순서를 다시 만들지 않는다. 대상 월 1일 00:10 KST 전의 실행은 거절하고, 종료한 회차는 재발급하지 않는다."
+      },
+      "CouponIssueRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "targetMonth": {
+            "type": "string",
+            "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+          },
+          "cutoffAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PREPARING",
+              "ISSUING",
+              "COMPLETED",
+              "REVIEW_REQUIRED",
+              "EXPIRED"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "targetMonth",
+          "cutoffAt",
+          "status",
+          "version"
+        ],
+        "description": "월 스냅샷과 발급 대상을 고정해 재시작한다. 만료 뒤 신규 발급은 금지하며 예산/원자료 부족은 운영 확인으로 남긴다."
       }
     }
   },

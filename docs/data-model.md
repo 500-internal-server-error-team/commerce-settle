@@ -222,7 +222,10 @@
 | `unit_price` | `bigint` | 업무 값 |
 | `quantity` | `integer` | 업무 값 |
 | `gross_amount` | `bigint` | 업무 값 |
-| `coupon_amount` | `bigint` | 업무 값 |
+| `coupon_amount` | `bigint` | S+P; 표시용 총할인액 |
+| `seller_coupon_amount` | `bigint` | S; 판매자 부담 할인 |
+| `platform_coupon_amount` | `bigint` | P; 플랫폼 부담 지원 |
+| `settlement_base_amount` | `bigint` | B=G−S; 수수료·정산 기준 |
 | `total_amount` | `bigint` | 업무 값 |
 | `mileage_amount` | `bigint` | 업무 값 |
 | `external_amount` | `bigint` | 업무 값 |
@@ -242,7 +245,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** G=unit_price*quantity, T=G-D=E+M; 1<=T<=10000000, 0<=D<G, 0<=M<=T, E>=0. 일반 quantity 1..10; event_id가 있으면1. Payment 연결 ID는 알려진 경우 UNIQUE. 상태 전이는 아래 표.
+**제약:** G=unit_price*quantity, D=S+P, B=G-S, T=B-P=E+M; 1<=T<=10000000, S/P>=0이고 최대 하나만 양수, 0<=D<G, 0<=M<=T, E>=0. buyer_coupon_id가 있으면 M=0. 쿠폰의 결제수단·소유권·예산 예약을 함께 검사. 일반 quantity 1..10; event_id가 있으면1. Payment 연결 ID는 알려진 경우 UNIQUE. 상태 전이는 아래 표.
 
 **인덱스:** (buyer_id,created_at,id); (seller_id,created_at,id); (status,refund_deadline_at,id); UNIQUE(payment_id) WHERE payment_id IS NOT NULL.
 
@@ -322,73 +325,126 @@
 
 ### coupon_templates
 
-소유: `seller`. 쿠폰 템플릿.
+소유: `seller`. 플랫폼·판매자 쿠폰의 발급 조건과 예산. 판매자 API는 SELLER/SELLER 부담만 생성하고 플랫폼 캠페인은 내부 운영 권한으로 생성합니다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
-| `seller_id` | `uuid` | →seller_accounts.id |
-| `product_id` | `uuid?` | →products.id |
-| `name` | `varchar(80)` | 업무 값 |
-| `discount_amount` | `bigint` | 업무 값 |
-| `min_order_amount` | `bigint` | 업무 값 |
-| `issuance_limit` | `integer` | 업무 값 |
-| `issued_count` | `integer` | 업무 값 |
-| `valid_from` | `timestamptz` | 업무 값 |
-| `valid_until` | `timestamptz` | 업무 값 |
-| `status` | `varchar(16)` | 업무 값 |
+| `kind` | `varchar(16)` | WELCOME/GRADE/SELLER |
+| `funder` | `varchar(16)` | PLATFORM/SELLER; 종류에서 서버가 결정 |
+| `seller_id` | `uuid?` | SELLER에만 필요 |
+| `product_id` | `uuid?` | SELLER의 지정 상품; null이면 판매자 전체 |
+| `grade` | `varchar(16)?` | GRADE의 BRONZE/SILVER/GOLD |
+| `target_month` | `date?` | GRADE/SELLER 혜택 월의 첫날 |
+| `name` | `varchar(80)` | 표시명 |
+| `discount_amount` | `bigint` | 정액 할인 |
+| `min_order_amount` | `bigint` | 적용 전 최소 상품대금 |
+| `min_seller_net_amount` | `bigint` | SELLER가 승인한 최소 정산액; 플랫폼 캠페인은 0 |
+| `allowed_methods` | `varchar(24)[]` | 승인된 CREDIT_CARD/DEBIT_CARD/EASY_PAY |
+| `pg_cost_ceiling_bps` | `integer` | PG 비용 상한; 기본 400bp |
+| `other_cost_allowance` | `bigint` | 주문당 기타 비용 충당액; 기본 1,000원 |
+| `issuance_limit` | `integer` | 발급 수 한도; SELLER는 최대 100 |
+| `issued_count` | `integer` | 누적 발급 수 |
+| `total_budget` | `bigint` | 명목 할인 예산 |
+| `committed_budget` | `bigint` | 발급했으나 아직 사용하지 않은 약속액 |
+| `consumed_budget` | `bigint` | 사용 누계에서 확정 환불 상쇄를 뺀 금액 |
+| `valid_from` | `timestamptz` | 신규 발급 시작 |
+| `valid_until` | `timestamptz` | 신규 발급 종료; 기존 쿠폰 기한을 줄이지 않음 |
+| `status` | `varchar(16)` | ACTIVE/CLOSED |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
-| `version` | `bigint` | NOT NULL; 낙관적 버전 |
+| `version` | `bigint` | 낙관적 버전 |
 
-**제약:** 정액 할인>0, 1<=min_order_amount<=10000000, 0<=issued_count<=issuance_limit, valid_from<valid_until. status=ACTIVE/CLOSED. 발급 뒤 조건 변경 금지.
+**제약:** 할인액>0, 할인액<min_order_amount<=10000000, 0<=issued_count<=issuance_limit. 예산·약속액·사용 누계 비음수, committed_budget+consumed_budget<=total_budget. WELCOME/GRADE는 funder=PLATFORM이고 seller_id/product_id는 null; SELLER는 funder=SELLER이고 seller_id 필수. grade는 GRADE에만 필요하고 target_month는 GRADE/SELLER에 필수. 상품 소유·사용 수단·손익 하한·최소 정산액을 발급 전에 검증합니다. 월 캠페인은 종류·판매자/등급·대상월별 한 개를 승인하며 발급 뒤 조건을 변경하지 않습니다.
 
-**인덱스:** (seller_id,status,created_at,id).
+**인덱스:** (seller_id,status,created_at,id); (kind,target_month,status). 활성 WELCOME 캠페인은 전체 한 개, GRADE는 (grade,target_month), SELLER는 (seller_id,target_month)에 각각 부분 UNIQUE.
 
 ### buyer_coupons
 
-소유: `seller`. 발급 쿠폰.
+소유: `seller`. 발급 당시 조건과 예산 약속을 보존한 쿠폰.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `template_id` | `uuid` | →coupon_templates.id |
 | `buyer_id` | `uuid` | →buyer_accounts.id |
-| `seller_id` | `uuid` | 업무 값 |
-| `product_id` | `uuid?` | 업무 값 |
-| `discount_amount` | `bigint` | 업무 값 |
-| `min_order_amount` | `bigint` | 업무 값 |
-| `valid_from` | `timestamptz` | 업무 값 |
-| `expires_at` | `timestamptz` | 업무 값 |
-| `status` | `varchar(16)` | 업무 값 |
+| `kind` | `varchar(16)` | WELCOME/GRADE/SELLER |
+| `funder` | `varchar(16)` | PLATFORM/SELLER |
+| `seller_id` | `uuid?` | SELLER에만 값 |
+| `product_id` | `uuid?` | SELLER 지정 상품 |
+| `target_month` | `date?` | 월별 혜택의 발급 업무 키 |
+| `discount_amount` | `bigint` | 원할인 사본 |
+| `min_order_amount` | `bigint` | 최소 상품대금 사본 |
+| `allowed_methods` | `varchar(24)[]` | 사용 수단 사본 |
+| `valid_from` | `timestamptz` | 사용 시작 |
+| `expires_at` | `timestamptz` | 웰컴=가입+14일, 월 쿠폰=다음 달 1일 00:00 KST |
+| `status` | `varchar(16)` | ISSUED/RESERVED/USED/EXPIRED |
 | `reserved_order_id` | `uuid?` | →orders.id |
 | `used_order_id` | `uuid?` | →orders.id |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
-| `version` | `bigint` | NOT NULL; 낙관적 버전 |
+| `version` | `bigint` | 낙관적 버전 |
 
-**제약:** UNIQUE(template_id,buyer_id), expires_at=min(created_at+30일,템플릿종료). 원할인/기간 사본 불변. status=ISSUED/RESERVED/USED/EXPIRED. 유효성은 상태와 시각 동시 검사.
+**제약:** UNIQUE(template_id,buyer_id).WELCOME는 buyer_id, GRADE는 (buyer_id,target_month), SELLER는 (seller_id,buyer_id,target_month)에 종류별 부분 UNIQUE. 발급과 예산 약속액 확보는 같은 트랜잭션입니다. 원할인·부담자·기간·수단은 불변이며 상태와 시각을 함께 검사합니다. 재가입·캠페인 교체로 발급 이력을 지우지 않습니다.
 
-**인덱스:** (buyer_id,status,expires_at,id); UNIQUE(reserved_order_id) WHERE reserved_order_id IS NOT NULL; UNIQUE(used_order_id) WHERE used_order_id IS NOT NULL.
+**인덱스:** (buyer_id,status,expires_at,id); UNIQUE(reserved_order_id) WHERE NOT NULL; UNIQUE(used_order_id) WHERE NOT NULL.
 
 ### coupon_history
 
-소유: `seller`. 쿠폰 예약·복구 이력.
+소유: `seller`. 발급·예약·사용·복구·만료와 예산 이동 이력.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `buyer_coupon_id` | `uuid` | →buyer_coupons.id |
-| `order_id` | `uuid` | →orders.id |
-| `operation` | `varchar(16)` | 업무 값 |
-| `business_ref` | `uuid` | 업무 값 |
-| `from_status` | `varchar(16)` | 업무 값 |
-| `to_status` | `varchar(16)` | 업무 값 |
+| `order_id` | `uuid?` | 발급·미사용 만료는 null |
+| `operation` | `varchar(16)` | ISSUE/RESERVE/USE/RELEASE/RESTORE/EXPIRE |
+| `business_ref` | `uuid` | 발급 대상·결제 회차·원결제·만료의 업무 키 |
+| `from_status` | `varchar(16)?` | ISSUE는 null |
+| `to_status` | `varchar(16)` | 전이 결과 |
+| `committed_delta` | `bigint` | 약속액 증감 |
+| `consumed_delta` | `bigint` | 사용액 증감 |
 | `created_at` | `timestamptz` | NOT NULL |
 
-**제약:** UNIQUE(buyer_coupon_id,operation,business_ref). operation=RESERVE/USE/RELEASE/RESTORE/EXPIRE. RESERVE/RELEASE는 payment_cycle_id별, USE/RESTORE는 원결제별 한 번.
+**제약:** UNIQUE(buyer_coupon_id,operation,business_ref). RESERVE/RELEASE는 payment_cycle_id별, USE/RESTORE는 원결제별 한 번. 쿠폰 상태·템플릿 예산·이력을 같은 트랜잭션으로 반영하고 미확정 결과로 약속액을 해제하지 않습니다.
 
 **인덱스:** (buyer_coupon_id,created_at,id).
+
+### coupon_issue_runs
+
+소유: `seller`. 월별 대상 고정과 재시작 가능한 발급 작업.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id` | `uuid` | PK |
+| `target_month` | `date` | UNIQUE; 혜택 월 첫날 |
+| `cutoff_at` | `timestamptz` | 대상 구매확정 반영 마감 |
+| `status` | `varchar(24)` | PREPARING/ISSUING/COMPLETED/REVIEW_REQUIRED/EXPIRED |
+| `created_at` | `timestamptz` | NOT NULL |
+| `updated_at` | `timestamptz` | NOT NULL |
+| `version` | `bigint` | 낙관적 버전 |
+
+같은 월의 재실행은 기존 run을 재개합니다. 대상·순서를 다시 계산하거나 완료한 대상에 추가 발급하지 않습니다.
+
+### coupon_issue_targets
+
+소유: `seller`. 같은 회차의 등급·판매자 발급 대상과 처리 결과.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id` | `uuid` | PK; 발급 업무 키 |
+| `run_id` | `uuid` | →coupon_issue_runs.id |
+| `template_id` | `uuid` | →coupon_templates.id |
+| `buyer_id` | `uuid` | →buyer_accounts.id |
+| `external_spend` | `bigint` | 고정한 대상 기간의 E 합계 |
+| `rank_no` | `integer?` | SELLER의 1~100위 |
+| `buyer_coupon_id` | `uuid?` | 처리된 원쿠폰 |
+| `status` | `varchar(24)` | PENDING/ISSUED/EXPIRED/REVIEW_REQUIRED |
+| `created_at` | `timestamptz` | NOT NULL |
+| `updated_at` | `timestamptz` | NOT NULL |
+| `version` | `bigint` | 낙관적 버전 |
+
+**제약:** UNIQUE(run_id,template_id,buyer_id), UNIQUE(buyer_coupon_id) WHERE buyer_coupon_id IS NOT NULL. 월별 마감의 불변 확정·취소 이력으로 대상과 합계를 고정합니다. 만료 뒤 재개는 새 쿠폰을 만들지 않고 EXPIRED로 종결합니다. 대상 저장과 상태 재개, 발급·예산 약속액 선점을 검증합니다.
 
 ## 결제·마일리지
 
@@ -447,7 +503,10 @@
 | `settlement_anchor_at` | `timestamptz` | 업무 값 |
 | `current_cycle_id` | `uuid` | 업무 값 |
 | `gross_amount` | `bigint` | 업무 값 |
-| `coupon_amount` | `bigint` | 업무 값 |
+| `coupon_amount` | `bigint` | S+P; 표시용 총할인액 |
+| `seller_coupon_amount` | `bigint` | S; 판매자 부담 할인 |
+| `platform_coupon_amount` | `bigint` | P; 플랫폼 부담 지원 |
+| `settlement_base_amount` | `bigint` | B=G−S; 수수료·정산 기준 |
 | `total_amount` | `bigint` | 업무 값 |
 | `mileage_amount` | `bigint` | 업무 값 |
 | `external_amount` | `bigint` | 업무 값 |
@@ -460,7 +519,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(order_id). T=E+M, fee=floor(T*5/100), seller_net=T-fee; 모두 비음수,T>=1. 같은 주문 재시도는 같은 결제의 새 attempt.
+**제약:** UNIQUE(order_id). T=E+M=B-P, fee=floor(B*15/100), seller_net=B-fee; D=S+P, B=G-S, 모두 비음수,T>=1. 쿠폰 사용 시 M=0. 같은 주문 재시도는 같은 결제의 새 attempt.
 
 **인덱스:** (buyer_id,created_at,id); (status,updated_at,id).
 
@@ -647,7 +706,9 @@
 | `eligible_received_at` | `timestamptz?` | 업무 값 |
 | `cycle_no` | `bigint?` | 업무 값 |
 | `scheduled_cutoff_at` | `timestamptz?` | 업무 값 |
-| `total_amount` | `bigint` | 업무 값 |
+| `total_amount` | `bigint` | T; 구매자 부담액 |
+| `platform_coupon_amount` | `bigint` | P; 플랫폼 지원 원금 |
+| `settlement_base_amount` | `bigint` | B=T+P |
 | `external_amount` | `bigint` | 업무 값 |
 | `mileage_amount` | `bigint` | 업무 값 |
 | `fee_amount` | `bigint` | 업무 값 |
@@ -660,7 +721,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(payment_id). T=E+M=fee+net. 상태 조건과 예약을 같은 트랜잭션으로 보호.
+**제약:** UNIQUE(payment_id). T=E+M, B=T+P=fee+net. fee=floor(B*15/100). 플랫폼 지원 재원과 지급 가능 현금의 확인 전 지급 금지. 상태 조건과 예약을 같은 트랜잭션으로 보호.
 
 **인덱스:** (seller_id,status,purchase_confirmed_at,id); (payout_id); UNIQUE(payment_id).
 
@@ -681,7 +742,7 @@
 | `policy_version` | `varchar(32)` | 업무 값 |
 | `created_at` | `timestamptz` | NOT NULL |
 
-**제약:** UNIQUE(payment_id,leg,business_ref), UNIQUE(reversal_of) WHERE NOT NULL. SOURCE:EXTERNAL/MILEAGE, ALLOCATION:SELLER/FEE. 각 측 합계=T; 환불은 원항목 반대 부호. 판매자 잔액은 SELLER leg만 집계.
+**제약:** UNIQUE(payment_id,leg,business_ref), UNIQUE(reversal_of) WHERE NOT NULL. SOURCE:EXTERNAL/MILEAGE/PLATFORM_COUPON, ALLOCATION:SELLER/FEE. 각 측 합계=B=E+M+P; 환불은 원항목 반대 부호. 판매자 잔액은 SELLER leg만 집계.
 
 **인덱스:** (item_id,created_at,id); (payment_id,side).
 
@@ -1031,7 +1092,7 @@
 - 이벤트 공개는 일반 가용 재고에서 Q를 배정하고, 참여는 R을 증가한다. 승인 시 R 감소·S 증가·배정 재고 감소·판매량 증가를 함께 반영한다. 종료 시 미사용분만 일반 재고로 반환하며 미확정 R은 유지한다.
 - 마일리지 잔액의 reserved_amount는 활성 예약 합계와 일치해야 한다. 사용 시 예약/잔액 차감·DEBIT·결제 확정·Outbox를 한 번에 기록하고, 환불 시 원외부 환불 확인 뒤 RESTORE·잔액·환불 상태·Outbox를 한 번에 기록한다.
 - 정산 항목은 결제당 하나, 지급은 배치당 하나이다. 활성 정산 예약은 항목당 하나여서 환불과 지급이 동시에 선점할 수 없다. partial UNIQUE로 보호하고 모든 상태/금액을 같은 DB에서 검사한다.
-- 정산 원장은 SOURCE(E/M)와 ALLOCATION(판매자/수수료)의 두 측을 분리한다. 각 측의 합계가 T이고 환불 뒤 0으로 상쇄된다. 두 측을 합쳐 매출을 두 배로 세지 않는다. reversal_of는 원원장 항목당 한 번이다.
+- 정산 원장은 SOURCE(E/M/P)와 ALLOCATION(판매자/수수료)의 두 측을 분리한다. 각 측의 합계가 B이고 환불 뒤 0으로 상쇄된다. 두 측을 합쳐 매출을 두 배로 세지 않는다. reversal_of는 원원장 항목당 한 번이다.
 - outbox/inbox/idempotency_records 정의는 seller/payment/settlement/finance_mock 각각에 적용한다. 서비스 간 공유 테이블이나 SQL join은 만들지 않는다. inbox의 event_id는 발신 outbox id와 논리적으로 대응하며 여러 consumer가 각각 수신할 수 있다.
 - 로컬 주문 전이·알림 항목, 외부 알림 Inbox·항목은 각각 커머스 한 트랜잭션에 저장한다. 알림 모의 수신은 별도 트랜잭션으로 기록하고 금융 DB를 갱신하지 않는다.
 - PK/UNIQUE/CHECK는 DB 제약으로, 합계·참조·다중 행 전이는 행 잠금/조건부 갱신·동일 트랜잭션으로 구현한다. ERD의 관계선은 FK constraint가 있다는 뜻이 아니다.

@@ -41,7 +41,6 @@
 | POST | `/api/sellers/me/products/{productId}/inventory-adjustments` | 일반 가용 재고 조정 | SELLER | `InventoryAdjustment` | `Inventory` | 200 |
 | POST | `/api/sellers/me/coupon-templates` | 쿠폰 템플릿 등록 | SELLER | `CouponTemplateCreate` | `CouponTemplate` | 201 |
 | GET | `/api/sellers/me/coupon-templates` | 쿠폰 템플릿 목록 | SELLER | `—` | `CouponTemplatePage` | 200 |
-| POST | `/api/sellers/me/coupon-templates/{templateId}/issues` | 구매자에게 쿠폰 발급 | SELLER | `CouponIssueRequest` | `BuyerCoupon` | 201 |
 | POST | `/api/sellers/me/coupon-templates/{templateId}/closure` | 쿠폰 신규 발급 종료 | SELLER | `VersionRequest` | `CouponTemplate` | 200 |
 | GET | `/api/buyers/me/coupons` | 본인 쿠폰 목록 | BUYER | `—` | `BuyerCouponPage` | 200 |
 | POST | `/api/sellers/me/events` | 이름을 정해 이벤트 등록 | SELLER | `EventCreate` | `Event` | 201 |
@@ -79,6 +78,9 @@
 | GET | `/internal/orders/{orderId}/payment-context` | 불변 주문·금액 컨텍스트 | SERVICE:payment | `—` | `PaymentContext` | 200 |
 | GET | `/internal/products/{productId}/settlement-context` | 상품 정산 기준일 | SERVICE:settlement | `—` | `ProductSettlementContext` | 200 |
 | GET | `/internal/payments/{paymentId}/settlement-context` | 확정 결제·원금액 컨텍스트 | SERVICE:settlement | `—` | `SettlementContext` | 200 |
+| POST | `/internal/coupon-templates` | 플랫폼 쿠폰 캠페인 승인 | OPERATOR | `PlatformCouponTemplateCreate` | `CouponTemplate` | 201 |
+| POST | `/internal/coupon-issue-runs` | 월 쿠폰 발급 생성·재개 | OPERATOR | `CouponIssueRunCreate` | `CouponIssueRun` | 202 |
+| GET | `/internal/coupon-issue-runs/{runId}` | 월 쿠폰 발급 작업 조회 | OPERATOR | `—` | `CouponIssueRun` | 200 |
 | POST | `/internal/refund-requests/{requestId}/closure` | 실패 환불의 안전한 운영 종결 | OPERATOR | `FailedRefundClosure` | `OrderRefundRequest` | 200 |
 | GET | `/internal/payment-jobs` | 운영 작업 목록 | OPERATOR | `—` | `JobPage` | 200 |
 | POST | `/internal/payment-jobs/{jobId}/replays` | 원업무 작업 재처리 | OPERATOR | `ReplayRequest` | `Job` | 202 |
@@ -106,6 +108,14 @@
 | GET | `/internal/notification-mock/receipts/{deliveryId}` | 모의 수신 원결과 조회 | OPERATOR | `—` | `MockNotificationReceipt` | 200 |
 
 같은 `/api/buyers`·`/api/sellers` 접두사라도 기능 소유 앱이 다를 수 있습니다. Gateway는 `x-owner-service`의 개별 경로 패턴을 기준으로 라우팅합니다. 마일리지는 Payment, 판매자 정산/지급은 Settlement이며 일반 계정/상품/주문은 커머스입니다. 상품 생성은 재고 0인 inventory 행도 함께 만들고 재고 조정은 별도 명령으로 기록합니다.
+
+## 쿠폰 사용 순서
+
+1. 내부 운영자가 웰컴·등급 캠페인의 예산·조건을 승인합니다. 판매자는 자기 월 캠페인만 생성하며 서버가 SELLER 종류·부담자를 지정합니다. 구매자를 임의로 지정해 발급하는 API는 없습니다.
+2. 가입 시 유효한 웰컴 캠페인이 있으면 계정당 한 장과 예산 약속액을 원자 저장합니다. 월 작업은 고정한 구매확정 합계로 등급 대상·판매자 상위 최대 100명을 정하고, 대상 전체 예산을 확보한 뒤 재시작 가능한 발급을 수행합니다.
+3. BuyerCoupon은 kind·funder·선택적 sellerId·사용 가능 수단·기한을 보여줍니다. OrderQuoteRequest와 OrderCreate는 쿠폰 ID 한 개만 받고 마일리지를 함께 사용할 수 없습니다. 지원하지 않는 입력 조합은 400, 실제 쿠폰의 만료·상품·소유·금액/수단 조건 위반은 409입니다.
+4. 응답·내부 컨텍스트·결제 이벤트는 총할인 couponAmount와 sellerCouponAmount(S)·platformCouponAmount(P)·settlementBaseAmount(B)를 구분합니다. 클라이언트가 할인 부담자나 금액을 지정하지 않습니다. `B=G−S=T+P=E+M+P`, 수수료는 B의 15%입니다.
+5. 예약·미확정·전액 환불은 원쿠폰과 최초 E/M/P·수수료·판매자 몫을 기준으로 한 번씩 처리합니다. 발급 예산과 판매자에게 실제 지급할 현금을 따로 확인합니다. 종류·기간·금액·예산의 기준은 [쿠폰 정책](policies.md#쿠폰)을 따릅니다.
 
 ## 주문·환불 사용 순서
 
@@ -144,6 +154,8 @@
 | `PaymentNoticeRequested` | payment | seller-notifications | `paymentId` | `PaymentNoticeRequestedPayload` |
 | `SettlementNoticeRequested` | settlement | seller-notifications | `batchId` | `SettlementNoticeRequestedPayload` |
 
+OrderPaymentRequested·PaymentConfirmed는 할인 부담별 S/P와 정산 기준 B를 전달합니다. Settlement는 SOURCE의 E/M/P와 ALLOCATION의 판매자/수수료를 각각 B로 대조하고 원액으로 환불 상쇄합니다.
+
 aggregateVersion은 발신 집계의 버전이고 서로 다른 서비스의 버전을 하나의 순서로 비교하지 않습니다. 재전달은 원래 이벤트/업무 키를 사용하며, 늦은 승인 원장·자동 확정은 다음 정산에서 누락 없이 반영합니다. 금융 이벤트에는 주소·비밀번호·로그인 토큰을 싣지 않습니다.
 
 PaymentAccepted·RefundAccepted 이벤트로 주문 조회에 금융 처리 ID를 먼저 연결합니다. 결제/실패/취소 결과는 현재 paymentCycleId와 대조하며 오래된 회차 결과로 새 예약을 해제하지 않습니다.
@@ -167,7 +179,8 @@ PaymentAccepted·RefundAccepted 이벤트로 주문 조회에 금융 처리 ID�
 | COMMON_ROLE_FORBIDDEN |403|계정/서비스 역할 혼용|
 | COMMON_RESOURCE_NOT_FOUND |404|없거나 타인 소유|
 | COMMON_VERSION_CONFLICT / COMMON_IDEMPOTENCY_CONFLICT |409|버전 또는 같은키 다른본문|
-| COUPON_EXPIRED / COUPON_NOT_APPLICABLE |409|만료·상품 조건·할인 후0원|
+| COUPON_EXPIRED / COUPON_NOT_APPLICABLE |409|만료·상품/소유/최소 금액·허용 수단 조건 위반|
+| COUPON_BUDGET_EXHAUSTED |409|캠페인 승인·발급의 명목 예산 또는 발급 수 부족; 가입 자체를 실패시키지는 않음|
 | INVENTORY_INSUFFICIENT / EVENT_ADMISSION_CLOSED |409|재고/기간/참여한도/매진|
 | MILEAGE_INSUFFICIENT / PAYMENT_STATE_CONFLICT |409|잔액 부족·미확정 재시도 등|
 | ORDER_REFUND_WINDOW_CLOSED / ORDER_REFUND_IN_PROGRESS |409|168시간 초과·기존 환불|
