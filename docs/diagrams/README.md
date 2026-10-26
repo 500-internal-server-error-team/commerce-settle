@@ -4,6 +4,7 @@ GitHub 문서에서 SVG 미리보기를 사용합니다. SVG 자체가 편집 �
 
 | 도식 | 미리보기 |
 | --- | --- |
+| 통합 인프라 | [infrastructure.svg](infrastructure.svg) |
 | 서비스 설계 | [services.svg](services.svg) |
 | 애플리케이션과 인프라 | [runtime.svg](runtime.svg) |
 | PG·간편결제·지급 대역 | [payment-providers.svg](payment-providers.svg) |
