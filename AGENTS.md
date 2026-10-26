@@ -10,6 +10,7 @@
 | 기능 API·요청/응답·권한·이벤트 | [API 명세](docs/api.md), [OpenAPI](docs/openapi.json) |
 | ERD·컬럼·제약·인덱스·상태 | [데이터 모델](docs/data-model.md) |
 | 쿠폰·기한·한도·세션·배치 정책 | [업무 정책](docs/policies.md) |
+| 웰컴·등급·판매자 쿠폰 분류와 차기 손익·재원 설계 | [쿠폰 재설계 v2](docs/policies.md#쿠폰-재설계-v2) |
 | 인프라 구조도·모듈·계층·데이터·네트워크 경계 | [서비스와 코드 경계](docs/architecture.md) |
 | 엔티티·DTO·포트·어댑터·새 파일 위치 | [서비스 내부 분류](docs/architecture.md#서비스-내부-분류) |
 | 테스트 형식·시나리오·중복·실행 경계 | [테스트 작성](CONTRIBUTING.md#테스트-작성) |
