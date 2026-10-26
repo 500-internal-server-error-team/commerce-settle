@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.1",
   "info": {
-    "title": "Live Settle API 설계",
+    "title": "commerce-settle API 설계",
     "version": "0.1.0-design",
     "description": "구현 예정 계약. 현재 Gateway/Swagger가 이업무API를제공한다는뜻이아님. 정책v1=policies.md, DB=data-model.md."
   },
