@@ -213,8 +213,8 @@ HTTP 오류는 [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 `appli
 
 ## CI
 
-`build-and-smoke`는 환경 생성기의 기존 값 보존, 운영·테스트 코드 포맷과 Checkstyle, 테스트·ArchUnit·패키징, Compose 기동·재기동, Gateway·DB 권한·Kafka·Redis 왕복, Zipkin 추적 전파와 k6 실행을 검사합니다. CI 화면에서 정적 검사와 테스트·패키징을 별도 단계로 표시하며 코드를 자동 수정하지 않습니다. 테스트·Checkstyle 보고서는 `verification-reports`에서 7일간 보관합니다.
+`quality`는 환경 생성기의 기존 값 보존과 Gradle `check`의 운영·테스트 코드 포맷·Checkstyle·테스트·ArchUnit을 검사합니다. 이와 병렬로 `runtime`은 Gradle `assemble`로 앱을 패키징하고 Compose 기동·재기동, Gateway·DB 권한·Kafka·Redis 왕복, Zipkin 추적 전파와 k6 실행을 검사합니다. 두 작업 모두 성공해야 필수 검사 `build-and-smoke`가 통과하며, 실패·취소·건너뜀은 통과로 처리하지 않습니다. 코드는 자동 수정하지 않고 테스트·Checkstyle 보고서는 `verification-reports`에서 7일간 보관합니다.
 
-Gradle 캐시와 같은 PR의 이전 실행 취소를 사용합니다. 매 실행의 불필요한 `clean`은 생략하고, 문서 변경에도 필수 검사를 유지합니다. 검사 생략이나 높은 부하의 성능 시험을 기본 CI 최적화 수단으로 삼지 않습니다.
+Gradle 캐시와 같은 PR의 이전 실행 취소를 사용합니다. CI의 Gradle 작업은 기존 worker 상한 2개 안에서 모듈을 병렬 실행합니다. 매 실행의 불필요한 `clean`은 생략하고, 문서 변경에도 필수 검사를 유지합니다. 검사 생략이나 높은 부하의 성능 시험을 기본 CI 최적화 수단으로 삼지 않습니다.
 
 개발자는 [실행·검증·종료 방법](docs/development.md)으로 같은 검사를 로컬에서 재현합니다.
