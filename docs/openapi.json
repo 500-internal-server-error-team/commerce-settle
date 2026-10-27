@@ -267,7 +267,7 @@
         "x-owner-service": "seller",
         "x-actor": "PUBLIC",
         "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "구매자 계정의 비밀번호·활성 상태를 PostgreSQL에서 확인한 뒤 Redis에 로그인 세션을 발급한다. 계정별 ACTIVE 인증 가드와 DB 인증 버전이 일치할 때만 저장하며 고정 30분 expiresAt과 TTL을 설정한다. 요청으로 만료를 연장하지 않는다. 자격 오류·확정 정지/삭제·자격 검증 뒤 버전 변경은 동일한 401이며 토큰을 발급하지 않는다. 변경 중 가드·Redis 저장 실패·쓰기 거절·복구 차단은 503이며 토큰을 반환하지 않는다. 계정 조회·비밀번호 검사 전에 policies.md의 로그인·복구 요청 제한을 적용한다. 계정 식별자별 고정 시간창의 상한 초과는 429와 Retry-After이며 계정 존재 여부를 구분하지 않는다. 제한 저장소 확인·원자 갱신 실패는 부작용 없이 503이다.",
         "security": [],
         "parameters": [],
         "responses": {
@@ -292,7 +292,7 @@
             }
           },
           "401": {
-            "description": "인증 필요/만료",
+            "description": "계정 종류·자격·활성 상태 오류 또는 발급 중 인증 버전 변경; 계정 존재 여부를 구분하지 않음",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -332,17 +332,26 @@
             }
           },
           "429": {
-            "description": "요청 제한",
+            "description": "계정 식별자별 요청 제한 초과. Retry-After 뒤 재시도하며 계정 존재 여부는 구분하지 않는다.",
             "content": {
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "남은 제한 시간창을 초 단위로 올림한 값.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
             }
           },
           "503": {
-            "description": "일시적 저장/외부 장애",
+            "description": "변경 중 인증 가드·Redis 세션 검증/저장 불가 또는 인증 복구 차단; 토큰 미발급",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -374,7 +383,7 @@
         "x-owner-service": "seller",
         "x-actor": "PUBLIC",
         "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "판매자 계정의 비밀번호·활성 상태를 PostgreSQL에서 확인한 뒤 Redis에 로그인 세션을 발급한다. 계정별 ACTIVE 인증 가드와 DB 인증 버전이 일치할 때만 저장하며 고정 30분 expiresAt과 TTL을 설정한다. 요청으로 만료를 연장하지 않는다. 자격 오류·확정 정지/삭제·자격 검증 뒤 버전 변경은 동일한 401이며 토큰을 발급하지 않는다. 변경 중 가드·Redis 저장 실패·쓰기 거절·복구 차단은 503이며 토큰을 반환하지 않는다. 계정 조회·비밀번호 검사 전에 policies.md의 로그인·복구 요청 제한을 적용한다. 계정 식별자별 고정 시간창의 상한 초과는 429와 Retry-After이며 계정 존재 여부를 구분하지 않는다. 제한 저장소 확인·원자 갱신 실패는 부작용 없이 503이다.",
         "security": [],
         "parameters": [],
         "responses": {
@@ -399,7 +408,7 @@
             }
           },
           "401": {
-            "description": "인증 필요/만료",
+            "description": "계정 종류·자격·활성 상태 오류 또는 발급 중 인증 버전 변경; 계정 존재 여부를 구분하지 않음",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -439,17 +448,26 @@
             }
           },
           "429": {
-            "description": "요청 제한",
+            "description": "계정 식별자별 요청 제한 초과. Retry-After 뒤 재시도하며 계정 존재 여부는 구분하지 않는다.",
             "content": {
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
               }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "남은 제한 시간창을 초 단위로 올림한 값.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
             }
           },
           "503": {
-            "description": "일시적 저장/외부 장애",
+            "description": "변경 중 인증 가드·Redis 세션 검증/저장 불가 또는 인증 복구 차단; 토큰 미발급",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -481,7 +499,7 @@
         "x-owner-service": "seller",
         "x-actor": "BUYER|SELLER",
         "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "Gateway가 검증해 전달한 계정 종류·ID와 현재 세션 해시로 Redis의 해당 세션만 조건부 삭제한다. 다른 계정 세션을 삭제하지 않으며 Redis 삭제 확인 뒤 204를 반환한다. expectedVersion·Idempotency-Key를 요구하지 않는다. 저장소 오류는 503이고 성공으로 안내하지 않는다. 이미 폐기된 토큰으로 다시 요청하면 Gateway에서 401이며 세션을 복원하지 않는다. 폐기 전에 인증된 진행 중 요청과 이미 접수한 금융 작업을 소급 취소하지 않는다.",
         "security": [
           {
             "accountSession": []
@@ -553,7 +571,7 @@
             }
           },
           "503": {
-            "description": "일시적 저장/외부 장애",
+            "description": "Redis 세션/인증 가드 검증·저장 불가 또는 인증 복구 차단",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -676,7 +694,7 @@
         "x-owner-service": "seller",
         "x-actor": "PUBLIC",
         "x-implemented": false,
-        "description": "계정 존재 여부와 무관한 동일200 응답. 등록수신경로로10분일회용토큰전달. 토큰을응답/금융Kafka에싣지않음.",
+        "description": "계정 존재 여부와 무관한 동일200 응답. 등록수신경로로10분일회용토큰전달. 토큰을응답/금융Kafka에싣지않음. 계정 조회·복구 토큰 발급/폐기·전달 전에 policies.md의 로그인·복구 요청 제한을 적용한다. 계정 식별자별 고정 시간창의 상한 초과는 429와 Retry-After이며 계정 존재 여부를 구분하지 않는다. 제한 저장소 확인·원자 갱신 실패는 부작용 없이 503이다.",
         "security": [],
         "parameters": [],
         "responses": {
@@ -741,11 +759,20 @@
             }
           },
           "429": {
-            "description": "요청 제한",
+            "description": "계정 식별자별 요청 제한 초과. Retry-After 뒤 재시도하며 계정 존재 여부는 구분하지 않는다.",
             "content": {
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "남은 제한 시간창을 초 단위로 올림한 값.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
                 }
               }
             }
@@ -783,7 +810,7 @@
         "x-owner-service": "seller",
         "x-actor": "PUBLIC",
         "x-implemented": false,
-        "description": "목적/종류/만료/미사용검증 뒤비밀번호교체·토큰소비·기존세션폐기를한트랜잭션으로수행.",
+        "description": "계정 종류와 PostgreSQL의 10분·일회용 복구 토큰 목적/만료/미사용을 검증한다. 먼저 Redis 계정 가드를 차단한 뒤 비밀번호 교체·복구 토큰 소비/폐기·auth_version의 조건부 증가·같은 변경 ID의 감사를 DB 트랜잭션으로 저장하고 확정 버전/상태를 Redis 가드에 반영한다. Redis와 DB를 단일 트랜잭션으로 취급하지 않는다. 미확정·반영 실패는 가드 차단을 유지하고 503을 반환하며 같은 변경의 확정 결과로 재조정한다. 503·응답 유실 때도 DB에서 비밀번호가 이미 변경됐을 수 있으므로 자동 재전송하지 않는다. 복구 후 새 비밀번호로 로그인하고 실패하면 새 복구 토큰을 요청한다. 소비/만료된 토큰 재사용은 401이며 비밀번호를 다시 바꾸지 않는다. 기존 버전의 전체 로그인 세션은 더 이상 유효하지 않다.",
         "security": [],
         "parameters": [],
         "responses": {
@@ -801,7 +828,7 @@
             }
           },
           "401": {
-            "description": "인증 필요/만료",
+            "description": "계정 종류 또는 복구 토큰 목적 오류·만료·소비/폐기",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -851,7 +878,7 @@
             }
           },
           "503": {
-            "description": "일시적 저장/외부 장애",
+            "description": "인증 가드 차단/확정 반영 불가 또는 변경 결과 미확정; DB 비밀번호는 이미 변경됐을 수 있음",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -10729,7 +10756,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "opaque-session",
-        "description": "DB 해시 세션, BUYER/SELLER는서버가식별. 고정30분."
+        "description": "외부 클라이언트의 Redis 기반 불투명 Bearer 세션. 커머스가 토큰 해시·계정 종류/ID·인증 버전·발급/만료를 저장하고 Gateway가 세션과 인증 가드를 원자 검증한다. 발급부터 고정 30분이며 조회로 연장하지 않는다. 세션 없음·폐기·만료·버전 불일치·확정 정지/삭제는 401, 변경 중 가드·유효 세션의 가드 누락·Redis 검증 불가·복구 차단은 503이다. 백엔드에는 원토큰 대신 검증된 신원과 대상 서비스 전용 Gateway 자격을 전달한다. 폐기 전 검증된 진행 중 요청을 소급 취소하지 않는다."
       },
       "serviceCredential": {
         "type": "http",
@@ -10991,7 +11018,8 @@
           "token": {
             "type": "string",
             "minLength": 32,
-            "maxLength": 512
+            "maxLength": 512,
+            "description": "256비트 이상 임의로 생성한 세션 토큰 원문. Authorization: Bearer로 제시하며 서버 저장·로그에는 원문을 남기지 않는다."
           },
           "tokenType": {
             "type": "string",
@@ -11001,7 +11029,8 @@
           },
           "expiresAt": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "description": "서버 발급 시각+30분. Redis TTL과 서버 검증의 공통 만료이며 요청으로 연장하지 않는다."
           },
           "account": {
             "$ref": "#/components/schemas/Account"
@@ -11012,7 +11041,8 @@
           "tokenType",
           "expiresAt",
           "account"
-        ]
+        ],
+        "description": "Redis에 저장한 불투명 로그인 세션의 발급 응답. token 원문은 발급 응답에만 포함하고 Redis에는 SHA-256 해시를 식별자로 사용한다. expiresAt은 발급 시각+30분으로 고정하며 Redis 저장과 계정 인증 가드 검증이 성공한 뒤 반환한다."
       },
       "PasswordResetRequest": {
         "type": "object",
