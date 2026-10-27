@@ -690,7 +690,7 @@
 | `business_key` | `uuid` | 업무 값 |
 | `external_ref` | `uuid?` | 업무 값 |
 | `status` | `varchar(24)` | 업무 값 |
-| `hold_reason` | `varchar(32)?` | NON_BUSINESS_DAY/INSUFFICIENT_FUNDS/UNKNOWN/CONFIRMED_REJECTION |
+| `hold_reason` | `varchar(32)?` | NON_BUSINESS_DAY/UNKNOWN/CONFIRMED_REJECTION |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
@@ -727,7 +727,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** ready_at=max(purchase_confirmed_at,eligible_received_at). UNIQUE(payment_id). T=E+M, B=T+P=fee+net. fee=floor(B*15/100). 플랫폼 지원 재원과 지급 가능 현금의 확인 전 지급 금지. 상태 조건과 예약을 같은 트랜잭션으로 보호.
+**제약:** ready_at=max(purchase_confirmed_at,eligible_received_at). UNIQUE(payment_id). T=E+M, B=T+P=fee+net. fee=floor(B*15/100). 플랫폼 지원분을 포함한 선지급 재원은 항상 충분하게 준비. 상태 조건과 예약을 같은 트랜잭션으로 보호.
 
 **인덱스:** (seller_id,status,ready_at,id); (payout_id); UNIQUE(payment_id). 배치는 ready_at<cutoff_at인 미선점 항목을 조회하며 payout_id가 있으면 다른 배치에 배정하지 않습니다.
 
@@ -770,7 +770,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(payout_id), UNIQUE(business_key). 지급 항목 선점·금액·작업 생성 원자 저장. next_run_at은 Payout 응답의 nextAttemptAt 원천입니다. 달력/재원 보류는 같은 작업을 재개하고 attempts를 늘리지 않으며 확정 거절은 REVIEW_REQUIRED입니다.
+**제약:** UNIQUE(payout_id), UNIQUE(business_key). 지급 항목 선점·금액·작업 생성 원자 저장. next_run_at은 Payout 응답의 nextAttemptAt 원천입니다. 비영업일 보류는 같은 작업을 재개하고 attempts를 늘리지 않으며 확정 거절은 REVIEW_REQUIRED입니다.
 
 **인덱스:** (status,next_run_at,lease_until,id).
 
@@ -817,7 +817,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(provider_id,account_ref,purpose). CHECK(0<=reserved_amount AND reserved_amount<=balance). purpose=GIFT/WALLET/PAYOUT. PAYOUT의 balance=opening_balance+해당 계정 cash_entries 합계이며 예약액은 소비 전까지 차감하지 않습니다.
+**제약:** UNIQUE(provider_id,account_ref,purpose). CHECK(0<=reserved_amount AND reserved_amount<=balance). purpose=WALLET/PAYOUT. PAYOUT의 balance=opening_balance+해당 계정 cash_entries 합계이며 예약액은 소비 전까지 차감하지 않습니다.
 
 **인덱스:** UNIQUE(provider_id,account_ref,purpose).
 
@@ -870,27 +870,26 @@
 
 **제약:** UNIQUE(provider_id,operation,business_key). 진행 중/성공 환불은 original_id별1개(부분 UNIQUE). amount>0. 카드 승인은 내부 잔액 차감 없이 결과만 모의. 최초 SUCCEEDED 시각 succeeded_at을 결과와 원자 저장하고 이후 불변.
 
-원승인당 입금은 한 번이며 입금/환불은 원승인 행 잠금으로 경합합니다. 승인 성공·입금 예정 정보는 같은 트랜잭션에서 저장합니다. 입금 전 확정 환불은 0 입금으로 종결하고, 입금 후 환불은 가용 재원 검사·E 차감·환불 결과·원수단 잔액 복원을 원자 저장합니다. 자금 부족이면 확정 거절하고 잔액은 유지합니다. pg_received_amount=0인 상쇄에는 현금 행을 만들지 않습니다. P/M은 PG 입금에 포함하지 않습니다.
+원승인당 입금은 한 번이며 입금/환불은 원승인 행 잠금으로 경합합니다. 승인 성공·입금 예정 정보는 같은 트랜잭션에서 저장합니다. 입금 전 확정 환불은 0 입금으로 종결하고, 입금 후 환불은 E 차감·환불 결과·원수단 잔액 복원을 원자 저장합니다. 입금 후 환불액도 사전 준비한 충분한 모의 재원에 포함합니다. pg_received_amount=0인 상쇄에는 현금 행을 만들지 않습니다. P/M은 PG 입금에 포함하지 않습니다.
 
 **인덱스:** (operation,status,pg_receipt_due_at,id) WHERE pg_received_at IS NULL; (provider_id,status,created_at,id); (original_id).
 
 ### mock_cash_entries
 
-소유: `finance_mock`. PAYOUT 재원의 추가 전용 현금 기록. 금융 Mock ERD는 기존 주요 거래를 요약하며 이 표가 현금 기록의 기준입니다.
+소유: `finance_mock`. PAYOUT의 PG 입금·환불·지급 차감을 보존하는 추가 전용 현금 기록. 선지급 재원은 항상 충분하며 이 기록으로 재원 부족 보류를 만들지 않습니다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `account_id` | `uuid` | →mock_accounts.id; purpose=PAYOUT |
-| `kind` | `varchar(24)` | PLATFORM_TOPUP/PG_RECEIPT/REFUND_DEBIT/PAYOUT_DEBIT |
-| `business_key` | `uuid` | 추가 자금의 요청 키 또는 원금융 거래 ID |
-| `transaction_id` | `uuid?` | →mock_transactions.id; TOPUP만 NULL |
+| `kind` | `varchar(24)` | PG_RECEIPT/REFUND_DEBIT/PAYOUT_DEBIT |
+| `transaction_id` | `uuid` | →mock_transactions.id |
 | `amount` | `bigint` | 입금은 양수, 환불/지급 차감은 음수 |
 | `created_at` | `timestamptz` | NOT NULL |
 
-**제약:** UNIQUE(kind,business_key). amount!=0, kind에 맞는 부호·거래 종류·계정을 검증합니다. 원래 거래 ID·금액을 한 번만 반영하고 행·계정 잔액을 같은 트랜잭션으로 갱신합니다. 같은 TOPUP 키의 다른 계정/금액은 409이며 생성·재요청 모두 기존 CashEntry와 Location을 201로 반환합니다. UPDATE/DELETE를 제공하지 않습니다. 지급 성공 차감은 대역 예약 소비와 원자 저장합니다.
+**제약:** UNIQUE(kind,transaction_id). amount!=0, kind에 맞는 부호·거래 종류·계정을 검증합니다. 원래 거래 ID·금액을 한 번만 반영하고 행·계정 잔액을 같은 트랜잭션으로 갱신합니다. UPDATE/DELETE를 제공하지 않습니다. 지급 성공 차감은 대역 예약 소비와 원자 저장합니다.
 
-**인덱스:** (account_id,created_at,id); UNIQUE(kind,business_key).
+**인덱스:** (account_id,created_at,id); UNIQUE(kind,transaction_id).
 
 ### mock_scenarios
 
