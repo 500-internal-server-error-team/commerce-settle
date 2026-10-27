@@ -8562,7 +8562,7 @@
         "x-owner-service": "finance-mock",
         "x-actor": "SERVICE:payment",
         "x-implemented": false,
-        "description": "PG의카드/상품권또는EASY_PAY의지갑만허용. 동일businessKey는원결과. 처리중202와상태조회; 성공후응답유실도같은결과유지.",
+        "description": "PG의 신용/체크카드 또는 EASY_PAY의 지갑만 허용한다. 상품권은 지원하지 않는다. 같은 업무 키·본문은 원결과로 연결하고 처리 중 202와 원거래 조회를 사용한다. 성공 후 응답 유실에도 결과를 유지한다.",
         "security": [
           {
             "serviceCredential": []
@@ -8845,7 +8845,7 @@
         "x-owner-service": "finance-mock",
         "x-actor": "SERVICE:payment",
         "x-implemented": false,
-        "description": "원승인·원수단에 E를 한 번만 환불한다. 원승인 잠금 아래 PG 입금 전이면 예정 입금을 0으로 종결하고, 입금 후면 같은 재원에서 E를 차감한다. 가용 재원 부족은 확정 거절이다. 현금 기록·환불 결과·상품권/간편결제 잔액 복원을 같은 트랜잭션으로 처리한다.",
+        "description": "원승인·원수단에 E를 한 번만 환불한다. 원승인 잠금 아래 PG 입금 전이면 예정 입금을 0으로 종결하고, 입금 후면 같은 재원에서 E를 차감한다. 입금 후 환불액도 사전 준비한 충분한 모의 재원에 포함한다. 현금 기록·환불 결과·간편결제 잔액 복원을 같은 트랜잭션으로 처리한다.",
         "security": [
           {
             "serviceCredential": []
@@ -9000,7 +9000,7 @@
         "x-owner-service": "finance-mock",
         "x-actor": "SERVICE:settlement",
         "x-implemented": false,
-        "description": "기존 업무 키가 있으면 원결과를 우선 반환한다. 신규 지급은 영업일·PAYOUT 계정·가용 잔액을 검사하고 거래 기록/자금 선점을 원자 저장한다. 비영업일은 409 PAYOUT_NON_BUSINESS_DAY, 자금 부족은 409 PAYOUT_INSUFFICIENT_FUNDS이며 거래/선점을 만들지 않는다. 보류 응답은 완료된 멱등 결과로 캐시하지 않되 요청 해시는 유지해 같은 키의 다른 금액/계정을 거절한다.",
+        "description": "기존 업무 키가 있으면 원결과를 우선 반환한다. 선지급 재원은 시험 전에 항상 충분하게 준비하며 재원 부족은 지급 보류·실패 사유가 아니다. 신규 지급은 영업일·PAYOUT 계정을 검증하고 거래 기록/자금 선점을 원자 저장한다. 비영업일은 409 PAYOUT_NON_BUSINESS_DAY이며 거래/선점을 만들지 않는다. 보류 응답은 완료된 멱등 결과로 캐시하지 않되 요청 해시는 유지해 같은 키의 다른 금액/계정을 거절한다.",
         "security": [
           {
             "serviceCredential": []
@@ -9080,7 +9080,7 @@
             }
           },
           "409": {
-            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "description": "비영업일·계정·상태·멱등 충돌",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -10721,147 +10721,6 @@
           }
         }
       }
-    },
-    "/mock/accounts/{accountId}/credits": {
-      "post": {
-        "operationId": "post_mock_accounts_accountId_credits",
-        "summary": "모의 지급 재원 보충",
-        "tags": [
-          "finance-mock"
-        ],
-        "x-owner-service": "finance-mock",
-        "x-actor": "OPERATOR",
-        "x-implemented": false,
-        "description": "운영자 서비스 자격으로 PAYOUT 계정에만 추가 자금을 반영한다. cash_entries·계정 잔액·멱등 결과는 한 트랜잭션이며 같은 키/본문 재요청도 기존 기록과 Location을 201로 반환한다.",
-        "security": [
-          {
-            "serviceCredential": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "accountId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
-          }
-        ],
-        "responses": {
-          "201": {
-            "description": "리소스 생성",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MockCashEntry"
-                }
-              }
-            },
-            "headers": {
-              "Location": {
-                "description": "생성 리소스 또는 비동기 처리 조회 경로",
-                "schema": {
-                  "type": "string",
-                  "format": "uri-reference"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "형식·값 오류",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "인증 필요/만료",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "역할·서비스 권한 없음",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "없거나 타인 소유",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "상태·버전·기한·잔액·멱등 충돌",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "요청 제한",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "일시적 저장/외부 장애",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MockAccountCredit"
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -12258,7 +12117,6 @@
                 "enum": [
                   "CREDIT_CARD",
                   "DEBIT_CARD",
-                  "GIFT_CERTIFICATE",
                   "EASY_PAY"
                 ]
               },
@@ -12474,7 +12332,6 @@
                 "enum": [
                   "CREDIT_CARD",
                   "DEBIT_CARD",
-                  "GIFT_CERTIFICATE",
                   "EASY_PAY"
                 ]
               },
@@ -13048,7 +12905,6 @@
                 "enum": [
                   "CREDIT_CARD",
                   "DEBIT_CARD",
-                  "GIFT_CERTIFICATE",
                   "EASY_PAY"
                 ]
               },
@@ -13121,7 +12977,7 @@
           "platformCouponAmount",
           "settlementBaseAmount"
         ],
-        "description": "B=T+P=E+M+P. 수수료=floor(B*15/100), 판매자 순액=B-수수료. 플랫폼 지원은 실제 지급 재원을 확인한다."
+        "description": "B=T+P=E+M+P. 수수료=floor(B*15/100), 판매자 순액=B-수수료. 플랫폼 지원분을 포함한 선지급 재원은 항상 충분하게 준비한다."
       },
       "PaymentAttempt": {
         "type": "object",
@@ -13153,7 +13009,6 @@
             "enum": [
               "CREDIT_CARD",
               "DEBIT_CARD",
-              "GIFT_CERTIFICATE",
               "EASY_PAY"
             ]
           },
@@ -13604,7 +13459,6 @@
                 "type": "string",
                 "enum": [
                   "NON_BUSINESS_DAY",
-                  "INSUFFICIENT_FUNDS",
                   "UNKNOWN",
                   "CONFIRMED_REJECTION"
                 ]
@@ -13937,7 +13791,6 @@
             "enum": [
               "CREDIT_CARD",
               "DEBIT_CARD",
-              "GIFT_CERTIFICATE",
               "EASY_PAY"
             ]
           },
@@ -14187,7 +14040,6 @@
           "purpose": {
             "type": "string",
             "enum": [
-              "GIFT",
               "WALLET",
               "PAYOUT"
             ]
@@ -14231,7 +14083,6 @@
           "purpose": {
             "type": "string",
             "enum": [
-              "GIFT",
               "WALLET",
               "PAYOUT"
             ]
@@ -15159,7 +15010,6 @@
                 "enum": [
                   "CREDIT_CARD",
                   "DEBIT_CARD",
-                  "GIFT_CERTIFICATE",
                   "EASY_PAY"
                 ]
               },
@@ -17473,7 +17323,7 @@
           "batchDate",
           "policyVersion"
         ],
-        "description": "businessRef는 PAYOUT_COMPLETED=payoutId, 나머지=batchId. 지급 완료만 payoutId·원대역 succeededAt 필수. 조치 필요만 reasonCode 필수. READY는 판매자별 batchDate·마감·합계 안내이며 지급 성공 아님. 부족 재원은 FUNDING_INSUFFICIENT, 확정 거절은 PROVIDER_DECLINED. 지급 보류 INSUFFICIENT_FUNDS는 기존 알림 사유 FUNDING_INSUFFICIENT에 대응한다. 비영업일은 조회의 holdReason으로 안내한다.",
+        "description": "businessRef는 PAYOUT_COMPLETED=payoutId, 나머지=batchId. 지급 완료만 payoutId·원대역 succeededAt 필수. 조치 필요만 reasonCode=PROVIDER_DECLINED 필수. READY는 판매자별 batchDate·마감·합계 안내이며 지급 성공 아님. 비영업일은 조회의 holdReason으로 안내한다.",
         "allOf": [
           {
             "if": {
@@ -17521,7 +17371,6 @@
               "properties": {
                 "reasonCode": {
                   "enum": [
-                    "FUNDING_INSUFFICIENT",
                     "PROVIDER_DECLINED"
                   ]
                 }
@@ -17550,85 +17399,6 @@
           "buyerId"
         ],
         "description": "판매자가 쿠폰을 지급할 등록 구매자. 정산·주문 주체를 바꾸는 필드가 아니며 수신자 유효성은 서버에서 검증한다."
-      },
-      "MockAccountCredit": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "businessKey": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "amount": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 1
-          }
-        },
-        "required": [
-          "businessKey",
-          "amount"
-        ],
-        "description": "운영자의 모의 재원 보충. 같은 업무 키·계정·금액은 기존 기록, 다른 본문은 409. PAYOUT 계정만 허용한다."
-      },
-      "MockCashEntry": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "accountId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "PLATFORM_TOPUP",
-              "PG_RECEIPT",
-              "REFUND_DEBIT",
-              "PAYOUT_DEBIT"
-            ]
-          },
-          "businessKey": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "transactionId": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "amount": {
-            "type": "integer",
-            "format": "int64",
-            "not": {
-              "const": 0
-            }
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "id",
-          "accountId",
-          "kind",
-          "businessKey",
-          "transactionId",
-          "amount",
-          "createdAt"
-        ],
-        "description": "추가 전용 현금 기록. 입금은 양수, 차감은 음수이며 0은 허용하지 않는다."
       }
     }
   },

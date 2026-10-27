@@ -91,7 +91,6 @@
 | POST | `/mock/providers/{providerId}/payments/{externalId}/refunds` | 원외부 결제 전액 환불 | SERVICE:payment | `MockRefund` | `MockTransaction` | 202 |
 | POST | `/mock/payouts` | 모의 지급 실행 | SERVICE:settlement | `MockPayout` | `MockTransaction` | 202 |
 | GET | `/mock/payouts/{businessKey}` | 원지급 조회 | SERVICE:settlement | `—` | `MockTransaction` | 200 |
-| POST | `/mock/accounts/{accountId}/credits` | 모의 지급 재원 보충 | OPERATOR | `MockAccountCredit` | `MockCashEntry` | 201 |
 | POST | `/mock/accounts` | 격리 시험 계정 준비 | OPERATOR | `MockAccountCreate` | `MockAccount` | 201 |
 | GET | `/mock/accounts/{accountId}` | 격리 시험 잔액 조회 | OPERATOR | `—` | `MockAccount` | 200 |
 | POST | `/mock/scenarios` | 새 버전 장애 설정 | OPERATOR | `MockScenarioCreate` | `MockScenario` | 201 |
@@ -125,6 +124,8 @@
 4. 환불은 주문의 refund-requests에서만 접수합니다. 구매자가 Payment에 임의 금액으로 직접 환불을 만들지 않습니다. 미발송 취소와 발송후 반품 승인, 기한내 접수와 기한후 처리를 구분합니다.
 5. 판매자 승인 전 반품은 구매자가 철회할 수 있습니다. 금융 실패 뒤 운영 종결은 외부확정거절·미복원·예약해제·고객확인 근거를 모두 확인한 경우만 허용하고, 미확정이면 거절합니다.
 6. 모의 배송완료 반영과 기한 후 자동 구매확정은 내부 스케줄 작업이며 구매자용 수동 조기확정 API는 없습니다. 정산·지급은 해당 이벤트와 예약 상태를 확인합니다.
+
+상품권 요청은 결제수단 enum 검증에서 `400 COMMON_VALIDATION_FAILED`로 거절합니다. 카드·간편결제·우리 마일리지의 기존 금액·원수단 환불 계약은 유지합니다.
 
 ## 이벤트 연동
 
@@ -164,7 +165,7 @@ PaymentAccepted·RefundAccepted 이벤트로 주문 조회에 금융 처리 ID�
 
 Order는 deliveryBusinessDays·deliveryCalendarVersion·shippedAt·deliveryDueAt·deliveredAt·refundDeadlineAt을 반환합니다. 서버만 모의 배송완료를 반영하며 구매자·판매자가 도착/환불 마감을 지정할 수 없습니다. PurchaseConfirmed는 deliveredAt·refundDeadlineAt·confirmedAt을 전달해 배송완료와 환불 마감 이후의 확정임을 보존합니다.
 
-PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반영합니다. MockApproval의 fundingAccountRef는 Payment 서버 설정이며 원승인에 고정합니다. MockTransaction의 pgReceiptDueAt·pgReceivedAt·pgReceivedAmount로 예정/실제 입금과 입금 전 환불 상쇄를 조회합니다. PAYOUT 재원의 추가 자금만 운영자 credit API를 사용합니다. [현금·복구 정책](policies.md#선지급-재원과-pg-회수)을 따릅니다.
+PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반영합니다. MockApproval의 fundingAccountRef는 Payment 서버 설정이며 원승인에 고정합니다. MockTransaction의 pgReceiptDueAt·pgReceivedAt·pgReceivedAmount로 예정/실제 입금과 입금 전 환불 상쇄를 조회합니다. 선지급 재원은 항상 충분하며 시험 전에 전체 지급·환불 자금을 준비합니다. [현금·복구 정책](policies.md#선지급-재원과-pg-회수)을 따릅니다.
 
 ## 거래 알림 사용 순서
 
@@ -188,7 +189,7 @@ PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반�
 | INVENTORY_INSUFFICIENT / EVENT_ADMISSION_CLOSED |409|재고/기간/참여한도/매진|
 | MILEAGE_INSUFFICIENT / PAYMENT_STATE_CONFLICT |409|잔액 부족·미확정 재시도 등|
 | ORDER_REFUND_WINDOW_CLOSED / ORDER_REFUND_IN_PROGRESS |409|배송완료+168시간 초과·기존 환불|
-| PAYOUT_NON_BUSINESS_DAY / PAYOUT_INSUFFICIENT_FUNDS |409|신규 대역 지급의 비영업일·재원 부족; 외부 거래 생성 없이 기존 지급 보류|
+| PAYOUT_NON_BUSINESS_DAY |409|신규 대역 지급의 비영업일; 외부 거래 생성 없이 기존 지급 보류|
 | SETTLEMENT_NO_ELIGIBLE_ITEMS |409|새 일배치에 배정할 지급 가능 항목 없음|
 | NOTIFICATION_REPLAY_CONFLICT |409|완료/수집 중/유효 임대 또는 재처리 불가 상태|
 | COMMON_RATE_LIMITED / COMMON_TEMPORARILY_UNAVAILABLE |429/503|제한·의존 저장소 장애|
