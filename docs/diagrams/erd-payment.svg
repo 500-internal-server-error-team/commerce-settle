@@ -1,1 +1,330 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="880" height="666" viewBox="0 0 880 666" role="img" aria-labelledby="title desc"><title id="title">결제·마일리지 ERD</title><desc id="desc">주요 필드와 논리 관계. 전체 컬럼과 제약은 데이터 모델 문서가 기준이며 물리 FK는 없다.</desc><rect width="880" height="666" fill="#ffffff" /><path data-relation="mileage_wallets:mileage_reservations" d="M264,86 L312,86" fill="none" stroke="#607084" stroke-width="1.1" /><path data-relation="mileage_reservations:payments" d="M560,86 L608,86" fill="none" stroke="#607084" stroke-width="1.1" /><path data-relation="mileage_wallets:mileage_entries" d="M140.0,130 L140.0,248" fill="none" stroke="#607084" stroke-width="1.1" /><path data-relation="payments:refunds" d="M732.0,158 L732.0,248" fill="none" stroke="#607084" stroke-width="1.1" /><path data-relation="refunds:refund_sagas" d="M608,318 L560,318" fill="none" stroke="#607084" stroke-width="1.1" /><path data-relation="refunds:payment_jobs" d="M732.0,390 L732.0,438 Q732.0,446 724.0,446 L444.0,446 Q436.0,446 436.0,454 L436.0,480" fill="none" stroke="#607084" stroke-width="1.1" /><path data-relation="payments:payment_attempts" d="M856,100 L864,100 Q872,100 872,108 L872,542 Q872,550 864,550 L856,550" fill="none" stroke="#607084" stroke-width="1.1" /><path data-relation="payments:payment_jobs" d="M608,116 L592,116 Q584,116 584,124 L584,310 a8,8 0 0,0 0,16 L584,438 a8,8 0 0,0 0,16 L584,542 Q584,550 576,550 L560,550" fill="none" stroke="#607084" stroke-width="1.1" /><g data-entity="mileage_wallets" data-box="16,16,248,114"><rect x="16" y="16" width="248" height="114" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><path d="M16 60h248" stroke="#e2e8f0" /><text x="28" y="36" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">우리 마일리지 잔액</text><text x="28" y="51" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">mileage_wallets</text><text x="28" y="77" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176"># id uuid</text><text x="28" y="91" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">buyer_id uuid</text><text x="28" y="105" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">balance bigint</text><text x="28" y="119" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">reserved_amount bigint</text></g><g data-entity="mileage_reservations" data-box="312,16,248,142"><rect x="312" y="16" width="248" height="142" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><path d="M312 60h248" stroke="#e2e8f0" /><text x="324" y="36" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">마일리지 예약</text><text x="324" y="51" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">mileage_reservations</text><text x="324" y="77" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176"># id uuid</text><text x="324" y="91" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">→ wallet_id uuid</text><text x="324" y="105" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">→ payment_id uuid</text><text x="324" y="119" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">cycle_id uuid</text><text x="324" y="133" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">amount bigint</text><text x="324" y="147" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">status varchar(16)</text></g><g data-entity="payments" data-box="608,16,248,142"><rect x="608" y="16" width="248" height="142" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><path d="M608 60h248" stroke="#e2e8f0" /><text x="620" y="36" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">결제</text><text x="620" y="51" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">payments</text><text x="620" y="77" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176"># id uuid</text><text x="620" y="91" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">order_id uuid</text><text x="620" y="105" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">total_amount bigint</text><text x="620" y="119" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">mileage_amount bigint</text><text x="620" y="133" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">external_amount bigint</text><text x="620" y="147" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">status varchar(32)</text></g><g data-entity="mileage_entries" data-box="16,248,248,142"><rect x="16" y="248" width="248" height="142" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><path d="M16 292h248" stroke="#e2e8f0" /><text x="28" y="268" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">마일리지 원장</text><text x="28" y="283" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">mileage_entries</text><text x="28" y="309" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176"># id uuid</text><text x="28" y="323" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">→ wallet_id uuid</text><text x="28" y="337" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">→ payment_id uuid?</text><text x="28" y="351" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">→ refund_id uuid?</text><text x="28" y="365" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">kind varchar(16)</text><text x="28" y="379" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">business_ref uuid</text></g><g data-entity="refund_sagas" data-box="312,248,248,142"><rect x="312" y="248" width="248" height="142" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><path d="M312 292h248" stroke="#e2e8f0" /><text x="324" y="268" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">환불 복구 진행</text><text x="324" y="283" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">refund_sagas</text><text x="324" y="309" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176"># id uuid</text><text x="324" y="323" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">→ refund_id uuid</text><text x="324" y="337" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">step varchar(40)</text><text x="324" y="351" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">reservation_ref uuid?</text><text x="324" y="365" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">ledger_reversed_at timestamptz?</text><text x="324" y="379" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">order_restored_at timestamptz?</text></g><g data-entity="refunds" data-box="608,248,248,142"><rect x="608" y="248" width="248" height="142" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><path d="M608 292h248" stroke="#e2e8f0" /><text x="620" y="268" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">금융 환불</text><text x="620" y="283" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">refunds</text><text x="620" y="309" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176"># id uuid</text><text x="620" y="323" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">→ payment_id uuid</text><text x="620" y="337" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">order_refund_request_id uuid</text><text x="620" y="351" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">external_amount bigint</text><text x="620" y="365" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">mileage_amount bigint</text><text x="620" y="379" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">status varchar(32)</text></g><g data-entity="payment_jobs" data-box="312,480,248,142"><rect x="312" y="480" width="248" height="142" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><path d="M312 524h248" stroke="#e2e8f0" /><text x="324" y="500" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">결제·환불 작업</text><text x="324" y="515" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">payment_jobs</text><text x="324" y="541" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176"># id uuid</text><text x="324" y="555" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">→ payment_id uuid</text><text x="324" y="569" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">→ refund_id uuid?</text><text x="324" y="583" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">operation varchar(32)</text><text x="324" y="597" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">business_key uuid</text><text x="324" y="611" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">status varchar(24)</text></g><g data-entity="payment_attempts" data-box="608,480,248,142"><rect x="608" y="480" width="248" height="142" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><path d="M608 524h248" stroke="#e2e8f0" /><text x="620" y="500" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">외부 승인 시도</text><text x="620" y="515" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">payment_attempts</text><text x="620" y="541" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176"># id uuid</text><text x="620" y="555" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">→ payment_id uuid</text><text x="620" y="569" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">attempt_no integer</text><text x="620" y="583" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">cycle_id uuid</text><text x="620" y="597" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">provider_id varchar(16)</text><text x="620" y="611" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" fill="#526176">method varchar(24)</text></g><text x="272" y="78" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176" text-anchor="start">1</text><text x="304" y="78" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176" text-anchor="end">0..N</text><text x="568" y="78" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176" text-anchor="start">0..1</text><text x="600" y="78" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176" text-anchor="end">1</text><text x="150.0" y="144" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">1</text><text x="150.0" y="240" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">0..N</text><text x="742.0" y="172" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">1</text><text x="742.0" y="240" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">0..N</text><text x="600" y="310" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176" text-anchor="end">1</text><text x="568" y="310" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176" text-anchor="start">1</text><text x="742.0" y="404" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">1</text><text x="446.0" y="472" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">0..N</text><text x="850" y="92" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">1</text><text x="850" y="542" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">0..N</text><text x="582" y="108" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">1</text><text x="570" y="542" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176">0..N</text><text x="16" y="654" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" font-weight="400" fill="#526176"># PK   → 논리 참조   관계선은 DB FK가 아님</text></svg>
+<?xml version='1.0' encoding='UTF-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="1204" viewBox="0 0 1240 1204" role="img" aria-labelledby="title desc">
+  <title id="title">결제·마일리지 ERD</title>
+  <desc id="desc">주요 필드와 논리 관계, 단일·복합 유일제약과 적용 조건. 전체 컬럼과 제약은 데이터 모델 문서가 기준이며 물리 FK는 없다.</desc>
+  <rect width="1240" height="1204" fill="#ffffff" />
+  <path data-relation="mileage_wallets:mileage_reservations" d="M360,116 L432,116" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="mileage_reservations:payments" d="M768,134 L840,134" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="mileage_wallets:mileage_entries" d="M192,208 L192,340" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="payments:refunds" d="M1008,244 L1008,340" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="refunds:refund_sagas" d="M840,450 L768,450" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="refunds:payment_jobs" d="M1008,676 L1008,727.733 Q1008,735.733 1000,735.733 L608,735.733 Q600,735.733 600,743.733 L600,772" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="payments:payment_attempts" d="M1176,154.141 L1184,154.141 Q1192,154.141 1192,162.141 L1192,931.604 Q1192,939.604 1184,939.604 L1176,939.604" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="payments:payment_jobs" d="M840,178.929 L812,178.929 Q804,178.929 804,186.929 L804,444 a6,6 0 0,0 0,12 L804,729.733 a6,6 0 0,0 0,12 L804,872.449 Q804,880.449 796,880.449 L768,880.449" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <g data-entity="mileage_wallets" data-box="24,24,336,184">
+    <rect x="24.0" y="24" width="336.0" height="184" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="40.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">우리 마일리지 잔액</text>
+    <text x="40.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">mileage_wallets</text>
+    <path d="M24,80h336" stroke="#e2e8f0" />
+    <text x="40.0" y="100" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0"># id</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="40.0" y="118" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">buyer_id</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="40.0" y="136" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">balance</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="40.0" y="154" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">reserved_amount</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <path d="M40,168h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="buyer_id" data-condition="">
+      <text x="40.0" y="188" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (buyer_id)</text>
+    </g>
+  </g>
+  <g data-entity="mileage_reservations" data-box="432,24,336,220">
+    <rect x="432.0" y="24" width="336.0" height="220" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="448.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">마일리지 예약</text>
+    <text x="448.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">mileage_reservations</text>
+    <path d="M432,80h336" stroke="#e2e8f0" />
+    <text x="448.0" y="100" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0"># id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="118" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">→ wallet_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="136" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">→ payment_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="154" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">cycle_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="172" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">amount</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="448.0" y="190" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">status</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> varchar(16)</tspan>
+    </text>
+    <path d="M448,204h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="payment_id" data-condition="">
+      <text x="448.0" y="224" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (payment_id)</text>
+    </g>
+  </g>
+  <g data-entity="payments" data-box="840,24,336,220">
+    <rect x="840.0" y="24" width="336.0" height="220" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="856.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">결제</text>
+    <text x="856.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">payments</text>
+    <path d="M840,80h336" stroke="#e2e8f0" />
+    <text x="856.0" y="100" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0"># id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856.0" y="118" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">order_id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856.0" y="136" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">total_amount</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="856.0" y="154" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">mileage_amount</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="856.0" y="172" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">external_amount</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="856.0" y="190" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">status</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> varchar(32)</tspan>
+    </text>
+    <path d="M856,204h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="order_id" data-condition="">
+      <text x="856.0" y="224" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (order_id)</text>
+    </g>
+  </g>
+  <g data-entity="mileage_entries" data-box="24,340,336,260">
+    <rect x="24.0" y="340" width="336.0" height="260" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="40.0" y="364" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">마일리지 원장</text>
+    <text x="40.0" y="382" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">mileage_entries</text>
+    <path d="M24,396h336" stroke="#e2e8f0" />
+    <text x="40.0" y="416" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0"># id</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="40.0" y="434" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">→ wallet_id</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="40.0" y="452" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">→ payment_id</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid?</tspan>
+    </text>
+    <text x="40.0" y="470" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">→ refund_id</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid?</tspan>
+    </text>
+    <text x="40.0" y="488" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">kind</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> varchar(16)</tspan>
+    </text>
+    <text x="40.0" y="506" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">business_ref</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <path d="M40,520h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="wallet_id,kind,business_ref" data-condition="">
+      <text x="40.0" y="540" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (wallet_id, kind, business_ref)</text>
+    </g>
+    <g data-constraint="PUK" data-columns="payment_id,kind" data-condition="kind IN (DEBIT,RESTORE)">
+      <text x="40.0" y="566" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (payment_id, kind)</text>
+      <text x="40.0" y="582" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">적용 조건: kind IN (DEBIT, RESTORE)</text>
+    </g>
+  </g>
+  <g data-entity="refund_sagas" data-box="432,340,336,220">
+    <rect x="432.0" y="340" width="336.0" height="220" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="448.0" y="364" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">환불 복구 진행</text>
+    <text x="448.0" y="382" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">refund_sagas</text>
+    <path d="M432,396h336" stroke="#e2e8f0" />
+    <text x="448.0" y="416" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0"># id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="434" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">→ refund_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="452" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">step</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> varchar(40)</tspan>
+    </text>
+    <text x="448.0" y="470" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">reservation_ref</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid?</tspan>
+    </text>
+    <text x="448.0" y="488" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">ledger_reversed_at</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> timestamptz?</tspan>
+    </text>
+    <text x="448.0" y="506" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">order_restored_at</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> timestamptz?</tspan>
+    </text>
+    <path d="M448,520h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="refund_id" data-condition="">
+      <text x="448.0" y="540" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (refund_id)</text>
+    </g>
+  </g>
+  <g data-entity="refunds" data-box="840,340,336,336">
+    <rect x="840.0" y="340" width="336.0" height="336" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="856.0" y="364" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">금융 환불</text>
+    <text x="856.0" y="382" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">refunds</text>
+    <path d="M840,396h336" stroke="#e2e8f0" />
+    <text x="856.0" y="416" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0"># id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856.0" y="434" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">→ payment_id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856.0" y="452" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">order_refund_request_id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856.0" y="470" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">external_amount</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="856.0" y="488" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">mileage_amount</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="856.0" y="506" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">status</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> varchar(32)</tspan>
+    </text>
+    <text x="856.0" y="524" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">business_key</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <path d="M856,538h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="order_refund_request_id" data-condition="">
+      <text x="856.0" y="558" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (order_refund_request_id)</text>
+    </g>
+    <g data-constraint="UK" data-columns="business_key" data-condition="">
+      <text x="856.0" y="584" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (business_key)</text>
+    </g>
+    <g data-constraint="PUK" data-columns="payment_id" data-condition="status IN (RESERVING,EXTERNAL_PENDING,RESTORING,INTERNAL_PENDING,COMPLETED,UNKNOWN,COMPENSATING)">
+      <text x="856.0" y="610" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (payment_id)</text>
+      <text x="856.0" y="626" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">적용 조건: status IN (RESERVING,</text>
+      <text x="856.0" y="642" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">EXTERNAL_PENDING, RESTORING, INTERNAL_PENDING,</text>
+      <text x="856.0" y="658" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">COMPLETED, UNKNOWN, COMPENSATING)</text>
+    </g>
+  </g>
+  <g data-entity="payment_jobs" data-box="432,772,336,220">
+    <rect x="432.0" y="772" width="336.0" height="220" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="448.0" y="796" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">결제·환불 작업</text>
+    <text x="448.0" y="814" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">payment_jobs</text>
+    <path d="M432,828h336" stroke="#e2e8f0" />
+    <text x="448.0" y="848" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0"># id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="866" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">→ payment_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="884" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">→ refund_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid?</tspan>
+    </text>
+    <text x="448.0" y="902" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">operation</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> varchar(32)</tspan>
+    </text>
+    <text x="448.0" y="920" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">business_key</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="938" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">status</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> varchar(24)</tspan>
+    </text>
+    <path d="M448,952h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="operation,business_key" data-condition="">
+      <text x="448.0" y="972" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (operation, business_key)</text>
+    </g>
+  </g>
+  <g data-entity="payment_attempts" data-box="840,772,336,340">
+    <rect x="840.0" y="772" width="336.0" height="340" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="856.0" y="796" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">외부 승인 시도</text>
+    <text x="856.0" y="814" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">payment_attempts</text>
+    <path d="M840,828h336" stroke="#e2e8f0" />
+    <text x="856.0" y="848" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0"># id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856.0" y="866" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">→ payment_id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856.0" y="884" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">attempt_no</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> integer</tspan>
+    </text>
+    <text x="856.0" y="902" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">cycle_id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856.0" y="920" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">provider_id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> varchar(16)</tspan>
+    </text>
+    <text x="856.0" y="938" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">method</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> varchar(24)</tspan>
+    </text>
+    <text x="856.0" y="956" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">business_key</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856.0" y="974" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">status</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> varchar(24)</tspan>
+    </text>
+    <path d="M856,988h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="payment_id,attempt_no" data-condition="">
+      <text x="856.0" y="1008" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (payment_id, attempt_no)</text>
+    </g>
+    <g data-constraint="UK" data-columns="provider_id,business_key" data-condition="">
+      <text x="856.0" y="1034" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (provider_id, business_key)</text>
+    </g>
+    <g data-constraint="PUK" data-columns="payment_id" data-condition="status IN (PENDING,PROCESSING,UNKNOWN,APPROVED)">
+      <text x="856.0" y="1060" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (payment_id)</text>
+      <text x="856.0" y="1076" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">적용 조건: status IN (PENDING, PROCESSING,</text>
+      <text x="856.0" y="1092" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">UNKNOWN, APPROVED)</text>
+    </g>
+  </g>
+  <text x="372.0" y="106.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="mileage_wallets:mileage_reservations" data-endpoint="source">1</text>
+  <text x="420.0" y="134.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="mileage_wallets:mileage_reservations" data-endpoint="target">0..N</text>
+  <text x="780.0" y="124.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="mileage_reservations:payments" data-endpoint="source">0..1</text>
+  <text x="828.0" y="152.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="mileage_reservations:payments" data-endpoint="target">1</text>
+  <text x="204.0" y="228" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="mileage_wallets:mileage_entries" data-endpoint="source">1</text>
+  <text x="204.0" y="328" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="mileage_wallets:mileage_entries" data-endpoint="target">0..N</text>
+  <text x="1020.0" y="264" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="payments:refunds" data-endpoint="source">1</text>
+  <text x="1020.0" y="328" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="payments:refunds" data-endpoint="target">0..N</text>
+  <text x="828.0" y="440.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="refunds:refund_sagas" data-endpoint="source">1</text>
+  <text x="780.0" y="468.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="refunds:refund_sagas" data-endpoint="target">1</text>
+  <text x="1020.0" y="696" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="refunds:payment_jobs" data-endpoint="source">0..1</text>
+  <text x="612.0" y="760" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="refunds:payment_jobs" data-endpoint="target">0..N</text>
+  <text x="1188.0" y="144.14137931034483" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="payments:payment_attempts" data-endpoint="source">1</text>
+  <text x="1188.0" y="957.6036144578313" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="payments:payment_attempts" data-endpoint="target">0..N</text>
+  <text x="828.0" y="168.92931034482757" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="payments:payment_jobs" data-endpoint="source">1</text>
+  <text x="780.0" y="898.4493975903614" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="payments:payment_jobs" data-endpoint="target">0..N</text>
+  <path d="M24,1136H1216" stroke="#e2e8f0" />
+  <text x="24" y="1158" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend"># PK    → 논리 참조    UK 괄호 안 컬럼 조합의 중복을 막음</text>
+  <text x="24" y="1178" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend">적용 조건: 해당 조건의 행끼리만 검사 · 추가 유일제약이 없으면 제약 영역 생략 · 관계선은 물리 FK가 아님</text>
+</svg>

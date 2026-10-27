@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="424" viewBox="0 0 880 424" role="img" aria-labelledby="title desc">
   <title id="title">서비스 구조</title>
-  <desc id="desc">완성된 목표 서비스 구조. 브라우저·API Gateway·커머스·결제 API·결제 Worker·정산·Kafka·금융 모의 서버의 HTTP와 이벤트 흐름.</desc>
+  <desc id="desc">완성된 목표 서비스 구조. 브라우저·API Gateway·커머스·결제 API·결제 Worker·정산·Kafka·금융 모의 서버의 HTTP와 이벤트 흐름. Spring Boot 앱 여섯 개는 각각 독립 컨테이너다.</desc>
   <defs>
     <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
       <polygon points="0 0,8 3,0 6" fill="#607084" />
@@ -56,22 +56,22 @@
       <text x="76" y="208" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">브라우저</text>
     </g>
   </g>
-  <g id="gateway" data-node="true" data-box="192,176,144,56" data-tech="spring-boot">
+  <g id="gateway" data-node="true" data-container="gateway" data-box="192,176,144,56" data-tech="spring-boot">
     <rect x="192" y="176" width="144" height="56" rx="6" fill="#ffffff" stroke="#64748b" stroke-width="1.5" />
     <use href="#logo-springboot" x="204" y="192" width="24" height="24" aria-hidden="true" />
     <text x="236" y="208" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">API Gateway</text>
   </g>
-  <g id="seller" data-node="true" data-box="400,64,144,56" data-tech="spring-boot">
+  <g id="seller" data-node="true" data-container="seller" data-box="400,64,144,56" data-tech="spring-boot">
     <rect x="400" y="64" width="144" height="56" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="412" y="80" width="24" height="24" aria-hidden="true" />
     <text x="444" y="96" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">커머스</text>
   </g>
-  <g id="payment-api" data-node="true" data-box="400,176,144,56" data-tech="spring-boot">
+  <g id="payment-api" data-node="true" data-container="payment-api" data-box="400,176,144,56" data-tech="spring-boot">
     <rect x="400" y="176" width="144" height="56" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="412" y="192" width="24" height="24" aria-hidden="true" />
     <text x="444" y="208" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">결제 API</text>
   </g>
-  <g id="settlement" data-node="true" data-box="400,288,144,56" data-tech="spring-boot">
+  <g id="settlement" data-node="true" data-container="settlement" data-box="400,288,144,56" data-tech="spring-boot">
     <rect x="400" y="288" width="144" height="56" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="412" y="304" width="24" height="24" aria-hidden="true" />
     <text x="444" y="320" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">정산</text>
@@ -81,12 +81,12 @@
     <use href="#logo-apachekafka" x="700" y="80" width="24" height="24" aria-hidden="true" />
     <text x="732" y="96" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">Apache Kafka</text>
   </g>
-  <g id="payment-worker" data-node="true" data-box="688,176,160,56" data-tech="spring-boot">
+  <g id="payment-worker" data-node="true" data-container="payment-worker" data-box="688,176,160,56" data-tech="spring-boot">
     <rect x="688" y="176" width="160" height="56" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="700" y="192" width="24" height="24" aria-hidden="true" />
     <text x="732" y="208" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">결제 Worker</text>
   </g>
-  <g id="finance-mock" data-node="true" data-box="688,288,160,56" data-tech="spring-boot">
+  <g id="finance-mock" data-node="true" data-container="finance-mock" data-box="688,288,160,56" data-tech="spring-boot">
     <rect x="688" y="288" width="160" height="56" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="700" y="304" width="24" height="24" aria-hidden="true" />
     <text x="732" y="320" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">금융 모의 서버</text>
@@ -98,6 +98,6 @@
     <line data-flow="event" x1="240" x2="280" y1="396" y2="396" stroke="#c56b00" stroke-width="2.2" stroke-dasharray="8 5" stroke-linecap="round" />
     <text x="292" y="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">Kafka 이벤트</text>
     <use href="#logo-springboot" x="440" y="386" width="20" height="20" />
-    <text x="472" y="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">Spring Boot 앱</text>
+    <text x="472" y="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">Spring Boot 앱 · 각 1 컨테이너</text>
   </g>
 </svg>
