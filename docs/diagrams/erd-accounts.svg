@@ -3,14 +3,14 @@
   <title id="title">계정·상품 ERD</title>
   <desc id="desc">주요 필드와 논리 관계, 단일·복합 유일제약과 적용 조건. 전체 컬럼과 제약은 데이터 모델 문서가 기준이며 물리 FK는 없다.</desc>
   <rect width="1200" height="1000" fill="#ffffff" />
-  <path data-relation="buyer_accounts:auth_sessions" d="M360,124 L432,124" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
-  <path data-relation="seller_accounts:auth_sessions" d="M840,134 L768,134" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
-  <path data-relation="buyer_accounts:buyer_addresses" d="M192,224 L192,340" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
-  <path data-relation="seller_accounts:products" d="M1008,244 L1008,340" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="buyer_accounts:password_reset_tokens" d="M360,124 L432,124" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="seller_accounts:password_reset_tokens" d="M840,134 L768,134" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="buyer_accounts:buyer_addresses" d="M192,242 L192,340" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="seller_accounts:products" d="M1008,262 L1008,340" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
   <path data-relation="products:product_inventory" d="M840,422 L768,422" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
   <path data-relation="product_inventory:inventory_movements" d="M516,560 L516,643.733 Q516,651.733 508,651.733 L200,651.733 Q192,651.733 192,659.733 L192,688" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
-  <g data-entity="buyer_accounts" data-box="24,24,336,200">
-    <rect x="24.0" y="24" width="336.0" height="200" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+  <g data-entity="buyer_accounts" data-box="24,24,336,218">
+    <rect x="24.0" y="24" width="336.0" height="218" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
     <text x="40.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">구매자 계정</text>
     <text x="40.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">buyer_accounts</text>
     <path d="M24,80h336" stroke="#e2e8f0" />
@@ -34,15 +34,19 @@
       <tspan x="40.0">status</tspan>
       <tspan x="344.0" text-anchor="end" fill="#64748b"> varchar(24)</tspan>
     </text>
-    <path d="M40,186h304" stroke="#e2e8f0" />
+    <text x="40.0" y="190" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">auth_version</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <path d="M40,204h304" stroke="#e2e8f0" />
     <g data-constraint="UK" data-columns="email_normalized" data-condition="">
-      <text x="40.0" y="206" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (email_normalized)</text>
+      <text x="40.0" y="224" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (email_normalized)</text>
     </g>
   </g>
-  <g data-entity="auth_sessions" data-box="432,24,336,220">
+  <g data-entity="password_reset_tokens" data-box="432,24,336,220">
     <rect x="432.0" y="24" width="336.0" height="220" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
-    <text x="448.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">세션·복구 토큰</text>
-    <text x="448.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">auth_sessions</text>
+    <text x="448.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">비밀번호 복구 토큰</text>
+    <text x="448.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">password_reset_tokens</text>
     <path d="M432,80h336" stroke="#e2e8f0" />
     <text x="448.0" y="100" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
       <tspan x="448.0"># id</tspan>
@@ -73,8 +77,8 @@
       <text x="448.0" y="224" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (token_hash)</text>
     </g>
   </g>
-  <g data-entity="seller_accounts" data-box="840,24,336,220">
-    <rect x="840.0" y="24" width="336.0" height="220" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+  <g data-entity="seller_accounts" data-box="840,24,336,238">
+    <rect x="840.0" y="24" width="336.0" height="238" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
     <text x="856.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">판매자 계정</text>
     <text x="856.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">seller_accounts</text>
     <path d="M840,80h336" stroke="#e2e8f0" />
@@ -102,9 +106,13 @@
       <tspan x="856.0">payout_account_ref</tspan>
       <tspan x="1160.0" text-anchor="end" fill="#64748b"> varchar(100)</tspan>
     </text>
-    <path d="M856,204h304" stroke="#e2e8f0" />
+    <text x="856.0" y="208" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">auth_version</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <path d="M856,222h304" stroke="#e2e8f0" />
     <g data-constraint="UK" data-columns="email_normalized" data-condition="">
-      <text x="856.0" y="224" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (email_normalized)</text>
+      <text x="856.0" y="242" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (email_normalized)</text>
     </g>
   </g>
   <g data-entity="buyer_addresses" data-box="24,340,336,252">
@@ -240,13 +248,13 @@
       <text x="40.0" y="888" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (product_id, operation, business_ref)</text>
     </g>
   </g>
-  <text x="372.0" y="114.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="buyer_accounts:auth_sessions" data-endpoint="source">1</text>
-  <text x="420.0" y="142.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="buyer_accounts:auth_sessions" data-endpoint="target">0..N</text>
-  <text x="828.0" y="124.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="seller_accounts:auth_sessions" data-endpoint="source">1</text>
-  <text x="780.0" y="152.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="seller_accounts:auth_sessions" data-endpoint="target">0..N</text>
-  <text x="204.0" y="244" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="buyer_accounts:buyer_addresses" data-endpoint="source">1</text>
+  <text x="372.0" y="114.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="buyer_accounts:password_reset_tokens" data-endpoint="source">1</text>
+  <text x="420.0" y="142.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="buyer_accounts:password_reset_tokens" data-endpoint="target">0..N</text>
+  <text x="828.0" y="124.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="seller_accounts:password_reset_tokens" data-endpoint="source">1</text>
+  <text x="780.0" y="152.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="seller_accounts:password_reset_tokens" data-endpoint="target">0..N</text>
+  <text x="204.0" y="262" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="buyer_accounts:buyer_addresses" data-endpoint="source">1</text>
   <text x="204.0" y="328" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="buyer_accounts:buyer_addresses" data-endpoint="target">0..N</text>
-  <text x="1020.0" y="264" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="seller_accounts:products" data-endpoint="source">1</text>
+  <text x="1020.0" y="282" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="seller_accounts:products" data-endpoint="source">1</text>
   <text x="1020.0" y="328" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="seller_accounts:products" data-endpoint="target">0..N</text>
   <text x="828.0" y="412.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="products:product_inventory" data-endpoint="source">1</text>
   <text x="780.0" y="440.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="products:product_inventory" data-endpoint="target">1</text>

@@ -81,6 +81,8 @@ Compose 개발·CI 환경의 목표 구성입니다. 실제 구현 범위와 상
 
 Payment API와 Worker는 같은 모듈·DB를 사용하며 각각 확장하는 구조입니다. 서비스 간에는 API·이벤트로 연동하고 다른 서비스의 테이블에 직접 접근하지 않습니다. 내부 코드는 표현·응용·도메인·인프라 4계층으로 나눕니다.
 
+사용자 인증은 [Redis 기반 Bearer 세션](docs/policies.md#인증공통-api-기준)으로 설계합니다. 커머스가 로그인·세션 발급을 맡고 Gateway가 Redis에서 세션을 검증합니다. 계정·비밀번호·복구 토큰은 PostgreSQL, 로그인 세션은 Redis에 저장하며 백엔드는 호출자 신원과 역할·소유권을 확인합니다. 고정 30분 만료·폐기·장애 복구를 포함한 구현 기준이며 아직 인증 코드에 적용된 상태는 아닙니다. [Redis 선택 이유와 검증 계획](docs/decisions/0002-redis-sessions.md)을 기록했습니다.
+
 ### 정합성 설계
 
 - **중복 방지:** API 멱등키, Inbox와 원장 업무 키에 유니크 제약을 둡니다. 같은 키로 다른 본문이 들어오면 거절합니다.
@@ -141,6 +143,7 @@ Java 21 · Spring Boot · Spring Cloud Gateway · PostgreSQL·Flyway · Kafka ·
 - [협업 규칙](CONTRIBUTING.md)
 - [프로젝트 초안·검증 목표·역할 배분안](docs/proposal.md)
 - [상세 설계 초안·범위와 가정·예상 질문](docs/design.md)
+- [구매자·판매자 와이어프레임](docs/wirefrees.html)
 
 ## 참고
 

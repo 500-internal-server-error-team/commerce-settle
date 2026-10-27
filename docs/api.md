@@ -2,17 +2,24 @@
 
 기계 판독 기준은 [OpenAPI 3.1.1 명세](openapi.json)입니다. 요청/응답 필드·필수값·타입·오류·권한·멱등 헤더를 포함합니다. 이 문서는 기능 탐색과 서비스 연동의 기준이며 현재 업무 API가 구현됐다는 뜻은 아닙니다. [업무 정책](policies.md)과 [ERD](data-model.md)를 함께 적용합니다.
 
+API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CONTRIBUTING.md#api-경로와-명세)을 따릅니다.
+
 ## 공통 계약
 
 - 요청 형식·범위는 `@Valid`와 OpenAPI, 업무 불변식은 도메인, 최종 경합은 DB에서 검증합니다. [검증 경계](../CONTRIBUTING.md#검증-경계)를 따릅니다. 생성/수정 시각·행위 감사 필드는 서버가 기록하며 요청 DTO로 받지 않습니다.
 - 공개 `/api` 경로는 Gateway가 소유 앱으로 전달할 계획입니다. `/internal`·`/mock`는 직접 서비스 자격을 검증하고 Gateway에 공개하지 않습니다. 기존 라우팅 설정에는 아직 추가하지 않았습니다.
 - `x-actor`는 소비자 권한, `x-owner-service`는 처리 앱입니다. 자기 역할과 리소스 소유권을 함께 검사합니다. 구매자/판매자 토큰을 서비스 자격으로 쓸 수 없습니다.
+- 사용자 Bearer 토큰은 [Redis 세션 정책](policies.md#인증공통-api-기준)을 따릅니다. 커머스가 발급·폐기를 맡고 Gateway는 보호 요청마다 Redis 세션·계정 가드를 확인합니다. 외부 보안 스키마 accountSession과 백엔드의 Gateway 호출 자격은 [신원 전달 계약](architecture.md#사용자-인증과-내부-신원-전달)으로 구분합니다. 고정 30분이며 세션 없음·폐기/만료·버전 불일치·정지/삭제는 401, 변경 중 가드·가드 누락·Redis 검증 불가·복구 차단은 503입니다. PUBLIC은 메서드와 경로를 함께 대조합니다.
 - POST 주문은 주문 리소스 생성 `201`과 Location을 반환하며 결제는 비동기입니다. 비동기 재처리·대역 접수는 `202`+Location이고 승인/환불 완료를 뜻하지 않습니다. 상태 조회 응답으로 후속 완료를 확인합니다.
 - 쓰기 DTO는 additionalProperties=false입니다. 클라이언트 가격·buyerId·sellerId·providerId로 원금액/주체를 덮어쓰지 않습니다. 생성 시 서버 계산과 expectedProductVersion/expectedEventVersion/expectedTotalAmount를 비교해 달라졌으면 409입니다.
 - 금융 API의 순수 조회도 본인 소유를 검사합니다. 역할 오류403, 같은 역할의 타인 리소스404. `400/401/403/404/409/429/503`은 [RFC9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 application/problem+json이며 code/traceId를 포함합니다.
 - 목록은 고정 createdAt DESC,id DESC 정렬·page/size 범위를 사용합니다. 금액은 정수, ID는 문자열 UUID, 시각은 UTC ISO8601입니다. 유효기간과 상태/버전 검사 기준은 policies.md가 소유합니다.
-- DELETE는 query의 expectedVersion을 검증합니다. 다른 변경 요청은 DTO의 expectedVersion을 검증합니다.
+- 버전이 있는 업무 리소스의 DELETE는 query의 expectedVersion, 다른 변경은 DTO의 expectedVersion을 검증합니다. 로그인·현재 세션 로그아웃·비밀번호 재설정에는 expectedVersion을 요구하지 않습니다.
 - 구매자 가입 `POST /api/buyers`는 인증 없이 호출하지만 `Idempotency-Key` 헤더가 필수입니다. 가입 전 키 범위·재요청·충돌·보존 기한은 [구매자 가입 재시도](policies.md#구매자-가입-재시도)를 따릅니다.
+
+로그인·비밀번호 복구 요청의 계정 식별자별 제한은 [요청 제한 정책](policies.md#로그인복구-요청-제한)을 따릅니다. 제한 초과는 `429`와 `Retry-After`, 제한 저장소 확인 실패는 부작용 없이 `503`이며 계정 존재 여부를 응답으로 구분하지 않습니다.
+
+로그아웃은 삭제 확인 뒤 204이며 삭제된 토큰의 재요청은 401입니다. 503이면 서버 폐기 성공으로 안내하지 않습니다. 비밀번호 재설정은 DB 커밋 뒤에도 503·응답 유실이 가능하므로 결과를 미확정으로 안내하고 자동 재전송하지 않습니다. 복구 후 새 비밀번호로 로그인하고 실패하면 새 복구 토큰을 요청합니다. 소비한 토큰은 401입니다. 진행 중 요청과 계정 상태 변경의 범위는 [폐기 정책](policies.md#폐기와-저장소-복구)을 따릅니다.
 
 ## 기능 목록
 
@@ -180,7 +187,7 @@ PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반�
 | code 예 | 상태 | 조건 |
 | --- | --- | --- |
 | COMMON_VALIDATION_FAILED |400|형식·수량·금액 범위 오류|
-| COMMON_AUTHENTICATION_REQUIRED |401|세션 없음·만료·폐기|
+| COMMON_AUTHENTICATION_REQUIRED |401|자격 오류·세션 없음/만료/폐기·인증 버전 불일치·정지/삭제·소비/만료된 복구 토큰|
 | COMMON_ROLE_FORBIDDEN |403|계정/서비스 역할 혼용|
 | COMMON_RESOURCE_NOT_FOUND |404|없거나 타인 소유|
 | COMMON_VERSION_CONFLICT / COMMON_IDEMPOTENCY_CONFLICT |409|버전 또는 같은키 다른본문|
@@ -192,6 +199,6 @@ PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반�
 | PAYOUT_NON_BUSINESS_DAY |409|신규 대역 지급의 비영업일; 외부 거래 생성 없이 기존 지급 보류|
 | SETTLEMENT_NO_ELIGIBLE_ITEMS |409|새 일배치에 배정할 지급 가능 항목 없음|
 | NOTIFICATION_REPLAY_CONFLICT |409|완료/수집 중/유효 임대 또는 재처리 불가 상태|
-| COMMON_RATE_LIMITED / COMMON_TEMPORARILY_UNAVAILABLE |429/503|제한·의존 저장소 장애|
+| COMMON_RATE_LIMITED / COMMON_TEMPORARILY_UNAVAILABLE |429/503|제한·의존 저장소 장애·변경 중/누락된 인증 가드·인증 복구 차단|
 
 구조 검증은 JSON·로컬 ref·경로 변수·operationId·명시 권한/오류·DTO 검사를 다룹니다. 컨트롤러·Gateway·DB·금융 동시성 검증은 구현 단계에서 별도로 수행합니다. OpenAPI 형식 기준은 [공식 OAS3.1.1](https://spec.openapis.org/oas/v3.1.1.html)입니다.

@@ -1,6 +1,6 @@
 # 데이터 모델
 
-서비스별 PostgreSQL 설계입니다. 물리 FK는 만들지 않고 아래 관계를 애플리케이션에서 검증합니다. 공통 시간 컬럼은 [시간 정보와 감사 기록](architecture.md#시간-정보와-감사-기록)에 따라 채웁니다. 생성/수정 시각과 행위 감사 로그는 별개입니다. 식별자는 서버 생성 UUID, 금액·누적 수량은 bigint, 시각은 UTC `timestamptz`입니다. `?`는 nullable, 나머지 컬럼은 NOT NULL입니다. 숫자 버전은 0부터 시작하고 조건부 갱신마다 증가합니다. 실제 Flyway migration은 아직 없으며 [DB 변경 정책](migrations.md)을 따릅니다.
+서비스별 PostgreSQL과 [Redis 인증 데이터](#redis-인증-데이터)의 설계입니다. PostgreSQL의 물리 FK는 만들지 않고 아래 관계를 애플리케이션에서 검증합니다. 공통 시간 컬럼은 [시간 정보와 감사 기록](architecture.md#시간-정보와-감사-기록)에 따라 채웁니다. 생성/수정 시각과 행위 감사 로그는 별개입니다. 식별자는 서버 생성 UUID, 금액·누적 수량은 bigint, PostgreSQL 시각은 UTC `timestamptz`입니다. `?`는 nullable, 나머지 컬럼은 NOT NULL입니다. 숫자 버전은 0부터 시작하고 조건부 갱신마다 증가합니다. 실제 Flyway migration은 아직 없으며 [DB 변경 정책](migrations.md)을 따릅니다.
 
 아래 컬럼·제약·인덱스가 기준이고 ERD는 주요 필드와 관계를 요약합니다. 각 뷰는 같은 DB 안의 관계를 보여주며 외부 서비스 ID는 값으로만 저장합니다. 주소·연락처는 별도 암호화 사본이고 금융 이벤트에 포함하지 않습니다.
 
@@ -19,18 +19,19 @@
 | `password_hash` | `varchar(255)` | 업무 값 |
 | `display_name` | `varchar(80)` | 업무 값 |
 | `status` | `varchar(24)` | 업무 값 |
+| `auth_version` | `bigint` | 인증 버전; 기본 0 |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 | `deleted_at` | `timestamptz?` | 논리삭제 |
 
-**제약:** UNIQUE(email_normalized), 삭제 뒤에도 유지. status=ACTIVE/SUSPENDED/DELETED.
+**제약:** UNIQUE(email_normalized), 삭제 뒤에도 유지. status=ACTIVE/SUSPENDED/DELETED. auth_version은 인증에 영향 주는 계정 상태·비밀번호 변경과 가드 복구 때 증가하며 일반 엔티티 version과 구분한다.
 
 **인덱스:** (status,id).
 
-### auth_sessions
+### password_reset_tokens
 
-소유: `seller`. 세션·복구 토큰.
+소유: `seller`. PostgreSQL의 일회용 비밀번호 복구 토큰. 로그인 세션은 Redis에 저장한다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -48,7 +49,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(token_hash). actor_kind=BUYER/SELLER, purpose=SESSION/PASSWORD_RESET. 목적·종류·만료·폐기를 DB에서 검사. RESET 발급은 계정 잠금 아래 이전 RESET을 폐기하고, 재설정 성공은 해당 계정의 모든 세션/RESET을 폐기.
+**제약:** UNIQUE(token_hash). actor_kind=BUYER/SELLER, purpose=PASSWORD_RESET. 목적·종류·10분 만료·소비/폐기를 DB에서 검사한다. 발급은 계정 잠금 아래 이전 복구 토큰을 폐기한다. 비밀번호 교체·토큰 소비·다른 복구 토큰 폐기·auth_version 증가는 같은 DB 트랜잭션이며 Redis 세션 폐기는 [정책의 차단·재조정](policies.md#폐기와-저장소-복구)을 따른다.
 
 **인덱스:** (actor_kind,actor_id,purpose); (expires_at).
 
@@ -63,13 +64,14 @@
 | `password_hash` | `varchar(255)` | 업무 값 |
 | `display_name` | `varchar(80)` | 업무 값 |
 | `status` | `varchar(24)` | 업무 값 |
+| `auth_version` | `bigint` | 인증 버전; 기본 0 |
 | `payout_account_ref` | `varchar(100)` | 업무 값 |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 | `deleted_at` | `timestamptz?` | 논리삭제 |
 
-**제약:** UNIQUE(email_normalized), 구매자 계정과 별도. status=ACTIVE/SUSPENDED/DELETED. 지급 계정은 시험용 참조.
+**제약:** UNIQUE(email_normalized), 구매자 계정과 별도. status=ACTIVE/SUSPENDED/DELETED. 지급 계정은 시험용 참조. auth_version은 인증에 영향 주는 계정 상태·비밀번호 변경과 가드 복구 때 증가하며 일반 엔티티 version과 구분한다.
 
 **인덱스:** (status,id).
 
@@ -154,6 +156,37 @@
 **제약:** UNIQUE(product_id,operation,business_ref). 증감과 현재 재고를 같은 트랜잭션으로 기록.
 
 **인덱스:** (product_id,created_at,id).
+
+## Redis 인증 데이터
+
+소유: 커머스 인증 영역. Gateway는 읽기 전용으로 검증하며 [세션 정책](policies.md#인증공통-api-기준)을 따른다. 아래 구조는 PostgreSQL 테이블이 아니며 시간은 UTC ISO 8601 문자열, 인증 버전은 0 이상의 정수다. 토큰 원문은 저장하지 않는다.
+
+### 로그인 세션
+
+키는 `commerce-settle:auth:session:<epoch>:<tokenHash>`다. epoch는 배포한 인증 세대 UUID, tokenHash는 256비트 이상 임의 토큰의 SHA-256이다.
+
+| 필드 | 타입 | 의미 |
+| --- | --- | --- |
+| `actorKind` | `string` | BUYER/SELLER |
+| `actorId` | `uuid` | 해당 종류의 PostgreSQL 계정 ID |
+| `purpose` | `string` | SESSION |
+| `authVersion` | `integer` | 발급 당시 계정의 auth_version |
+| `issuedAt` | `string` | 서버 발급 시각 |
+| `expiresAt` | `string` | issuedAt+30분; 변경 불가 |
+
+**제약:** TTL은 expiresAt까지 남은 시간이다. 조회로 연장하지 않는다. 현재 세대·목적·만료와 아래 ACTIVE 가드의 인증 버전을 원자적으로 검증한다. 세션 또는 가드 누락 시 허용하지 않으며 PostgreSQL에서 세션을 재생성하지 않는다.
+
+### 계정별 인증 가드
+
+키는 `commerce-settle:auth:subject:<epoch>:<actorKind>:<actorId>`다. 개별 세션 목록을 스캔하지 않고 해당 계정 종류·ID의 전체 세션을 차단한다.
+
+| 필드 | 타입 | 의미 |
+| --- | --- | --- |
+| `authVersion` | `integer` | PostgreSQL에서 확정한 auth_version |
+| `state` | `string` | ACTIVE/BLOCKED; 정지·삭제·변경 중이면 BLOCKED |
+| `pendingChangeId` | `uuid?` | 진행 중인 인증 변경의 동일성·재조정 기준; 확정 반영 뒤 null |
+
+**제약:** 가드는 현재 세대에서 TTL로 만료시키지 않는다. 최초 로그인에서 DB 계정 상태·인증 버전을 확인해 없는 가드를 조건부 생성할 수 있으나, 기존 BLOCKED 가드를 로그인으로 열지 않는다. 폐기는 가드의 상태·인증 버전·pendingChangeId를 조건부 변경해 직렬화한다. DB 확정 상태 반영은 같은 변경만 허용하고 이전 버전의 지연 반영을 거절한다. 확정 정지/삭제 가드는 BLOCKED·pendingChangeId=null이며 401, 변경 중 가드·유효 세션의 가드 누락·Redis 검증 오류·복구 중 요청은 503이다. 재접속 때 이전 세션 세대를 계속 사용하지 않는다.
 
 ## 주문·선착순 이벤트
 
@@ -1116,13 +1149,13 @@
 | `correlation_id` | `varchar(100)` | 요청/이벤트/배치의 비밀값 없는 추적 ID |
 | `occurred_at` | `timestamptz` | 해당 서비스에서 변경한 UTC 시각 |
 
-**제약:** 추가 전용이며 UPDATE/DELETE API를 만들지 않는다. 업무 변경·감사 행을 같은 트랜잭션으로 저장하고 둘 다 롤백한다. 멱등 재요청은 기존 결과를 반환하며 상태 변경 감사 행을 다시 만들지 않는다. 실제 운영 재처리는 새 실행 행위를 기록한다. 원금액 변화의 근거는 원결제·마일리지/정산 원장을 참조한다. 전체 요청/응답·주소·전화번호·비밀번호·토큰·자유 형식 본문을 저장하지 않는다. 인증 실패는 별도 보안 로그이며 성공한 업무 감사 행으로 위장하지 않는다.
+**제약:** 추가 전용이며 UPDATE/DELETE API를 만들지 않는다. 업무 변경·감사 행을 같은 트랜잭션으로 저장하고 둘 다 롤백한다. 멱등 재요청은 기존 결과를 반환하며 상태 변경 감사 행을 다시 만들지 않는다. 실제 운영 재처리는 새 실행 행위를 기록한다. 계정 인증 변경·가드 복구는 ACCOUNT_AUTH_CHANGED/ACCOUNT_AUTH_GUARD_RECOVERED로 기록하고 correlation_id에 pendingChangeId를 사용해 DB 확정 결과와 연결한다. 원금액 변화의 근거는 원결제·마일리지/정산 원장을 참조한다. 전체 요청/응답·주소·전화번호·비밀번호·토큰·자유 형식 본문을 저장하지 않는다. 인증 실패는 별도 보안 로그이며 성공한 업무 감사 행으로 위장하지 않는다.
 
 **인덱스:** (aggregate_type,aggregate_id,occurred_at,id); (actor_kind,actor_ref,occurred_at,id); (correlation_id).
 
 ## 트랜잭션과 관계
 
-- `buyer_accounts/seller_accounts`는 독립 계정이다. `auth_sessions`의 actor_kind+actor_id가 해당 테이블을 선택한다. 로그인/복구 토큰 목적을 섞지 않는다.
+- `buyer_accounts/seller_accounts`는 독립 계정이다. Redis 세션과 password_reset_tokens의 계정 종류+ID가 해당 계정을 선택한다. 로그인 세션은 Redis, 복구 토큰과 인증 버전은 PostgreSQL에 두며 두 저장소의 변경을 단일 트랜잭션으로 취급하지 않는다.
 - 주문·주소 사본·재고/쿠폰/이벤트 예약·Outbox를 커머스 한 트랜잭션으로 저장한다. 멱등 기록도 같은 트랜잭션에 완료한다.
 - 이벤트 공개는 일반 가용 재고에서 Q를 배정하고, 참여는 R을 증가한다. 승인 시 R 감소·S 증가·배정 재고 감소·판매량 증가를 함께 반영한다. 종료 시 미사용분만 일반 재고로 반환하며 미확정 R은 유지한다.
 - 마일리지 잔액의 reserved_amount는 활성 예약 합계와 일치해야 한다. 사용 시 예약/잔액 차감·DEBIT·결제 확정·Outbox를 한 번에 기록하고, 환불 시 원외부 환불 확인 뒤 RESTORE·잔액·환불 상태·Outbox를 한 번에 기록한다.
