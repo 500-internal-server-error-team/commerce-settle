@@ -12,6 +12,7 @@
 - 금융 API의 순수 조회도 본인 소유를 검사합니다. 역할 오류403, 같은 역할의 타인 리소스404. `400/401/403/404/409/429/503`은 [RFC9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 application/problem+json이며 code/traceId를 포함합니다.
 - 목록은 고정 createdAt DESC,id DESC 정렬·page/size 범위를 사용합니다. 금액은 정수, ID는 문자열 UUID, 시각은 UTC ISO8601입니다. 유효기간과 상태/버전 검사 기준은 policies.md가 소유합니다.
 - DELETE는 query의 expectedVersion을 검증합니다. 다른 변경 요청은 DTO의 expectedVersion을 검증합니다.
+- 구매자 가입 `POST /api/buyers`는 인증 없이 호출하지만 `Idempotency-Key` 헤더가 필수입니다. 가입 전 키 범위·재요청·충돌·보존 기한은 [구매자 가입 재시도](policies.md#구매자-가입-재시도)를 따릅니다.
 
 ## 기능 목록
 
