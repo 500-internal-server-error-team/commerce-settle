@@ -10,7 +10,7 @@
 - 작업 브랜치: `<type>/<scope>/<issue-number>-<short-description>`.
   예: `feat/payment/12-accept-payment`, `fix/settlement/23-refund-hold`.
 - 최초 실행 기반 구성에 한해 `chore/infra/bootstrap`을 사용하고 PR로 반영합니다.
-- scope: `seller`, `payment`, `settlement`, `finance-mock`, `gateway`, `infra`, `project`.
+- scope: `commerce`, `payment`, `settlement`, `finance-mock`, `gateway`, `infra`, `project`.
 - 한 브랜치·PR에는 한 가지 목적을 담고, 병합 후 작업 브랜치를 삭제합니다.
 - 선행 PR에 의존할 때만 해당 브랜치를 임시 base로 사용합니다. 선행 PR 병합 후 최신 `develop` 위로 rebase하고 PR base·diff·CI를 다시 확인합니다.
 

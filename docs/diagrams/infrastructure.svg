@@ -123,10 +123,10 @@
     <use href="#logo-springboot" x="284" y="229" width="22" height="22" aria-hidden="true" transform="translate(0 0)" />
     <text x="316" y="246" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start" transform="translate(0 -2.5)">API Gateway</text>
   </g>
-  <g id="business-apps" data-zone="true" data-box="272,340,400,168" data-apps="seller,payment-api,payment-worker,settlement,finance-mock" data-notification-app="seller" data-mock-kakao="local" data-public-routes="seller,payment-api,settlement">
+  <g id="business-apps" data-zone="true" data-box="272,340,400,168" data-apps="commerce,payment-api,payment-worker,settlement,finance-mock" data-notification-app="commerce" data-mock-kakao="local" data-public-routes="commerce,payment-api,settlement">
     <rect x="272" y="340" width="400" height="168" rx="5" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <g data-align-content="card" transform="translate(0 5)">
-      <g id="seller" data-node="true" data-container="seller" data-box="276,349,192,48" data-app="seller">
+      <g id="commerce" data-node="true" data-container="commerce" data-box="276,349,192,48" data-app="commerce">
         <rect x="276" y="344" width="192" height="48" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
         <use href="#logo-springboot" x="284" y="348" width="22" height="22" aria-hidden="true" transform="translate(0 9)" />
         <text x="316" y="364" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">커머스</text>
@@ -158,12 +158,12 @@
       </g>
     </g>
   </g>
-  <g id="postgres" data-node="true" data-box="736,212,192,100" data-databases="seller,payment,settlement,finance_mock" data-payment-shared="payment-api,payment-worker">
+  <g id="postgres" data-node="true" data-box="736,212,192,100" data-databases="commerce,payment,settlement,finance_mock" data-payment-shared="payment-api,payment-worker">
     <rect x="736" y="212" width="192" height="100" rx="5" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <g data-align-content="card" transform="translate(0 1.5)">
       <use href="#logo-postgresql" x="748" y="222" width="22" height="22" aria-hidden="true" transform="translate(0 2)" />
       <text x="780" y="238" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">PostgreSQL</text>
-      <text x="752" y="260" font-size="10" font-weight="400" font-family="Geist Mono, SFMono-Regular, monospace" fill="#526176" text-anchor="start">seller · payment</text>
+      <text x="752" y="260" font-size="10" font-weight="400" font-family="Geist Mono, SFMono-Regular, monospace" fill="#526176" text-anchor="start">commerce · payment</text>
       <text x="752" y="278" font-size="10" font-weight="400" font-family="Geist Mono, SFMono-Regular, monospace" fill="#526176" text-anchor="start">settlement · finance_mock</text>
       <text x="752" y="298" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">1 컨테이너 · 업무 DB 4개</text>
     </g>

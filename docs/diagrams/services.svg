@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="424" viewBox="0 0 880 424" role="img" aria-labelledby="title desc">
   <title id="title">서비스 구조</title>
-  <desc id="desc">완성된 목표 서비스 구조. 브라우저·API Gateway·커머스·결제 API·결제 Worker·정산·Kafka·금융 모의 서버의 HTTP와 이벤트 흐름. Spring Boot 앱 여섯 개는 각각 독립 컨테이너다.</desc>
+  <desc id="desc">완성된 목표 서비스 구조. 브라우저·API Gateway·커머스·결제 API·결제 Worker·정산·Kafka·금융 모의 서버의 HTTP와 이벤트 흐름. 쿠폰은 커머스, 마일리지는 Payment, 정산 원장은 Settlement 내부 도메인이다. Spring Boot 앱 여섯 개는 각각 독립 컨테이너다.</desc>
   <defs>
     <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
       <polygon points="0 0,8 3,0 6" fill="#607084" />
@@ -61,20 +61,23 @@
     <use href="#logo-springboot" x="204" y="192" width="24" height="24" aria-hidden="true" />
     <text x="236" y="208" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">API Gateway</text>
   </g>
-  <g id="seller" data-node="true" data-container="seller" data-box="400,64,144,56" data-tech="spring-boot">
+  <g id="commerce" data-node="true" data-container="commerce" data-box="400,64,144,56" data-tech="spring-boot">
     <rect x="400" y="64" width="144" height="56" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="412" y="80" width="24" height="24" aria-hidden="true" />
-    <text x="444" y="96" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">커머스</text>
+    <text x="444" y="88" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">커머스</text>
+    <text x="444" y="105" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="9" fill="#526176">주문·재고·쿠폰</text>
   </g>
   <g id="payment-api" data-node="true" data-container="payment-api" data-box="400,176,144,56" data-tech="spring-boot">
     <rect x="400" y="176" width="144" height="56" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="412" y="192" width="24" height="24" aria-hidden="true" />
-    <text x="444" y="208" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">결제 API</text>
+    <text x="444" y="200" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">결제 API</text>
+    <text x="444" y="217" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="9" fill="#526176">결제·마일리지</text>
   </g>
   <g id="settlement" data-node="true" data-container="settlement" data-box="400,288,144,56" data-tech="spring-boot">
     <rect x="400" y="288" width="144" height="56" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="412" y="304" width="24" height="24" aria-hidden="true" />
-    <text x="444" y="320" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">정산</text>
+    <text x="444" y="312" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600">정산·지급</text>
+    <text x="444" y="329" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="9" fill="#526176">정산 원장</text>
   </g>
   <g id="kafka" data-node="true" data-box="688,64,160,56" data-tech="component">
     <rect x="688" y="64" width="160" height="56" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />

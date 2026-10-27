@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-for spec in seller:SELLER_DB_PASSWORD payment:PAYMENT_DB_PASSWORD settlement:SETTLEMENT_DB_PASSWORD finance_mock:FINANCE_MOCK_DB_PASSWORD; do
+for spec in commerce:COMMERCE_DB_PASSWORD payment:PAYMENT_DB_PASSWORD settlement:SETTLEMENT_DB_PASSWORD finance_mock:FINANCE_MOCK_DB_PASSWORD; do
   service="${spec%%:*}"
   password_key="${spec#*:}"
   psql --username "$POSTGRES_USER" --dbname postgres --set ON_ERROR_STOP=1 \

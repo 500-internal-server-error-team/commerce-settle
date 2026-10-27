@@ -1,4 +1,4 @@
-package com.commercesettle.seller.infrastructure.config;
+package com.commercesettle.commerce.infrastructure.config;
 
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
@@ -12,7 +12,11 @@ public class OpenApiConfiguration {
   @Bean
   OpenAPI openApi() {
     return new OpenAPI()
-        .info(new Info().title("Seller").version("0.0.1").description("Seller API specification."))
+        .info(
+            new Info()
+                .title("Commerce")
+                .version("0.0.1")
+                .description("Commerce API specification."))
         .servers(List.of(new Server().url("/")));
   }
 }

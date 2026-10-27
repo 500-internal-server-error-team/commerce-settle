@@ -1,2 +1,2 @@
 /** Database, messaging and external service adapters. */
-package com.commercesettle.seller.infrastructure;
+package com.commercesettle.commerce.infrastructure;

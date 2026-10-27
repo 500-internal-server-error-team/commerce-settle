@@ -2,7 +2,7 @@
 
 서비스별 Flyway와 `ddl-auto=validate`를 사용합니다.
 
-1. 담당 서비스의 `src/main/resources/db/migration/`에 SQL을 추가합니다. 예: Seller의 `V2__create_sellers.sql`.
+1. 담당 서비스의 `src/main/resources/db/migration/`에 SQL을 추가합니다. 예: `commerce`의 `V2__create_sellers.sql`.
 2. 같은 서비스에서 버전이 겹치면 PR 병합 전에 다음 번호로 조정합니다. 서비스가 다르면 같은 번호를 써도 됩니다.
 3. 빈 로컬 DB와 기존 데이터를 유지한 DB에서 기동을 확인하고 PR로 리뷰합니다.
 4. 배포 시 앱 시작 과정에서 자기 DB에만 자동 적용합니다. Payment API·Worker는 같은 migration 이력을 공유하며 Flyway가 동시 적용을 조정합니다.
