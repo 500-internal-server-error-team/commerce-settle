@@ -1,1 +1,251 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="880" height="492" viewBox="0 0 880 492" role="img" aria-labelledby="title desc"><title id="title">쿠폰 ERD</title><desc id="desc">쿠폰 종류·부담자·예산과 월별 발급 대상. 주요 필드의 요약이며 전체 제약은 데이터 모델 문서가 기준이다.</desc><rect width="880" height="492" fill="#ffffff" /><path data-relation="coupon_templates:buyer_coupons" d="M264,100 L312,100" fill="none" stroke="#607084" stroke-width="1.1" /><path data-relation="buyer_coupons:coupon_history" d="M560,100 L608,100" fill="none" stroke="#607084" stroke-width="1.1" /><path data-relation="coupon_issue_runs:coupon_issue_targets" d="M264,350 L312,350" fill="none" stroke="#607084" stroke-width="1.1" /><path data-relation="coupon_templates:coupon_issue_targets" d="M140,186 L140,220 Q140,228 148,228 L352,228 Q360,228 360,236 L360,280" fill="none" stroke="#607084" stroke-width="1.1" /><path data-relation="coupon_issue_targets:buyer_coupons" d="M436,280 L436,186" fill="none" stroke="#607084" stroke-width="1.1" /><g data-entity="coupon_templates" data-box="16,16,248,170"><rect x="16" y="16" width="248" height="170" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><path d="M16 60h248" stroke="#e2e8f0" /><text x="28" y="36" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">쿠폰 템플릿</text><text x="28" y="51" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">coupon_templates</text><text x="28" y="77" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176"># id uuid</text><text x="28" y="91" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">kind varchar(16)</text><text x="28" y="105" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">funder varchar(16)</text><text x="28" y="119" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">→ seller_id uuid?</text><text x="28" y="133" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">discount_amount bigint</text><text x="28" y="147" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">total_budget bigint?</text><text x="28" y="161" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">committed_budget bigint</text><text x="28" y="175" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">consumed_budget bigint</text></g><g data-entity="buyer_coupons" data-box="312,16,248,170"><rect x="312" y="16" width="248" height="170" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><path d="M312 60h248" stroke="#e2e8f0" /><text x="324" y="36" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">발급 쿠폰</text><text x="324" y="51" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">buyer_coupons</text><text x="324" y="77" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176"># id uuid</text><text x="324" y="91" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">→ template_id uuid</text><text x="324" y="105" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">→ buyer_id uuid</text><text x="324" y="119" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">kind varchar(16)</text><text x="324" y="133" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">target_month date?</text><text x="324" y="147" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">expires_at timestamptz</text><text x="324" y="161" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">status varchar(16)</text><text x="324" y="175" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">→ used_order_id uuid?</text></g><g data-entity="coupon_history" data-box="608,16,248,142"><rect x="608" y="16" width="248" height="142" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><path d="M608 60h248" stroke="#e2e8f0" /><text x="620" y="36" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">쿠폰·예산 이동 이력</text><text x="620" y="51" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">coupon_history</text><text x="620" y="77" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176"># id uuid</text><text x="620" y="91" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">→ buyer_coupon_id uuid</text><text x="620" y="105" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">→ order_id uuid?</text><text x="620" y="119" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">operation varchar(16)</text><text x="620" y="133" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">committed_delta bigint</text><text x="620" y="147" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">consumed_delta bigint</text></g><g data-entity="coupon_issue_runs" data-box="16,280,248,128"><rect x="16" y="280" width="248" height="128" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><path d="M16 324h248" stroke="#e2e8f0" /><text x="28" y="300" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">월 발급 작업</text><text x="28" y="315" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">coupon_issue_runs</text><text x="28" y="341" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176"># id uuid</text><text x="28" y="355" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">target_month date</text><text x="28" y="369" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">cutoff_at timestamptz</text><text x="28" y="383" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">status varchar(24)</text><text x="28" y="397" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">version bigint</text></g><g data-entity="coupon_issue_targets" data-box="312,280,248,156"><rect x="312" y="280" width="248" height="156" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" /><path d="M312 324h248" stroke="#e2e8f0" /><text x="324" y="300" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">월 발급 대상</text><text x="324" y="315" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">coupon_issue_targets</text><text x="324" y="341" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176"># id uuid</text><text x="324" y="355" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">→ run_id uuid</text><text x="324" y="369" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">→ template_id uuid</text><text x="324" y="383" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">→ buyer_id uuid</text><text x="324" y="397" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">external_spend bigint</text><text x="324" y="411" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">→ buyer_coupon_id uuid?</text><text x="324" y="425" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" fill="#526176">status varchar(24)</text></g><rect x="270" y="81" width="10" height="12" fill="#ffffff" /><text x="272" y="90" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">1</text><rect x="282" y="81" width="24" height="12" fill="#ffffff" /><text x="284" y="90" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">0..N</text><rect x="566" y="81" width="10" height="12" fill="#ffffff" /><text x="568" y="90" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">1</text><rect x="578" y="81" width="24" height="12" fill="#ffffff" /><text x="580" y="90" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">0..N</text><rect x="270" y="331" width="10" height="12" fill="#ffffff" /><text x="272" y="340" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">1</text><rect x="282" y="331" width="24" height="12" fill="#ffffff" /><text x="284" y="340" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">0..N</text><rect x="146" y="207" width="30" height="12" fill="#ffffff" /><text x="148" y="216" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">1</text><rect x="366" y="255" width="30" height="12" fill="#ffffff" /><text x="368" y="264" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">0..N</text><rect x="442" y="207" width="30" height="12" fill="#ffffff" /><text x="444" y="216" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">0..1</text><rect x="442" y="255" width="30" height="12" fill="#ffffff" /><text x="444" y="264" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176">0..1</text><text x="16" y="480" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176"># PK   → 논리 참조   관계선은 DB FK가 아님; 전체 컬럼·제약은 데이터 모델 본문</text></svg>
+<?xml version='1.0' encoding='UTF-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="932" viewBox="0 0 1200 932" role="img" aria-labelledby="title desc">
+  <title id="title">쿠폰 ERD</title>
+  <desc id="desc">주요 필드와 논리 관계, 단일·복합 유일제약과 적용 조건. 전체 컬럼과 제약은 데이터 모델 문서가 기준이며 물리 FK는 없다.</desc>
+  <rect width="1200" height="932" fill="#ffffff" />
+  <path data-relation="coupon_templates:buyer_coupons" d="M360,198 L432,198" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="buyer_coupons:coupon_history" d="M768,142 L840,142" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="coupon_issue_runs:coupon_issue_targets" d="M360,660 L432,660" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="coupon_templates:coupon_issue_targets" d="M192,372 L192,498.894 Q192,506.894 200,506.894 L489.03,506.894 Q497.03,506.894 497.03,514.894 L497.03,560" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="coupon_issue_targets:buyer_coupons" d="M600,560 L600,464" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <g data-entity="coupon_templates" data-box="24,24,336,348">
+    <rect x="24.0" y="24" width="336.0" height="348" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="40.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">쿠폰 템플릿</text>
+    <text x="40.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">coupon_templates</text>
+    <path d="M24,80h336" stroke="#e2e8f0" />
+    <text x="40.0" y="100" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0"># id</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="40.0" y="118" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">kind</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> varchar(16)</tspan>
+    </text>
+    <text x="40.0" y="136" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">funder</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> varchar(16)</tspan>
+    </text>
+    <text x="40.0" y="154" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">→ seller_id</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid?</tspan>
+    </text>
+    <text x="40.0" y="172" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">discount_amount</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="40.0" y="190" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">total_budget</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> bigint?</tspan>
+    </text>
+    <text x="40.0" y="208" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">committed_budget</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="40.0" y="226" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">consumed_budget</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="40.0" y="244" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">grade</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> varchar(16)?</tspan>
+    </text>
+    <text x="40.0" y="262" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">target_month</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> date?</tspan>
+    </text>
+    <path d="M40,276h304" stroke="#e2e8f0" />
+    <g data-constraint="PUK" data-columns="" data-condition="활성 WELCOME 캠페인 전체 1개">
+      <text x="40.0" y="296" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK 캠페인 전체에서 1개</text>
+      <text x="40.0" y="312" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">적용 조건: 활성 WELCOME 캠페인</text>
+    </g>
+    <g data-constraint="PUK" data-columns="grade,target_month" data-condition="kind=GRADE">
+      <text x="40.0" y="338" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (grade, target_month)</text>
+      <text x="40.0" y="354" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">적용 조건: kind = GRADE</text>
+    </g>
+  </g>
+  <g data-entity="buyer_coupons" data-box="432,24,336,440">
+    <rect x="432.0" y="24" width="336.0" height="440" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="448.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">발급 쿠폰</text>
+    <text x="448.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">buyer_coupons</text>
+    <path d="M432,80h336" stroke="#e2e8f0" />
+    <text x="448.0" y="100" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0"># id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="118" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">→ template_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="136" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">→ buyer_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="154" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">kind</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> varchar(16)</tspan>
+    </text>
+    <text x="448.0" y="172" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">target_month</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> date?</tspan>
+    </text>
+    <text x="448.0" y="190" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">expires_at</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> timestamptz</tspan>
+    </text>
+    <text x="448.0" y="208" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">status</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> varchar(16)</tspan>
+    </text>
+    <text x="448.0" y="226" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">→ used_order_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid?</tspan>
+    </text>
+    <text x="448.0" y="244" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">reserved_order_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid?</tspan>
+    </text>
+    <path d="M448,258h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="template_id,buyer_id" data-condition="">
+      <text x="448.0" y="278" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (template_id, buyer_id)</text>
+    </g>
+    <g data-constraint="PUK" data-columns="reserved_order_id" data-condition="reserved_order_id IS NOT NULL">
+      <text x="448.0" y="304" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (reserved_order_id)</text>
+      <text x="448.0" y="320" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">적용 조건: reserved_order_id IS NOT NULL</text>
+    </g>
+    <g data-constraint="PUK" data-columns="used_order_id" data-condition="used_order_id IS NOT NULL">
+      <text x="448.0" y="346" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (used_order_id)</text>
+      <text x="448.0" y="362" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">적용 조건: used_order_id IS NOT NULL</text>
+    </g>
+    <g data-constraint="PUK" data-columns="buyer_id" data-condition="kind=WELCOME">
+      <text x="448.0" y="388" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (buyer_id)</text>
+      <text x="448.0" y="404" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">적용 조건: kind = WELCOME</text>
+    </g>
+    <g data-constraint="PUK" data-columns="buyer_id,target_month" data-condition="kind=GRADE">
+      <text x="448.0" y="430" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (buyer_id, target_month)</text>
+      <text x="448.0" y="446" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">적용 조건: kind = GRADE</text>
+    </g>
+  </g>
+  <g data-entity="coupon_history" data-box="840,24,336,236">
+    <rect x="840.0" y="24" width="336.0" height="236" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="856.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">쿠폰·예산 이동 이력</text>
+    <text x="856.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">coupon_history</text>
+    <path d="M840,80h336" stroke="#e2e8f0" />
+    <text x="856.0" y="100" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0"># id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856.0" y="118" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">→ buyer_coupon_id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856.0" y="136" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">→ order_id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid?</tspan>
+    </text>
+    <text x="856.0" y="154" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">operation</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> varchar(16)</tspan>
+    </text>
+    <text x="856.0" y="172" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">committed_delta</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="856.0" y="190" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">consumed_delta</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="856.0" y="208" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">business_ref</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <path d="M856,222h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="buyer_coupon_id,operation,business_ref" data-condition="">
+      <text x="856.0" y="242" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (buyer_coupon_id, operation, business_ref)</text>
+    </g>
+  </g>
+  <g data-entity="coupon_issue_runs" data-box="24,560,336,200">
+    <rect x="24.0" y="560" width="336.0" height="200" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="40.0" y="584" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">월 발급 작업</text>
+    <text x="40.0" y="602" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">coupon_issue_runs</text>
+    <path d="M24,616h336" stroke="#e2e8f0" />
+    <text x="40.0" y="636" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0"># id</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="40.0" y="654" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">target_month</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> date</tspan>
+    </text>
+    <text x="40.0" y="672" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">cutoff_at</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> timestamptz</tspan>
+    </text>
+    <text x="40.0" y="690" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">status</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> varchar(24)</tspan>
+    </text>
+    <text x="40.0" y="708" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">version</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <path d="M40,722h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="target_month" data-condition="">
+      <text x="40.0" y="742" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (target_month)</text>
+    </g>
+  </g>
+  <g data-entity="coupon_issue_targets" data-box="432,560,336,280">
+    <rect x="432.0" y="560" width="336.0" height="280" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="448.0" y="584" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">월 발급 대상</text>
+    <text x="448.0" y="602" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">coupon_issue_targets</text>
+    <path d="M432,616h336" stroke="#e2e8f0" />
+    <text x="448.0" y="636" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0"># id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="654" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">→ run_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="672" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">→ template_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="690" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">→ buyer_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="708" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">external_spend</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="448.0" y="726" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">→ buyer_coupon_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid?</tspan>
+    </text>
+    <text x="448.0" y="744" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">status</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> varchar(24)</tspan>
+    </text>
+    <path d="M448,758h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="run_id,buyer_id" data-condition="">
+      <text x="448.0" y="778" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (run_id, buyer_id)</text>
+    </g>
+    <g data-constraint="PUK" data-columns="buyer_coupon_id" data-condition="buyer_coupon_id IS NOT NULL">
+      <text x="448.0" y="804" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (buyer_coupon_id)</text>
+      <text x="448.0" y="820" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">적용 조건: buyer_coupon_id IS NOT NULL</text>
+    </g>
+  </g>
+  <text x="372.0" y="188.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="coupon_templates:buyer_coupons" data-endpoint="source">1</text>
+  <text x="420.0" y="216.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="coupon_templates:buyer_coupons" data-endpoint="target">0..N</text>
+  <text x="780.0" y="132.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="buyer_coupons:coupon_history" data-endpoint="source">1</text>
+  <text x="828.0" y="160.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="buyer_coupons:coupon_history" data-endpoint="target">0..N</text>
+  <text x="372.0" y="650.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="coupon_issue_runs:coupon_issue_targets" data-endpoint="source">1</text>
+  <text x="420.0" y="678.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="coupon_issue_runs:coupon_issue_targets" data-endpoint="target">0..N</text>
+  <text x="204.0" y="392" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="coupon_templates:coupon_issue_targets" data-endpoint="source">1</text>
+  <text x="509.03" y="548" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="coupon_templates:coupon_issue_targets" data-endpoint="target">0..N</text>
+  <text x="612.0" y="548" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="coupon_issue_targets:buyer_coupons" data-endpoint="source">0..1</text>
+  <text x="612.0" y="484" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="coupon_issue_targets:buyer_coupons" data-endpoint="target">0..1</text>
+  <path d="M24,864H1176" stroke="#e2e8f0" />
+  <text x="24" y="886" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend"># PK    → 논리 참조    UK 괄호 안 컬럼 조합의 중복을 막음</text>
+  <text x="24" y="906" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend">적용 조건: 해당 조건의 행끼리만 검사 · 추가 유일제약이 없으면 제약 영역 생략 · 관계선은 물리 FK가 아님</text>
+</svg>

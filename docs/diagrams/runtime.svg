@@ -39,7 +39,7 @@
   <g id="spring-boot-apps" data-zone="spring-boot-apps" data-box="16,40,848,168">
     <rect x="16" y="40" width="848" height="168" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
     <use href="#logo-springboot" x="32" y="52" width="18" height="18" aria-hidden="true" />
-    <text x="60" y="66" font-size="12" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">Spring Boot 애플리케이션</text>
+    <text x="60" y="66" font-size="12" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">Spring Boot 애플리케이션 · 독립 컨테이너 6개</text>
   </g>
   <g id="database-apps" data-zone="database-apps" data-box="168,80,688,112">
     <rect x="168" y="80" width="688" height="112" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
@@ -49,10 +49,10 @@
     <rect x="16" y="240" width="848" height="120" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
     <text x="32" y="266" font-size="12" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">데이터 인프라</text>
   </g>
-  <path id="apps-postgres" data-edge="true" d="M 360,192 L 360,224 Q 360,232 352,232 L 256,232 Q 248,232 248,240 L 248,288" fill="none" stroke="#0f766e" stroke-width="2.2" marker-end="url(#arrow-store)" stroke-linejoin="round" stroke-linecap="round" data-flow="store" stroke-dasharray="12 4 2 4" />
-  <path id="apps-kafka" data-edge="true" d="M 440,192 L 440,288" fill="none" stroke="#c56b00" stroke-width="2.2" marker-end="url(#arrow-event)" stroke-linejoin="round" stroke-linecap="round" data-flow="event" stroke-dasharray="8 5" />
-  <path id="apps-redis" data-edge="true" d="M 748,208 L 748,248 Q 748,256 740,256 L 712,256 Q 704,256 704,264 L 704,288" fill="none" stroke="#0f766e" stroke-width="2.2" marker-end="url(#arrow-store)" stroke-linejoin="round" stroke-linecap="round" data-flow="store" stroke-dasharray="12 4 2 4" />
-  <g id="gateway" data-node="true" data-logo="springboot" data-tech="spring-boot" data-box="32,124,120,44">
+  <path id="apps-postgres" data-edge="true" data-source="database-apps" data-target="postgres" d="M 360,192 L 360,224 Q 360,232 352,232 L 256,232 Q 248,232 248,240 L 248,288" fill="none" stroke="#0f766e" stroke-width="2.2" marker-end="url(#arrow-store)" stroke-linejoin="round" stroke-linecap="round" data-flow="store" stroke-dasharray="12 4 2 4" />
+  <path id="apps-kafka" data-edge="true" data-source="database-apps" data-target="kafka" d="M 440,192 L 440,288" fill="none" stroke="#c56b00" stroke-width="2.2" marker-end="url(#arrow-event)" stroke-linejoin="round" stroke-linecap="round" data-flow="event" stroke-dasharray="8 5" />
+  <path id="apps-redis" data-edge="true" data-source="spring-boot-apps" data-target="redis" d="M 748,208 L 748,248 Q 748,256 740,256 L 712,256 Q 704,256 704,264 L 704,288" fill="none" stroke="#0f766e" stroke-width="2.2" marker-end="url(#arrow-store)" stroke-linejoin="round" stroke-linecap="round" data-flow="store" stroke-dasharray="12 4 2 4" />
+  <g id="gateway" data-node="true" data-container="gateway" data-logo="springboot" data-tech="spring-boot" data-box="32,124,120,44">
     <title>API Gateway · gateway</title>
     <rect x="32" y="124" width="120" height="44" rx="4" fill="#ffffff" stroke="#64748b" stroke-width="1.5" />
     <g data-align-content="card" transform="translate(0 1.5)">
@@ -63,32 +63,32 @@
       </text>
     </g>
   </g>
-  <g id="seller" data-node="true" data-logo="springboot" data-tech="spring-boot" data-box="180,124,124,44">
+  <g id="seller" data-node="true" data-container="seller" data-logo="springboot" data-tech="spring-boot" data-box="180,124,124,44">
     <title>커머스 · seller</title>
     <rect x="180" y="124" width="124" height="44" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="188" y="135.0" width="22" height="22" aria-hidden="true" />
     <text x="220" y="143" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">커머스</text>
     <text x="220" y="158" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176" font-weight="400">거래 알림</text>
   </g>
-  <g id="payment-api" data-node="true" data-logo="springboot" data-tech="spring-boot" data-box="316,124,124,44">
+  <g id="payment-api" data-node="true" data-container="payment-api" data-logo="springboot" data-tech="spring-boot" data-box="316,124,124,44">
     <title>결제 API · payment-api</title>
     <rect x="316" y="124" width="124" height="44" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="324" y="135.0" width="22" height="22" aria-hidden="true" />
     <text x="356" y="150.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">결제 API</text>
   </g>
-  <g id="payment-worker" data-node="true" data-logo="springboot" data-tech="spring-boot" data-box="452,124,124,44">
+  <g id="payment-worker" data-node="true" data-container="payment-worker" data-logo="springboot" data-tech="spring-boot" data-box="452,124,124,44">
     <title>결제 Worker · payment-worker</title>
     <rect x="452" y="124" width="124" height="44" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="460" y="135.0" width="22" height="22" aria-hidden="true" />
     <text x="492" y="150.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">결제 Worker</text>
   </g>
-  <g id="settlement" data-node="true" data-logo="springboot" data-tech="spring-boot" data-box="588,124,124,44">
+  <g id="settlement" data-node="true" data-container="settlement" data-logo="springboot" data-tech="spring-boot" data-box="588,124,124,44">
     <title>정산 · settlement</title>
     <rect x="588" y="124" width="124" height="44" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="596" y="135.0" width="22" height="22" aria-hidden="true" />
     <text x="628" y="150.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">정산</text>
   </g>
-  <g id="finance-mock" data-node="true" data-logo="springboot" data-tech="spring-boot" data-box="724,124,124,44">
+  <g id="finance-mock" data-node="true" data-container="finance-mock" data-logo="springboot" data-tech="spring-boot" data-box="724,124,124,44">
     <title>금융 모의 서버 · finance-mock</title>
     <rect x="724" y="124" width="124" height="44" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="732" y="135.0" width="22" height="22" aria-hidden="true" />
@@ -109,11 +109,12 @@
   </g>
   <use href="#logo-docker" x="16" y="6" width="18" height="18" aria-hidden="true" />
   <text x="42" y="20" font-size="10" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="400" fill="#526176" text-anchor="start">Docker Compose</text>
-  <g id="redis" data-node="true" data-logo="redis" data-tech="infrastructure" data-box="616,288,176,56">
+  <g id="redis" data-node="true" data-container="redis" data-logo="redis" data-tech="infrastructure" data-box="616,288,176,56">
     <title>Redis · redis</title>
     <rect x="616" y="288" width="176" height="56" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-redis" x="624" y="305.0" width="22" height="22" aria-hidden="true" />
-    <text x="656" y="320.0" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">Redis</text>
+    <text x="656" y="310" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">Redis</text>
+    <text x="656" y="328" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">공유 1개 · 앱 6개 연결</text>
   </g>
   <rect data-label-for="apps-postgres" x="248" y="210" width="104" height="14" fill="#ffffff" />
   <text data-label-for="apps-postgres" x="300.0" y="220" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#334155" text-anchor="middle">JDBC</text>
