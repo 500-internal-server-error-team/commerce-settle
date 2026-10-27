@@ -230,12 +230,18 @@
 | `mileage_amount` | `bigint` | 업무 값 |
 | `external_amount` | `bigint` | 업무 값 |
 | `payment_cycle_id` | `uuid` | 업무 값 |
-| `settlement_anchor_at` | `timestamptz` | 업무 값 |
 | `external_method` | `varchar(24)?` | 업무 값 |
 | `provider_id` | `varchar(16)?` | 업무 값 |
 | `method_account_ref` | `varchar(100)?` | 시험용 |
 | `status` | `varchar(32)` | 업무 값 |
-| `fulfillment_status` | `varchar(24)` | 업무 값 |
+| `fulfillment_status` | `varchar(24)` | UNSHIPPED/SHIPPED/DELIVERED/RETURN_RECEIVED |
+| `simulation_seed` | `bigint` | 주문별 배송 소요일을 정한 시험 seed |
+| `delivery_business_days` | `integer` | 생성 때 고정한 2 또는 3 |
+| `delivery_calendar_version` | `varchar(32)` | 불변 시험 달력 버전 |
+| `delivery_calendar` | `jsonb` | 시간대·공휴일 목록 사본 |
+| `shipped_at` | `timestamptz?` | 최초 서버 발송 시각 |
+| `delivery_due_at` | `timestamptz?` | 발송 당시 계산한 모의 도착 시각 |
+| `delivered_at` | `timestamptz?` | 배송완료 반영 시 delivery_due_at을 복사 |
 | `payment_confirmed_at` | `timestamptz?` | 업무 값 |
 | `refund_deadline_at` | `timestamptz?` | 업무 값 |
 | `purchase_confirmed_at` | `timestamptz?` | 업무 값 |
@@ -247,7 +253,9 @@
 
 **제약:** G=unit_price*quantity, D=S+P, B=G-S, T=B-P=E+M; 1<=T<=10000000, S/P>=0이고 최대 하나만 양수, 0<=D<G, 0<=M<=T, E>=0. buyer_coupon_id가 있으면 M=0. 쿠폰의 결제수단·소유권·예산 예약을 함께 검사. 일반 quantity 1..10; event_id가 있으면1. Payment 연결 ID는 알려진 경우 UNIQUE. 상태 전이는 아래 표.
 
-**인덱스:** (buyer_id,created_at,id); (seller_id,created_at,id); (status,refund_deadline_at,id); UNIQUE(payment_id) WHERE payment_id IS NOT NULL.
+배송 소요일·seed·달력 사본은 생성 후 불변입니다. 발송/도착 예정 시각은 함께 설정하고 발송 재요청으로 바꾸지 않습니다. 배송완료 시 delivered_at=delivery_due_at, refund_deadline_at=delivered_at+168시간을 함께 저장합니다. 배송 전 deadline은 NULL이며 진행 중 취소·반품·환불은 자동 구매확정을 막습니다. 늦은 배송 작업과 환불 접수도 같은 주문 잠금으로 기한을 검사합니다.
+
+**인덱스:** (buyer_id,created_at,id); (seller_id,created_at,id); (fulfillment_status,delivery_due_at,id); (status,refund_deadline_at,id); UNIQUE(payment_id) WHERE payment_id IS NOT NULL.
 
 ### order_refund_requests
 
@@ -502,7 +510,6 @@
 | `seller_id` | `uuid` | 업무 값 |
 | `order_version` | `bigint` | 업무 값 |
 | `product_id` | `uuid` | 업무 값 |
-| `settlement_anchor_at` | `timestamptz` | 업무 값 |
 | `current_cycle_id` | `uuid` | 업무 값 |
 | `gross_amount` | `bigint` | 업무 값 |
 | `coupon_amount` | `bigint` | S+P; 표시용 총할인액 |
@@ -653,9 +660,7 @@
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `seller_id` | `uuid` | 업무 값 |
-| `product_id` | `uuid` | 업무 값 |
-| `anchor_at` | `timestamptz` | 업무 값 |
-| `cycle_no` | `bigint` | 업무 값 |
+| `batch_date` | `date` | Asia/Seoul 마감 날짜 |
 | `cutoff_at` | `timestamptz` | 업무 값 |
 | `policy_version` | `varchar(32)` | 업무 값 |
 | `status` | `varchar(24)` | 업무 값 |
@@ -664,7 +669,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(product_id,cycle_no,policy_version); cutoff_at=anchor_at+cycle_no*14일. net_amount>=0, status=CREATED/RESERVED/PROCESSING/COMPLETED/REVIEW_REQUIRED.
+**제약:** UNIQUE(seller_id,batch_date,policy_version); cutoff_at은 해당 batch_date의 10:00 Asia/Seoul. net_amount>=0, status=CREATED/RESERVED/PROCESSING/COMPLETED/REVIEW_REQUIRED.
 
 **인덱스:** (status,created_at,id).
 
@@ -685,6 +690,7 @@
 | `business_key` | `uuid` | 업무 값 |
 | `external_ref` | `uuid?` | 업무 값 |
 | `status` | `varchar(24)` | 업무 값 |
+| `hold_reason` | `varchar(32)?` | NON_BUSINESS_DAY/INSUFFICIENT_FUNDS/UNKNOWN/CONFIRMED_REJECTION |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
@@ -704,10 +710,8 @@
 | `order_id` | `uuid` | 업무 값 |
 | `product_id` | `uuid` | 업무 값 |
 | `seller_id` | `uuid` | 업무 값 |
-| `settlement_anchor_at` | `timestamptz` | 업무 값 |
 | `eligible_received_at` | `timestamptz?` | 업무 값 |
-| `cycle_no` | `bigint?` | 업무 값 |
-| `scheduled_cutoff_at` | `timestamptz?` | 업무 값 |
+| `ready_at` | `timestamptz?` | 구매확정과 선행 원장이 모두 준비된 시각 |
 | `total_amount` | `bigint` | T; 구매자 부담액 |
 | `platform_coupon_amount` | `bigint` | P; 플랫폼 지원 원금 |
 | `settlement_base_amount` | `bigint` | B=T+P |
@@ -723,9 +727,9 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(payment_id). T=E+M, B=T+P=fee+net. fee=floor(B*15/100). 플랫폼 지원 재원과 지급 가능 현금의 확인 전 지급 금지. 상태 조건과 예약을 같은 트랜잭션으로 보호.
+**제약:** ready_at=max(purchase_confirmed_at,eligible_received_at). UNIQUE(payment_id). T=E+M, B=T+P=fee+net. fee=floor(B*15/100). 플랫폼 지원 재원과 지급 가능 현금의 확인 전 지급 금지. 상태 조건과 예약을 같은 트랜잭션으로 보호.
 
-**인덱스:** (seller_id,status,purchase_confirmed_at,id); (payout_id); UNIQUE(payment_id).
+**인덱스:** (seller_id,status,ready_at,id); (payout_id); UNIQUE(payment_id). 배치는 ready_at<cutoff_at인 미선점 항목을 조회하며 payout_id가 있으면 다른 배치에 배정하지 않습니다.
 
 ### settlement_entries
 
@@ -766,7 +770,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(payout_id), UNIQUE(business_key). 지급 항목 선점·금액·작업 생성 원자 저장.
+**제약:** UNIQUE(payout_id), UNIQUE(business_key). 지급 항목 선점·금액·작업 생성 원자 저장. next_run_at은 Payout 응답의 nextAttemptAt 원천입니다. 달력/재원 보류는 같은 작업을 재개하고 attempts를 늘리지 않으며 확정 거절은 REVIEW_REQUIRED입니다.
 
 **인덱스:** (status,next_run_at,lease_until,id).
 
@@ -806,13 +810,14 @@
 | `provider_id` | `varchar(16)` | 업무 값 |
 | `account_ref` | `varchar(100)` | 업무 값 |
 | `purpose` | `varchar(16)` | 업무 값 |
+| `opening_balance` | `bigint` | 시험 계정 생성 때 받은 불변 기초잔액 |
 | `balance` | `bigint` | 업무 값 |
 | `reserved_amount` | `bigint` | 업무 값 |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(provider_id,account_ref,purpose). CHECK(0<=reserved_amount AND reserved_amount<=balance). purpose=GIFT/WALLET/PAYOUT.
+**제약:** UNIQUE(provider_id,account_ref,purpose). CHECK(0<=reserved_amount AND reserved_amount<=balance). purpose=GIFT/WALLET/PAYOUT. PAYOUT의 balance=opening_balance+해당 계정 cash_entries 합계이며 예약액은 소비 전까지 차감하지 않습니다.
 
 **인덱스:** UNIQUE(provider_id,account_ref,purpose).
 
@@ -848,6 +853,12 @@
 | `original_id` | `uuid?` | →mock_transactions.id |
 | `account_id` | `uuid?` | →mock_accounts.id |
 | `method` | `varchar(24)?` | 업무 값 |
+| `funding_account_id` | `uuid?` | 외부 승인/지급의 PAYOUT 재원 계정 |
+| `pg_calendar_version` | `varchar(32)?` | 승인 당시 입금 달력 버전 |
+| `pg_calendar` | `jsonb?` | 시간대·공휴일 목록 사본 |
+| `pg_receipt_due_at` | `timestamptz?` | 승인 시각+대역별 영업일 |
+| `pg_received_at` | `timestamptz?` | 실제 입금/입금 전 환불 상쇄 처리 시각 |
+| `pg_received_amount` | `bigint?` | 입금 처리 전 NULL, 처리 뒤 E 또는 0 |
 | `amount` | `bigint` | 업무 값 |
 | `status` | `varchar(24)` | 업무 값 |
 | `succeeded_at` | `timestamptz?` | 업무 값 |
@@ -859,7 +870,27 @@
 
 **제약:** UNIQUE(provider_id,operation,business_key). 진행 중/성공 환불은 original_id별1개(부분 UNIQUE). amount>0. 카드 승인은 내부 잔액 차감 없이 결과만 모의. 최초 SUCCEEDED 시각 succeeded_at을 결과와 원자 저장하고 이후 불변.
 
-**인덱스:** (provider_id,status,created_at,id); (original_id).
+원승인당 입금은 한 번이며 입금/환불은 원승인 행 잠금으로 경합합니다. 승인 성공·입금 예정 정보는 같은 트랜잭션에서 저장합니다. 입금 전 확정 환불은 0 입금으로 종결하고, 입금 후 환불은 가용 재원 검사·E 차감·환불 결과·원수단 잔액 복원을 원자 저장합니다. 자금 부족이면 확정 거절하고 잔액은 유지합니다. pg_received_amount=0인 상쇄에는 현금 행을 만들지 않습니다. P/M은 PG 입금에 포함하지 않습니다.
+
+**인덱스:** (operation,status,pg_receipt_due_at,id) WHERE pg_received_at IS NULL; (provider_id,status,created_at,id); (original_id).
+
+### mock_cash_entries
+
+소유: `finance_mock`. PAYOUT 재원의 추가 전용 현금 기록. 금융 Mock ERD는 기존 주요 거래를 요약하며 이 표가 현금 기록의 기준입니다.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id` | `uuid` | PK; 서버 생성 |
+| `account_id` | `uuid` | →mock_accounts.id; purpose=PAYOUT |
+| `kind` | `varchar(24)` | PLATFORM_TOPUP/PG_RECEIPT/REFUND_DEBIT/PAYOUT_DEBIT |
+| `business_key` | `uuid` | 추가 자금의 요청 키 또는 원금융 거래 ID |
+| `transaction_id` | `uuid?` | →mock_transactions.id; TOPUP만 NULL |
+| `amount` | `bigint` | 입금은 양수, 환불/지급 차감은 음수 |
+| `created_at` | `timestamptz` | NOT NULL |
+
+**제약:** UNIQUE(kind,business_key). amount!=0, kind에 맞는 부호·거래 종류·계정을 검증합니다. 원래 거래 ID·금액을 한 번만 반영하고 행·계정 잔액을 같은 트랜잭션으로 갱신합니다. 같은 TOPUP 키의 다른 계정/금액은 409이며 생성·재요청 모두 기존 CashEntry와 Location을 201로 반환합니다. UPDATE/DELETE를 제공하지 않습니다. 지급 성공 차감은 대역 예약 소비와 원자 저장합니다.
+
+**인덱스:** (account_id,created_at,id); UNIQUE(kind,business_key).
 
 ### mock_scenarios
 
@@ -868,6 +899,7 @@
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
+| `settlement_delay_business_days` | `integer?` | PG/EASY_PAY의 입금 지연 0~365; PAYOUT은 NULL |
 | `provider_id` | `varchar(16)` | 업무 값 |
 | `scenario_version` | `varchar(32)` | 업무 값 |
 | `min_delay_ms` | `integer` | 업무 값 |
@@ -1105,7 +1137,7 @@
 
 | 대상 | 정상·실패 전이 |
 | --- | --- |
-| 주문 | PAYMENT_PENDING→PAID/DECLINED/CANCEL_PENDING→CANCELLED. PAID→REFUND_PENDING→REFUNDED 또는 안전한 종결 후 PAID. PAID→PURCHASE_CONFIRMED는 환불 마감 초과·미진행 환불일 때만. |
+| 주문 | 배송 UNSHIPPED→SHIPPED→DELIVERED이며 반품 입고는 SHIPPED/DELIVERED→RETURN_RECEIVED. PAYMENT_PENDING→PAID/DECLINED/CANCEL_PENDING→CANCELLED. PAID→REFUND_PENDING→REFUNDED 또는 안전한 종결 후 PAID. PAID→PURCHASE_CONFIRMED는 배송완료·환불 마감 초과·미진행 환불일 때만. |
 | 결제 | PENDING→PROCESSING→CONFIRMED/DECLINED/UNKNOWN. UNKNOWN은 원대역 조회로만 확정. DECLINED 재시도는 예약 재확보 후 새 attempt. |
 | 외부 시도 | PENDING→PROCESSING→APPROVED/DECLINED/UNKNOWN. M 전액이면 attempt 없음. |
 | 금융 환불 | RESERVING→EXTERNAL_PENDING→RESTORING→INTERNAL_PENDING→COMPLETED. 외부 거절은 COMPENSATING→DECLINED, 결과 불명은 UNKNOWN. 상태만으로 커머스 복구까지 완료했다고 표시하지 않는다. |

@@ -78,7 +78,7 @@
 | GET | `/api/sellers/me/payouts` | 본인 지급 목록 | SELLER | `—` | `PayoutPage` | 200 |
 | GET | `/api/sellers/me/payouts/{payoutId}` | 본인 지급 조회 | SELLER | `—` | `Payout` | 200 |
 | GET | `/internal/orders/{orderId}/payment-context` | 불변 주문·금액 컨텍스트 | SERVICE:payment | `—` | `PaymentContext` | 200 |
-| GET | `/internal/products/{productId}/settlement-context` | 상품 정산 기준일 | SERVICE:settlement | `—` | `ProductSettlementContext` | 200 |
+| GET | `/internal/products/{productId}/settlement-context` | 상품·판매자 지급 컨텍스트 | SERVICE:settlement | `—` | `ProductSettlementContext` | 200 |
 | GET | `/internal/payments/{paymentId}/settlement-context` | 확정 결제·원금액 컨텍스트 | SERVICE:settlement | `—` | `SettlementContext` | 200 |
 | POST | `/internal/refund-requests/{requestId}/closure` | 실패 환불의 안전한 운영 종결 | OPERATOR | `FailedRefundClosure` | `OrderRefundRequest` | 200 |
 | GET | `/internal/payment-jobs` | 운영 작업 목록 | OPERATOR | `—` | `JobPage` | 200 |
@@ -91,6 +91,7 @@
 | POST | `/mock/providers/{providerId}/payments/{externalId}/refunds` | 원외부 결제 전액 환불 | SERVICE:payment | `MockRefund` | `MockTransaction` | 202 |
 | POST | `/mock/payouts` | 모의 지급 실행 | SERVICE:settlement | `MockPayout` | `MockTransaction` | 202 |
 | GET | `/mock/payouts/{businessKey}` | 원지급 조회 | SERVICE:settlement | `—` | `MockTransaction` | 200 |
+| POST | `/mock/accounts/{accountId}/credits` | 모의 지급 재원 보충 | OPERATOR | `MockAccountCredit` | `MockCashEntry` | 201 |
 | POST | `/mock/accounts` | 격리 시험 계정 준비 | OPERATOR | `MockAccountCreate` | `MockAccount` | 201 |
 | GET | `/mock/accounts/{accountId}` | 격리 시험 잔액 조회 | OPERATOR | `—` | `MockAccount` | 200 |
 | POST | `/mock/scenarios` | 새 버전 장애 설정 | OPERATOR | `MockScenarioCreate` | `MockScenario` | 201 |
@@ -123,7 +124,7 @@
 3. PaymentRequested 수신 뒤 Payment가 마일리지를 예약하고 외부 수단이 있으면 호출합니다. GET 주문/결제에서 확정과 미확정을 구분합니다. 외부 승인 결과와 마일리지 차감을 모두 반영한 뒤 전체 결제를 확정합니다.
 4. 환불은 주문의 refund-requests에서만 접수합니다. 구매자가 Payment에 임의 금액으로 직접 환불을 만들지 않습니다. 미발송 취소와 발송후 반품 승인, 기한내 접수와 기한후 처리를 구분합니다.
 5. 판매자 승인 전 반품은 구매자가 철회할 수 있습니다. 금융 실패 뒤 운영 종결은 외부확정거절·미복원·예약해제·고객확인 근거를 모두 확인한 경우만 허용하고, 미확정이면 거절합니다.
-6. 기한 후 자동 구매확정은 내부 스케줄 작업이며 구매자용 수동 조기확정 API는 없습니다. 정산·지급은 해당 이벤트와 예약 상태를 확인합니다.
+6. 모의 배송완료 반영과 기한 후 자동 구매확정은 내부 스케줄 작업이며 구매자용 수동 조기확정 API는 없습니다. 정산·지급은 해당 이벤트와 예약 상태를 확인합니다.
 
 ## 이벤트 연동
 
@@ -159,7 +160,11 @@ aggregateVersion은 발신 집계의 버전이고 서로 다른 서비스의 버
 
 PaymentAccepted·RefundAccepted 이벤트로 주문 조회에 금융 처리 ID를 먼저 연결합니다. 결제/실패/취소 결과는 현재 paymentCycleId와 대조하며 오래된 회차 결과로 새 예약을 해제하지 않습니다.
 
-지급 생성 전 Settlement는 서비스 자격의 ProductSettlementContext로 판매자 상태·수취 시험계정·버전을 확인합니다. 수취 계정과 출금 시험계정을 payouts에 사본으로 저장하고 이후 재시도에는 현재 프로필을 다시 적용하지 않습니다. Payout.succeededAt은 원대역의 최초 성공 시각이며 예정 마감·요청 접수·로컬 관측 시각과 다릅니다.
+지급 생성 전 Settlement는 서비스 자격의 ProductSettlementContext로 판매자 상태·수취 시험계정·버전을 확인합니다. 수취 계정과 출금 시험계정을 payouts에 사본으로 저장하고 이후 재시도에는 현재 프로필을 다시 적용하지 않습니다. SettlementBatch는 상품 회차 대신 sellerId+batchDate+policyVersion으로 식별합니다. Payout의 holdReason·nextAttemptAt으로 보류와 다음 시도를 안내하고 succeededAt으로 실제 성공을 구분합니다. 원래 업무 키·계정 사본·항목 연결은 보류/재시작에 유지합니다.
+
+Order는 deliveryBusinessDays·deliveryCalendarVersion·shippedAt·deliveryDueAt·deliveredAt·refundDeadlineAt을 반환합니다. 서버만 모의 배송완료를 반영하며 구매자·판매자가 도착/환불 마감을 지정할 수 없습니다. PurchaseConfirmed는 deliveredAt·refundDeadlineAt·confirmedAt을 전달해 배송완료와 환불 마감 이후의 확정임을 보존합니다.
+
+PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반영합니다. MockApproval의 fundingAccountRef는 Payment 서버 설정이며 원승인에 고정합니다. MockTransaction의 pgReceiptDueAt·pgReceivedAt·pgReceivedAmount로 예정/실제 입금과 입금 전 환불 상쇄를 조회합니다. PAYOUT 재원의 추가 자금만 운영자 credit API를 사용합니다. [현금·복구 정책](policies.md#선지급-재원과-pg-회수)을 따릅니다.
 
 ## 거래 알림 사용 순서
 
@@ -182,7 +187,9 @@ PaymentAccepted·RefundAccepted 이벤트로 주문 조회에 금융 처리 ID�
 | COUPON_BUDGET_EXHAUSTED |409|판매자 캠페인의 명목 예산 또는 발급 수 소진; 플랫폼 자동 발급·가입에는 적용하지 않음|
 | INVENTORY_INSUFFICIENT / EVENT_ADMISSION_CLOSED |409|재고/기간/참여한도/매진|
 | MILEAGE_INSUFFICIENT / PAYMENT_STATE_CONFLICT |409|잔액 부족·미확정 재시도 등|
-| ORDER_REFUND_WINDOW_CLOSED / ORDER_REFUND_IN_PROGRESS |409|168시간 초과·기존 환불|
+| ORDER_REFUND_WINDOW_CLOSED / ORDER_REFUND_IN_PROGRESS |409|배송완료+168시간 초과·기존 환불|
+| PAYOUT_NON_BUSINESS_DAY / PAYOUT_INSUFFICIENT_FUNDS |409|신규 대역 지급의 비영업일·재원 부족; 외부 거래 생성 없이 기존 지급 보류|
+| SETTLEMENT_NO_ELIGIBLE_ITEMS |409|새 일배치에 배정할 지급 가능 항목 없음|
 | NOTIFICATION_REPLAY_CONFLICT |409|완료/수집 중/유효 임대 또는 재처리 불가 상태|
 | COMMON_RATE_LIMITED / COMMON_TEMPORARILY_UNAVAILABLE |429/503|제한·의존 저장소 장애|
 
