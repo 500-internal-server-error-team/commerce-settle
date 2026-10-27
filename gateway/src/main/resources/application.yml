@@ -9,8 +9,8 @@ spring:
       server:
         webflux:
           routes:
-            - id: seller-api
-              uri: ${SELLER_URL:http://seller:8080}
+            - id: commerce-api
+              uri: ${COMMERCE_URL:http://commerce:8080}
               predicates:
                 - Path=/api/sellers,/api/sellers/**
             - id: payment-api
@@ -21,10 +21,10 @@ spring:
               uri: ${SETTLEMENT_URL:http://settlement:8080}
               predicates:
                 - Path=/api/settlements,/api/settlements/**
-            - id: seller-docs
-              uri: ${SELLER_URL:http://seller:8080}
+            - id: commerce-docs
+              uri: ${COMMERCE_URL:http://commerce:8080}
               predicates:
-                - Path=/v3/api-docs/seller
+                - Path=/v3/api-docs/commerce
               filters:
                 - SetPath=/v3/api-docs
             - id: payment-docs
@@ -44,8 +44,8 @@ springdoc:
   swagger-ui:
     disable-swagger-default-url: true
     urls:
-      - name: Seller
-        url: /v3/api-docs/seller
+      - name: Commerce
+        url: /v3/api-docs/commerce
       - name: Payment
         url: /v3/api-docs/payment
       - name: Settlement

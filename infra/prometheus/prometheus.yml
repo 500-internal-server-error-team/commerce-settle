@@ -6,7 +6,7 @@ scrape_configs:
     static_configs:
       - targets:
           - gateway:9091
-          - seller:9091
+          - commerce:9091
           - payment-api:9091
           - payment-worker:9091
           - settlement:9091

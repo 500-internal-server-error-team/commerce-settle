@@ -1,2 +1,2 @@
 /** Business invariants, entities and domain ports. */
-package com.commercesettle.seller.domain;
+package com.commercesettle.commerce.domain;

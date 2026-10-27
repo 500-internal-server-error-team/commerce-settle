@@ -37,16 +37,16 @@ export const options = {
 
 // One document request per iteration. This verifies the tool, not payment TPS.
 export default function () {
-  const response = http.get(`${__ENV.BASE_URL || 'http://gateway:8080'}/v3/api-docs/seller`, {
+  const response = http.get(`${__ENV.BASE_URL || 'http://gateway:8080'}/v3/api-docs/commerce`, {
     timeout: '5s',
-    tags: { name: 'bootstrap-seller-docs' },
+    tags: { name: 'bootstrap-commerce-docs' },
   });
   check(response, {
-    'Seller OpenAPI is reachable through Gateway': (r) => {
+    'Commerce OpenAPI is reachable through Gateway': (r) => {
       if (r.status !== 200) return false;
       try {
         const document = r.json();
-        return document.openapi.startsWith('3.') && document.info.title === 'Seller';
+        return document.openapi.startsWith('3.') && document.info.title === 'Commerce';
       } catch (_) {
         return false;
       }

@@ -3,7 +3,7 @@ server:
 
 spring:
   application:
-    name: seller
+    name: commerce
   datasource:
     url: ${DB_URL}
     username: ${DB_USERNAME}
@@ -16,12 +16,12 @@ spring:
     hibernate:
       ddl-auto: validate
     properties:
-      hibernate.default_schema: seller
+      hibernate.default_schema: commerce
   flyway:
     clean-disabled: true
     validate-on-migrate: true
-    default-schema: seller
-    schemas: seller
+    default-schema: commerce
+    schemas: commerce
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
 

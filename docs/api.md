@@ -140,35 +140,37 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 
 | 이벤트 | 생산자 | 소비자 | key | payload |
 | --- | --- | --- | --- | --- |
-| `OrderPaymentRequested` | seller | payment | `orderId` | `OrderPaymentRequestedPayload` |
-| `PaymentAccepted` | payment | seller | `paymentId` | `PaymentAcceptedPayload` |
-| `PaymentCancellationRequested` | seller | payment | `orderId` | `PaymentCancellationRequestedPayload` |
-| `PaymentCancellationRejected` | payment | seller | `paymentId` | `PaymentCancellationRejectedPayload` |
-| `PaymentConfirmed` | payment | seller, settlement | `paymentId` | `PaymentConfirmedPayload` |
-| `PaymentDeclined` | payment | seller | `paymentId` | `PaymentDeclinedPayload` |
-| `PaymentCancelled` | payment | seller | `paymentId` | `PaymentCancelledPayload` |
-| `RefundApproved` | seller | payment | `paymentId` | `RefundApprovedPayload` |
-| `RefundAccepted` | payment | seller | `paymentId` | `RefundAcceptedPayload` |
+| `OrderPaymentRequested` | commerce | payment | `orderId` | `OrderPaymentRequestedPayload` |
+| `PaymentAccepted` | payment | commerce | `paymentId` | `PaymentAcceptedPayload` |
+| `PaymentCancellationRequested` | commerce | payment | `orderId` | `PaymentCancellationRequestedPayload` |
+| `PaymentCancellationRejected` | payment | commerce | `paymentId` | `PaymentCancellationRejectedPayload` |
+| `PaymentConfirmed` | payment | commerce, settlement | `paymentId` | `PaymentConfirmedPayload` |
+| `PaymentDeclined` | payment | commerce | `paymentId` | `PaymentDeclinedPayload` |
+| `PaymentCancelled` | payment | commerce | `paymentId` | `PaymentCancelledPayload` |
+| `RefundApproved` | commerce | payment | `paymentId` | `RefundApprovedPayload` |
+| `RefundAccepted` | payment | commerce | `paymentId` | `RefundAcceptedPayload` |
 | `RefundReservationRequested` | payment | settlement | `paymentId` | `RefundReservationRequestedPayload` |
 | `RefundReservationResult` | settlement | payment | `paymentId` | `RefundReservationResultPayload` |
 | `RefundFinancialCompleted` | payment | settlement | `paymentId` | `RefundFinancialCompletedPayload` |
 | `RefundLedgerReversed` | settlement | payment | `paymentId` | `RefundLedgerReversedPayload` |
-| `RefundCompleted` | payment | seller | `paymentId` | `RefundCompletedPayload` |
-| `RefundOrderRestored` | seller | payment | `paymentId` | `RefundOrderRestoredPayload` |
+| `RefundCompleted` | payment | commerce | `paymentId` | `RefundCompletedPayload` |
+| `RefundOrderRestored` | commerce | payment | `paymentId` | `RefundOrderRestoredPayload` |
 | `RefundReleaseRequested` | payment | settlement | `paymentId` | `RefundReleaseRequestedPayload` |
 | `RefundReservationReleased` | settlement | payment | `paymentId` | `RefundReservationReleasedPayload` |
-| `RefundFailed` | payment | seller | `paymentId` | `RefundFailedPayload` |
-| `PurchaseConfirmed` | seller | settlement | `paymentId` | `PurchaseConfirmedPayload` |
-| `PaymentNoticeRequested` | payment | seller-notifications | `paymentId` | `PaymentNoticeRequestedPayload` |
-| `SettlementNoticeRequested` | settlement | seller-notifications | `batchId` | `SettlementNoticeRequestedPayload` |
+| `RefundFailed` | payment | commerce | `paymentId` | `RefundFailedPayload` |
+| `PurchaseConfirmed` | commerce | settlement | `paymentId` | `PurchaseConfirmedPayload` |
+| `PaymentNoticeRequested` | payment | commerce-notifications | `paymentId` | `PaymentNoticeRequestedPayload` |
+| `SettlementNoticeRequested` | settlement | commerce-notifications | `batchId` | `SettlementNoticeRequestedPayload` |
 
 OrderPaymentRequested·PaymentConfirmed는 할인 부담별 S/P와 정산 기준 B를 전달합니다. Settlement는 SOURCE의 E/M/P와 ALLOCATION의 판매자/수수료를 각각 B로 대조하고 원액으로 환불 상쇄합니다.
+
+`RefundCompleted`는 외부 환불·마일리지 복원·정산 원장 상쇄 후 커머스에 주문 복구를 전달하는 기존 v1 이벤트입니다. 이 발행 시점의 FinancialRefund는 `INTERNAL_PENDING`이며 전체 환불 완료를 뜻하지 않습니다. 커머스는 로컬 복구와 `RefundOrderRestored` Outbox를 함께 저장하고, Payment는 그 확인을 수신·반영한 뒤 `COMPLETED`로 전이합니다.
 
 aggregateVersion은 발신 집계의 버전이고 서로 다른 서비스의 버전을 하나의 순서로 비교하지 않습니다. 재전달은 원래 이벤트/업무 키를 사용하며, 늦은 승인 원장·자동 확정은 다음 정산에서 누락 없이 반영합니다. 금융 이벤트에는 주소·비밀번호·로그인 토큰을 싣지 않습니다.
 
 PaymentAccepted·RefundAccepted 이벤트로 주문 조회에 금융 처리 ID를 먼저 연결합니다. 결제/실패/취소 결과는 현재 paymentCycleId와 대조하며 오래된 회차 결과로 새 예약을 해제하지 않습니다.
 
-지급 생성 전 Settlement는 서비스 자격의 ProductSettlementContext로 판매자 상태·수취 시험계정·버전을 확인합니다. 수취 계정과 출금 시험계정을 payouts에 사본으로 저장하고 이후 재시도에는 현재 프로필을 다시 적용하지 않습니다. SettlementBatch는 상품 회차 대신 sellerId+batchDate+policyVersion으로 식별합니다. Payout의 holdReason·nextAttemptAt으로 보류와 다음 시도를 안내하고 succeededAt으로 실제 성공을 구분합니다. 원래 업무 키·계정 사본·항목 연결은 보류/재시작에 유지합니다.
+지급 생성 전 Settlement는 서비스 자격의 ProductSettlementContext로 상품·판매자 일치와 판매자 상태·수취 시험계정·버전을 확인합니다. 커머스의 상품 영역이 소유 관계를 확인하고 판매자 영역이 상태·계좌·버전을 제공합니다. 이 조회 계약이 판매자 정보의 소유권을 상품이나 Settlement로 옮기지는 않습니다. 수취 계정과 출금 시험계정을 payouts에 사본으로 저장하고 이후 재시도에는 현재 프로필을 다시 적용하지 않습니다. SettlementBatch는 상품 회차 대신 sellerId+batchDate+policyVersion으로 식별합니다. Payout의 holdReason·nextAttemptAt으로 보류와 다음 시도를 안내하고 succeededAt으로 실제 성공을 구분합니다. 원래 업무 키·계정 사본·항목 연결은 보류/재시작에 유지합니다.
 
 Order는 deliveryBusinessDays·deliveryCalendarVersion·shippedAt·deliveryDueAt·deliveredAt·refundDeadlineAt을 반환합니다. 서버만 모의 배송완료를 반영하며 구매자·판매자가 도착/환불 마감을 지정할 수 없습니다. PurchaseConfirmed는 deliveredAt·refundDeadlineAt·confirmedAt을 전달해 배송완료와 환불 마감 이후의 확정임을 보존합니다.
 
@@ -176,7 +178,7 @@ PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반�
 
 ## 거래 알림 사용 순서
 
-1. 결제·환불은 Payment의 `PaymentNoticeRequested`, 정산·지급은 Settlement의 `SettlementNoticeRequested`를 기존 생산자 토픽에서 받습니다. 알림 소비 그룹은 `seller-notifications.v1`이며 기존 금융 소비 그룹과 offset을 공유하지 않습니다. 알림 실패가 금융 이벤트 소비를 막지 않습니다.
+1. 결제·환불은 Payment의 `PaymentNoticeRequested`, 정산·지급은 Settlement의 `SettlementNoticeRequested`를 기존 생산자 토픽에서 받습니다. 알림 소비 그룹은 `commerce-notifications.v1`이며 기존 금융 소비 그룹과 offset을 공유하지 않습니다. 알림 실패가 금융 이벤트 소비를 막지 않습니다.
 2. 커머스의 발송·자동 구매확정·취소·반품 전이는 같은 DB 트랜잭션에 알림 항목을 만듭니다. 외부 요청 이벤트는 Inbox에 저장하고 주문/원환불의 선행 반영이 없으면 영속 대기합니다. 새 알림 요청은 기존 금융 v1 이벤트의 payload를 바꾸지 않습니다.
 3. 구매자·판매자는 같은 `/api/notifications`를 사용하지만 서버는 세션의 계정 종류와 ID로 범위를 제한합니다. `Notification`의 `SENT`는 모의 수신 확인입니다. 조회는 createdAt DESC,id DESC 정렬이며 COLLECTING 본문은 마감 전 빈 값입니다.
 4. 운영자는 내부 발송 조회·시도 이력·원키 재처리만 사용합니다. 사용자용 임의 발송·수신자 지정·본문 수정 API는 없습니다. 재처리의 expectedVersion·Idempotency-Key·사유를 검증하고 `Location`으로 같은 발송을 조회합니다.

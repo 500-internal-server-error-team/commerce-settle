@@ -4,13 +4,15 @@
 
 아래 컬럼·제약·인덱스가 기준이고 ERD는 주요 필드와 관계를 요약합니다. 각 뷰는 같은 DB 안의 관계를 보여주며 외부 서비스 ID는 값으로만 저장합니다. 주소·연락처는 별도 암호화 사본이고 금융 이벤트에 포함하지 않습니다.
 
+소유 표기의 `commerce`는 커머스 앱과 그 앱이 소유한 DB·계정·스키마 이름입니다. 판매자 계정·컬럼의 `seller`는 업무 식별자입니다.
+
 ## 계정·상품
 
 ![계정·상품 ERD](diagrams/erd-accounts.svg)
 
 ### buyer_accounts
 
-소유: `seller`. 구매자 계정.
+소유: `commerce`. 구매자 계정.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -31,7 +33,7 @@
 
 ### password_reset_tokens
 
-소유: `seller`. PostgreSQL의 일회용 비밀번호 복구 토큰. 로그인 세션은 Redis에 저장한다.
+소유: `commerce`. PostgreSQL의 일회용 비밀번호 복구 토큰. 로그인 세션은 Redis에 저장한다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -55,7 +57,7 @@
 
 ### seller_accounts
 
-소유: `seller`. 판매자 계정.
+소유: `commerce`. 판매자 계정.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -77,7 +79,7 @@
 
 ### buyer_addresses
 
-소유: `seller`. 구매자 주소록.
+소유: `commerce`. 구매자 주소록.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -98,7 +100,7 @@
 
 ### product_inventory
 
-소유: `seller`. 재고.
+소유: `commerce`. 재고.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -118,7 +120,7 @@
 
 ### products
 
-소유: `seller`. 상품.
+소유: `commerce`. 상품.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -138,7 +140,7 @@
 
 ### inventory_movements
 
-소유: `seller`. 재고 변경 이력.
+소유: `commerce`. 재고 변경 이력.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -194,7 +196,7 @@
 
 ### sale_events
 
-소유: `seller`. 선착순 이벤트.
+소유: `commerce`. 선착순 이벤트.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -221,7 +223,7 @@
 
 ### event_participations
 
-소유: `seller`. 이벤트 참여.
+소유: `commerce`. 이벤트 참여.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -240,7 +242,7 @@
 
 ### orders
 
-소유: `seller`. 주문.
+소유: `commerce`. 주문.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -292,7 +294,7 @@
 
 ### order_refund_requests
 
-소유: `seller`. 취소·반품 요청.
+소유: `commerce`. 취소·반품 요청.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -319,7 +321,7 @@
 
 ### inventory_reservations
 
-소유: `seller`. 주문 재고 예약.
+소유: `commerce`. 주문 재고 예약.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -341,7 +343,7 @@
 
 ### order_addresses
 
-소유: `seller`. 주문 주소 사본.
+소유: `commerce`. 주문 주소 사본.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -366,7 +368,7 @@
 
 ### coupon_templates
 
-소유: `seller`. 발급 당시 혜택 조건과 할인 비용 집계. WELCOME는 가입 시, GRADE는 월 배치가 서버 규칙으로 자동 생성합니다. 판매자 API는 SELLER 템플릿만 생성합니다.
+소유: `commerce`. 발급 당시 혜택 조건과 할인 비용 집계. WELCOME는 가입 시, GRADE는 월 배치가 서버 규칙으로 자동 생성합니다. 판매자 API는 SELLER 템플릿만 생성합니다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -402,7 +404,7 @@
 
 ### buyer_coupons
 
-소유: `seller`. 발급 당시 조건과 예산 약속을 보존한 쿠폰.
+소유: `commerce`. 발급 당시 조건과 예산 약속을 보존한 쿠폰.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -432,7 +434,7 @@
 
 ### coupon_history
 
-소유: `seller`. 발급·예약·사용·복구·만료와 예산 이동 이력.
+소유: `commerce`. 발급·예약·사용·복구·만료와 예산 이동 이력.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -453,7 +455,7 @@
 
 ### coupon_issue_runs
 
-소유: `seller`. 플랫폼 월간 우수고객의 대상 고정과 재시작 가능한 발급 작업. 판매자 자유 발급은 포함하지 않습니다.
+소유: `commerce`. 플랫폼 월간 우수고객의 대상 고정과 재시작 가능한 발급 작업. 판매자 자유 발급은 포함하지 않습니다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -471,7 +473,7 @@
 
 ### coupon_issue_targets
 
-소유: `seller`. 같은 회차의 플랫폼 월간 우수고객과 처리 결과.
+소유: `commerce`. 같은 회차의 플랫폼 월간 우수고객과 처리 결과.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -950,11 +952,11 @@
 
 ![거래 알림 ERD](diagrams/erd-notifications.svg)
 
-네 테이블은 커머스 `seller` DB 소유입니다. 알림 전용 DB나 물리 FK를 만들지 않습니다. [거래 알림 정책](policies.md#거래-알림)이 종류·수신자·묶음·재시도 기준입니다.
+네 테이블은 커머스(`commerce`)가 소유하며 `commerce` DB에 저장합니다. 알림 전용 DB나 물리 FK를 만들지 않습니다. [거래 알림 정책](policies.md#거래-알림)이 종류·수신자·묶음·재시도 기준입니다.
 
 ### notification_deliveries
 
-소유: `seller`. 거래 알림과 발송 작업.
+소유: `commerce`. 거래 알림과 발송 작업.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -990,13 +992,13 @@
 
 ### notification_items
 
-소유: `seller`. 원거래별 알림 항목.
+소유: `commerce`. 원거래별 알림 항목.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
 | `id` | `uuid` | PK |
 | `delivery_id` | `uuid` | →notification_deliveries.id |
-| `source_service` | `varchar(16)` | seller/payment/settlement |
+| `source_service` | `varchar(16)` | commerce/payment/settlement |
 | `source_event_id` | `uuid` | 수신 eventId 또는 로컬 전이에서 생성한 고정 ID |
 | `kind` | `varchar(40)` | 알림 종류 |
 | `business_ref` | `uuid` | 원주문/요청/결제/환불/배치/지급 ID |
@@ -1012,7 +1014,7 @@
 
 ### notification_attempts
 
-소유: `seller`. 발송·조회·운영 재처리 이력.
+소유: `commerce`. 발송·조회·운영 재처리 이력.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -1033,7 +1035,7 @@
 
 ### notification_mock_receipts
 
-소유: `seller`. 모의 수신 원결과.
+소유: `commerce`. 모의 수신 원결과.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -1161,7 +1163,7 @@
 - 마일리지 잔액의 reserved_amount는 활성 예약 합계와 일치해야 한다. 사용 시 예약/잔액 차감·DEBIT·결제 확정·Outbox를 한 번에 기록하고, 환불 시 원외부 환불 확인 뒤 RESTORE·잔액·환불 상태·Outbox를 한 번에 기록한다.
 - 정산 항목은 결제당 하나, 지급은 배치당 하나이다. 활성 정산 예약은 항목당 하나여서 환불과 지급이 동시에 선점할 수 없다. partial UNIQUE로 보호하고 모든 상태/금액을 같은 DB에서 검사한다.
 - 정산 원장은 SOURCE(E/M/P)와 ALLOCATION(판매자/수수료)의 두 측을 분리한다. 각 측의 합계가 B이고 환불 뒤 0으로 상쇄된다. 두 측을 합쳐 매출을 두 배로 세지 않는다. reversal_of는 원원장 항목당 한 번이다.
-- outbox/inbox/idempotency_records 정의는 seller/payment/settlement/finance_mock 각각에 적용한다. 서비스 간 공유 테이블이나 SQL join은 만들지 않는다. inbox의 event_id는 발신 outbox id와 논리적으로 대응하며 여러 consumer가 각각 수신할 수 있다.
+- outbox/inbox/idempotency_records 정의는 commerce/payment/settlement/finance_mock 각각에 적용한다. 서비스 간 공유 테이블이나 SQL join은 만들지 않는다. inbox의 event_id는 발신 outbox id와 논리적으로 대응하며 여러 consumer가 각각 수신할 수 있다.
 - 로컬 주문 전이·알림 항목, 외부 알림 Inbox·항목은 각각 커머스 한 트랜잭션에 저장한다. 알림 모의 수신은 별도 트랜잭션으로 기록하고 금융 DB를 갱신하지 않는다.
 - PK/UNIQUE/CHECK는 DB 제약으로, 합계·참조·다중 행 전이는 행 잠금/조건부 갱신·동일 트랜잭션으로 구현한다. ERD의 관계선은 FK constraint가 있다는 뜻이 아니다.
 
@@ -1172,7 +1174,7 @@
 | 주문 | 배송 UNSHIPPED→SHIPPED→DELIVERED이며 반품 입고는 SHIPPED/DELIVERED→RETURN_RECEIVED. PAYMENT_PENDING→PAID/DECLINED/CANCEL_PENDING→CANCELLED. PAID→REFUND_PENDING→REFUNDED 또는 안전한 종결 후 PAID. PAID→PURCHASE_CONFIRMED는 배송완료·환불 마감 초과·미진행 환불일 때만. |
 | 결제 | PENDING→PROCESSING→CONFIRMED/DECLINED/UNKNOWN. UNKNOWN은 원대역 조회로만 확정. DECLINED 재시도는 예약 재확보 후 새 attempt. |
 | 외부 시도 | PENDING→PROCESSING→APPROVED/DECLINED/UNKNOWN. M 전액이면 attempt 없음. |
-| 금융 환불 | RESERVING→EXTERNAL_PENDING→RESTORING→INTERNAL_PENDING→COMPLETED. 외부 거절은 COMPENSATING→DECLINED, 결과 불명은 UNKNOWN. 상태만으로 커머스 복구까지 완료했다고 표시하지 않는다. |
+| 금융 환불 | RESERVING→EXTERNAL_PENDING→RESTORING→INTERNAL_PENDING→COMPLETED. 원장 상쇄·커머스 복구 확인 대기는 INTERNAL_PENDING이며, RefundCompleted 발행만으로 완료하지 않는다. RefundOrderRestored를 수신·반영한 뒤 COMPLETED로 전이한다. 외부 거절은 COMPENSATING→DECLINED, 결과 불명은 UNKNOWN. |
 | 정산 항목 | WAITING_CONFIRMATION/PAYABLE→REFUND_RESERVED→REFUNDED. 지급은 PAYABLE→PAYOUT_RESERVED→PAID만 허용. 보상은 previous_item_status와 최신 구매확정/환불 정보를 대조해 조건부 복귀. |
 | 거래 알림 | 판매 COLLECTING→PENDING, 나머지 PENDING→SENDING→SENT/RETRY/UNKNOWN/REVIEW_REQUIRED. UNKNOWN은 원수신 조회부터 재개. SENT는 모의 수신 확인이며 금융 성공 상태를 바꾸지 않는다. |
 | 쿠폰·이벤트·예약 | [정책](policies.md)의 상태와 시각 조건을 함께 적용한다. 상태를 덮어써 사용/복원 이력을 지우지 않는다. |

@@ -81,7 +81,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_DB: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python3 scripts/init_env.py}
-      SELLER_DB_PASSWORD: ${SELLER_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      COMMERCE_DB_PASSWORD: ${COMMERCE_DB_PASSWORD:?Run python3 scripts/init_env.py}
       PAYMENT_DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
       SETTLEMENT_DB_PASSWORD: ${SETTLEMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
       FINANCE_MOCK_DB_PASSWORD: ${FINANCE_MOCK_DB_PASSWORD:?Run python3 scripts/init_env.py}
@@ -134,24 +134,24 @@ services:
       - 127.0.0.1:${GATEWAY_PORT:-8080}:8080
     depends_on:
       <<: *app-deps
-      seller:
+      commerce:
         condition: service_healthy
       payment-api:
         condition: service_healthy
       settlement:
         condition: service_healthy
 
-  seller:
+  commerce:
     <<: *app
     build:
       context: .
       args:
-        MODULE: seller
+        MODULE: commerce
     environment:
       <<: *app-env
-      DB_URL: jdbc:postgresql://postgres:5432/seller
-      DB_USERNAME: seller
-      DB_PASSWORD: ${SELLER_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      DB_URL: jdbc:postgresql://postgres:5432/commerce
+      DB_USERNAME: commerce
+      DB_PASSWORD: ${COMMERCE_DB_PASSWORD:?Run python3 scripts/init_env.py}
     depends_on:
       <<: *app-deps
       postgres:

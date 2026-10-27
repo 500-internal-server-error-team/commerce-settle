@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="420" viewBox="0 0 880 420" role="img" aria-labelledby="title desc">
   <title id="title">애플리케이션과 인프라</title>
-  <desc id="desc">Docker Compose의 Spring Boot 실행 여섯 개와 PostgreSQL·Kafka·Redis를 구분한다. Gateway를 제외한 다섯 앱은 DB와 Kafka를 사용하도록 설정되어 있고 모든 앱에 Redis 연결 설정이 전달된다. 거래 알림은 seller 내부 설계이며 추가 앱이나 컨테이너가 아니다.</desc>
+  <desc id="desc">Docker Compose의 Spring Boot 실행 여섯 개와 PostgreSQL·Kafka·Redis를 구분한다. Gateway를 제외한 다섯 앱은 DB와 Kafka를 사용하도록 설정되어 있고 모든 앱에 Redis 연결 설정이 전달된다. 거래 알림은 commerce 내부 설계이며 추가 앱이나 컨테이너가 아니다.</desc>
   <defs>
     <style>@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;600&amp;family=Geist+Mono:wght@400;500&amp;display=swap');</style>
     <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse">
@@ -63,8 +63,8 @@
       </text>
     </g>
   </g>
-  <g id="seller" data-node="true" data-container="seller" data-logo="springboot" data-tech="spring-boot" data-box="180,124,124,44">
-    <title>커머스 · seller</title>
+  <g id="commerce" data-node="true" data-container="commerce" data-logo="springboot" data-tech="spring-boot" data-box="180,124,124,44">
+    <title>커머스 · commerce</title>
     <rect x="180" y="124" width="124" height="44" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <use href="#logo-springboot" x="188" y="135.0" width="22" height="22" aria-hidden="true" />
     <text x="220" y="143" font-size="13" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-weight="600" fill="#1e293b" text-anchor="start">커머스</text>

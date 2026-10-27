@@ -1,11 +1,11 @@
-package com.commercesettle.seller;
+package com.commercesettle.commerce;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class SellerApplication {
+public class CommerceApplication {
   public static void main(String[] args) {
-    SpringApplication.run(SellerApplication.class, args);
+    SpringApplication.run(CommerceApplication.class, args);
   }
 }

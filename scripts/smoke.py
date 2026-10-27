@@ -11,7 +11,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVICES = [
-    "gateway", "seller", "payment-api", "payment-worker",
+    "gateway", "commerce", "payment-api", "payment-worker",
     "settlement", "finance-mock",
 ]
 
@@ -51,7 +51,7 @@ def main():
             assert not config["services"][service].get("ports"), service
         print(f"PASS {service}: readiness, metrics and port boundary")
 
-    for service in ["seller", "payment", "settlement"]:
+    for service in ["commerce", "payment", "settlement"]:
         with urlopen(f"{base}/v3/api-docs/{service}", timeout=15) as response:
             document = json.load(response)
         assert document["openapi"].startswith("3."), document
@@ -85,7 +85,7 @@ def main():
 
     trace_id = uuid.uuid4().hex
     parent_id = uuid.uuid4().hex[:16]
-    request = Request(f"{base}/v3/api-docs/seller", headers={
+    request = Request(f"{base}/v3/api-docs/commerce", headers={
         "traceparent": f"00-{trace_id}-{parent_id}-01",
     })
     with urlopen(request, timeout=15) as response:
@@ -102,20 +102,20 @@ def main():
         gateway_clients = {span["id"] for span in spans
                            if span.get("localEndpoint", {}).get("serviceName") == "gateway"
                            and span.get("kind") == "CLIENT"}
-        if any(span.get("localEndpoint", {}).get("serviceName") == "seller"
+        if any(span.get("localEndpoint", {}).get("serviceName") == "commerce"
                and span.get("kind") == "SERVER" and span.get("parentId") in gateway_clients
                for span in spans):
             break
         time.sleep(1)
     else:
-        raise AssertionError(f"Gateway to Seller trace propagation missing: {spans}")
-    print("PASS Zipkin: Gateway client and Seller server share a parent-linked trace")
+        raise AssertionError(f"Gateway to Commerce trace propagation missing: {spans}")
+    print("PASS Zipkin: Gateway client and Commerce server share a parent-linked trace")
 
     for service, password_key in [
-        ("seller", "SELLER_DB_PASSWORD"), ("payment", "PAYMENT_DB_PASSWORD"),
+        ("commerce", "COMMERCE_DB_PASSWORD"), ("payment", "PAYMENT_DB_PASSWORD"),
         ("settlement", "SETTLEMENT_DB_PASSWORD"), ("finance_mock", "FINANCE_MOCK_DB_PASSWORD"),
     ]:
-        for database in ["seller", "payment", "settlement", "finance_mock"]:
+        for database in ["commerce", "payment", "settlement", "finance_mock"]:
             command = (
                 f'PGPASSWORD="${password_key}" psql -h 127.0.0.1 '
                 f'-U {service} -d {database} -c "SELECT 1"'

@@ -66,7 +66,7 @@ class ArchitectureTest {
           .should()
           .dependOnClassesThat()
           .resideInAnyPackage(
-              "com.commercesettle.seller..",
+              "com.commercesettle.commerce..",
               "com.commercesettle.payment..",
               "com.commercesettle.financemock..")
           .allowEmptyShould(true);

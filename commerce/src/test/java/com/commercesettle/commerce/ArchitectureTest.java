@@ -1,4 +1,4 @@
-package com.commercesettle.seller;
+package com.commercesettle.commerce;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
@@ -8,7 +8,7 @@ import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
 
 @AnalyzeClasses(
-    packages = "com.commercesettle.seller",
+    packages = "com.commercesettle.commerce",
     importOptions = ImportOption.DoNotIncludeTests.class)
 class ArchitectureTest {
   // Empty layers are expected in the bootstrap; these rules guard subsequent business code.
@@ -62,7 +62,7 @@ class ArchitectureTest {
   static final ArchRule SERVICES_DO_NOT_IMPORT_EACH_OTHER =
       noClasses()
           .that()
-          .resideInAPackage("com.commercesettle.seller..")
+          .resideInAPackage("com.commercesettle.commerce..")
           .should()
           .dependOnClassesThat()
           .resideInAnyPackage(

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="396" viewBox="0 0 880 396" role="img" aria-labelledby="title desc">
   <title id="title">거래 알림</title>
-  <desc id="desc">목표 구조: 기존 seller Spring Boot 앱 내부에서 알림 소비·발송·카카오 모의 수신을 처리한다. 새 앱/DB나 실제 카카오 연결은 없다.</desc>
+  <desc id="desc">목표 구조: commerce Spring Boot 앱 내부에서 알림 소비·발송·카카오 모의 수신을 처리한다. 새 앱/DB나 실제 카카오 연결은 없다.</desc>
   <defs>
     <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
       <polygon points="0 0, 8 3, 0 6" fill="#607084" />
@@ -33,7 +33,7 @@
   </defs>
   <rect width="880" height="396" fill="#ffffff" />
   <rect x="448" y="32" width="240" height="280" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
-  <text x="464" y="50" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176" font-weight="400">seller · Spring Boot 앱 내부</text>
+  <text x="464" y="50" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#526176" font-weight="400">commerce · Spring Boot 앱 내부</text>
   <path id="notice-outbox" data-edge="true" d="M192 108 H256" fill="none" stroke="#c56b00" stroke-width="2.2" marker-end="url(#arrow-event)" stroke-linejoin="round" stroke-linecap="round" data-flow="event" stroke-dasharray="8 5" />
   <rect x="206.0" y="86" width="36" height="14" fill="#ffffff" data-label-for="notice-outbox" />
   <text x="224" y="96" font-family="Geist Mono, SFMono-Regular, monospace" font-size="9" fill="#334155" font-weight="400" text-anchor="middle" data-label-for="notice-outbox">요청</text>
@@ -80,12 +80,12 @@
       <text x="484" y="280.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176" font-weight="400">기록만 저장 · 외부 발송 없음</text>
     </g>
   </g>
-  <g id="seller-db" data-node="true" data-box="736,76,128,64" data-tech="component">
+  <g id="commerce-db" data-node="true" data-box="736,76,128,64" data-tech="component">
     <rect x="736" y="76" width="128" height="64" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
     <g data-align-content="card" transform="translate(0 -2.5)">
       <use href="#logo-postgresql" x="748" y="96.0" width="24" height="24" aria-hidden="true" transform="translate(0 2.5)" />
       <text x="784" y="108.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" fill="#1e293b" font-weight="600" transform="translate(0 -1)">PostgreSQL</text>
-      <text x="784" y="124.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176" font-weight="400" transform="translate(0 -1)">seller DB</text>
+      <text x="784" y="124.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176" font-weight="400" transform="translate(0 -1)">commerce DB</text>
     </g>
   </g>
   <line x1="16" y1="326" x2="864" y2="326" stroke="#e2e8f0" stroke-width="0.8" />
