@@ -455,21 +455,34 @@
 
 ### coupon_issue_runs
 
-소유: `commerce`. 플랫폼 월간 우수고객의 대상 고정과 재시작 가능한 발급 작업. 판매자 자유 발급은 포함하지 않습니다.
+소유: `commerce`. 플랫폼 월간 우수고객의 대상 고정과 재시작 가능한 발급 회차. 판매자 자유 발급은 포함하지 않습니다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
-| `id` | `uuid` | PK |
-| `target_month` | `date` | UNIQUE; 혜택 월 첫날 |
-| `cutoff_at` | `timestamptz` | 대상 구매확정 반영 마감 |
-| `target_count` | `integer?` | 동점자 포함 선정 인원; 대상 고정 전 null |
-| `cutoff_spend` | `bigint?` | 선정 대상의 최저 E 합계; 대상 고정 전·대상 없음은 null |
-| `status` | `varchar(24)` | PREPARING/ISSUING/COMPLETED/EXPIRED |
+| `id` | `uuid` | PK; Job의 runId |
+| `target_month` | `date` | 혜택 월 첫날; 취소되지 않은 회차만 월별 UNIQUE |
+| `cutoff_at` | `timestamptz` | 원래 월 마감; 대체 회차도 보존 |
+| `policy_version` | `varchar(32)` | 최초 회차의 서버 정책 버전; 대체·재시작에서 보존 |
+| `replaces_run_id` | `uuid?` | 이전 CANCELLED 회차의 논리 참조; 최초 회차는 null |
+| `target_count` | `integer?` | 동점자 포함 선정 인원; 확정 전 null |
+| `cutoff_spend` | `bigint?` | 선정 대상의 최저 E 합계; 확정 전·대상 없음은 null |
+| `status` | `varchar(24)` | PREPARING/ISSUING/COMPLETED/EXPIRED/CANCELLED |
+| `cancelled_at` | `timestamptz?` | 서버가 기록한 교정 시각 |
+| `cancelled_by` | `varchar(100)?` | 검증한 운영자 자격의 식별자; 이메일 금지 |
+| `cancellation_reason_code` | `varchar(80)?` | AGGREGATION_ERROR; 운영자 임의 대상·금액 지정 불가 |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | 낙관적 버전 |
 
-스케줄러가 매월 1일 00:10 KST부터 생성·실행하고 미완료 회차를 10분마다 자동 재시도합니다. 플랫폼 전체 E 합계>0인 구매자의 금액 순위 100위까지 동점자를 포함해 저장합니다. 대상 고정 뒤 target_count는 대상 행 수와 같고 cutoff_spend는 그 최저 금액입니다. 대상이 없으면 0/null로 완료합니다. 대상·해당 월 등급별 템플릿의 생성과 고정을 마친 뒤 ISSUING으로 전이합니다. 예정 할인 총액은 고정한 대상별 템플릿 할인액의 합이며 사전 예산 승인과 비교하지 않습니다. 오류가 나면 현재 단계·처리 결과를 유지하고 같은 run·대상을 재개합니다. 원자료가 없으면 발급하지 않고 재시도하며 만료 뒤에는 EXPIRED로 종결합니다.
+**제약:** target_month·cutoff_at·policy_version·status는 NOT NULL. CHECK(replaces_run_id <> id). UNIQUE(target_month) WHERE status <> 'CANCELLED'; UNIQUE(replaces_run_id) WHERE replaces_run_id IS NOT NULL. target_month는 월 첫날이고 target_count>=0, cutoff_spend>0이다. 세 취소 필드는 CANCELLED일 때 모두 필수이며 다른 상태에서는 모두 null이다. 대체 회차는 같은 월·마감·정책 버전의 CANCELLED 부모 한 개를 참조하며, 부모·자식 연결과 취소를 같은 트랜잭션에 저장한다. 참조·상태는 앱에서 확인하며 물리 FK는 두지 않는다. EXPIRED 또는 발급 이력이 있는 회차는 취소하지 않는다. 집계 오류의 발급0건 COMPLETED는 원래 기한 안에서만 같은 교정 조건을 적용한다.
+
+Scheduler는 매월 1일 00:10 KST부터 생성·실행하고 미생성·미완료 회차를 10분마다 확인한다. 첫 Step은 PREPARING에서 같은 마감 원자료의 집계·대상 저장을 재개하고, RANK 동점자 전원·등급·템플릿·할인 합계·중복을 검증한 뒤 대상 수·경계 금액과 ISSUING을 확정한다. 대상이 없으면 target_count=0/cutoff_spend=null로 완료한다. 확정 뒤에는 대상을 덮어쓰지 않는다. 업무 상태가 ISSUING으로 커밋됐지만 첫 Step 완료 이력이 남지 않았다면 저장한 확정 결과를 확인해 재사용하고 재집계하지 않는다. 발급 Step은 고정한 PENDING만 처리한다. 예정 할인 총액은 대상별 할인액의 합이며 사전 예산 승인과 비교하지 않는다.
+
+Job 식별자는 targetMonth+runId다. 정상 재시작은 같은 값을 사용하고 CANCELLED는 실행하지 않는다. 원자료나 저장한 정책 버전을 재구성할 수 없으면 현재 값으로 대체하지 않고 발급을 멈춘다. 원래 만료가 지나면 미발급 대상을 EXPIRED로 종결하며 새 회차로 연장하지 않는다.
+
+교정·Job 실행 등록·대상 저장·발급 chunk는 회차 행을 먼저 잠그고 상태를 다시 확인한다. 교정은 원회차 PREPARING/ISSUING/COMPLETED, 활성 실행 없음·실행자 부재 확인, 발급 0건, 원래 발급 기한 전이라는 조건을 모두 확인한다. ISSUED 또는 buyer_coupon_id가 있는 대상·해당 대상의 ISSUE 이력이 있으면 거절하고, 이력의 정합성을 확인할 수 없으면 판정을 미룬다. 취소·대체 회차·감사·멱등 결과는 원자 저장한다. 취소가 먼저 커밋되면 이전 실행의 지연 저장을 거절하고 첫 발급이 먼저 커밋되면 취소를 거절한다. 원회차 대상과 이력은 보존한다. 호출·오류는 [운영 계약](api.md#월간-혜택-운영-조회와-오류-교정)을 따른다.
+
+**인덱스:** (status,target_month,id); 조건부 월 유일성과 replaces_run_id 유일성은 위 제약으로 관리한다. Job·메타데이터·업무 테이블의 실제 Flyway migration은 첫 구현에서 함께 검증한다.
 
 ### coupon_issue_targets
 
@@ -489,7 +502,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | 낙관적 버전 |
 
-**제약:** UNIQUE(run_id,buyer_id), UNIQUE(buyer_coupon_id) WHERE buyer_coupon_id IS NOT NULL. template_id는 해당 월·등급의 GRADE 캠페인이며 external_spend>0, 1<=rank_no<=100입니다. 동점자 때문에 행 수가 100을 넘을 수 있습니다. 월별 마감의 불변 확정·취소 이력으로 대상과 합계를 고정합니다. 만료 뒤 재개는 새 쿠폰을 만들지 않고 EXPIRED로 종결합니다. 같은 대상 재시도는 원쿠폰을 재사용하며 PENDING 대상만 이어서 처리합니다. 쿠폰·발급 이력·대상 ISSUED 전이는 같은 DB 트랜잭션으로 반영합니다.
+**제약:** UNIQUE(run_id,buyer_id), UNIQUE(buyer_coupon_id) WHERE buyer_coupon_id IS NOT NULL. template_id는 해당 월·등급의 GRADE 캠페인이며 external_spend>0, 1<=rank_no<=100입니다. 동점자 때문에 행 수가 100을 넘을 수 있습니다. 월별 마감의 불변 확정·취소 이력으로 대상과 합계를 고정합니다. 만료 뒤 재개는 새 쿠폰을 만들지 않고 EXPIRED로 종결합니다. 같은 대상 재시도는 원쿠폰을 재사용하며 PENDING 대상만 이어서 처리합니다. 쿠폰·발급 이력·대상 ISSUED 전이는 같은 DB 트랜잭션으로 반영합니다. 회차 행을 먼저 잠그고 ISSUING·원래 발급 기한을 확인하며 CANCELLED 부모의 대상은 처리하지 않습니다.
 
 ## 결제·마일리지
 
@@ -1179,7 +1192,7 @@ Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보�
 | `correlation_id` | `varchar(100)` | 요청/이벤트/배치의 비밀값 없는 추적 ID |
 | `occurred_at` | `timestamptz` | 해당 서비스에서 변경한 UTC 시각 |
 
-**제약:** 추가 전용이며 UPDATE/DELETE API를 만들지 않는다. 업무 변경·감사 행을 같은 트랜잭션으로 저장하고 둘 다 롤백한다. 멱등 재요청은 기존 결과를 반환하며 상태 변경 감사 행을 다시 만들지 않는다. 실제 운영 재처리는 새 실행 행위를 기록한다. 계정 인증 변경·가드 복구는 ACCOUNT_AUTH_CHANGED/ACCOUNT_AUTH_GUARD_RECOVERED로 기록하고 correlation_id에 pendingChangeId를 사용해 DB 확정 결과와 연결한다. 원금액 변화의 근거는 원결제·마일리지/정산 원장을 참조한다. 전체 요청/응답·주소·전화번호·비밀번호·토큰·자유 형식 본문을 저장하지 않는다. 인증 실패는 별도 보안 로그이며 성공한 업무 감사 행으로 위장하지 않는다.
+**제약:** 추가 전용이며 UPDATE/DELETE API를 만들지 않는다. 업무 변경·감사 행을 같은 트랜잭션으로 저장하고 둘 다 롤백한다. 멱등 재요청은 기존 결과를 반환하며 상태 변경 감사 행을 다시 만들지 않는다. 실제 운영 재처리는 새 실행 행위를 기록한다. 계정 인증 변경·가드 복구는 ACCOUNT_AUTH_CHANGED/ACCOUNT_AUTH_GUARD_RECOVERED로 기록하고 correlation_id에 pendingChangeId를 사용해 DB 확정 결과와 연결한다. 월간 오류 교정은 COUPON_ISSUE_RUN_REPLACED와 COUPON_ISSUE_RUN_CREATED를 같은 트랜잭션에 남기고 reason_code=AGGREGATION_ERROR, 검증한 OPERATOR와 원회차·대체 회차를 기록한다. 원금액 변화의 근거는 원결제·마일리지/정산 원장을 참조한다. 전체 요청/응답·주소·전화번호·비밀번호·토큰·자유 형식 본문을 저장하지 않는다. 인증 실패는 별도 보안 로그이며 성공한 업무 감사 행으로 위장하지 않는다.
 
 **인덱스:** (aggregate_type,aggregate_id,occurred_at,id); (actor_kind,actor_ref,occurred_at,id); (correlation_id).
 

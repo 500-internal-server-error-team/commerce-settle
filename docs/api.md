@@ -93,6 +93,9 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 | GET | `/internal/payments/{paymentId}/settlement-context` | 확정 결제·원금액 컨텍스트 | SERVICE:settlement | `—` | `SettlementContext` | 200 |
 | GET | `/internal/payment-reconciliation-events` | 마감 시점의 불변 금융 이벤트·발행 위치 | SERVICE:settlement | `cutoffAt`, `cursor`, `size` | `PaymentReconciliationEventPage` | 200 |
 | POST | `/internal/refund-requests/{requestId}/closure` | 실패 환불의 안전한 운영 종결 | OPERATOR | `FailedRefundClosure` | `OrderRefundRequest` | 200 |
+| GET | `/internal/coupon-issue-runs` | 월간 혜택 회차 목록 | OPERATOR | query `targetMonth/status/page/size` | `CouponIssueRunPage` | 200 |
+| GET | `/internal/coupon-issue-runs/{runId}` | 회차·취소·대체 결과 조회 | OPERATOR | `—` | `CouponIssueRun` | 200 |
+| POST | `/internal/coupon-issue-runs/{runId}/replacements` | 발급 전 오류 교정 | OPERATOR | `CouponIssueRunReplacementRequest` | `CouponIssueRun` | 201 |
 | GET | `/internal/payment-jobs` | 운영 작업 목록 | OPERATOR | `—` | `JobPage` | 200 |
 | POST | `/internal/payment-jobs/{jobId}/replays` | 원업무 작업 재처리 | OPERATOR | `ReplayRequest` | `Job` | 202 |
 | GET | `/internal/payout-jobs` | 운영 작업 목록 | OPERATOR | `—` | `JobPage` | 200 |
@@ -122,11 +125,29 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 
 ## 쿠폰 사용 순서
 
-1. 플랫폼 혜택은 서버 규칙으로 관리하며 운영자 승인·발급 API를 두지 않습니다. 판매자는 자기 캠페인의 대상·기간·수량·예산을 정하고 issues API로 발급합니다. 서버가 SELLER 종류·부담자를 지정하며 동일 템플릿·구매자 중복을 차단합니다.
+1. 플랫폼 혜택은 서버 규칙으로 관리하며 운영자 승인·수신자/금액 지정 발급 API를 두지 않습니다. 발급 전 집계 오류의 제한적 교정은 아래 운영 내부 계약을 따릅니다. 판매자는 자기 캠페인의 대상·기간·수량·예산을 정하고 issues API로 발급합니다. 서버가 SELLER 종류·부담자를 지정하며 동일 템플릿·구매자 중복을 차단합니다.
 2. 가입과 웰컴 한 장 발급을 같은 트랜잭션으로 처리합니다. 월 배치는 플랫폼 전체의 구매확정 E 합계로 상위 100위와 동점자 전원을 고정하고 구매액별 할인액을 자동 적용합니다. 수혜 인원·예정 할인 총액을 계산해 발급하며 미완료 회차는 같은 업무 키로 자동 재개합니다. 판매자 쿠폰은 이 월 작업과 무관합니다.
 3. BuyerCoupon은 kind·funder·선택적 sellerId·사용 가능 수단·기한을 보여줍니다. OrderQuoteRequest와 OrderCreate는 쿠폰 ID 한 개만 받고 마일리지를 함께 사용할 수 없습니다. 지원하지 않는 입력 조합은 400, 실제 쿠폰의 만료·상품·소유·금액/수단 조건 위반은 409입니다.
 4. 응답·내부 컨텍스트·결제 이벤트는 총할인 couponAmount와 sellerCouponAmount(S)·platformCouponAmount(P)·settlementBaseAmount(B)를 구분합니다. 클라이언트가 할인 부담자나 금액을 지정하지 않습니다. `B=G−S=T+P=E+M+P`, 수수료는 B의 15%입니다.
 5. 예약·미확정·전액 환불은 원쿠폰과 최초 E/M/P·수수료·판매자 몫을 기준으로 한 번씩 처리합니다. 할인 비용 집계와 판매자에게 실제 지급할 현금을 구분합니다. 종류·기간·금액·예산의 기준은 [쿠폰 정책](policies.md#쿠폰)을 따릅니다.
+
+## 월간 혜택 운영 조회와 오류 교정
+
+위 세 경로는 Commerce 소유의 구현 예정 계약입니다. 검증한 OPERATOR별 서비스 자격만 허용하고 Gateway에 공개하지 않습니다. 구매자·판매자 세션과 일반 서비스 자격으로 호출하지 않습니다. 목록은 생성 시각 DESC,id DESC, page 기본0·size 기본20/최대100이며 targetMonth 필터는 혜택 월 첫날입니다. 회차·발급 건수·이전/대체 연결은 같은 조회 스냅샷에서 반환합니다.
+
+교정 POST는 필수 Idempotency-Key와 `{expectedVersion, reasonCode: "AGGREGATION_ERROR"}`를 받습니다. 처리자는 검증한 자격에서 기록하며 구매자·등급·금액·원자료 마감·기간을 받지 않습니다. 원회차 PREPARING/ISSUING/COMPLETED, 발급0건, 원래 발급 기한 전, 활성 실행 없음과 실행자 부재를 확인합니다. 진행 중 실행은 JobOperator의 정상 중단 절차와 진행 트랜잭션 종료를 먼저 확인하고, STARTED 잔류는 실행자·저장 진행 상태를 검증해 복구합니다. 실행 이력을 임의 수정하거나 새 파라미터로 우회하지 않습니다.
+
+런처의 실행 등록·대상 저장·발급·교정은 같은 회차 행을 잠그고 상태를 다시 확인합니다. 취소가 먼저 커밋되면 이전 실행의 저장을 거절하고 첫 발급이 먼저 커밋되면 교정을 거절합니다. ISSUED 대상·연결 쿠폰·해당 대상의 ISSUE 이력이 있는 회차는 취소하지 않습니다. 교정은 원회차 CANCELLED 전이·같은 월/마감/정책/만료의 새 PREPARING 회차·감사·멱등 결과를 한 트랜잭션에 저장합니다. 대체 회차는 새 runId와 replacesRunId를 가지며, 새 쿠폰 발급은 이후 Scheduler가 자동으로 시작합니다. 정책과 상태·유일성은 [업무 정책](policies.md#월간-회차-검증과-오류-교정)·[데이터 모델](data-model.md#coupon_issue_runs)을 따릅니다.
+
+성공은 `201`과 새 회차의 Location이며 쿠폰 발급 완료가 아닙니다. 동일 키·본문의 재요청은 저장한 결과를 버전·현재 상태 검사보다 먼저 반환합니다. 같은 키의 다른 본문은409이며 새 회차를 다시 만들지 않습니다. 원회차 조회의 replacementRunId로도 교정 결과를 찾을 수 있습니다. 감사에는 COUPON_ISSUE_RUN_REPLACED/CREATED, AGGREGATION_ERROR, 검증한 OPERATOR와 원회차·대체 회차를 같은 트랜잭션에 남깁니다.
+
+| 조건 | 응답 |
+| --- | --- |
+| 발급 이력 있음, EXPIRED/CANCELLED, 이미 교정된 다른 요청 | `409 COUPON_RUN_NOT_REPLACEABLE` |
+| STARTING/STARTED/STOPPING 등 활성 실행·미종료 작업 | `409 COUPON_RUN_EXECUTION_ACTIVE` |
+| expectedVersion 불일치 | `409 COUPON_RUN_VERSION_CONFLICT` |
+| 원래 발급 기한 경과 | `409 COUPON_RUN_EXPIRED` |
+| 실행자 부재·마감 원자료·저장 정책·발급 이력 정합성 확인 불가 | `503 COUPON_RUN_STATE_UNVERIFIED` |
 
 ## 주문·환불 사용 순서
 
