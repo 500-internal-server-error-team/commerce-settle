@@ -21,6 +21,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.system.CapturedOutput;
@@ -46,6 +47,7 @@ import reactor.netty.http.server.HttpServer;
     properties = {"management.server.port=0", "management.zipkin.tracing.export.enabled=false"})
 @Import(GatewayRoutingIntegrationTest.FailureRoutes.class)
 @ExtendWith(OutputCaptureExtension.class)
+@AutoConfigureObservability(metrics = false)
 class GatewayRoutingIntegrationTest {
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private static final Map<String, Backend> BACKENDS =
