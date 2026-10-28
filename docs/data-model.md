@@ -1200,7 +1200,7 @@ Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보�
 | 대상 | 정상·실패 전이 |
 | --- | --- |
 | 주문 | 배송 UNSHIPPED→SHIPPED→DELIVERED이며 반품 입고는 SHIPPED/DELIVERED→RETURN_RECEIVED. PAYMENT_PENDING→PAID/DECLINED/CANCEL_PENDING→CANCELLED. PAID→REFUND_PENDING→REFUNDED 또는 안전한 종결 후 PAID. PAID→PURCHASE_CONFIRMED는 배송완료·환불 마감 초과·미진행 환불일 때만. |
-| 결제 | PENDING→PROCESSING→CONFIRMED/DECLINED/UNKNOWN. UNKNOWN은 원대역 조회와 거래 부재 시의 원키 재요청 결과로만 확정하며 원업무 키·예약을 유지. DECLINED 재시도는 예약 재확보 후 새 attempt. |
+| 결제 | PENDING→PROCESSING→CONFIRMED/DECLINED/UNKNOWN. E=0이면 PROCESSING 없이 PENDING→CONFIRMED. 외부 호출 전 미결제 취소만 PENDING→CANCELLED이며 PROCESSING·UNKNOWN은 취소하지 않고 예약을 유지·조회. UNKNOWN은 원대역 조회와 거래 부재 시의 원키 재요청 결과로만 확정하며 원업무 키·예약을 유지. DECLINED 재시도는 예약 재확보 후 새 attempt, 재시도하지 않으면 DECLINED→CANCELLED. CONFIRMED·CANCELLED는 종료. |
 | 외부 시도 | PENDING→PROCESSING→APPROVED/DECLINED/UNKNOWN. M 전액이면 attempt 없음. |
 | 금융 환불 | RESERVING→EXTERNAL_PENDING→RESTORING→INTERNAL_PENDING→COMPLETED. 원장 상쇄·커머스 복구 확인 대기는 INTERNAL_PENDING이며, RefundCompleted 발행만으로 완료하지 않는다. RefundOrderRestored를 수신·반영한 뒤 COMPLETED로 전이한다. 외부 거절은 COMPENSATING→DECLINED, 결과 불명은 UNKNOWN. |
 | 정산 항목 | WAITING_CONFIRMATION/PAYABLE→REFUND_RESERVED→REFUNDED. 지급은 PAYABLE→PAYOUT_RESERVED→PAID만 허용. 보상은 previous_item_status와 최신 구매확정/환불 정보를 대조해 조건부 복귀. |
