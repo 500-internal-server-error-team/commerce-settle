@@ -705,9 +705,15 @@ class OutboxIntegrationTest {
       factory.setDataSource(source);
       factory.setPackagesToScan("com.commercesettle.commerce.domain");
       factory.setJpaVendorAdapter(new HibernateJpaVendorAdapter());
+      // 앱의 Spring Boot 기본 컬럼 이름 규칙과 같게 맞춰 domain 엔티티를 실제 스키마로 검증한다.
       factory.setJpaPropertyMap(
           java.util.Map.of(
-              "hibernate.hbm2ddl.auto", "validate", "hibernate.default_schema", "commerce"));
+              "hibernate.hbm2ddl.auto",
+              "validate",
+              "hibernate.default_schema",
+              "commerce",
+              "hibernate.physical_naming_strategy",
+              "org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy"));
       return factory;
     }
 
