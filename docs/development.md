@@ -32,7 +32,12 @@ git rm -r --cached -q .
 git reset --hard
 ```
 
-초기화 스크립트가 실패한 PostgreSQL 볼륨은 다시 초기화되지 않으므로 [초기화 명령](#종료재실행초기화)으로 볼륨을 삭제한 뒤 다시 시작합니다.
+초기화 스크립트는 PostgreSQL 이미지에 복사되고, 실패한 볼륨은 다시 초기화되지 않습니다. [초기화 명령](#종료재실행초기화)으로 볼륨을 삭제하고 이미지를 다시 빌드한 뒤 시작합니다.
+
+```bash
+docker compose build postgres
+docker compose up -d --wait --wait-timeout 300
+```
 
 기존 환경의 `COMPOSE_PROJECT_NAME`도 보존하므로, 기존 컨테이너·볼륨을 계속 사용하려면 그 값을 유지합니다. 신규 환경의 기본 프로젝트명은 `commerce-settle`입니다.
 
