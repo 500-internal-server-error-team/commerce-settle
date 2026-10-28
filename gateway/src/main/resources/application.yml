@@ -4,41 +4,37 @@ server:
 spring:
   application:
     name: gateway
+  reactor:
+    context-propagation: auto
   cloud:
     gateway:
       server:
         webflux:
           routes:
-            - id: commerce-api
-              uri: ${COMMERCE_URL:http://commerce:8080}
-              predicates:
-                - Path=/api/sellers,/api/sellers/**
-            - id: payment-api
-              uri: ${PAYMENT_URL:http://payment-api:8080}
-              predicates:
-                - Path=/api/payments,/api/payments/**,/api/refunds,/api/refunds/**
-            - id: settlement-api
-              uri: ${SETTLEMENT_URL:http://settlement:8080}
-              predicates:
-                - Path=/api/settlements,/api/settlements/**
             - id: commerce-docs
-              uri: ${COMMERCE_URL:http://commerce:8080}
+              uri: ${gateway.services.commerce}
               predicates:
                 - Path=/v3/api-docs/commerce
               filters:
                 - SetPath=/v3/api-docs
             - id: payment-docs
-              uri: ${PAYMENT_URL:http://payment-api:8080}
+              uri: ${gateway.services.payment}
               predicates:
                 - Path=/v3/api-docs/payment
               filters:
                 - SetPath=/v3/api-docs
             - id: settlement-docs
-              uri: ${SETTLEMENT_URL:http://settlement:8080}
+              uri: ${gateway.services.settlement}
               predicates:
                 - Path=/v3/api-docs/settlement
               filters:
                 - SetPath=/v3/api-docs
+
+gateway:
+  services:
+    commerce: ${COMMERCE_URL:http://commerce:8080}
+    payment: ${PAYMENT_URL:http://payment-api:8080}
+    settlement: ${SETTLEMENT_URL:http://settlement:8080}
 
 springdoc:
   swagger-ui:
