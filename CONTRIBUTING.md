@@ -153,6 +153,8 @@ HTTP 오류는 [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 `appli
 - `common`, `util`, `Base*`, 범용 `Manager`부터 만들지 않습니다. 실제 중복과 안정된 공통 책임을 확인한 뒤 추출합니다. DTO·Command·엔티티 간 변환도 서로 다른 계약이 필요할 때 추가합니다.
 - 공통 모듈·새 서비스는 독립 배포·확장·데이터 소유권과 변경 영향으로 판단합니다. 팀원 수나 클래스 수만으로 나누지 않습니다. 서비스끼리 엔티티·내부 DTO를 공유하지 않습니다.
 
+API 기술 코드의 공유 범위와 도입 조건은 [공통 API 계약과 공유 코드의 경계 제안](docs/decisions/0009-api-contract-and-shared-code.md)을 참고합니다.
+
 ### 이벤트·트랜잭션
 
 - 이벤트는 `eventId`, `eventType`, `eventVersion`, `occurredAt`, `aggregateId`, `payload`를 포함합니다. 같은 이벤트 재발행 시 ID를 유지하며, 수신자는 ID·업무 키로 중복을 처리합니다. 금액·시간 표현은 API 규약을 따릅니다.
