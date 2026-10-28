@@ -176,6 +176,12 @@ Order는 deliveryBusinessDays·deliveryCalendarVersion·shippedAt·deliveryDueAt
 
 PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반영합니다. MockApproval의 fundingAccountRef는 Payment 서버 설정이며 원승인에 고정합니다. MockTransaction의 pgReceiptDueAt·pgReceivedAt·pgReceivedAmount로 예정/실제 입금과 입금 전 환불 상쇄를 조회합니다. 선지급 재원은 항상 충분하며 시험 전에 전체 지급·환불 자금을 준비합니다. [현금·복구 정책](policies.md#선지급-재원과-pg-회수)을 따릅니다.
 
+### 금융 대역 조회와 장애 설정
+
+두 금융 거래 GET은 `scenarioVersion` 쿼리가 필수입니다. 이는 서버가 선택한 조회 통신 프로필이며 응답의 `MockTransaction.scenarioVersion`은 원거래의 금융 실행 버전입니다. 조회 버전 변경은 원거래 결과·요청 본문을 바꾸지 않습니다. 설정 부재·조회 실패는 503, 지정한 provider·operation·businessKey의 기록 부재는 `404 MOCK_TRANSACTION_NOT_FOUND`입니다. 일반 404나 통신 오류를 거래 없음으로 해석하지 않습니다.
+
+금융 POST는 같은 대역·작업·업무 키·본문의 재요청에 원거래를 반환하고 다른 본문은 409입니다. 환불은 원승인의 금융 버전을 계승합니다. `MockScenarioCreate/MockScenario`는 승인/PAYOUT, 환불, 조회의 설정을 분리하며 PAYOUT의 환불 필드는 모두 null입니다. [상세 설정](design.md#pg-3종과-장애-시나리오)과 [조회 결과별 복구·Worker 인계](policies.md#공통-복구)를 따릅니다. 업무 경로·이벤트 이름·금액 정책은 유지합니다.
+
 ## 거래 알림 사용 순서
 
 1. 결제·환불은 Payment의 `PaymentNoticeRequested`, 정산·지급은 Settlement의 `SettlementNoticeRequested`를 기존 생산자 토픽에서 받습니다. 알림 소비 그룹은 `commerce-notifications.v1`이며 기존 금융 소비 그룹과 offset을 공유하지 않습니다. 알림 실패가 금융 이벤트 소비를 막지 않습니다.
@@ -192,6 +198,7 @@ PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반�
 | COMMON_AUTHENTICATION_REQUIRED |401|자격 오류·세션 없음/만료/폐기·인증 버전 불일치·정지/삭제·소비/만료된 복구 토큰|
 | COMMON_ROLE_FORBIDDEN |403|계정/서비스 역할 혼용|
 | COMMON_RESOURCE_NOT_FOUND |404|없거나 타인 소유|
+| MOCK_TRANSACTION_NOT_FOUND |404|인증된 원대역 GET에서 지정한 provider·operation·businessKey의 거래 기록 없음. 실패 확정·예약 해제 근거가 아님|
 | COMMON_VERSION_CONFLICT / COMMON_IDEMPOTENCY_CONFLICT |409|버전 또는 같은키 다른본문|
 | COUPON_EXPIRED / COUPON_NOT_APPLICABLE |409|만료·상품/소유/최소 금액·허용 수단 조건 위반|
 | COUPON_BUDGET_EXHAUSTED |409|판매자 캠페인의 명목 예산 또는 발급 수 소진; 플랫폼 자동 발급·가입에는 적용하지 않음|

@@ -647,6 +647,7 @@
 | `attempts` | `integer` | 업무 값 |
 | `next_run_at` | `timestamptz` | 업무 값 |
 | `lease_owner` | `varchar(100)?` | 업무 값 |
+| `lease_token` | `uuid?` | 금융 Job 임대마다 새 UUID; 오래된 결과 반영 차단 |
 | `lease_until` | `timestamptz?` | 업무 값 |
 | `last_error_code` | `varchar(80)?` | 업무 값 |
 | `created_at` | `timestamptz` | NOT NULL |
@@ -654,6 +655,8 @@
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(operation,business_key). 작업 저장 뒤 메시지 ack. status=PENDING/RUNNING/RETRY/REVIEW_REQUIRED/DONE.
+
+임대 소유자·token·만료는 함께 설정/해제하며 선점·회수 때 버전을 증가합니다. 결과 반영은 유효한 token·실행자·Job/금융 상태·회차·예상 버전을 같은 트랜잭션에서 검사합니다. 만료 RUNNING도 회수하며 원대역 조회부터 재개합니다. [금융 Worker 정책](policies.md#금융-worker-임대와-결과-반영)을 따릅니다.
 
 **인덱스:** (status,next_run_at,lease_until,id).
 
@@ -670,16 +673,19 @@
 | `provider_id` | `varchar(16)` | 업무 값 |
 | `method` | `varchar(24)` | 업무 값 |
 | `account_ref` | `varchar(100)` | 업무 값 |
+| `funding_account_ref` | `varchar(100)` | 승인 시도 생성 때 서버 설정에서 고정한 PAYOUT 재원 계정 |
 | `business_key` | `uuid` | 업무 값 |
 | `external_ref` | `uuid?` | 업무 값 |
 | `amount` | `bigint` | 업무 값 |
 | `status` | `varchar(24)` | 업무 값 |
-| `scenario_version` | `varchar(32)?` | 업무 값 |
+| `scenario_version` | `varchar(32)` | 외부 승인 시도 생성 때 고정; 원키 재요청·원승인 환불에 유지 |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(payment_id,attempt_no), UNIQUE(provider_id,business_key). 진행 중/성공 시도는 결제별1개(부분 UNIQUE). E>0인 경우만 생성. 상태=PENDING/PROCESSING/UNKNOWN/APPROVED/DECLINED/CANCELLED.
+
+provider·method·account_ref·funding_account_ref·amount·scenario_version은 외부 호출 전 원본문의 사본으로 고정합니다. 호출 전 중단 뒤에도 이 값으로 승인 요청을 재구성하며 현재 서버 설정으로 재원·시나리오를 덮어쓰지 않습니다.
 
 **인덱스:** (status,updated_at,id); UNIQUE(payment_id) WHERE status IN (PENDING,PROCESSING,UNKNOWN,APPROVED).
 
@@ -720,6 +726,7 @@
 | `recipient_account_ref` | `varchar(100)` | 업무 값 |
 | `recipient_account_version` | `bigint` | 업무 값 |
 | `funding_account_ref` | `varchar(100)` | 업무 값 |
+| `scenario_version` | `varchar(32)` | 지급 생성 때 고정한 금융 실행 시나리오 버전 |
 | `succeeded_at` | `timestamptz?` | 업무 값 |
 | `amount` | `bigint` | 업무 값 |
 | `business_key` | `uuid` | 업무 값 |
@@ -800,12 +807,15 @@
 | `attempts` | `integer` | 업무 값 |
 | `next_run_at` | `timestamptz` | 업무 값 |
 | `lease_owner` | `varchar(100)?` | 업무 값 |
+| `lease_token` | `uuid?` | 지급 Job 임대마다 새 UUID; 오래된 결과 반영 차단 |
 | `lease_until` | `timestamptz?` | 업무 값 |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(payout_id), UNIQUE(business_key). 지급 항목 선점·금액·작업 생성 원자 저장. next_run_at은 Payout 응답의 nextAttemptAt 원천입니다. 비영업일 보류는 같은 작업을 재개하고 attempts를 늘리지 않으며 확정 거절은 REVIEW_REQUIRED입니다.
+
+Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건을 적용합니다. 금융 결과와 지급 항목·Job을 함께 반영하고, 만료된 실행자의 결과는 모두 롤백합니다. 호출·조회·원키 재개는 [공통 복구](policies.md#공통-복구)를 따릅니다.
 
 **인덱스:** (status,next_run_at,lease_until,id).
 
@@ -905,6 +915,8 @@
 
 **제약:** UNIQUE(provider_id,operation,business_key). 진행 중/성공 환불은 original_id별1개(부분 UNIQUE). amount>0. 카드 승인은 내부 잔액 차감 없이 결과만 모의. 최초 SUCCEEDED 시각 succeeded_at을 결과와 원자 저장하고 이후 불변.
 
+기존 멱등 기록의 발신 서비스·provider·operation·업무 키 범위와 원본문 해시를 거래 생성·잔액 변경과 같은 트랜잭션에 저장합니다. 같은 키·다른 본문은 409이며 같은 본문은 원거래를 반환합니다. 금융 시나리오 버전은 원거래에 고정하고, GET의 조회용 버전으로 금융 결과를 바꾸지 않습니다. [원키 재요청 정책](policies.md#금융-결과-조회와-원키-재요청)을 따릅니다.
+
 원승인당 입금은 한 번이며 입금/환불은 원승인 행 잠금으로 경합합니다. 승인 성공·입금 예정 정보는 같은 트랜잭션에서 저장합니다. 입금 전 확정 환불은 0 입금으로 종결하고, 입금 후 환불은 E 차감·환불 결과·원수단 잔액 복원을 원자 저장합니다. 입금 후 환불액도 사전 준비한 충분한 모의 재원에 포함합니다. pg_received_amount=0인 상쇄에는 현금 행을 만들지 않습니다. P/M은 PG 입금에 포함하지 않습니다.
 
 **인덱스:** (operation,status,pg_receipt_due_at,id) WHERE pg_received_at IS NULL; (provider_id,status,created_at,id); (original_id).
@@ -941,10 +953,16 @@
 | `rejection_rate` | `numeric(8,7)` | 업무 값 |
 | `response_loss_rate` | `numeric(8,7)` | 업무 값 |
 | `lookup_failure_rate` | `numeric(8,7)` | 업무 값 |
+| `refund_min_delay_ms` | `integer?` | PG/EASY_PAY 환불 지연 최솟값; PAYOUT은 NULL |
+| `refund_max_delay_ms` | `integer?` | PG/EASY_PAY 환불 지연 최댓값; PAYOUT은 NULL |
+| `refund_rejection_rate` | `numeric(8,7)?` | 환불 확정 거절확률; PAYOUT은 NULL |
+| `refund_response_loss_rate` | `numeric(8,7)?` | 환불 결과 저장 후 응답 유실확률; PAYOUT은 NULL |
+| `lookup_min_delay_ms` | `integer` | GET 조회 지연 최솟값 |
+| `lookup_max_delay_ms` | `integer` | GET 조회 지연 최댓값 |
 | `seed` | `bigint` | 업무 값 |
 | `created_at` | `timestamptz` | NOT NULL |
 
-**제약:** UNIQUE(provider_id,scenario_version). 0<=min<=max, 각 확률0..1. 저장 거래의 결과는 설정 변경 뒤에도 불변.
+**제약:** UNIQUE(provider_id,scenario_version). 기존 min/max_delay_ms·rejection_rate·response_loss_rate는 APPROVE 또는 PAYOUT용입니다. PG/EASY_PAY는 환불 4필드가 필수이고 PAYOUT은 모두 NULL입니다. 각 작업별 0<=min<=max, 확률 0..1. GET은 명시한 조회 버전의 lookup 필드만 적용하고 설정 부재는 503입니다. 시나리오 행은 불변이며 조회 버전 교체로 저장 거래의 금융 결과를 바꾸지 않습니다.
 
 **인덱스:** UNIQUE(provider_id,scenario_version).
 
@@ -1172,7 +1190,7 @@
 | 대상 | 정상·실패 전이 |
 | --- | --- |
 | 주문 | 배송 UNSHIPPED→SHIPPED→DELIVERED이며 반품 입고는 SHIPPED/DELIVERED→RETURN_RECEIVED. PAYMENT_PENDING→PAID/DECLINED/CANCEL_PENDING→CANCELLED. PAID→REFUND_PENDING→REFUNDED 또는 안전한 종결 후 PAID. PAID→PURCHASE_CONFIRMED는 배송완료·환불 마감 초과·미진행 환불일 때만. |
-| 결제 | PENDING→PROCESSING→CONFIRMED/DECLINED/UNKNOWN. UNKNOWN은 원대역 조회로만 확정. DECLINED 재시도는 예약 재확보 후 새 attempt. |
+| 결제 | PENDING→PROCESSING→CONFIRMED/DECLINED/UNKNOWN. UNKNOWN은 원대역 조회와 거래 부재 시의 원키 재요청 결과로만 확정하며 원업무 키·예약을 유지. DECLINED 재시도는 예약 재확보 후 새 attempt. |
 | 외부 시도 | PENDING→PROCESSING→APPROVED/DECLINED/UNKNOWN. M 전액이면 attempt 없음. |
 | 금융 환불 | RESERVING→EXTERNAL_PENDING→RESTORING→INTERNAL_PENDING→COMPLETED. 원장 상쇄·커머스 복구 확인 대기는 INTERNAL_PENDING이며, RefundCompleted 발행만으로 완료하지 않는다. RefundOrderRestored를 수신·반영한 뒤 COMPLETED로 전이한다. 외부 거절은 COMPENSATING→DECLINED, 결과 불명은 UNKNOWN. |
 | 정산 항목 | WAITING_CONFIRMATION/PAYABLE→REFUND_RESERVED→REFUNDED. 지급은 PAYABLE→PAYOUT_RESERVED→PAID만 허용. 보상은 previous_item_status와 최신 구매확정/환불 정보를 대조해 조건부 복귀. |
