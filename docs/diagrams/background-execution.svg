@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="832" viewBox="0 0 1120 832" role="img" aria-labelledby="title desc" data-scope="service-execution">
-  <title id="title">배치 실행과 영속 지급 작업의 경계</title>
-  <desc id="desc">Commerce 내부 Scheduler가 월간 혜택 Job을 실행하여 대상 확정과 쿠폰 발급을 처리한다. Settlement 내부 Scheduler는 정산 일배치와 대조를 시작한다. 일배치가 만든 지급 작업은 별도 실행 풀의 Worker가 임대하고 금융 모의 서버에 호출한다. Kafka Consumer의 원장 반영은 배치와 독립적이다. 각 서비스는 자기 DB에 업무 상태와 Batch 메타데이터를 저장한다.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="992" viewBox="0 0 1120 992" role="img" aria-labelledby="title desc" data-scope="service-execution">
+  <title id="title">앱 내부 Job·Consumer·지급 Worker의 실행 경계</title>
+  <desc id="desc">Commerce 월간 혜택 Job은 대상 확정·자동 검증과 쿠폰 발급의 두 Step이다. Settlement의 정산 일배치만 지급 작업을 생성한다. 정산 대조는 업무 데이터를 읽기만 하며 지급을 생성하지 않는다. Kafka 원장 Consumer와 영속 지급 작업을 임대하는 Worker는 Batch와 독립적이다. 경계는 서비스 소유권이며 PostgreSQL 한 컨테이너 안에서 네 업무 DB를 분리한다. 현재 목표는 기존 여섯 앱을 사용한다.</desc>
   <defs>
     <symbol id="logo-springbatch" viewBox="0 0 150.49 156.27">
       <path d="M0,101.29v11.57l75.24,43.41,75.25-43.41V101.29L75.24,144.7ZM0,78.14V89.71l75.24,43.41,75.25-43.41V78.14L75.24,121.55ZM75.24,0,0,43.41V66.56L75.24,110l75.25-43.41V43.41Z" fill="#6db33f" />
@@ -9,106 +9,126 @@
       <path d="M0 0 8 3 0 6Z" fill="#64748b" />
     </marker>
   </defs>
-  <rect width="1120" height="832" fill="#fff" />
+  <rect width="1120" height="992" fill="#fff" />
   <text x="24" y="28" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="600" fill="#1e293b">배치 실행과 영속 작업의 경계</text>
   <g id="commerce-owner" data-zone="service-ownership" data-box="24,56,1072,232">
     <rect x="24" y="56" width="1072" height="232" rx="6" fill="#fff" stroke="#94a3b8" stroke-width="1" />
     <text x="40" y="84" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b">Commerce</text>
     <text x="40" y="104" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176">Scheduler와 월간 Job은 commerce 앱 내부 · 업무·실행 이력은 commerce DB</text>
   </g>
-  <g id="settlement-owner" data-zone="service-ownership" data-box="24,324,1072,320">
-    <rect x="24" y="324" width="1072" height="320" rx="6" fill="#fff" stroke="#94a3b8" stroke-width="1" />
+  <g id="settlement-owner" data-zone="service-ownership" data-box="24,324,1072,432">
+    <rect x="24" y="324" width="1072" height="432" rx="6" fill="#fff" stroke="#94a3b8" stroke-width="1" />
     <text x="40" y="352" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b">Settlement</text>
     <text x="40" y="372" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176">Scheduler·Job·Consumer·지급 Worker는 settlement 앱 내부 · 실행 풀은 분리</text>
   </g>
+  <path id="reconciliation-read" data-edge="true" data-source="reconciliation-job" data-target="settlement-db" d="M544 680H848 Q856 680 856 672V488 Q856 480 848 480H816" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" />
+  <path id="reconciliation-trigger" data-edge="true" data-source="settlement-scheduler" data-target="reconciliation-job" d="M136 484V672 Q136 680 144 680H288" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" />
+  <path id="settlement-store" data-edge="true" data-source="settlement-daily-job" data-target="settlement-db" d="M544 448H608" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" />
+  <path id="settlement-trigger" data-edge="true" data-source="settlement-scheduler" data-target="settlement-daily-job" d="M224 448H288" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" />
   <path id="commerce-trigger" data-edge="true" data-source="commerce-scheduler" data-target="monthly-benefit-job" d="M224 164H288" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" />
   <path id="commerce-store" data-edge="true" data-source="monthly-benefit-job" data-target="commerce-db" d="M712 164H824" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" />
-  <path id="settlement-trigger" data-edge="true" data-source="settlement-scheduler" data-target="settlement-jobs" d="M224 448H288" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" />
-  <path id="settlement-store" data-edge="true" data-source="settlement-jobs" data-target="settlement-db" d="M544 448H608" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" />
   <path id="claim-payout" data-edge="true" data-source="settlement-db" data-target="payout-worker" d="M816 448H880" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" />
-  <path id="apply-ledger" data-edge="true" data-source="ledger-consumer" data-target="settlement-db" d="M712 548V496" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" />
-  <path id="consume-events" data-edge="true" data-source="kafka-input" data-target="ledger-consumer" d="M24 588H608" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" stroke-dasharray="6 4" />
-  <path id="payout-call" data-edge="true" data-source="payout-worker" data-target="finance-mock" d="M976 484V700" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" />
-  <g id="commerce-scheduler" data-node="true" data-box="48,128,176,72" data-align-content="vertical-center" data-content-center-y="164">
+  <path id="apply-ledger" data-edge="true" data-source="ledger-consumer" data-target="settlement-db" d="M712 548V492" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" />
+  <path id="consume-events" data-edge="true" data-source="kafka-input" data-target="ledger-consumer" d="M24 588H128 a8 8 0 0 1 16 0H608" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" stroke-dasharray="6 4" />
+  <path id="payout-call" data-edge="true" data-source="payout-worker" data-target="finance-mock" d="M976 484V816" fill="none" stroke="#64748b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)" />
+  <g id="commerce-scheduler" data-node="true" data-box="48,128,176,72" data-align-content="vertical-center" data-content-center-y="164.0">
     <rect x="48" y="128" width="176" height="72" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
-    <text x="64" y="148.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" dominant-baseline="central">Spring Scheduler</text>
-    <text x="64" y="164.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">매월 1일 00:10 KST</text>
-    <text x="64" y="180.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">미완료 회차는 10분 간격</text>
+    <text x="64" y="148.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" dominant-baseline="central">Spring Scheduler</text>
+    <text x="64" y="164.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">매월 1일 00:10 KST</text>
+    <text x="64" y="180.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">미완료 회차는 10분 간격</text>
   </g>
   <g id="monthly-benefit-job" data-node="true" data-box="288,116,424,96" data-align-content="composite-center" data-content-center-y="164">
     <rect x="288" y="116" width="424" height="96" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
-    <use href="#logo-springbatch" x="304" y="132" width="18" height="18" />
-    <text x="330" y="141" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" dominant-baseline="central">월간 혜택 Job</text>
-    <rect x="304" y="156" width="184" height="40" rx="4" fill="#fff" stroke="#cbd5e1" stroke-width="1.2" />
+    <use href="#logo-springbatch" x="304" y="153" width="22" height="22" />
+    <text x="340" y="138" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" dominant-baseline="central">월간 혜택 Job</text>
+    <rect x="340" y="156" width="148" height="40" rx="4" fill="#fff" stroke="#cbd5e1" stroke-width="1.2" />
     <rect x="512" y="156" width="184" height="40" rx="4" fill="#fff" stroke="#cbd5e1" stroke-width="1.2" />
     <path d="M488 176H512" fill="none" stroke="#64748b" stroke-width="1.2" marker-end="url(#arrow)" />
     <g data-step="1" data-align-content="vertical-center" data-content-center-y="176">
-      <text x="316" y="168.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b" dominant-baseline="central">대상 확정·검증</text>
-      <text x="316" y="184.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">집계·순위·혜택 등급</text>
+      <text x="352" y="168.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b" dominant-baseline="central">1  대상 확정·자동 검증</text>
+      <text x="352" y="184.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">집계·순위·혜택 등급</text>
     </g>
     <g data-step="2" data-align-content="vertical-center" data-content-center-y="176">
-      <text x="524" y="168.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b" dominant-baseline="central">쿠폰 발급</text>
+      <text x="524" y="168.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b" dominant-baseline="central">2  쿠폰 발급</text>
       <text x="524" y="184.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">고정한 미발급 대상만</text>
     </g>
   </g>
-  <g id="commerce-db" data-node="true" data-box="824,124,232,88" data-align-content="vertical-center" data-content-center-y="168">
-    <rect x="824" y="124" width="232" height="88" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
-    <text x="840" y="152.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" dominant-baseline="central">commerce DB</text>
-    <text x="840" y="168.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">발급 회차·대상·쿠폰</text>
-    <text x="840" y="184.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">Spring Batch 메타데이터</text>
+  <g id="commerce-db" data-node="true" data-box="824,120.0,232,88" data-align-content="vertical-center" data-content-center-y="164.0">
+    <rect x="824" y="120.0" width="232" height="88" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
+    <text x="840" y="147.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" dominant-baseline="central">commerce DB</text>
+    <text x="840" y="163.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">발급 회차·대상·쿠폰</text>
+    <text x="840" y="179.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">Spring Batch 메타데이터</text>
   </g>
-  <g id="settlement-scheduler" data-node="true" data-box="48,408,176,72" data-align-content="vertical-center" data-content-center-y="444">
-    <rect x="48" y="408" width="176" height="72" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
-    <text x="64" y="428.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" dominant-baseline="central">Spring Scheduler</text>
-    <text x="64" y="444.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">매일 10:00 / 10:30 KST</text>
-    <text x="64" y="460.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">날짜·마감 기준으로 실행</text>
+  <g id="settlement-scheduler" data-node="true" data-box="48,412.0,176,72" data-align-content="vertical-center" data-content-center-y="448.0">
+    <rect x="48" y="412.0" width="176" height="72" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
+    <text x="64" y="432.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" dominant-baseline="central">Spring Scheduler</text>
+    <text x="64" y="448.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">일배치 10:00 KST</text>
+    <text x="64" y="464.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">정산 대조 10:30 KST</text>
   </g>
-  <g id="settlement-jobs" data-node="true" data-box="288,396,256,104" data-align-content="vertical-center" data-content-center-y="448">
-    <rect x="288" y="396" width="256" height="104" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
-    <use href="#logo-springbatch" x="304" y="439" width="18" height="18" />
-    <text x="330" y="432.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" dominant-baseline="central">Spring Batch</text>
-    <text x="330" y="448.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">정산 일배치 · 10:00</text>
-    <text x="330" y="464.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">정산 대조 · 10:30</text>
+  <g id="settlement-daily-job" data-node="true" data-box="288,412.0,256,72" data-align-content="vertical-center" data-content-center-y="448.0">
+    <rect x="288" y="412.0" width="256" height="72" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
+    <use href="#logo-springbatch" x="300" y="437.0" width="22" height="22" aria-hidden="true" />
+    <text x="332" y="441.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" dominant-baseline="central">정산 일배치 Job</text>
+    <text x="332" y="457.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">대상·금액 확정 → 지급 작업 저장</text>
   </g>
-  <g id="settlement-db" data-node="true" data-box="608,408,208,88" data-align-content="vertical-center" data-content-center-y="452">
-    <rect x="608" y="408" width="208" height="88" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
-    <text x="624" y="436.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" dominant-baseline="central">settlement DB</text>
-    <text x="624" y="452.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">원장·payout_jobs</text>
-    <text x="624" y="468.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">Spring Batch 메타데이터</text>
+  <g id="settlement-db" data-node="true" data-box="608,404.0,208,88" data-align-content="vertical-center" data-content-center-y="448.0">
+    <rect x="608" y="404.0" width="208" height="88" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
+    <text x="624" y="431.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" dominant-baseline="central">settlement DB</text>
+    <text x="624" y="447.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">원장·payout_jobs</text>
+    <text x="624" y="463.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">Spring Batch 메타데이터</text>
   </g>
-  <g id="payout-worker" data-node="true" data-box="880,412,192,72" data-align-content="vertical-center" data-content-center-y="448">
+  <g id="payout-worker" data-node="true" data-box="880,412,192,72" data-align-content="vertical-center" data-content-center-y="448.0">
     <rect x="880" y="412" width="192" height="72" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
-    <text x="896" y="432.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" dominant-baseline="central">지급 Worker</text>
-    <text x="896" y="448.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">도래 작업 임대·결과 반영</text>
-    <text x="896" y="464.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">미확정은 원거래 조회</text>
+    <text x="896" y="433.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" dominant-baseline="central">지급 Worker</text>
+    <text x="896" y="449.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">도래 작업 임대·결과 반영</text>
+    <text x="896" y="465.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">미확정은 원거래 조회</text>
   </g>
-  <g id="ledger-consumer" data-node="true" data-box="608,548,208,64" data-align-content="vertical-center" data-content-center-y="580">
+  <g id="ledger-consumer" data-node="true" data-box="608,548,208,64" data-align-content="vertical-center" data-content-center-y="580.0">
     <rect x="608" y="548" width="208" height="64" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
-    <text x="624" y="572.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" dominant-baseline="central">원장 Consumer</text>
-    <text x="624" y="588.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">Kafka 수신·원장 반영</text>
+    <text x="624" y="573.25" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" dominant-baseline="central">원장 Consumer</text>
+    <text x="624" y="589.25" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">Kafka 수신·원장 반영</text>
   </g>
-  <g id="finance-mock" data-node="true" data-box="880,700,192,64" data-align-content="vertical-center" data-content-center-y="732">
-    <rect x="880" y="700" width="192" height="64" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
-    <text x="896" y="724.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" dominant-baseline="central">금융 모의 서버</text>
-    <text x="896" y="740.75" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" dominant-baseline="central">지급·원거래 조회 API</text>
+  <g id="finance-mock" data-node="true" data-box="880,816,192,64" data-align-content="vertical-center" data-content-center-y="848.0">
+    <rect x="880" y="816" width="192" height="64" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
+    <text x="896" y="841.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" dominant-baseline="central">금융 모의 서버</text>
+    <text x="896" y="857.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">지급·원거래 조회 API</text>
   </g>
-  <rect x="236.0" y="137" width="40" height="14" fill="#fff" />
-  <text x="256" y="148" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="middle">실행</text>
-  <rect x="718.0" y="137" width="100" height="14" fill="#fff" />
-  <text x="768" y="148" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="middle">업무·실행 이력</text>
-  <rect x="236.0" y="421" width="40" height="14" fill="#fff" />
-  <text x="256" y="432" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="middle">실행</text>
-  <rect x="548.0" y="421" width="56" height="14" fill="#fff" />
-  <text x="576" y="432" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="middle">저장·조회</text>
-  <rect x="820.0" y="421" width="56" height="14" fill="#fff" />
-  <text x="848" y="432" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="middle">작업 임대</text>
+  <rect x="236.0" y="142" width="40" height="14" fill="#fff" />
+  <text x="256" y="153" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="middle">실행</text>
+  <rect x="718.0" y="142" width="100" height="14" fill="#fff" />
+  <text x="768" y="153" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="middle">업무·실행 이력</text>
+  <rect x="236.0" y="426" width="40" height="14" fill="#fff" />
+  <text x="256" y="437" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="middle">실행</text>
+  <rect x="548.0" y="426" width="56" height="14" fill="#fff" />
+  <text x="576" y="437" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="middle">저장</text>
+  <rect x="820.0" y="426" width="56" height="14" fill="#fff" />
+  <text x="848" y="437" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="middle">작업 임대</text>
   <rect x="720" y="509" width="72" height="16" fill="#fff" />
   <text x="720" y="521" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176">원장 반영</text>
-  <rect x="200.0" y="561" width="224" height="14" fill="#fff" />
-  <text x="312" y="572" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="middle">Kafka · 결제·환불·구매확정 이벤트</text>
-  <rect x="984" y="612" width="104" height="16" fill="#fff" />
-  <text x="984" y="624" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176">지급·조회 API</text>
-  <line x1="24" x2="1096" y1="792" y2="792" stroke="#e2e8f0" stroke-width="0.8" />
-  <text x="24" y="812" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176">그룹은 서비스 소유권 · DB는 별도 PostgreSQL · 지급은 Job 완료 뒤에도 독립적으로 재시도</text>
+  <rect x="200.0" y="566" width="224" height="14" fill="#fff" />
+  <text x="312" y="577" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="middle">Kafka · 결제·환불·구매확정 이벤트</text>
+  <rect x="984" y="778" width="104" height="16" fill="#fff" />
+  <text x="984" y="790" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176">지급·조회 API</text>
+  <line x1="24" x2="1096" y1="916" y2="916" stroke="#e2e8f0" stroke-width="0.8" />
+  <text x="24" y="970" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176">그룹은 서비스 소유권 · PostgreSQL 한 컨테이너에서 업무 DB 분리 · 지급 Worker·Consumer는 Batch와 독립 실행</text>
   <g id="kafka-input" data-port="external-event-input" data-point="24,588" />
+  <g id="reconciliation-job" data-node="true" data-box="288,636,256,88" data-align-content="vertical-center" data-content-center-y="680.0">
+    <rect x="288" y="636" width="256" height="88" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />
+    <use href="#logo-springbatch" x="300" y="669.0" width="22" height="22" aria-hidden="true" />
+    <text x="332" y="665.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" dominant-baseline="central">정산 대조 Job</text>
+    <text x="332" y="681.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">참조·금액 대조</text>
+    <text x="332" y="697.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">업무 데이터 읽기 전용</text>
+  </g>
+  <rect x="144" y="644" width="48" height="20" fill="#fff" />
+  <text x="152" y="654" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">실행</text>
+  <rect x="864" y="650" width="88" height="20" fill="#fff" />
+  <text x="864" y="660" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">자기 DB 조회</text>
+  <text x="288" y="744" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">대조는 지급 작업을 만들지 않음 · Payment·Mock API와 자기 Consumer 그룹의 커밋 offset 조회</text>
+  <text x="48" y="244" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">상위 100위·동점자 전원 · 정상 회차 자동 실행 · 플랫폼 발급 수·월 할인 예산 상한 없음</text>
+  <text x="48" y="264" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">동일 회차 재시작: 확정 대상·기존 쿠폰 보존 → 미발급분만 재개</text>
+  <text x="24" y="46" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">기존 앱 내부의 목표 구성 · Job·운영 API·메타데이터 migration은 구현 전</text>
+  <text x="24" y="940" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">Scheduler: 실행 계기</text>
+  <text x="316" y="940" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">Spring Batch: Job·Step 실행 관리</text>
+  <text x="680" y="940" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">Worker: 영속 작업 임대·처리</text>
+  <use href="#logo-springbatch" x="288" y="926" width="20" height="20" />
 </svg>
