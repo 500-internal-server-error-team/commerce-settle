@@ -50,6 +50,10 @@ spring:
       ack-mode: manual_immediate
       concurrency: 1
       missing-topics-fatal: true
+  # 오류 응답의 검증 사유를 다른 응답 문구와 같은 한국어로 고정한다.
+  web:
+    locale: ko_KR
+    locale-resolver: fixed
 
 springdoc:
   paths-to-match: /api/**
