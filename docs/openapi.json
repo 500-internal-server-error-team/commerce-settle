@@ -8589,7 +8589,7 @@
         "x-owner-service": "finance-mock",
         "x-actor": "SERVICE:payment",
         "x-implemented": false,
-        "description": "PG의 신용/체크카드 또는 EASY_PAY의 지갑만 허용한다. 상품권은 지원하지 않는다. 같은 업무 키·본문은 원결과로 연결하고 처리 중 202와 원거래 조회를 사용한다. 성공 후 응답 유실에도 결과를 유지한다.",
+        "description": "PG의 신용/체크카드 또는 EASY_PAY의 지갑만 허용한다. 상품권은 지원하지 않는다. 같은 업무 키·본문은 원결과로 연결하고 처리 중 202와 원거래 조회를 사용한다. 성공 후 응답 유실에도 결과를 유지한다. provider·operation·businessKey의 원본문 해시를 기존 멱등 기록에 금융 변경과 함께 저장한다. 같은 키의 다른 금액·계정·원거래·금융 실행 버전은 409이며 중복 요청의 결과를 다시 추첨하지 않는다.",
         "security": [
           {
             "serviceCredential": []
@@ -8735,7 +8735,7 @@
         "x-owner-service": "finance-mock",
         "x-actor": "SERVICE:payment",
         "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "지정한 조회 시나리오를 적용한 뒤 원거래를 조회한다. 설정 부재·조회 실패는 503이며, 거래 부재만 404 MOCK_TRANSACTION_NOT_FOUND이다. 404는 금융 실패나 취소 확정이 아니며 현재 작업 권한 아래 같은 업무 키·원본문으로만 실행 재요청한다. 200 PROCESSING은 재조회하고 SUCCEEDED/DECLINED는 원결과로 내부 처리를 재개한다.",
         "security": [
           {
             "serviceCredential": []
@@ -8776,6 +8776,17 @@
                 "REFUND"
               ]
             }
+          },
+          {
+            "name": "scenarioVersion",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "description": "Worker 서버 설정이 선택한 조회 통신 시나리오 버전. 저장 거래의 금융 실행 버전과 독립이며 해당 provider의 lookup 지연/실패만 적용한다."
           }
         ],
         "responses": {
@@ -8820,7 +8831,7 @@
             }
           },
           "404": {
-            "description": "없거나 타인 소유",
+            "description": "MOCK_TRANSACTION_NOT_FOUND: 해당 provider·operation·businessKey의 거래 기록 없음. 늦은 요청 도착 가능성이 있어 실패 확정·예약 해제 근거가 아니다.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -8850,7 +8861,7 @@
             }
           },
           "503": {
-            "description": "일시적 저장/외부 장애",
+            "description": "조회 시나리오 부재 또는 통신/저장소/주입한 조회 장애. 거래 부재로 해석하지 않는다.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -8872,7 +8883,7 @@
         "x-owner-service": "finance-mock",
         "x-actor": "SERVICE:payment",
         "x-implemented": false,
-        "description": "원승인·원수단에 E를 한 번만 환불한다. 원승인 잠금 아래 PG 입금 전이면 예정 입금을 0으로 종결하고, 입금 후면 같은 재원에서 E를 차감한다. 입금 후 환불액도 사전 준비한 충분한 모의 재원에 포함한다. 현금 기록·환불 결과·간편결제 잔액 복원을 같은 트랜잭션으로 처리한다.",
+        "description": "원승인·원수단에 E를 한 번만 환불한다. 원승인 잠금 아래 PG 입금 전이면 예정 입금을 0으로 종결하고, 입금 후면 같은 재원에서 E를 차감한다. 입금 후 환불액도 사전 준비한 충분한 모의 재원에 포함한다. 현금 기록·환불 결과·간편결제 잔액 복원을 같은 트랜잭션으로 처리한다. provider·operation·businessKey의 원본문 해시를 기존 멱등 기록에 금융 변경과 함께 저장한다. 같은 키의 다른 금액·계정·원거래·금융 실행 버전은 409이며 중복 요청의 결과를 다시 추첨하지 않는다.",
         "security": [
           {
             "serviceCredential": []
@@ -9027,7 +9038,7 @@
         "x-owner-service": "finance-mock",
         "x-actor": "SERVICE:settlement",
         "x-implemented": false,
-        "description": "기존 업무 키가 있으면 원결과를 우선 반환한다. 선지급 재원은 시험 전에 항상 충분하게 준비하며 재원 부족은 지급 보류·실패 사유가 아니다. 신규 지급은 영업일·PAYOUT 계정을 검증하고 거래 기록/자금 선점을 원자 저장한다. 비영업일은 409 PAYOUT_NON_BUSINESS_DAY이며 거래/선점을 만들지 않는다. 보류 응답은 완료된 멱등 결과로 캐시하지 않되 요청 해시는 유지해 같은 키의 다른 금액/계정을 거절한다.",
+        "description": "기존 업무 키가 있으면 원결과를 우선 반환한다. 선지급 재원은 시험 전에 항상 충분하게 준비하며 재원 부족은 지급 보류·실패 사유가 아니다. 신규 지급은 영업일·PAYOUT 계정을 검증하고 거래 기록/자금 선점을 원자 저장한다. 비영업일은 409 PAYOUT_NON_BUSINESS_DAY이며 거래/선점을 만들지 않는다. 보류 응답은 완료된 멱등 결과로 캐시하지 않되 요청 해시는 유지해 같은 키의 다른 금액/계정을 거절한다. provider·operation·businessKey의 원본문 해시를 기존 멱등 기록에 금융 변경과 함께 저장한다. 같은 키의 다른 금액·계정·원거래·금융 실행 버전은 409이며 중복 요청의 결과를 다시 추첨하지 않는다.",
         "security": [
           {
             "serviceCredential": []
@@ -9159,7 +9170,7 @@
         "x-owner-service": "finance-mock",
         "x-actor": "SERVICE:settlement",
         "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "지정한 조회 시나리오를 적용한 뒤 원거래를 조회한다. 설정 부재·조회 실패는 503이며, 거래 부재만 404 MOCK_TRANSACTION_NOT_FOUND이다. 404는 금융 실패나 취소 확정이 아니며 현재 작업 권한 아래 같은 업무 키·원본문으로만 실행 재요청한다. 200 PROCESSING은 재조회하고 SUCCEEDED/DECLINED는 원결과로 내부 처리를 재개한다.",
         "security": [
           {
             "serviceCredential": []
@@ -9174,6 +9185,17 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "scenarioVersion",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "description": "Worker 서버 설정이 선택한 조회 통신 시나리오 버전. 저장 거래의 금융 실행 버전과 독립이며 해당 provider의 lookup 지연/실패만 적용한다."
           }
         ],
         "responses": {
@@ -9218,7 +9240,7 @@
             }
           },
           "404": {
-            "description": "없거나 타인 소유",
+            "description": "MOCK_TRANSACTION_NOT_FOUND: 해당 provider·operation·businessKey의 거래 기록 없음. 늦은 요청 도착 가능성이 있어 실패 확정·예약 해제 근거가 아니다.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -9248,7 +9270,7 @@
             }
           },
           "503": {
-            "description": "일시적 저장/외부 장애",
+            "description": "조회 시나리오 부재 또는 통신/저장소/주입한 조회 장애. 거래 부재로 해석하지 않는다.",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -13875,7 +13897,8 @@
         "required": [
           "businessKey",
           "amount"
-        ]
+        ],
+        "description": "원외부 결제 전액 환불. 원승인의 provider·scenarioVersion을 계승해 환불 전용 설정을 사용한다. 원키 재요청에서 businessKey·원거래·amount를 유지한다."
       },
       "MockTransaction": {
         "type": "object",
@@ -14010,7 +14033,7 @@
           "pgReceivedAmount",
           "fundingAccountRef"
         ],
-        "description": "PG 입금 필드는 APPROVE 거래만 사용한다. pgReceivedAmount는 입금 전 null, 처리 뒤 E 또는 입금 전 환불로 상쇄한 0이다. P/M은 포함하지 않는다. 입금 후 환불은 별도 현금 차감 기록으로 보존한다."
+        "description": "PG 입금 필드는 APPROVE 거래만 사용한다. pgReceivedAmount는 입금 전 null, 처리 뒤 E 또는 입금 전 환불로 상쇄한 0이다. P/M은 포함하지 않는다. 입금 후 환불은 별도 현금 차감 기록으로 보존한다. GET의 조회용 scenarioVersion과 이 응답의 원금융 scenarioVersion을 구분한다. PROCESSING은 원거래 재조회로 추적하고 재실행하지 않는다."
       },
       "MockPayout": {
         "type": "object",
@@ -14171,26 +14194,31 @@
           },
           "minDelayMs": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다."
           },
           "maxDelayMs": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다."
           },
           "rejectionRate": {
             "type": "number",
             "minimum": 0,
-            "maximum": 1
+            "maximum": 1,
+            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다."
           },
           "responseLossRate": {
             "type": "number",
             "minimum": 0,
-            "maximum": 1
+            "maximum": 1,
+            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다."
           },
           "lookupFailureRate": {
             "type": "number",
             "minimum": 0,
-            "maximum": 1
+            "maximum": 1,
+            "description": "GET 조회의 일시 실패확률. 금융 거래 결과를 변경하지 않는다."
           },
           "seed": {
             "type": "integer",
@@ -14208,6 +14236,66 @@
               }
             ],
             "description": "PG/EASY_PAY는 승인부터 입금까지 0~365영업일. 기본 fixture는 PG_A/EASY_PAY=5, PG_B=6, PG_C=7이며 지연 시험은 15를 사용. PAYOUT이면 null. 승인 당시 예정일을 고정한다."
+          },
+          "refundMinDelayMs": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "PG/EASY_PAY의 환불 전용 설정. PAYOUT이면 null."
+          },
+          "refundMaxDelayMs": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "PG/EASY_PAY의 환불 전용 설정. PAYOUT이면 null."
+          },
+          "refundRejectionRate": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "PG/EASY_PAY의 환불 전용 설정. PAYOUT이면 null."
+          },
+          "refundResponseLossRate": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "PG/EASY_PAY의 환불 전용 설정. PAYOUT이면 null."
+          },
+          "lookupMinDelayMs": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "GET 조회 전용 지연(ms). 원거래 부재 시에도 적용."
+          },
+          "lookupMaxDelayMs": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "GET 조회 전용 지연(ms). 원거래 부재 시에도 적용."
           }
         },
         "required": [
@@ -14219,7 +14307,13 @@
           "responseLossRate",
           "lookupFailureRate",
           "seed",
-          "settlementDelayBusinessDays"
+          "settlementDelayBusinessDays",
+          "refundMinDelayMs",
+          "refundMaxDelayMs",
+          "refundRejectionRate",
+          "refundResponseLossRate",
+          "lookupMinDelayMs",
+          "lookupMaxDelayMs"
         ],
         "allOf": [
           {
@@ -14234,6 +14328,18 @@
               "properties": {
                 "settlementDelayBusinessDays": {
                   "type": "null"
+                },
+                "refundMinDelayMs": {
+                  "type": "null"
+                },
+                "refundMaxDelayMs": {
+                  "type": "null"
+                },
+                "refundRejectionRate": {
+                  "type": "null"
+                },
+                "refundResponseLossRate": {
+                  "type": "null"
                 }
               }
             },
@@ -14243,11 +14349,30 @@
                   "type": "integer",
                   "minimum": 0,
                   "maximum": 365
+                },
+                "refundMinDelayMs": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "refundMaxDelayMs": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "refundRejectionRate": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "refundResponseLossRate": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
                 }
               }
             }
           }
-        ]
+        ],
+        "description": "providerId+scenarioVersion별 불변 설정. 승인/PAYOUT·환불·조회 프로필을 구분한다. 각 작업의 maxDelayMs는 대응 minDelayMs 이상인지 도메인에서 검증한다. 환불은 원승인의 버전을 계승한다. GET의 scenarioVersion은 조회 통신만 제어하며 금융 결과를 바꾸지 않는다."
       },
       "MockScenario": {
         "type": "object",
@@ -14270,26 +14395,31 @@
           },
           "minDelayMs": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다."
           },
           "maxDelayMs": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다."
           },
           "rejectionRate": {
             "type": "number",
             "minimum": 0,
-            "maximum": 1
+            "maximum": 1,
+            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다."
           },
           "responseLossRate": {
             "type": "number",
             "minimum": 0,
-            "maximum": 1
+            "maximum": 1,
+            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다."
           },
           "lookupFailureRate": {
             "type": "number",
             "minimum": 0,
-            "maximum": 1
+            "maximum": 1,
+            "description": "GET 조회의 일시 실패확률. 금융 거래 결과를 변경하지 않는다."
           },
           "seed": {
             "type": "integer",
@@ -14315,6 +14445,66 @@
               }
             ],
             "description": "PG/EASY_PAY는 승인부터 입금까지 0~365영업일. 기본 fixture는 PG_A/EASY_PAY=5, PG_B=6, PG_C=7이며 지연 시험은 15를 사용. PAYOUT이면 null. 승인 당시 예정일을 고정한다."
+          },
+          "refundMinDelayMs": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "PG/EASY_PAY의 환불 전용 설정. PAYOUT이면 null."
+          },
+          "refundMaxDelayMs": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "PG/EASY_PAY의 환불 전용 설정. PAYOUT이면 null."
+          },
+          "refundRejectionRate": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "PG/EASY_PAY의 환불 전용 설정. PAYOUT이면 null."
+          },
+          "refundResponseLossRate": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "PG/EASY_PAY의 환불 전용 설정. PAYOUT이면 null."
+          },
+          "lookupMinDelayMs": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "GET 조회 전용 지연(ms). 원거래 부재 시에도 적용."
+          },
+          "lookupMaxDelayMs": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "GET 조회 전용 지연(ms). 원거래 부재 시에도 적용."
           }
         },
         "required": [
@@ -14328,7 +14518,13 @@
           "seed",
           "id",
           "createdAt",
-          "settlementDelayBusinessDays"
+          "settlementDelayBusinessDays",
+          "refundMinDelayMs",
+          "refundMaxDelayMs",
+          "refundRejectionRate",
+          "refundResponseLossRate",
+          "lookupMinDelayMs",
+          "lookupMaxDelayMs"
         ],
         "allOf": [
           {
@@ -14343,6 +14539,18 @@
               "properties": {
                 "settlementDelayBusinessDays": {
                   "type": "null"
+                },
+                "refundMinDelayMs": {
+                  "type": "null"
+                },
+                "refundMaxDelayMs": {
+                  "type": "null"
+                },
+                "refundRejectionRate": {
+                  "type": "null"
+                },
+                "refundResponseLossRate": {
+                  "type": "null"
                 }
               }
             },
@@ -14352,11 +14560,30 @@
                   "type": "integer",
                   "minimum": 0,
                   "maximum": 365
+                },
+                "refundMinDelayMs": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "refundMaxDelayMs": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "refundRejectionRate": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "refundResponseLossRate": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
                 }
               }
             }
           }
-        ]
+        ],
+        "description": "providerId+scenarioVersion별 불변 설정. 승인/PAYOUT·환불·조회 프로필을 구분한다. 각 작업의 maxDelayMs는 대응 minDelayMs 이상인지 도메인에서 검증한다. 환불은 원승인의 버전을 계승한다. GET의 scenarioVersion은 조회 통신만 제어하며 금융 결과를 바꾸지 않는다."
       },
       "AddressPage": {
         "type": "object",
