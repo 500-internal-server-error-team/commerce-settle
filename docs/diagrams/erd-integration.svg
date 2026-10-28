@@ -4,8 +4,8 @@
   <desc id="desc">주요 필드와 논리 관계, 단일·복합 유일제약과 적용 조건. 전체 컬럼과 제약은 데이터 모델 문서가 기준이며 물리 FK는 없다. Outbox·Inbox·멱등 기록·감사는 각 소유 서비스 DB에 개별 저장하는 공통 구조다. Outbox의 status는 발행 상태, published_at은 Kafka 브로커 ACK 확인 뒤 확정한 시각이다.</desc>
   <rect width="1200" height="612" fill="#ffffff" />
   <path data-relation="outbox:inbox" d="M360,132 L432,132" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
-  <g data-entity="outbox" data-box="24,24,336,216">
-    <rect x="24.0" y="24" width="336.0" height="216" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+  <g data-entity="outbox" data-box="24,24,336,270">
+    <rect x="24.0" y="24" width="336.0" height="270" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
     <text x="40.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">발행할 이벤트</text>
     <text x="40.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">outbox</text>
     <path d="M24,80h336" stroke="#e2e8f0" />
@@ -19,22 +19,34 @@
       <tspan x="344.0" text-anchor="end" fill="#64748b"> integer</tspan>
     </text>
     <text x="40.0" y="154" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">occurred_at</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> timestamptz</tspan>
+    </text>
+    <text x="40.0" y="172" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
       <tspan x="40.0">aggregate_id</tspan>
       <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid</tspan>
     </text>
-    <text x="40.0" y="172" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+    <text x="40.0" y="190" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
       <tspan x="40.0">aggregate_version</tspan>
       <tspan x="344.0" text-anchor="end" fill="#64748b"> bigint</tspan>
     </text>
-    <text x="40.0" y="190" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+    <text x="40.0" y="208" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
       <tspan x="40.0">topic</tspan>
       <tspan x="344.0" text-anchor="end" fill="#64748b"> varchar(100)</tspan>
     </text>
-    <text x="40.0" y="208" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+    <text x="40.0" y="226" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
       <tspan x="40.0">status</tspan>
       <tspan x="344.0" text-anchor="end" fill="#64748b"> varchar(16)</tspan>
     </text>
-    <text x="40.0" y="226" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+    <text x="40.0" y="244" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">published_partition</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> integer?</tspan>
+    </text>
+    <text x="40.0" y="262" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">published_offset</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> bigint?</tspan>
+    </text>
+    <text x="40.0" y="280" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
       <tspan x="40.0">published_at</tspan>
       <tspan x="344.0" text-anchor="end" fill="#64748b"> timestamptz?</tspan>
     </text>

@@ -91,6 +91,7 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 | GET | `/internal/orders/{orderId}/payment-context` | 불변 주문·금액 컨텍스트 | SERVICE:payment | `—` | `PaymentContext` | 200 |
 | GET | `/internal/products/{productId}/settlement-context` | 상품·판매자 지급 컨텍스트 | SERVICE:settlement | `—` | `ProductSettlementContext` | 200 |
 | GET | `/internal/payments/{paymentId}/settlement-context` | 확정 결제·원금액 컨텍스트 | SERVICE:settlement | `—` | `SettlementContext` | 200 |
+| GET | `/internal/payment-reconciliation-events` | 마감 시점의 불변 금융 이벤트·발행 위치 | SERVICE:settlement | `cutoffAt`, `cursor`, `size` | `PaymentReconciliationEventPage` | 200 |
 | POST | `/internal/refund-requests/{requestId}/closure` | 실패 환불의 안전한 운영 종결 | OPERATOR | `FailedRefundClosure` | `OrderRefundRequest` | 200 |
 | GET | `/internal/payment-jobs` | 운영 작업 목록 | OPERATOR | `—` | `JobPage` | 200 |
 | POST | `/internal/payment-jobs/{jobId}/replays` | 원업무 작업 재처리 | OPERATOR | `ReplayRequest` | `Job` | 202 |
@@ -180,6 +181,16 @@ Order는 deliveryBusinessDays·deliveryCalendarVersion·shippedAt·deliveryDueAt
 
 PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반영합니다. MockApproval의 fundingAccountRef는 Payment 서버 설정이며 원승인에 고정합니다. MockTransaction의 pgReceiptDueAt·pgReceivedAt·pgReceivedAmount로 예정/실제 입금과 입금 전 환불 상쇄를 조회합니다. 선지급 재원은 항상 충분하며 시험 전에 전체 지급·환불 자금을 준비합니다. [현금·복구 정책](policies.md#선지급-재원과-pg-회수)을 따릅니다.
 
+### 정산 대조 조회
+
+`GET /internal/payment-reconciliation-events`는 Payment가 소유하며 Settlement 전용 서비스 자격만 허용합니다. 사용자·Gateway·일반 운영자 자격으로 호출하지 않고 Gateway에 공개하지 않습니다. 다른 서비스 DB 직접 조회를 대체하는 읽기 전용 계약이며 금융 실행 API가 아닙니다.
+
+- 최초 요청은 `cutoffAt`(UTC)과 `size`(1~100, 기본 100)를 받습니다. Payment는 검증한 최대 업무 트랜잭션 시간보다 긴 안전 여유가 지난 마감만 허용하며, 미래 마감·준비 전 기준선은 `409 RECONCILIATION_CUTOFF_NOT_READY`입니다. 원천 이력·안전 여유를 확인할 수 없으면 503으로 중단하며 현재 상태로 대체하지 않습니다.
+- `occurredAt≤cutoffAt`인 `PaymentConfirmed`·`RefundFinancialCompleted`를 **발행 여부와 무관하게** 제공합니다. E·M·P·B·F·N은 원거래에 고정한 금액이며 환불 이벤트도 양수 원금액을 반환합니다. 대조 측은 이벤트 종류에 따라 최초 반영·상쇄를 구분합니다. 이후 환불·정책 변경으로 과거 금액을 다시 계산하지 않습니다.
+- 내부 대조는 회차를 이어 읽는 이벤트 피드이므로 `createdAt DESC,eventId DESC`의 keyset cursor를 사용합니다. 응답은 공통 목록의 `items/page/size/totalElements/totalPages`와 `cutoffAt/snapshotAt/nextCursor`를 반환합니다. 최초 조회의 snapshotAt·원천 조회 경계·cutoffAt·size를 cursor에 묶고, 이후 요청에서는 같은 cutoffAt·size와 cursor를 사용합니다. 기준선 이벤트 집합·금융 값은 불변이며 발행 위치만 진행에 따라 달라질 수 있습니다. 잘못된 cursor·다른 조건의 재사용은 400입니다.
+- `publicationState=PENDING`은 미발행 또는 ack 뒤 위치 저장 전 중단을 포함합니다. `topic`은 고정된 원천 토픽이며 `partition/offset/publishedAt`은 함께 null입니다. `PUBLISHED`이면 세 필드가 모두 있고 위치는 ack 결과입니다. null을 0으로 바꾸거나 미발행 이벤트를 페이지에서 제외하지 않습니다.
+- Settlement는 `eventId`로 자기 Inbox를 먼저 확인합니다. 이미 APPLIED인 이벤트는 재발행 위치가 더 뒤로 옮겨져도 원장을 대조합니다. 수신 기록이 없는 위치 미확정 건은 발행 대기로 남깁니다. 자기 Consumer 그룹의 커밋 offset·Inbox·격리 기록에 따른 나머지 판정은 [정산 대조 결정](decisions/0007-settlement-batch-scope-and-schedule.md#d6-정산-대조)을 따릅니다.
+
 ### 금융 대역 조회와 장애 설정
 
 두 금융 거래 GET은 `scenarioVersion` 쿼리가 필수입니다. 이는 서버가 선택한 조회 통신 프로필이며 응답의 `MockTransaction.scenarioVersion`은 원거래의 금융 실행 버전입니다. 조회 버전 변경은 원거래 결과·요청 본문을 바꾸지 않습니다. 설정 부재·조회 실패는 503, 지정한 provider·operation·businessKey의 기록 부재는 `404 MOCK_TRANSACTION_NOT_FOUND`입니다. 일반 404나 통신 오류를 거래 없음으로 해석하지 않습니다.
@@ -196,6 +207,8 @@ PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반�
 
 ## 오류와 완료 기준
 
+정산 대조 조회가 미래 마감이나 안전 여유 이전 기준선을 받으면 `409 RECONCILIATION_CUTOFF_NOT_READY`를 반환합니다. 원천 이력·조회 경계 보장 불가는 503이며 대조 판정을 미룹니다.
+
 | code 예 | 상태 | 조건 |
 | --- | --- | --- |
 | COMMON_VALIDATION_FAILED |400|형식·수량·금액 범위 오류|
@@ -209,7 +222,6 @@ PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반�
 | INVENTORY_INSUFFICIENT / EVENT_ADMISSION_CLOSED |409|재고/기간/참여한도/매진|
 | MILEAGE_INSUFFICIENT / PAYMENT_STATE_CONFLICT |409|잔액 부족·미확정 재시도 등|
 | ORDER_REFUND_WINDOW_CLOSED / ORDER_REFUND_IN_PROGRESS |409|배송완료+168시간 초과·기존 환불|
-| PAYOUT_NON_BUSINESS_DAY |409|신규 대역 지급의 비영업일; 외부 거래 생성 없이 기존 지급 보류|
 | SETTLEMENT_NO_ELIGIBLE_ITEMS |409|새 일배치에 배정할 지급 가능 항목 없음|
 | NOTIFICATION_REPLAY_CONFLICT |409|완료/수집 중/유효 임대 또는 재처리 불가 상태|
 | COMMON_RATE_LIMITED / COMMON_TEMPORARILY_UNAVAILABLE |429/503|제한·의존 저장소 장애·변경 중/누락된 인증 가드·인증 복구 차단|
