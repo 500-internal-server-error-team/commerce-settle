@@ -15,7 +15,7 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 - 금융 API의 순수 조회도 본인 소유를 검사합니다. 역할 오류403, 같은 역할의 타인 리소스404. `400/401/403/404/409/429/503`은 [RFC9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 application/problem+json이며 code/traceId를 포함합니다.
 - 목록은 고정 createdAt DESC,id DESC 정렬·page/size 범위를 사용합니다. 금액은 정수, ID는 문자열 UUID, 시각은 UTC ISO8601입니다. 유효기간과 상태/버전 검사 기준은 policies.md가 소유합니다.
 - 버전이 있는 업무 리소스의 DELETE는 query의 expectedVersion, 다른 변경은 DTO의 expectedVersion을 검증합니다. 로그인·현재 세션 로그아웃·비밀번호 재설정에는 expectedVersion을 요구하지 않습니다.
-- 구매자 가입 `POST /api/buyers`는 인증 없이 호출하지만 `Idempotency-Key` 헤더가 필수입니다. 가입 전 키 범위·재요청·충돌·보존 기한은 [구매자 가입 재시도](policies.md#구매자-가입-재시도)를 따릅니다.
+- `Idempotency-Key` 필수 여부는 아래 기능 목록과 OpenAPI를 따릅니다. 같은 키·본문의 재요청은 기존 결과로 연결하고 같은 키의 다른 본문은 `409`입니다. 사용자 API 키는 계정 종류·계정 ID·작업별로 구분하며, 내부 명령 키는 발신 서비스·업무 종류와 함께 식별합니다. 구매자 가입의 키 범위·재요청·충돌·보존 기한은 [구매자 가입 재시도](policies.md#구매자-가입-재시도)를 따릅니다.
 
 로그인·비밀번호 복구 요청의 계정 식별자별 제한은 [요청 제한 정책](policies.md#로그인복구-요청-제한)을 따릅니다. 제한 초과는 `429`와 `Retry-After`, 제한 저장소 확인 실패는 부작용 없이 `503`이며 계정 존재 여부를 응답으로 구분하지 않습니다.
 
@@ -27,99 +27,99 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 
 ## 기능 목록
 
-| 메서드 | 경로 | 기능 | 권한 | 요청 DTO | 응답 DTO | 성공 |
-| --- | --- | --- | --- | --- | --- | --- |
-| POST | `/api/buyers` | 구매자 가입 | PUBLIC | `BuyerRegistration` | `Account` | 201 |
-| POST | `/api/sellers` | 판매자 가입 | PUBLIC | `SellerRegistration` | `Account` | 201 |
-| POST | `/api/buyer-sessions` | buyer 로그인 | PUBLIC | `LoginRequest` | `Session` | 200 |
-| POST | `/api/seller-sessions` | seller 로그인 | PUBLIC | `LoginRequest` | `Session` | 200 |
-| DELETE | `/api/sessions/current` | 로그아웃 | BUYER / SELLER | `—` | `—` | 204 |
-| GET | `/api/accounts/me` | 본인 계정 | BUYER / SELLER | `—` | `Account` | 200 |
-| POST | `/api/password-reset-requests` | 재설정 요청 | PUBLIC | `PasswordResetRequest` | `AcceptedNotice` | 200 |
-| POST | `/api/password-resets` | 비밀번호 재설정 | PUBLIC | `PasswordReset` | `—` | 204 |
-| GET | `/api/sellers/me` | 본인 판매자 정보 | SELLER | `—` | `SellerProfile` | 200 |
-| PUT | `/api/sellers/me` | 판매자 정보 변경 | SELLER | `SellerProfileUpdate` | `SellerProfile` | 200 |
-| POST | `/api/buyers/me/addresses` | 주소 등록 | BUYER | `AddressCreate` | `Address` | 201 |
-| GET | `/api/buyers/me/addresses` | 주소 목록 | BUYER | `—` | `AddressPage` | 200 |
-| PUT | `/api/buyers/me/addresses/{addressId}` | 주소 변경 | BUYER | `AddressUpdate` | `Address` | 200 |
-| DELETE | `/api/buyers/me/addresses/{addressId}` | 주소 삭제 | BUYER | query `expectedVersion` | `—` | 204 |
-| GET | `/api/products` | 판매 상품 목록 | PUBLIC | `—` | `ProductPage` | 200 |
-| GET | `/api/products/{productId}` | 판매 상품 조회 | PUBLIC | `—` | `Product` | 200 |
-| POST | `/api/sellers/me/products` | 상품 등록 | SELLER | `ProductCreate` | `Product` | 201 |
-| GET | `/api/sellers/me/products` | 본인 상품 목록 | SELLER | `—` | `ProductPage` | 200 |
-| PUT | `/api/sellers/me/products/{productId}` | 상품 변경 | SELLER | `ProductUpdate` | `Product` | 200 |
-| DELETE | `/api/sellers/me/products/{productId}` | 상품 논리삭제 | SELLER | query `expectedVersion` | `—` | 204 |
-| GET | `/api/sellers/me/products/{productId}/inventory` | 본인 상품 재고 | SELLER | `—` | `Inventory` | 200 |
-| POST | `/api/sellers/me/products/{productId}/inventory-adjustments` | 일반 가용 재고 조정 | SELLER | `InventoryAdjustment` | `Inventory` | 200 |
-| POST | `/api/sellers/me/coupon-templates` | 쿠폰 템플릿 등록 | SELLER | `CouponTemplateCreate` | `CouponTemplate` | 201 |
-| GET | `/api/sellers/me/coupon-templates` | 쿠폰 템플릿 목록 | SELLER | `—` | `CouponTemplatePage` | 200 |
-| POST | `/api/sellers/me/coupon-templates/{templateId}/closure` | 쿠폰 신규 발급 종료 | SELLER | `VersionRequest` | `CouponTemplate` | 200 |
-| POST | `/api/sellers/me/coupon-templates/{templateId}/issues` | 구매자에게 판매자 쿠폰 발급 | SELLER | `CouponIssueRequest` | `BuyerCoupon` | 201 |
-| GET | `/api/buyers/me/coupons` | 본인 쿠폰 목록 | BUYER | `—` | `BuyerCouponPage` | 200 |
-| POST | `/api/sellers/me/events` | 이름을 정해 이벤트 등록 | SELLER | `EventCreate` | `Event` | 201 |
-| PUT | `/api/sellers/me/events/{eventId}` | 미공개 이벤트 변경 | SELLER | `EventUpdate` | `Event` | 200 |
-| POST | `/api/sellers/me/events/{eventId}/publication` | 이벤트 공개·재고 배정 | SELLER | `VersionRequest` | `Event` | 200 |
-| POST | `/api/sellers/me/events/{eventId}/closure` | 이벤트 조기 종료 | SELLER | `ReasonRequest` | `Event` | 200 |
-| GET | `/api/events` | 공개 이벤트 목록 | PUBLIC | `—` | `EventPage` | 200 |
-| GET | `/api/events/{eventId}` | 공개 이벤트 조회 | PUBLIC | `—` | `Event` | 200 |
-| GET | `/api/events/{eventId}/gauge` | 판매 진행률·신청 상태 | PUBLIC | `—` | `EventGauge` | 200 |
-| POST | `/api/order-quotes` | 서버 주문 금액 미리보기 | BUYER | `OrderQuoteRequest` | `OrderQuote` | 200 |
-| POST | `/api/orders` | 일반/이벤트 주문과 결제 접수 | BUYER | `OrderCreate` | `Order` | 201 |
-| GET | `/api/orders` | 본인 주문 목록 | BUYER | `—` | `OrderPage` | 200 |
-| GET | `/api/orders/{orderId}` | 본인 주문 조회 | BUYER | `—` | `Order` | 200 |
-| POST | `/api/orders/{orderId}/payment-retries` | 확정 거절 뒤 재예약·재시도 | BUYER | `VersionRequest` | `Order` | 202 |
-| POST | `/api/orders/{orderId}/cancellation` | 미결제 주문 취소 접수 | BUYER | `ReasonRequest` | `Order` | 202 |
-| POST | `/api/orders/{orderId}/refund-requests` | 기한 내 취소·반품 요청 | BUYER | `OrderRefundCreate` | `OrderRefundRequest` | 201 |
-| GET | `/api/refund-requests/{requestId}` | 본인 취소·반품 진행 | BUYER | `—` | `OrderRefundRequest` | 200 |
-| POST | `/api/refund-requests/{requestId}/withdrawal` | 승인 전 반품 요청 철회 | BUYER | `VersionRequest` | `OrderRefundRequest` | 200 |
-| GET | `/api/sellers/me/orders` | 본인 판매 주문 목록 | SELLER | `—` | `SellerOrderPage` | 200 |
-| GET | `/api/sellers/me/orders/{orderId}` | 이행 대상 판매 주문 조회 | SELLER | `—` | `SellerOrder` | 200 |
-| POST | `/api/sellers/me/orders/{orderId}/shipments` | 발송 처리 | SELLER | `ShipmentRequest` | `Order` | 200 |
-| GET | `/api/sellers/me/refund-requests` | 본인 반품 요청 목록 | SELLER | `—` | `OrderRefundRequestPage` | 200 |
-| POST | `/api/sellers/me/refund-requests/{requestId}/decision` | 반품 승인·거절 | SELLER | `RefundDecision` | `OrderRefundRequest` | 202 |
-| POST | `/api/sellers/me/refund-requests/{requestId}/receipt` | 반품 입고·재고 복구 | SELLER | `VersionRequest` | `OrderRefundRequest` | 200 |
-| GET | `/api/payments` | 본인 결제 목록 | BUYER | `—` | `PaymentPage` | 200 |
-| GET | `/api/payments/{paymentId}` | 본인 결제 진행 | BUYER | `—` | `Payment` | 200 |
-| GET | `/api/payments/{paymentId}/attempts` | 본인 외부 승인 시도 | BUYER | `—` | `PaymentAttemptPage` | 200 |
-| GET | `/api/refunds/{refundId}` | 본인 금융 환불 진행 | BUYER | `—` | `FinancialRefund` | 200 |
-| GET | `/api/buyers/me/mileage` | 본인 마일리지 잔액 | BUYER | `—` | `MileageWallet` | 200 |
-| GET | `/api/buyers/me/mileage/entries` | 본인 마일리지 이력 | BUYER | `—` | `MileageEntryPage` | 200 |
-| GET | `/api/sellers/me/settlement-items` | 본인 정산 항목 | SELLER | `—` | `SettlementItemPage` | 200 |
-| GET | `/api/sellers/me/settlement-batches` | 본인 정산 배치 | SELLER | `—` | `SettlementBatchPage` | 200 |
-| GET | `/api/sellers/me/payouts` | 본인 지급 목록 | SELLER | `—` | `PayoutPage` | 200 |
-| GET | `/api/sellers/me/payouts/{payoutId}` | 본인 지급 조회 | SELLER | `—` | `Payout` | 200 |
-| GET | `/internal/orders/{orderId}/payment-context` | 불변 주문·금액 컨텍스트 | SERVICE:payment | `—` | `PaymentContext` | 200 |
-| GET | `/internal/products/{productId}/settlement-context` | 상품·판매자 지급 컨텍스트 | SERVICE:settlement | `—` | `ProductSettlementContext` | 200 |
-| GET | `/internal/payments/{paymentId}/settlement-context` | 확정 결제·원금액 컨텍스트 | SERVICE:settlement | `—` | `SettlementContext` | 200 |
-| GET | `/internal/payment-reconciliation-events` | 마감 시점의 불변 금융 이벤트·발행 위치 | SERVICE:settlement | `cutoffAt`, `cursor`, `size` | `PaymentReconciliationEventPage` | 200 |
-| POST | `/internal/refund-requests/{requestId}/closure` | 실패 환불의 안전한 운영 종결 | OPERATOR | `FailedRefundClosure` | `OrderRefundRequest` | 200 |
-| GET | `/internal/coupon-issue-runs` | 월간 혜택 회차 목록 | OPERATOR | query `targetMonth/status/page/size` | `CouponIssueRunPage` | 200 |
-| GET | `/internal/coupon-issue-runs/{runId}` | 회차·취소·대체 결과 조회 | OPERATOR | `—` | `CouponIssueRun` | 200 |
-| POST | `/internal/coupon-issue-runs/{runId}/replacements` | 발급 전 오류 교정 | OPERATOR | `CouponIssueRunReplacementRequest` | `CouponIssueRun` | 201 |
-| GET | `/internal/payment-jobs` | 운영 작업 목록 | OPERATOR | `—` | `JobPage` | 200 |
-| POST | `/internal/payment-jobs/{jobId}/replays` | 원업무 작업 재처리 | OPERATOR | `ReplayRequest` | `Job` | 202 |
-| GET | `/internal/payout-jobs` | 운영 작업 목록 | OPERATOR | `—` | `JobPage` | 200 |
-| POST | `/internal/payout-jobs/{jobId}/replays` | 원업무 작업 재처리 | OPERATOR | `ReplayRequest` | `Job` | 202 |
-| POST | `/internal/settlement-batches` | 정산 배치 생성·재개 | OPERATOR | `BatchCreate` | `SettlementBatch` | 202 |
-| POST | `/mock/providers/{providerId}/payments` | 모의 외부 승인 | SERVICE:payment | `MockApproval` | `MockTransaction` | 202 |
-| GET | `/mock/providers/{providerId}/transactions/{businessKey}` | 원대역 거래 조회 | SERVICE:payment | `—` | `MockTransaction` | 200 |
-| POST | `/mock/providers/{providerId}/payments/{externalId}/refunds` | 원외부 결제 전액 환불 | SERVICE:payment | `MockRefund` | `MockTransaction` | 202 |
-| POST | `/mock/payouts` | 모의 지급 실행 | SERVICE:settlement | `MockPayout` | `MockTransaction` | 202 |
-| GET | `/mock/payouts/{businessKey}` | 원지급 조회 | SERVICE:settlement | `—` | `MockTransaction` | 200 |
-| POST | `/mock/accounts` | 격리 시험 계정 준비 | OPERATOR | `MockAccountCreate` | `MockAccount` | 201 |
-| GET | `/mock/accounts/{accountId}` | 격리 시험 잔액 조회 | OPERATOR | `—` | `MockAccount` | 200 |
-| POST | `/mock/scenarios` | 새 버전 장애 설정 | OPERATOR | `MockScenarioCreate` | `MockScenario` | 201 |
-| GET | `/api/sellers/me/products/{productId}` | 본인 미공개/판매 상품 조회 | SELLER | `—` | `Product` | 200 |
-| GET | `/api/sellers/me/coupon-templates/{templateId}` | 본인 쿠폰 템플릿 조회 | SELLER | `—` | `CouponTemplate` | 200 |
-| GET | `/api/sellers/me/events` | 본인 이벤트 목록 | SELLER | `—` | `EventPage` | 200 |
-| GET | `/api/sellers/me/events/{eventId}` | 본인 이벤트 조회 | SELLER | `—` | `Event` | 200 |
-| GET | `/api/notifications` | 본인 거래 알림 목록 | BUYER / SELLER | `—` | `NotificationPage` | 200 |
-| GET | `/api/notifications/{notificationId}` | 본인 거래 알림 조회 | BUYER / SELLER | `—` | `Notification` | 200 |
-| GET | `/internal/notification-deliveries` | 운영 발송 목록 | OPERATOR | `—` | `NotificationDeliveryPage` | 200 |
-| GET | `/internal/notification-deliveries/{deliveryId}` | 운영 발송 조회 | OPERATOR | `—` | `NotificationDelivery` | 200 |
-| GET | `/internal/notification-deliveries/{deliveryId}/attempts` | 발송·조회·재처리 이력 | OPERATOR | `—` | `NotificationAttemptPage` | 200 |
-| POST | `/internal/notification-deliveries/{deliveryId}/replays` | 원알림 재처리 | OPERATOR | `NotificationReplayRequest` | `NotificationDelivery` | 202 |
-| GET | `/internal/notification-mock/receipts/{deliveryId}` | 모의 수신 원결과 조회 | OPERATOR | `—` | `MockNotificationReceipt` | 200 |
+| 메서드 | 경로 | 기능 | 권한 | 요청 DTO | 응답 DTO | 필수 헤더 | 성공 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| POST | `/api/buyers` | 구매자 가입 | PUBLIC | `BuyerRegistration` | `Account` | `Idempotency-Key` | 201 |
+| POST | `/api/sellers` | 판매자 가입 | PUBLIC | `SellerRegistration` | `Account` | — | 201 |
+| POST | `/api/buyer-sessions` | buyer 로그인 | PUBLIC | `LoginRequest` | `Session` | — | 200 |
+| POST | `/api/seller-sessions` | seller 로그인 | PUBLIC | `LoginRequest` | `Session` | — | 200 |
+| DELETE | `/api/sessions/current` | 로그아웃 | BUYER / SELLER | `—` | `—` | — | 204 |
+| GET | `/api/accounts/me` | 본인 계정 | BUYER / SELLER | `—` | `Account` | — | 200 |
+| POST | `/api/password-reset-requests` | 재설정 요청 | PUBLIC | `PasswordResetRequest` | `AcceptedNotice` | — | 200 |
+| POST | `/api/password-resets` | 비밀번호 재설정 | PUBLIC | `PasswordReset` | `—` | — | 204 |
+| GET | `/api/sellers/me` | 본인 판매자 정보 | SELLER | `—` | `SellerProfile` | — | 200 |
+| PUT | `/api/sellers/me` | 판매자 정보 변경 | SELLER | `SellerProfileUpdate` | `SellerProfile` | `Idempotency-Key` | 200 |
+| POST | `/api/buyers/me/addresses` | 주소 등록 | BUYER | `AddressCreate` | `Address` | `Idempotency-Key` | 201 |
+| GET | `/api/buyers/me/addresses` | 주소 목록 | BUYER | `—` | `AddressPage` | — | 200 |
+| PUT | `/api/buyers/me/addresses/{addressId}` | 주소 변경 | BUYER | `AddressUpdate` | `Address` | `Idempotency-Key` | 200 |
+| DELETE | `/api/buyers/me/addresses/{addressId}` | 주소 삭제 | BUYER | query `expectedVersion` | `—` | `Idempotency-Key` | 204 |
+| GET | `/api/products` | 판매 상품 목록 | PUBLIC | `—` | `ProductPage` | — | 200 |
+| GET | `/api/products/{productId}` | 판매 상품 조회 | PUBLIC | `—` | `Product` | — | 200 |
+| POST | `/api/sellers/me/products` | 상품 등록 | SELLER | `ProductCreate` | `Product` | `Idempotency-Key` | 201 |
+| GET | `/api/sellers/me/products` | 본인 상품 목록 | SELLER | `—` | `ProductPage` | — | 200 |
+| PUT | `/api/sellers/me/products/{productId}` | 상품 변경 | SELLER | `ProductUpdate` | `Product` | `Idempotency-Key` | 200 |
+| DELETE | `/api/sellers/me/products/{productId}` | 상품 논리삭제 | SELLER | query `expectedVersion` | `—` | `Idempotency-Key` | 204 |
+| GET | `/api/sellers/me/products/{productId}/inventory` | 본인 상품 재고 | SELLER | `—` | `Inventory` | — | 200 |
+| POST | `/api/sellers/me/products/{productId}/inventory-adjustments` | 일반 가용 재고 조정 | SELLER | `InventoryAdjustment` | `Inventory` | `Idempotency-Key` | 200 |
+| POST | `/api/sellers/me/coupon-templates` | 쿠폰 템플릿 등록 | SELLER | `CouponTemplateCreate` | `CouponTemplate` | `Idempotency-Key` | 201 |
+| GET | `/api/sellers/me/coupon-templates` | 쿠폰 템플릿 목록 | SELLER | `—` | `CouponTemplatePage` | — | 200 |
+| POST | `/api/sellers/me/coupon-templates/{templateId}/closure` | 쿠폰 신규 발급 종료 | SELLER | `VersionRequest` | `CouponTemplate` | `Idempotency-Key` | 200 |
+| POST | `/api/sellers/me/coupon-templates/{templateId}/issues` | 구매자에게 판매자 쿠폰 발급 | SELLER | `CouponIssueRequest` | `BuyerCoupon` | `Idempotency-Key` | 201 |
+| GET | `/api/buyers/me/coupons` | 본인 쿠폰 목록 | BUYER | `—` | `BuyerCouponPage` | — | 200 |
+| POST | `/api/sellers/me/events` | 이름을 정해 이벤트 등록 | SELLER | `EventCreate` | `Event` | `Idempotency-Key` | 201 |
+| PUT | `/api/sellers/me/events/{eventId}` | 미공개 이벤트 변경 | SELLER | `EventUpdate` | `Event` | `Idempotency-Key` | 200 |
+| POST | `/api/sellers/me/events/{eventId}/publication` | 이벤트 공개·재고 배정 | SELLER | `VersionRequest` | `Event` | `Idempotency-Key` | 200 |
+| POST | `/api/sellers/me/events/{eventId}/closure` | 이벤트 조기 종료 | SELLER | `ReasonRequest` | `Event` | `Idempotency-Key` | 200 |
+| GET | `/api/events` | 공개 이벤트 목록 | PUBLIC | `—` | `EventPage` | — | 200 |
+| GET | `/api/events/{eventId}` | 공개 이벤트 조회 | PUBLIC | `—` | `Event` | — | 200 |
+| GET | `/api/events/{eventId}/gauge` | 판매 진행률·신청 상태 | PUBLIC | `—` | `EventGauge` | — | 200 |
+| POST | `/api/order-quotes` | 서버 주문 금액 미리보기 | BUYER | `OrderQuoteRequest` | `OrderQuote` | — | 200 |
+| POST | `/api/orders` | 일반/이벤트 주문과 결제 접수 | BUYER | `OrderCreate` | `Order` | `Idempotency-Key` | 201 |
+| GET | `/api/orders` | 본인 주문 목록 | BUYER | `—` | `OrderPage` | — | 200 |
+| GET | `/api/orders/{orderId}` | 본인 주문 조회 | BUYER | `—` | `Order` | — | 200 |
+| POST | `/api/orders/{orderId}/payment-retries` | 확정 거절 뒤 재예약·재시도 | BUYER | `VersionRequest` | `Order` | `Idempotency-Key` | 202 |
+| POST | `/api/orders/{orderId}/cancellation` | 미결제 주문 취소 접수 | BUYER | `ReasonRequest` | `Order` | `Idempotency-Key` | 202 |
+| POST | `/api/orders/{orderId}/refund-requests` | 기한 내 취소·반품 요청 | BUYER | `OrderRefundCreate` | `OrderRefundRequest` | `Idempotency-Key` | 201 |
+| GET | `/api/refund-requests/{requestId}` | 본인 취소·반품 진행 | BUYER | `—` | `OrderRefundRequest` | — | 200 |
+| POST | `/api/refund-requests/{requestId}/withdrawal` | 승인 전 반품 요청 철회 | BUYER | `VersionRequest` | `OrderRefundRequest` | `Idempotency-Key` | 200 |
+| GET | `/api/sellers/me/orders` | 본인 판매 주문 목록 | SELLER | `—` | `SellerOrderPage` | — | 200 |
+| GET | `/api/sellers/me/orders/{orderId}` | 이행 대상 판매 주문 조회 | SELLER | `—` | `SellerOrder` | — | 200 |
+| POST | `/api/sellers/me/orders/{orderId}/shipments` | 발송 처리 | SELLER | `ShipmentRequest` | `Order` | `Idempotency-Key` | 200 |
+| GET | `/api/sellers/me/refund-requests` | 본인 반품 요청 목록 | SELLER | `—` | `OrderRefundRequestPage` | — | 200 |
+| POST | `/api/sellers/me/refund-requests/{requestId}/decision` | 반품 승인·거절 | SELLER | `RefundDecision` | `OrderRefundRequest` | `Idempotency-Key` | 202 |
+| POST | `/api/sellers/me/refund-requests/{requestId}/receipt` | 반품 입고·재고 복구 | SELLER | `VersionRequest` | `OrderRefundRequest` | `Idempotency-Key` | 200 |
+| GET | `/api/payments` | 본인 결제 목록 | BUYER | `—` | `PaymentPage` | — | 200 |
+| GET | `/api/payments/{paymentId}` | 본인 결제 진행 | BUYER | `—` | `Payment` | — | 200 |
+| GET | `/api/payments/{paymentId}/attempts` | 본인 외부 승인 시도 | BUYER | `—` | `PaymentAttemptPage` | — | 200 |
+| GET | `/api/refunds/{refundId}` | 본인 금융 환불 진행 | BUYER | `—` | `FinancialRefund` | — | 200 |
+| GET | `/api/buyers/me/mileage` | 본인 마일리지 잔액 | BUYER | `—` | `MileageWallet` | — | 200 |
+| GET | `/api/buyers/me/mileage/entries` | 본인 마일리지 이력 | BUYER | `—` | `MileageEntryPage` | — | 200 |
+| GET | `/api/sellers/me/settlement-items` | 본인 정산 항목 | SELLER | `—` | `SettlementItemPage` | — | 200 |
+| GET | `/api/sellers/me/settlement-batches` | 본인 정산 배치 | SELLER | `—` | `SettlementBatchPage` | — | 200 |
+| GET | `/api/sellers/me/payouts` | 본인 지급 목록 | SELLER | `—` | `PayoutPage` | — | 200 |
+| GET | `/api/sellers/me/payouts/{payoutId}` | 본인 지급 조회 | SELLER | `—` | `Payout` | — | 200 |
+| GET | `/internal/orders/{orderId}/payment-context` | 불변 주문·금액 컨텍스트 | SERVICE:payment | `—` | `PaymentContext` | — | 200 |
+| GET | `/internal/products/{productId}/settlement-context` | 상품·판매자 지급 컨텍스트 | SERVICE:settlement | `—` | `ProductSettlementContext` | — | 200 |
+| GET | `/internal/payments/{paymentId}/settlement-context` | 확정 결제·원금액 컨텍스트 | SERVICE:settlement | `—` | `SettlementContext` | — | 200 |
+| GET | `/internal/payment-reconciliation-events` | 마감 시점의 불변 금융 이벤트·발행 위치 | SERVICE:settlement | `cutoffAt`, `cursor`, `size` | `PaymentReconciliationEventPage` | — | 200 |
+| POST | `/internal/refund-requests/{requestId}/closure` | 실패 환불의 안전한 운영 종결 | OPERATOR | `FailedRefundClosure` | `OrderRefundRequest` | `Idempotency-Key` | 200 |
+| GET | `/internal/coupon-issue-runs` | 월간 혜택 회차 목록 | OPERATOR | query `targetMonth/status/page/size` | `CouponIssueRunPage` | — | 200 |
+| GET | `/internal/coupon-issue-runs/{runId}` | 회차·취소·대체 결과 조회 | OPERATOR | `—` | `CouponIssueRun` | — | 200 |
+| POST | `/internal/coupon-issue-runs/{runId}/replacements` | 발급 전 오류 교정 | OPERATOR | `CouponIssueRunReplacementRequest` | `CouponIssueRun` | `Idempotency-Key` | 201 |
+| GET | `/internal/payment-jobs` | 운영 작업 목록 | OPERATOR | `—` | `JobPage` | — | 200 |
+| POST | `/internal/payment-jobs/{jobId}/replays` | 원업무 작업 재처리 | OPERATOR | `ReplayRequest` | `Job` | `Idempotency-Key` | 202 |
+| GET | `/internal/payout-jobs` | 운영 작업 목록 | OPERATOR | `—` | `JobPage` | — | 200 |
+| POST | `/internal/payout-jobs/{jobId}/replays` | 원업무 작업 재처리 | OPERATOR | `ReplayRequest` | `Job` | `Idempotency-Key` | 202 |
+| POST | `/internal/settlement-batches` | 정산 배치 생성·재개 | OPERATOR | `BatchCreate` | `SettlementBatch` | `Idempotency-Key` | 202 |
+| POST | `/mock/providers/{providerId}/payments` | 모의 외부 승인 | SERVICE:payment | `MockApproval` | `MockTransaction` | `Idempotency-Key` | 202 |
+| GET | `/mock/providers/{providerId}/transactions/{businessKey}` | 원대역 거래 조회 | SERVICE:payment | `—` | `MockTransaction` | — | 200 |
+| POST | `/mock/providers/{providerId}/payments/{externalId}/refunds` | 원외부 결제 전액 환불 | SERVICE:payment | `MockRefund` | `MockTransaction` | `Idempotency-Key` | 202 |
+| POST | `/mock/payouts` | 모의 지급 실행 | SERVICE:settlement | `MockPayout` | `MockTransaction` | `Idempotency-Key` | 202 |
+| GET | `/mock/payouts/{businessKey}` | 원지급 조회 | SERVICE:settlement | `—` | `MockTransaction` | — | 200 |
+| POST | `/mock/accounts` | 격리 시험 계정 준비 | OPERATOR | `MockAccountCreate` | `MockAccount` | `Idempotency-Key` | 201 |
+| GET | `/mock/accounts/{accountId}` | 격리 시험 잔액 조회 | OPERATOR | `—` | `MockAccount` | — | 200 |
+| POST | `/mock/scenarios` | 새 버전 장애 설정 | OPERATOR | `MockScenarioCreate` | `MockScenario` | `Idempotency-Key` | 201 |
+| GET | `/api/sellers/me/products/{productId}` | 본인 미공개/판매 상품 조회 | SELLER | `—` | `Product` | — | 200 |
+| GET | `/api/sellers/me/coupon-templates/{templateId}` | 본인 쿠폰 템플릿 조회 | SELLER | `—` | `CouponTemplate` | — | 200 |
+| GET | `/api/sellers/me/events` | 본인 이벤트 목록 | SELLER | `—` | `EventPage` | — | 200 |
+| GET | `/api/sellers/me/events/{eventId}` | 본인 이벤트 조회 | SELLER | `—` | `Event` | — | 200 |
+| GET | `/api/notifications` | 본인 거래 알림 목록 | BUYER / SELLER | `—` | `NotificationPage` | — | 200 |
+| GET | `/api/notifications/{notificationId}` | 본인 거래 알림 조회 | BUYER / SELLER | `—` | `Notification` | — | 200 |
+| GET | `/internal/notification-deliveries` | 운영 발송 목록 | OPERATOR | `—` | `NotificationDeliveryPage` | — | 200 |
+| GET | `/internal/notification-deliveries/{deliveryId}` | 운영 발송 조회 | OPERATOR | `—` | `NotificationDelivery` | — | 200 |
+| GET | `/internal/notification-deliveries/{deliveryId}/attempts` | 발송·조회·재처리 이력 | OPERATOR | `—` | `NotificationAttemptPage` | — | 200 |
+| POST | `/internal/notification-deliveries/{deliveryId}/replays` | 원알림 재처리 | OPERATOR | `NotificationReplayRequest` | `NotificationDelivery` | `Idempotency-Key` | 202 |
+| GET | `/internal/notification-mock/receipts/{deliveryId}` | 모의 수신 원결과 조회 | OPERATOR | `—` | `MockNotificationReceipt` | — | 200 |
 
 같은 `/api/buyers`·`/api/sellers` 접두사라도 기능 소유 앱이 다를 수 있습니다. Gateway는 `x-owner-service`의 개별 경로 패턴을 기준으로 라우팅합니다. 마일리지는 Payment, 판매자 정산/지급은 Settlement이며 일반 계정/상품/주문은 커머스입니다. 상품 생성은 재고 0인 inventory 행도 함께 만들고 재고 조정은 별도 명령으로 기록합니다.
 
