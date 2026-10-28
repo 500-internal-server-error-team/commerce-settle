@@ -1,4 +1,3 @@
-<?xml version='1.0' encoding='UTF-8'?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="952" viewBox="0 0 1200 952" role="img" aria-labelledby="title desc">
   <title id="title">쿠폰 ERD</title>
   <desc id="desc">주요 필드와 논리 관계, 단일·복합 유일제약과 적용 조건. 전체 컬럼과 제약은 데이터 모델 문서가 기준이며 물리 FK는 없다.</desc>
@@ -8,6 +7,7 @@
   <path data-relation="coupon_issue_runs:coupon_issue_targets" d="M360,660 L432,660" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
   <path data-relation="coupon_templates:coupon_issue_targets" d="M192,372 L192,498.894 Q192,506.894 200,506.894 L489.03,506.894 Q497.03,506.894 497.03,514.894 L497.03,560" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
   <path data-relation="coupon_issue_targets:buyer_coupons" d="M600,560 L600,464" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <path data-relation="coupon_issue_runs:coupon_issue_runs" data-via="replaces_run_id" d="M72,560 V536 Q72,528 80,528 H128 Q136,528 136,536 V560" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
   <g data-entity="coupon_templates" data-box="24,24,336,348">
     <rect x="24.0" y="24" width="336.0" height="348" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
     <text x="40.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">쿠폰 템플릿</text>
@@ -163,8 +163,8 @@
       <text x="856.0" y="242" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (buyer_coupon_id, operation, business_ref)</text>
     </g>
   </g>
-  <g data-entity="coupon_issue_runs" data-box="24,560,336,200">
-    <rect x="24.0" y="560" width="336.0" height="200" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+  <g data-entity="coupon_issue_runs" data-box="24,560,336,292">
+    <rect x="24.0" y="560" width="336.0" height="292" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
     <text x="40.0" y="584" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">월 발급 작업</text>
     <text x="40.0" y="602" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">coupon_issue_runs</text>
     <path d="M24,616h336" stroke="#e2e8f0" />
@@ -181,16 +181,29 @@
       <tspan x="344.0" text-anchor="end" fill="#64748b"> timestamptz</tspan>
     </text>
     <text x="40.0" y="690" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">policy_version</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> varchar(32)</tspan>
+    </text>
+    <text x="40.0" y="708" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">→ replaces_run_id</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid?</tspan>
+    </text>
+    <text x="40.0" y="726" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
       <tspan x="40.0">status</tspan>
       <tspan x="344.0" text-anchor="end" fill="#64748b"> varchar(24)</tspan>
     </text>
-    <text x="40.0" y="708" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+    <text x="40.0" y="744" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
       <tspan x="40.0">version</tspan>
       <tspan x="344.0" text-anchor="end" fill="#64748b"> bigint</tspan>
     </text>
-    <path d="M40,722h304" stroke="#e2e8f0" />
-    <g data-constraint="UK" data-columns="target_month" data-condition="">
-      <text x="40.0" y="742" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (target_month)</text>
+    <path d="M40,758h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="target_month" data-condition="status &lt;&gt; 'CANCELLED'">
+      <text x="40" y="778" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-key">UK (target_month)</text>
+      <text x="40" y="796" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">WHERE status &lt;&gt; 'CANCELLED'</text>
+    </g>
+    <g data-constraint="UK" data-columns="replaces_run_id" data-condition="replaces_run_id IS NOT NULL">
+      <text x="40" y="816" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-key">UK (replaces_run_id)</text>
+      <text x="40" y="834" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">WHERE replaces_run_id IS NOT NULL</text>
     </g>
   </g>
   <g data-entity="coupon_issue_targets" data-box="432,560,336,280">
@@ -249,4 +262,6 @@
   <text x="24" y="886" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend"># PK    → 논리 참조    UK 괄호 안 컬럼 조합의 중복을 막음</text>
   <text x="24" y="906" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend">적용 조건: 해당 조건의 행끼리만 검사 · 추가 유일제약이 없으면 제약 영역 생략 · 관계선은 물리 FK가 아님</text>
   <text x="24" y="926" fill="#526176" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" data-role="owner">쿠폰 도메인 · 커머스(commerce) 소유 · commerce DB</text>
+  <text x="84" y="548" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" data-role="cardinality" data-label-for="coupon_issue_runs:coupon_issue_runs" data-endpoint="source">0..1</text>
+  <text x="148" y="548" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" data-role="cardinality" data-label-for="coupon_issue_runs:coupon_issue_runs" data-endpoint="target">0..1</text>
 </svg>
