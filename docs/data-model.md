@@ -161,7 +161,7 @@
 
 ## Redis 인증 데이터
 
-소유: 커머스 인증 영역. Gateway는 읽기 전용으로 검증하며 [세션 정책](policies.md#인증공통-api-기준)을 따른다. 아래 구조는 PostgreSQL 테이블이 아니며 시간은 UTC ISO 8601 문자열, 인증 버전은 0 이상의 정수다. 토큰 원문은 저장하지 않는다.
+소유: 커머스 인증 영역. Gateway는 읽기 전용으로 검증하며 [세션 정책](policies.md#인증공통-api-기준)을 따른다. 아래 구조는 PostgreSQL 테이블이 아니며 시간은 UTC epoch 밀리초 정수, 인증 버전은 0 이상의 정수다. 토큰 원문은 저장하지 않는다. 검증과 조건부 변경은 [Lua 스크립트](decisions/0003-redis-sessions.md#원자-검증에-lua-스크립트를-쓰는-이유)로 원자 실행한다.
 
 ### 로그인 세션
 
@@ -173,10 +173,10 @@
 | `actorId` | `uuid` | 해당 종류의 PostgreSQL 계정 ID |
 | `purpose` | `string` | SESSION |
 | `authVersion` | `integer` | 발급 당시 계정의 auth_version |
-| `issuedAt` | `string` | 서버 발급 시각 |
-| `expiresAt` | `string` | issuedAt+30분; 변경 불가 |
+| `issuedAt` | `integer` | 서버 발급 시각(epoch ms) |
+| `expiresAt` | `integer` | issuedAt+30분(epoch ms); 변경 불가 |
 
-**제약:** TTL은 expiresAt까지 남은 시간이다. 조회로 연장하지 않는다. 현재 세대·목적·만료와 아래 ACTIVE 가드의 인증 버전을 원자적으로 검증한다. 세션 또는 가드 누락 시 허용하지 않으며 PostgreSQL에서 세션을 재생성하지 않는다.
+**제약:** 발급 때 `PEXPIREAT`으로 키 만료를 expiresAt에 맞추고 조회로 연장하지 않는다. Gateway의 읽기 전용 스크립트가 현재 세대·목적·만료와 아래 ACTIVE 가드의 인증 버전을 원자적으로 검증하며, 만료는 Redis `TIME`과 expiresAt을 비교해 한 번 더 확인한다. 가드 키는 스크립트가 세션의 actorKind·actorId로 만들며 단일 노드를 전제로 한다. 세션 또는 가드 누락 시 허용하지 않으며 PostgreSQL에서 세션을 재생성하지 않는다.
 
 ### 계정별 인증 가드
 
@@ -188,7 +188,7 @@
 | `state` | `string` | ACTIVE/BLOCKED; 정지·삭제·변경 중이면 BLOCKED |
 | `pendingChangeId` | `uuid?` | 진행 중인 인증 변경의 동일성·재조정 기준; 확정 반영 뒤 null |
 
-**제약:** 가드는 현재 세대에서 TTL로 만료시키지 않는다. 최초 로그인에서 DB 계정 상태·인증 버전을 확인해 없는 가드를 조건부 생성할 수 있으나, 기존 BLOCKED 가드를 로그인으로 열지 않는다. 폐기는 가드의 상태·인증 버전·pendingChangeId를 조건부 변경해 직렬화한다. DB 확정 상태 반영은 같은 변경만 허용하고 이전 버전의 지연 반영을 거절한다. 확정 정지/삭제 가드는 BLOCKED·pendingChangeId=null이며 401, 변경 중 가드·유효 세션의 가드 누락·Redis 검증 오류·복구 중 요청은 503이다. 재접속 때 이전 세션 세대를 계속 사용하지 않는다.
+**제약:** 가드는 현재 세대에서 TTL로 만료시키지 않는다. 최초 로그인에서 DB 계정 상태·인증 버전을 확인해 없는 가드를 조건부 생성할 수 있으나, 기존 BLOCKED 가드를 로그인으로 열지 않는다. 폐기는 가드의 상태·인증 버전·pendingChangeId를 조건부 변경해 직렬화한다. 세션 발급·가드 선차단·확정 반영은 커머스의 스크립트가 조건을 모두 확인한 뒤 마지막에 쓴다. DB 확정 상태 반영은 같은 변경만 허용하고 이전 버전의 지연 반영을 거절한다. 확정 정지/삭제 가드는 BLOCKED·pendingChangeId=null이며 401, 변경 중 가드·유효 세션의 가드 누락·Redis 검증 오류·복구 중 요청은 503이다. 재접속 때 이전 세션 세대를 계속 사용하지 않는다.
 
 ## 주문·선착순 이벤트
 
