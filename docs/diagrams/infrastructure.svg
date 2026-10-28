@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="768" viewBox="0 0 1120 768" role="img" aria-labelledby="title desc" data-scope="compose-target" data-network="backend">
   <title id="title">통합 인프라 구조도</title>
-  <desc id="desc">Compose 개발·CI 목표 구성. 브라우저와 k6가 Gateway에 HTTP 요청을 보낸다. Spring Boot 앱은 Gateway, 커머스, 결제 API, 결제 Worker, 정산, 금융 모의 서버의 여섯 독립 컨테이너다. 공개 라우팅은 커머스·결제 API·정산에 한정한다. 카카오 모의 발송은 커머스 앱 내부 처리이며 실제 카카오 채널이나 외부 HTTP 연동이 아니다. PostgreSQL 한 컨테이너에서 네 업무 DB를 분리하고 결제 API와 Worker는 payment DB를 공유한다. 메트릭·추적 선은 데이터 흐름을, 관측 도구 안의 Kafka UI에서 바로 위 Kafka로 향하는 선은 관리·조회 요청을 나타낸다. Redis는 여섯 앱이 같은 호스트로 연결하는 공유 컨테이너 한 개다. 관측 도구와 Slack으로 이어지는 경보를 함께 표시한다. 상세 연결과 현재 구현 범위는 인프라 문서가 기준이다.</desc>
+  <desc id="desc">Compose 개발·CI 목표 구성. 브라우저와 k6가 Gateway에 HTTP 요청을 보낸다. Spring Boot 앱은 Gateway, 커머스, 결제 API, 결제 Worker, 정산, 금융 모의 서버의 여섯 독립 컨테이너다. 공개 라우팅은 커머스·결제 API·정산에 한정한다. 카카오 모의 발송은 커머스 앱 내부 처리이며 실제 카카오 채널이나 외부 HTTP 연동이 아니다. PostgreSQL 한 컨테이너에서 네 업무 DB를 분리하고 결제 API와 Worker는 payment DB를 공유한다. 메트릭·추적 선은 데이터 흐름을, 관측 도구 안의 Kafka UI에서 바로 위 Kafka로 향하는 선은 관리·조회 요청을 나타낸다. Redis는 여섯 앱이 같은 호스트로 연결하는 공유 컨테이너 한 개다. 관측 도구와 Slack으로 이어지는 경보를 함께 표시한다. 상세 연결과 현재 구현 범위는 인프라 문서가 기준이다. 커머스의 월간 혜택 배치·주문·쿠폰 만료·보존·알림 처리는 commerce 앱 내부의 예정 실행이며 별도 컨테이너를 추가하지 않는다.</desc>
   <defs>
     <symbol id="logo-springboot" viewBox="0 0 24 24" fill="#6DB33F">
       <path d="m23.693 10.7058-4.73-8.1844c-.4094-.7106-1.4166-1.2942-2.2402-1.2942H7.2725c-.819 0-1.8308.5836-2.2402 1.2942L.307 10.7058c-.4095.7106-.4095 1.873 0 2.5837l4.7252 8.189c.4094.7107 1.4166 1.2943 2.2402 1.2943h9.455c.819 0 1.826-.5836 2.2402-1.2942l4.7252-8.189c.4095-.7107.4095-1.8732 0-2.5838zM10.9763 5.7547c0-.5365.4377-.9742.9742-.9742s.9742.4377.9742.9742v5.8217c0 .5366-.4377.9742-.9742.9742s-.9742-.4376-.9742-.9742zm.9742 12.4294c-3.6427 0-6.6077-2.965-6.6077-6.6077.0047-2.0896.993-4.0521 2.6685-5.304a.8657.8657 0 0 1 1.2142.1788.8657.8657 0 0 1-.1788 1.2143c-2.1602 1.6048-2.612 4.6592-1.0072 6.8194 1.6049 2.1603 4.6593 2.612 6.8195 1.0072 1.2378-.9177 1.9673-2.372 1.9673-3.9157a4.8972 4.8972 0 0 0-1.9861-3.925c-.386-.2824-.466-.8284-.1836-1.2143.2824-.386.8283-.466 1.2143-.1835 1.6895 1.2471 2.6826 3.2238 2.6873 5.3228 0 3.6474-2.965 6.6077-6.6077 6.6077z" />
@@ -128,7 +128,7 @@
         <rect x="276" y="296" width="192" height="48" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
         <use href="#logo-springboot" x="284" y="300" width="22" height="22" aria-hidden="true" transform="translate(0 9)" />
         <text x="316" y="316" font-size="13" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b" text-anchor="start">커머스</text>
-        <text x="316" y="334" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">거래 알림 · 카카오 모의 발송</text>
+        <text x="316" y="334" font-size="10" font-weight="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176" text-anchor="start">월간 혜택 · 주문 · 알림</text>
       </g>
       <g id="payment-api" data-node="true" data-container="payment-api" data-box="276,353,192,48" data-app="payment-api">
         <rect x="276" y="348" width="192" height="48" rx="4" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
