@@ -4,6 +4,7 @@
   "schemaVersion": 39,
   "version": 1,
   "refresh": "15s",
+  "timezone": "Asia/Seoul",
   "time": {
     "from": "now-15m",
     "to": "now"

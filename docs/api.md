@@ -13,7 +13,7 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 - POST 주문은 주문 리소스 생성 `201`과 Location을 반환하며 결제는 비동기입니다. 비동기 재처리·대역 접수는 `202`+Location이고 승인/환불 완료를 뜻하지 않습니다. 상태 조회 응답으로 후속 완료를 확인합니다.
 - 쓰기 DTO는 additionalProperties=false입니다. 클라이언트 가격·buyerId·sellerId·providerId로 원금액/주체를 덮어쓰지 않습니다. 생성 시 서버 계산과 expectedProductVersion/expectedEventVersion/expectedTotalAmount를 비교해 달라졌으면 409입니다.
 - 금융 API의 순수 조회도 본인 소유를 검사합니다. 역할 오류403, 같은 역할의 타인 리소스404. `400/401/403/404/409/429/503`은 [RFC9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 application/problem+json이며 code/traceId를 포함합니다.
-- 목록은 고정 createdAt DESC,id DESC 정렬·page/size 범위를 사용합니다. 금액은 정수, ID는 문자열 UUID, 시각은 UTC ISO8601입니다. 유효기간과 상태/버전 검사 기준은 policies.md가 소유합니다.
+- 목록은 고정 createdAt DESC,id DESC 정렬·page/size 범위를 사용합니다. 금액은 정수, ID는 문자열 UUID, 시각의 입력·출력은 [공통 시간 규약](../CONTRIBUTING.md#요청과-응답)을 따릅니다. 유효기간과 상태/버전 검사 기준은 policies.md가 소유합니다.
 - 버전이 있는 업무 리소스의 DELETE는 query의 expectedVersion, 다른 변경은 DTO의 expectedVersion을 검증합니다. 로그인·현재 세션 로그아웃·비밀번호 재설정에는 expectedVersion을 요구하지 않습니다.
 - `Idempotency-Key` 필수 여부는 아래 기능 목록과 OpenAPI를 따릅니다. 같은 키·본문의 재요청은 기존 결과로 연결하고 같은 키의 다른 본문은 `409`입니다. 사용자 API 키는 계정 종류·계정 ID·작업별로 구분하며, 내부 명령 키는 발신 서비스·업무 종류와 함께 식별합니다. 구매자 가입의 키 범위·재요청·충돌·보존 기한은 [구매자 가입 재시도](policies.md#구매자-가입-재시도)를 따릅니다.
 
@@ -206,7 +206,7 @@ PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반�
 
 `GET /internal/payment-reconciliation-events`는 Payment가 소유하며 Settlement 전용 서비스 자격만 허용합니다. 사용자·Gateway·일반 운영자 자격으로 호출하지 않고 Gateway에 공개하지 않습니다. 다른 서비스 DB 직접 조회를 대체하는 읽기 전용 계약이며 금융 실행 API가 아닙니다.
 
-- 최초 요청은 `cutoffAt`(UTC)과 `size`(1~100, 기본 100)를 받습니다. Payment는 검증한 최대 업무 트랜잭션 시간보다 긴 안전 여유가 지난 마감만 허용하며, 미래 마감·준비 전 기준선은 `409 RECONCILIATION_CUTOFF_NOT_READY`입니다. 원천 이력·안전 여유를 확인할 수 없으면 503으로 중단하며 현재 상태로 대체하지 않습니다.
+- 최초 요청은 `cutoffAt`(오프셋을 포함한 시각)과 `size`(1~100, 기본 100)를 받습니다. Payment는 검증한 최대 업무 트랜잭션 시간보다 긴 안전 여유가 지난 마감만 허용하며, 미래 마감·준비 전 기준선은 `409 RECONCILIATION_CUTOFF_NOT_READY`입니다. 원천 이력·안전 여유를 확인할 수 없으면 503으로 중단하며 현재 상태로 대체하지 않습니다.
 - `occurredAt≤cutoffAt`인 `PaymentConfirmed`·`RefundFinancialCompleted`를 **발행 여부와 무관하게** 제공합니다. E·M·P·B·F·N은 원거래에 고정한 금액이며 환불 이벤트도 양수 원금액을 반환합니다. 대조 측은 이벤트 종류에 따라 최초 반영·상쇄를 구분합니다. 이후 환불·정책 변경으로 과거 금액을 다시 계산하지 않습니다.
 - 내부 대조는 회차를 이어 읽는 이벤트 피드이므로 `createdAt DESC,eventId DESC`의 keyset cursor를 사용합니다. 응답은 공통 목록의 `items/page/size/totalElements/totalPages`와 `cutoffAt/snapshotAt/nextCursor`를 반환합니다. 최초 조회의 snapshotAt·원천 조회 경계·cutoffAt·size를 cursor에 묶고, 이후 요청에서는 같은 cutoffAt·size와 cursor를 사용합니다. 기준선 이벤트 집합·금융 값은 불변이며 발행 위치만 진행에 따라 달라질 수 있습니다. 잘못된 cursor·다른 조건의 재사용은 400입니다.
 - `publicationState=PENDING`은 미발행 또는 ack 뒤 위치 저장 전 중단을 포함합니다. `topic`은 고정된 원천 토픽이며 `partition/offset/publishedAt`은 함께 null입니다. `PUBLISHED`이면 세 필드가 모두 있고 위치는 ack 결과입니다. null을 0으로 바꾸거나 미발행 이벤트를 페이지에서 제외하지 않습니다.

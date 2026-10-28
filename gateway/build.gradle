@@ -6,3 +6,11 @@ dependencies {
 tasks.named('processResources') {
     from(rootProject.file('docs/openapi.json')) { into 'contracts' }
 }
+
+tasks.named('processTestResources') {
+    ['gateway', 'commerce', 'payment', 'settlement', 'finance-mock'].each { service ->
+        from(rootProject.file("${service}/src/main/resources/application.yml")) {
+            into "time-contract/${service}"
+        }
+    }
+}

@@ -3,6 +3,7 @@
 
 import json
 from pathlib import Path
+import re
 import subprocess
 import time
 from urllib.error import HTTPError
@@ -50,6 +51,11 @@ def main():
         if service != "gateway":
             assert not config["services"][service].get("ports"), service
         print(f"PASS {service}: readiness, metrics and port boundary")
+
+        logs = compose("logs", "--no-color", "--no-log-prefix", "--tail=100", service).stdout
+        timestamps = re.findall(r"(?m)^(\d{4}-\d{2}-\d{2}T\S+)\s", logs)
+        assert timestamps and all(stamp.endswith("+09:00") for stamp in timestamps), service
+    print("PASS app logs: explicit KST offset for all six processes")
 
     for service in ["commerce", "payment", "settlement"]:
         with urlopen(f"{base}/v3/api-docs/{service}", timeout=15) as response:
@@ -128,6 +134,20 @@ def main():
                     service, database, result.stderr
                 )
     print("PASS PostgreSQL: four databases, own access and cross-service denial")
+
+    times = compose(
+        "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "postgres",
+        "-v", "ON_ERROR_STOP=1", "-Atq", input_text="""
+SHOW TimeZone;
+SHOW log_timezone;
+CREATE TEMP TABLE time_smoke (occurred_at timestamptz NOT NULL);
+INSERT INTO time_smoke VALUES ('2026-10-31T15:00:00.123456Z');
+SELECT occurred_at::text FROM time_smoke;
+SELECT occurred_at = '2026-11-01T00:00:00.123456+09:00'::timestamptz FROM time_smoke;
+""",
+    ).stdout.splitlines()
+    assert times == ["Asia/Seoul", "Asia/Seoul", "2026-11-01 00:00:00.123456+09", "t"], times
+    print("PASS PostgreSQL: KST query/log settings and stored instant/microsecond preservation")
 
     kafka = ["exec", "-T", "kafka"]
     tool = "/opt/kafka/bin/"
