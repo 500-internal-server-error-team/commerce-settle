@@ -1,13 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="952" viewBox="0 0 1200 952" role="img" aria-labelledby="title desc">
   <title id="title">쿠폰 ERD</title>
   <desc id="desc">주요 필드와 논리 관계, 단일·복합 유일제약과 적용 조건. 전체 컬럼과 제약은 데이터 모델 문서가 기준이며 물리 FK는 없다.</desc>
+  <defs>
+    <marker id="replacement-arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0 0 8 3 0 6Z" fill="#64748b" />
+    </marker>
+  </defs>
   <rect width="1200" height="952" fill="#ffffff" />
   <path data-relation="coupon_templates:buyer_coupons" d="M360,198 L432,198" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
   <path data-relation="buyer_coupons:coupon_history" d="M768,142 L840,142" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
   <path data-relation="coupon_issue_runs:coupon_issue_targets" d="M360,660 L432,660" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
   <path data-relation="coupon_templates:coupon_issue_targets" d="M192,372 L192,498.894 Q192,506.894 200,506.894 L489.03,506.894 Q497.03,506.894 497.03,514.894 L497.03,560" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
   <path data-relation="coupon_issue_targets:buyer_coupons" d="M600,560 L600,464" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
-  <path data-relation="coupon_issue_runs:coupon_issue_runs" data-via="replaces_run_id" d="M72,560 V536 Q72,528 80,528 H128 Q136,528 136,536 V560" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
   <g data-entity="coupon_templates" data-box="24,24,336,348">
     <rect x="24.0" y="24" width="336.0" height="348" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
     <text x="40.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">쿠폰 템플릿</text>
@@ -101,7 +105,7 @@
       <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid?</tspan>
     </text>
     <text x="448.0" y="244" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
-      <tspan x="448.0">reserved_order_id</tspan>
+      <tspan x="448.0">→ reserved_order_id</tspan>
       <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid?</tspan>
     </text>
     <path d="M448,258h304" stroke="#e2e8f0" />
@@ -165,7 +169,7 @@
   </g>
   <g data-entity="coupon_issue_runs" data-box="24,560,336,292">
     <rect x="24.0" y="560" width="336.0" height="292" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
-    <text x="40.0" y="584" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">월 발급 작업</text>
+    <text x="40.0" y="584" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">월간 발급 회차</text>
     <text x="40.0" y="602" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">coupon_issue_runs</text>
     <path d="M24,616h336" stroke="#e2e8f0" />
     <text x="40.0" y="636" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
@@ -208,7 +212,7 @@
   </g>
   <g data-entity="coupon_issue_targets" data-box="432,560,336,280">
     <rect x="432.0" y="560" width="336.0" height="280" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
-    <text x="448.0" y="584" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">월 발급 대상</text>
+    <text x="448.0" y="584" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">월간 발급 대상</text>
     <text x="448.0" y="602" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">coupon_issue_targets</text>
     <path d="M432,616h336" stroke="#e2e8f0" />
     <text x="448.0" y="636" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
@@ -262,6 +266,16 @@
   <text x="24" y="886" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend"># PK    → 논리 참조    UK 괄호 안 컬럼 조합의 중복을 막음</text>
   <text x="24" y="906" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend">적용 조건: 해당 조건의 행끼리만 검사 · 추가 유일제약이 없으면 제약 영역 생략 · 관계선은 물리 FK가 아님</text>
   <text x="24" y="926" fill="#526176" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" data-role="owner">쿠폰 도메인 · 커머스(commerce) 소유 · commerce DB</text>
-  <text x="84" y="548" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" data-role="cardinality" data-label-for="coupon_issue_runs:coupon_issue_runs" data-endpoint="source">0..1</text>
-  <text x="148" y="548" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" data-role="cardinality" data-label-for="coupon_issue_runs:coupon_issue_runs" data-endpoint="target">0..1</text>
+  <g id="run-replacement-roles" data-box="840,336,336,184" data-note="same-table-reference">
+    <rect x="840" y="336" width="336" height="184" rx="4" fill="#fff" stroke="#94a3b8" stroke-width="1" />
+    <text x="856" y="360" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" dominant-baseline="central">회차 교체 관계</text>
+    <text x="856" y="380" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">coupon_issue_runs 안의 두 역할</text>
+    <text x="856" y="420" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b" text-anchor="start" dominant-baseline="central">대체 회차</text>
+    <text x="1096" y="420" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b" text-anchor="middle" dominant-baseline="central">이전 회차</text>
+    <path data-relation="coupon_issue_runs:coupon_issue_runs" data-via="replaces_run_id" data-direction="replacement-to-previous" d="M936 420H1040" fill="none" stroke="#64748b" stroke-width="1.2" marker-end="url(#replacement-arrow)" />
+    <text x="988" y="400" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="9" font-weight="400" fill="#526176" text-anchor="middle" dominant-baseline="central">replaces_run_id</text>
+    <text x="856" y="462" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176" dominant-baseline="central">각 회차가 참조하는 이전 회차: 0..1</text>
+    <text x="856" y="482" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176" dominant-baseline="central">각 회차를 대체하는 새 회차: 0..1</text>
+    <text x="856" y="502" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176" dominant-baseline="central">최초 회차는 null · 이전 회차는 CANCELLED</text>
+  </g>
 </svg>
