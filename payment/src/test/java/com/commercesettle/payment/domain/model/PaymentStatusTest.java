@@ -1,12 +1,12 @@
 package com.commercesettle.payment.domain.model;
 
-import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
-public class PaymentStatusTest {
+class PaymentStatusTest {
   @ParameterizedTest
   @CsvSource({
     "PENDING, PROCESSING",
@@ -30,7 +30,8 @@ public class PaymentStatusTest {
     "UNKNOWN, CANCELLED",
     "PROCESSING, CANCELLED",
     "CONFIRMED, PROCESSING",
-    "CANCELLED, PENDING"
+    "CANCELLED, PENDING",
+    "PENDING, PENDING"
   })
   @DisplayName("전이표에 없는 상태로는 이동할 수 없다")
   void rejectsUndefinedTransitions(PaymentStatus from, PaymentStatus to) {
