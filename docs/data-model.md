@@ -1071,6 +1071,8 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 ![메시지·멱등성·감사 ERD](diagrams/erd-integration.svg)
 
+Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보존·삭제 초기값](decisions/0005-kafka-event-delivery-and-capacity.md#보존과-삭제-초기값)을 따릅니다. 첫 구현은 이 DB 기록의 자동 삭제를 비활성화하며 일반 관리·가입의 기존 만료 정책은 유지합니다. 해석 불가 메시지의 격리는 원본 bytes·topic·partition·offset·실패 사유를 같은 소비자 DB에 저장할 수 있어야 하고, 구체 테이블·컬럼은 해당 소비자 migration에서 정의합니다.
+
 ### outbox
 
 소유: `각 서비스 DB`. 발행할 이벤트.
