@@ -4456,7 +4456,7 @@
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
         "x-implemented": false,
-        "description": "원자주문/주소/재고/쿠폰/이벤트예약·Outbox. 이벤트참여를별도HTTP명령으로중복생성하지않음. 결제는비동기. 쿠폰과 마일리지 병용·지원하지 않는 수단을 거절하고 할인 부담별 사본과 예산 예약을 보존한다.",
+        "description": "원자주문/주소/재고/쿠폰/이벤트예약·Outbox. 이벤트참여를별도HTTP명령으로중복생성하지않음. 결제는비동기. 쿠폰과 마일리지 병용·지원하지 않는 수단을 거절하고 할인 부담별 사본과 예산 예약을 보존한다. 신규 접수는 Kafka·Worker 적체/저장 공간/관측 유효성 gate를 검사하며 용량 부족이면 예약·새 업무 저장 전 503 COMMON_CAPACITY_EXCEEDED와 Retry-After: 30을 반환한다. 기존 동일 멱등키·본문 결과와 본문 충돌409 판정이 먼저이며 거절을 완료된 멱등 결과로 캐시하지 않는다. 같은 키·본문으로 재시도한다. 취소·환불·기존 지급·원업무 복구·조회에는 이 신규 접수 gate를 적용하지 않는다.",
         "security": [
           {
             "accountSession": []
@@ -4586,12 +4586,22 @@
             }
           },
           "503": {
-            "description": "일시적 저장/외부 장애",
+            "description": "일시적 저장/외부 장애; 신규 접수 용량 부족은 COMMON_CAPACITY_EXCEEDED",
             "content": {
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "COMMON_CAPACITY_EXCEEDED일 때 재시도 전 대기 초. 다른 503에는 필수 아님.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "example": 30
               }
             }
           }
@@ -4861,7 +4871,7 @@
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
         "x-implemented": false,
-        "description": "같은주문사본·결제구성유지. 미확정거래재시도금지, 모든예약재확보실패시409.",
+        "description": "같은주문사본·결제구성유지. 미확정거래재시도금지, 모든예약재확보실패시409. 신규 접수는 Kafka·Worker 적체/저장 공간/관측 유효성 gate를 검사하며 용량 부족이면 예약·새 업무 저장 전 503 COMMON_CAPACITY_EXCEEDED와 Retry-After: 30을 반환한다. 기존 동일 멱등키·본문 결과와 본문 충돌409 판정이 먼저이며 거절을 완료된 멱등 결과로 캐시하지 않는다. 같은 키·본문으로 재시도한다. 취소·환불·기존 지급·원업무 복구·조회에는 이 신규 접수 gate를 적용하지 않는다.",
         "security": [
           {
             "accountSession": []
@@ -4970,12 +4980,22 @@
             }
           },
           "503": {
-            "description": "일시적 저장/외부 장애",
+            "description": "일시적 저장/외부 장애; 신규 접수 용량 부족은 COMMON_CAPACITY_EXCEEDED",
             "content": {
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/Problem"
                 }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "COMMON_CAPACITY_EXCEEDED일 때 재시도 전 대기 초. 다른 503에는 필수 아님.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "example": 30
               }
             }
           }
