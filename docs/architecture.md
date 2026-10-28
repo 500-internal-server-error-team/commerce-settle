@@ -83,6 +83,8 @@ Prometheus·Grafana는 각각 `prometheus-data`·`grafana-data` 볼륨을 사용
 
 Payment 두 실행은 같은 jar·DB를 사용하고 `PAYMENT_ROLE=api|worker`로 메트릭 태그를 구분합니다. 실제 역할별 Bean 활성화와 업무 처리 로직은 구현해야 합니다.
 
+Settlement의 정산·모의 지급은 주말·공휴일 구분 없이 매일 처리합니다. 앱 내부 스케줄러가 정산 Job을 실행하고 영속 지급 작업은 같은 Settlement의 Worker가 맡습니다. 대조 Job은 자기 DB와 [Payment 내부 조회](api.md#정산-대조-조회)·대역 조회·자기 Consumer 그룹 offset을 사용하며 다른 업무 DB에 직접 접근하지 않습니다. 실행·재시작·대조 경계는 [정산 배치 결정](decisions/0007-settlement-batch-scope-and-schedule.md)을 따릅니다. 스케줄러와 Spring Batch는 앱에 포함하며 별도 서버·컨테이너·공통 업무 DB를 만들지 않습니다.
+
 커머스의 모듈·실행·패키지 이름은 `commerce`로 통일합니다. 판매자 업무의 `Seller`·`SELLER`·`sellerId`와 `/api/sellers`는 유지합니다. 배포 전 설계의 물리 DB·계정·스키마도 `commerce`, 비밀번호 변수도 `COMMERCE_DB_PASSWORD`로 맞춥니다. 회원·인증·상품·주문·쿠폰·선착순 이벤트는 같은 커머스 서비스에 두고 주문·재고·쿠폰·이벤트 수량 예약을 같은 DB 트랜잭션으로 처리합니다. 마일리지 잔액·예약·원장은 Payment 안에 두어 금융 결제 상태와 원자 저장합니다. [데이터 소유권](design.md#4-서비스-경계와-원천-데이터)과 [계정·권한](design.md#사용자와-거래-주체)을 따르며 신규 앱·DB는 추가하지 않습니다.
 
 PostgreSQL 컨테이너 1대에서 DB·계정·스키마를 분리합니다. 계정은 자기 DB에만 연결할 수 있고, 다른 서비스 DB에 대한 CONNECT 권한은 없습니다. 애플리케이션에는 자기 DB 자격만 주며, Flyway가 각 스키마를 관리합니다. 개발용 공용 PostgreSQL 컨테이너는 독립 운영 DB의 장애 격리를 제공하지 않습니다.

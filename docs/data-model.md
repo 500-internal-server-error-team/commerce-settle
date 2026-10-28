@@ -732,7 +732,7 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 | `business_key` | `uuid` | 업무 값 |
 | `external_ref` | `uuid?` | 업무 값 |
 | `status` | `varchar(24)` | 업무 값 |
-| `hold_reason` | `varchar(32)?` | NON_BUSINESS_DAY/UNKNOWN/CONFIRMED_REJECTION |
+| `hold_reason` | `varchar(32)?` | UNKNOWN/CONFIRMED_REJECTION |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
@@ -786,13 +786,17 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 | `leg` | `varchar(24)` | 업무 값 |
 | `amount` | `bigint` | 업무 값 |
 | `business_ref` | `uuid` | 업무 값 |
+| `source_event_id` | `uuid` | 원장을 만든 원천 금융 이벤트 ID; 같은 이벤트의 각 leg가 공유 |
+| `source_occurred_at` | `timestamptz` | 원천 Envelope의 occurredAt; 늦은 반영·재전달에도 불변 |
 | `reversal_of` | `uuid?` | →settlement_entries.id |
 | `policy_version` | `varchar(32)` | 업무 값 |
 | `created_at` | `timestamptz` | NOT NULL |
 
 **제약:** UNIQUE(payment_id,leg,business_ref), UNIQUE(reversal_of) WHERE NOT NULL. SOURCE:EXTERNAL/MILEAGE/PLATFORM_COUPON, ALLOCATION:SELLER/FEE. 각 측 합계=B=E+M+P; 환불은 원항목 반대 부호. 판매자 잔액은 SELLER leg만 집계.
 
-**인덱스:** (item_id,created_at,id); (payment_id,side).
+**인덱스:** (item_id,created_at,id); (payment_id,side); (source_occurred_at,payment_id,id); (source_event_id).
+
+대조는 생성 시각이 아닌 source_occurred_at으로 범위를 자릅니다. 최초 원장은 `PaymentConfirmed`, 환불 상쇄는 `RefundFinancialCompleted`의 ID·시각을 보존하고 기존 원금액·상쇄 유일성을 유지합니다. 다른 서비스 DB를 조회해 시각을 채우지 않습니다.
 
 ### payout_jobs
 
@@ -813,7 +817,7 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(payout_id), UNIQUE(business_key). 지급 항목 선점·금액·작업 생성 원자 저장. next_run_at은 Payout 응답의 nextAttemptAt 원천입니다. 비영업일 보류는 같은 작업을 재개하고 attempts를 늘리지 않으며 확정 거절은 REVIEW_REQUIRED입니다.
+**제약:** UNIQUE(payout_id), UNIQUE(business_key). 지급 항목 선점·금액·작업 생성 원자 저장. next_run_at은 Payout 응답의 nextAttemptAt 원천입니다. 주말·공휴일도 같은 실행·재시도 규칙을 적용하며 확정 거절은 REVIEW_REQUIRED입니다.
 
 Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건을 적용합니다. 금융 결과와 지급 항목·Job을 함께 반영하고, 만료된 실행자의 결과는 모두 롤백합니다. 호출·조회·원키 재개는 [공통 복구](policies.md#공통-복구)를 따릅니다.
 
@@ -1085,19 +1089,23 @@ Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보�
 | `aggregate_id` | `uuid` | 업무 값 |
 | `aggregate_version` | `bigint` | 업무 값 |
 | `topic` | `varchar(100)` | 업무 값 |
+| `occurred_at` | `timestamptz` | 원천 Envelope의 occurredAt과 같은 불변 시각 |
 | `message_key` | `varchar(100)` | 업무 값 |
 | `payload` | `jsonb` | 업무 값 |
 | `status` | `varchar(16)` | 업무 값 |
 | `attempts` | `integer` | 업무 값 |
 | `next_run_at` | `timestamptz` | 업무 값 |
 | `lease_until` | `timestamptz?` | 업무 값 |
+| `published_partition` | `integer?` | 발행 ack의 파티션; 위치 미확정이면 null |
+| `published_offset` | `bigint?` | 발행 ack의 offset; 위치 미확정이면 null |
+| `published_at` | `timestamptz?` | ack의 위치를 DB에 반영한 시각; 위치 미확정이면 null |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** id=eventId. 상태와 함께 원자 저장. payload에 주소·비밀번호·인증 토큰·실결제 비밀값 금지.
+**제약:** id=eventId. occurred_at은 payload의 원천 occurredAt과 같고 업무 상태와 함께 원자 저장합니다. published_partition·published_offset·published_at은 모두 null이거나 모두 값이 있어야 하며 파티션·offset은 0 이상입니다. 발행 완료 상태와 위치를 같은 DB 트랜잭션으로 저장합니다. 미발행·ack 후 저장 전 중단은 위치 미확정이며 대조에서 제외하지 않습니다. 재발행은 원래 id·occurred_at·본문을 유지하고 확인한 위치를 갱신할 수 있습니다. 위치가 바뀌어도 소비자의 원래 eventId 처리 기록은 유효합니다. payload에 주소·비밀번호·인증 토큰·실결제 비밀값을 넣지 않습니다.
 
-**인덱스:** (status,next_run_at,lease_until,id).
+**인덱스:** (status,next_run_at,lease_until,id); (occurred_at,created_at,id).
 
 ### inbox
 

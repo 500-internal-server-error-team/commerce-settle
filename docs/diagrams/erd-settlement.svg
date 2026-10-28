@@ -1,8 +1,8 @@
 <?xml version='1.0' encoding='UTF-8'?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="792" viewBox="0 0 1200 792" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="828" viewBox="0 0 1200 828" role="img" aria-labelledby="title desc">
   <title id="title">정산·지급 ERD</title>
   <desc id="desc">주요 필드와 논리 관계, 단일·복합 유일제약과 적용 조건. 전체 컬럼과 제약은 데이터 모델 문서가 기준이며 물리 FK는 없다.</desc>
-  <rect width="1200" height="792" fill="#ffffff" />
+  <rect width="1200" height="828" fill="#ffffff" />
   <path data-relation="settlement_batches:payouts" d="M360,134 L432,134" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
   <path data-relation="payouts:settlement_items" d="M768,134 L840,134" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
   <path data-relation="payouts:payout_jobs" d="M600,288 L600,384" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
@@ -117,8 +117,8 @@
       <text x="856.0" y="224" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (payment_id)</text>
     </g>
   </g>
-  <g data-entity="settlement_entries" data-box="24,384,336,296">
-    <rect x="24.0" y="384" width="336.0" height="296" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+  <g data-entity="settlement_entries" data-box="24,384,336,332">
+    <rect x="24.0" y="384" width="336.0" height="332" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
     <text x="40.0" y="408" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">정산 원장</text>
     <text x="40.0" y="426" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">settlement_entries</text>
     <path d="M24,440h336" stroke="#e2e8f0" />
@@ -151,16 +151,24 @@
       <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid</tspan>
     </text>
     <text x="40.0" y="586" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">source_event_id</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="40.0" y="604" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">source_occurred_at</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> timestamptz</tspan>
+    </text>
+    <text x="40.0" y="622" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
       <tspan x="40.0">reversal_of</tspan>
       <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid?</tspan>
     </text>
-    <path d="M40,600h304" stroke="#e2e8f0" />
+    <path d="M40,636h304" stroke="#e2e8f0" />
     <g data-constraint="UK" data-columns="payment_id,leg,business_ref" data-condition="">
-      <text x="40.0" y="620" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (payment_id, leg, business_ref)</text>
+      <text x="40.0" y="656" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (payment_id, leg, business_ref)</text>
     </g>
     <g data-constraint="PUK" data-columns="reversal_of" data-condition="reversal_of IS NOT NULL">
-      <text x="40.0" y="646" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (reversal_of)</text>
-      <text x="40.0" y="662" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">적용 조건: reversal_of IS NOT NULL</text>
+      <text x="40.0" y="682" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (reversal_of)</text>
+      <text x="40.0" y="698" fill="#64748b" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="unique-condition">적용 조건: reversal_of IS NOT NULL</text>
     </g>
   </g>
   <g data-entity="payout_jobs" data-box="432,384,336,244">
@@ -252,8 +260,8 @@
   <text x="1020.0" y="372" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="settlement_items:settlement_reservations" data-endpoint="target">0..N</text>
   <text x="976.65" y="264" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="settlement_items:settlement_entries" data-endpoint="source">1</text>
   <text x="204.0" y="372" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="settlement_items:settlement_entries" data-endpoint="target">0..N</text>
-  <path d="M24,704H1176" stroke="#e2e8f0" />
-  <text x="24" y="726" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend"># PK    → 논리 참조    UK 괄호 안 컬럼 조합의 중복을 막음</text>
-  <text x="24" y="746" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend">적용 조건: 해당 조건의 행끼리만 검사 · 추가 유일제약이 없으면 제약 영역 생략 · 관계선은 물리 FK가 아님</text>
-  <text x="24" y="766" fill="#526176" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" data-role="owner">정산 원장·정산·지급 도메인 · Settlement 소유 · settlement DB</text>
+  <path d="M24,740H1176" stroke="#e2e8f0" />
+  <text x="24" y="762" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend"># PK    → 논리 참조    UK 괄호 안 컬럼 조합의 중복을 막음</text>
+  <text x="24" y="782" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend">적용 조건: 해당 조건의 행끼리만 검사 · 추가 유일제약이 없으면 제약 영역 생략 · 관계선은 물리 FK가 아님</text>
+  <text x="24" y="802" fill="#526176" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" data-role="owner">정산 원장·정산·지급 도메인 · Settlement 소유 · settlement DB</text>
 </svg>
