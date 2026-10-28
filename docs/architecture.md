@@ -38,7 +38,7 @@ PostgreSQL·Kafka·Redis는 각각 `postgres-data`·`kafka-data`·`redis-data` �
 
 가입·로그인·복구·상품/이벤트 조회의 공개 여부는 OpenAPI의 PUBLIC 작업을 HTTP 메서드·정규화한 경로로 대조합니다. 경로 접두사만으로 공개하지 않으며 백엔드의 Gateway 허용 작업도 같은 기준을 사용합니다. 보호 작업에 검증된 계정 종류·ID가 없거나 로그아웃에 세션 해시가 없으면 `401`로 거절합니다. `/internal`·`/mock`는 Gateway 경로를 만들지 않으며 기존 서비스별/운영자별 자격과 허용 경로를 직접 확인합니다. Worker는 접수된 내부 명령·업무 키로 실행하며 사용자 세션을 재사용하지 않습니다. 컨테이너의 같은 네트워크나 클라이언트가 보낸 계정 ID만으로 호출을 신뢰하지 않습니다.
 
-인증용 Redis 쓰기는 커머스에만 허용합니다. Gateway는 해당 세션·가드의 읽기와 읽기 전용 검증 스크립트, Redis 실행 식별자 확인만 허용하고 Payment·Settlement·Mock에는 인증 키 접근을 허용하지 않습니다. 키 접두사 대신 Redis ACL로 경계를 적용합니다. 현재 Compose의 공용 비밀번호 설정에는 이 ACL·세션 처리·Gateway 신원 전달이 아직 없으며 구현 시 함께 적용·검증해야 합니다.
+인증용 Redis 쓰기는 커머스에만 허용합니다. Gateway는 해당 세션·가드의 읽기와 읽기 전용 검증 스크립트, Redis 실행 식별자 확인만 [허용](decisions/0003-redis-sessions.md#gateway의-redis-권한과-스크립트-재적재)하고 Payment·Settlement·Mock에는 인증 키 접근을 허용하지 않습니다. 키 접두사 대신 Redis ACL로 경계를 적용합니다. 현재 Compose의 공용 비밀번호 설정에는 이 ACL·세션 처리·Gateway 신원 전달이 아직 없으며 구현 시 함께 적용·검증해야 합니다.
 
 ### 거래 알림
 
