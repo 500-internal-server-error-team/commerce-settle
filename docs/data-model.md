@@ -1272,7 +1272,7 @@ Payment는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니
 | 결제 | PENDING→PROCESSING→CONFIRMED/DECLINED/UNKNOWN. E=0이면 PROCESSING 없이 PENDING→CONFIRMED. 외부 호출 전 미결제 취소만 PENDING→CANCELLED이며 PROCESSING·UNKNOWN은 취소하지 않고 예약을 유지·조회. UNKNOWN은 원대역 조회와 거래 부재 시의 원키 재요청 결과로만 확정하며 원업무 키·예약을 유지. DECLINED 재시도는 예약 재확보 후 새 attempt. 재시도 대기 중에는 DECLINED를 유지하고, 취소 요청을 처리해 이후 승인·재시도를 차단할 때만 DECLINED→CANCELLED. CONFIRMED·CANCELLED는 종료. |
 | 외부 시도 | PENDING→PROCESSING→APPROVED/DECLINED/UNKNOWN. M 전액이면 attempt 없음. |
 | 금융 환불 | RESERVING→EXTERNAL_PENDING→RESTORING→INTERNAL_PENDING→COMPLETED. 원장 상쇄·커머스 복구 확인 대기는 INTERNAL_PENDING이며, RefundCompleted 발행만으로 완료하지 않는다. RefundOrderRestored를 수신·반영한 뒤 COMPLETED로 전이한다. 외부 거절은 COMPENSATING→DECLINED, 결과 불명은 UNKNOWN. |
-| 정산 항목 | WAITING_CONFIRMATION/PAYABLE→REFUND_RESERVED→REFUNDED. 지급은 PAYABLE→PAYOUT_RESERVED→PAID만 허용. 보상은 previous_item_status와 최신 구매확정/환불 정보를 대조해 조건부 복귀. |
+| 정산 항목 | WAITING_CONFIRMATION→PAYABLE은 구매확정과 선행 원장이 모두 준비된 ready_at 시점. WAITING_CONFIRMATION/PAYABLE→REFUND_RESERVED→REFUNDED. 지급은 PAYABLE→PAYOUT_RESERVED→PAID만 허용. 보상은 previous_item_status와 최신 구매확정/환불 정보를 대조해 조건부 복귀. |
 | 거래 알림 | 판매 COLLECTING→PENDING, 나머지 PENDING→SENDING→SENT/RETRY/UNKNOWN/REVIEW_REQUIRED. UNKNOWN은 원수신 조회부터 재개. SENT는 모의 수신 확인이며 금융 성공 상태를 바꾸지 않는다. |
 | 재고 예약 | RESERVED→CONSUMED→RESTORED, RESERVED→RELEASED→RESERVED(새 결제 회차). 회차가 일치하는 결과만 반영하며 세부 조건은 [inventory_reservations](#inventory_reservations). |
 | 쿠폰·이벤트·예약 | [정책](policies.md)의 상태와 시각 조건을 함께 적용한다. 상태를 덮어써 사용/복원 이력을 지우지 않는다. |
