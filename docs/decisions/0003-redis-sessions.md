@@ -54,14 +54,14 @@ Gateway는 공유 인증 상태를 Redis에서 직접 조회하도록 설계했�
 
 ### 원자 검증에 Lua 스크립트를 쓰는 이유
 
-**세션·가드 확인과 조건부 변경은 Redis Lua 스크립트로 실행합니다.** [Redis는 스크립트를 실행하는 동안 다른 명령을 처리하지 않으므로](https://redis.io/docs/latest/develop/programmability/eval-intro/) 여러 키의 확인과 변경을 경합 없이 처리할 수 있습니다. WATCH/MULTI도 원자성을 보장하지만 왕복이 늘고 전용 연결과 충돌 재시도가 필요하므로 스크립트를 우선합니다. 두 방식의 트레이드오프는 [WATCH/MULTI와의 비교](#watchmulti와의-비교)에 정리합니다.
+**세션·가드 확인과 조건부 변경은 Redis Lua 스크립트로 실행합니다.** [Redis는 스크립트를 실행하는 동안 다른 명령을 처리하지 않으므로](https://redis.io/docs/latest/develop/programmability/eval-intro/) 여러 키의 확인과 변경을 경합 없이 처리할 수 있습니다. Gateway의 읽기 검증은 MULTI/EXEC 재조회로도 재시도 없이 처리할 수 있지만 왕복이 1번 늘고 전용 연결이 필요합니다. 커머스의 조건부 쓰기는 WATCH 충돌 재시도가 필요합니다. 두 경로 모두 이 비용을 피하려고 스크립트를 우선합니다. 경로별 트레이드오프는 [WATCH/MULTI와의 비교](#watchmulti와의-비교)에 정리합니다.
 
 | 이점 | 이 프로젝트에서 얻는 것 |
 | --- | --- |
 | 확인과 변경의 원자 처리 | 가드가 ACTIVE이고 버전이 같을 때만 세션 저장, 가드의 상태·인증 버전·pendingChangeId 조건부 변경, 같은 변경 ID만 확정 반영 |
-| 한 번의 왕복으로 판정 | Gateway가 세션·가드·버전·만료를 한 번에 확인하고 결과 코드만 받음. 매 보호 요청의 Redis 조회 지연을 줄임 |
+| 한 번의 왕복으로 판정 | Gateway가 세션·가드·버전·만료를 한 번에 확인하고 결과 코드만 받음. [비교 가정](#비교-가정)에서 MULTI/EXEC 재조회보다 매 보호 요청의 왕복이 1번 적음 |
 | 판정 규칙의 일원화 | 여러 Gateway 인스턴스가 같은 스크립트로 판단 |
-| 읽기 전용 강제 | Gateway는 [`EVALSHA_RO`](https://redis.io/docs/latest/commands/evalsha_ro/)와 [읽기 키 권한](https://redis.io/docs/latest/operate/oss_and_stack/management/security/acl/#key-permissions)만으로 검증 |
+| 읽기 전용 강제 | ACL로 쓰기 명령을 막은 Gateway 자격에서 [`EVALSHA_RO`](https://redis.io/docs/latest/commands/evalsha_ro/)가 스크립트 안의 쓰기도 거절. 권한은 [Gateway의 Redis 권한과 스크립트 재적재](#gateway의-redis-권한과-스크립트-재적재)를 따름 |
 
 스크립트에는 아래 한계가 있으며 각 해결 방안을 함께 적용합니다.
 
@@ -71,27 +71,77 @@ Gateway는 공유 인증 상태를 Redis에서 직접 조회하도록 설계했�
 | 실행 중 Redis 전체가 다른 요청을 처리하지 않음 | 키 2~3개만 읽고 쓰는 짧은 스크립트로 제한하고 반복문·SCAN을 쓰지 않음 |
 | 실행 중 오류가 나도 앞선 쓰기를 되돌리지 않음. noeviction에서는 메모리를 늘리는 첫 쓰기에서 스크립트가 중단됨 | 조건을 모두 확인한 뒤 마지막에 씀. 쓰기 거절은 정책대로 503으로 처리하고 토큰을 반환하지 않음 |
 | Redis와 PostgreSQL 사이의 일관성은 해결하지 않음 | [폐기 정책](../policies.md#폐기와-저장소-복구)의 가드 선차단·DB 커밋·확정 반영·재조정을 따름 |
-| 스크립트 캐시는 재시작·장애 조치 때 사라져 `NOSCRIPT` 오류가 남 | 클라이언트가 EVALSHA 실패 시 스크립트를 다시 적재해 실행함. 커머스는 Spring `RedisScript` 실행이 이를 처리함. Spring 템플릿에는 `EVALSHA_RO`가 없으므로 Gateway는 Lettuce `evalshaReadOnly`로 호출하고 재적재를 직접 구현함 |
+| 스크립트 캐시는 재시작·장애 조치·`SCRIPT FLUSH` 때 사라져 `NOSCRIPT` 오류가 남 | 클라이언트가 스크립트 본문으로 다시 실행해 캐시에 적재함. 커머스는 Spring `RedisScript` 실행이 이를 처리함. Spring 템플릿에는 `EVALSHA_RO`가 없으므로 Gateway는 Lettuce로 [직접 재적재](#gateway의-redis-권한과-스크립트-재적재)함 |
 | ISO 8601 문자열은 스크립트에서 시각을 비교하기 어려움 | 시각을 epoch 밀리초 정수로 저장하고 Redis `TIME`과 비교함. 키 만료는 `PEXPIREAT`으로 expiresAt에 맞춤 |
 | 복제본에서 읽으면 폐기 전 값을 볼 수 있음 | 인증 검증은 주 노드에서만 실행함 |
 | 자동 재접속 뒤 실행 식별자를 확인하기 전에 AOF로 복원된 데이터로 인증할 수 있음 | 재연결을 감지하면 즉시 인증을 차단하고 [복구 절차](../development.md#redis-세션-검증과-복구)를 따름 |
-| Java 코드 안의 Lua 문자열은 단위 시험이 어려움 | 스크립트를 리소스 파일로 분리하고 실제 Redis 통합 시험으로 경합·폐기·만료를 검증함 |
+| 판정 분기를 Java 단위 시험으로 확인할 수 없음 | 스크립트를 리소스 파일로 분리하고 실제 Redis 통합 시험에서 판정 분기를 확인함. 경합·만료·복구 시험은 [두 방식 모두 필요](#두-방식에-공통인-검증)함 |
 
 ### WATCH/MULTI와의 비교
 
-WATCH/MULTI는 클라이언트가 값을 읽어 판단한 뒤 EXEC로 반영하고, 그 사이 감시한 키가 바뀌면 EXEC가 실패해 다시 시도합니다. Lua는 판단과 변경을 서버 안에서 한 번에 실행합니다. **WATCH는 조건을 Java로 쓰는 대신 왕복·연결·재시도 경로가 복잡해지고, Lua는 실행 경로가 단순한 대신 스크립트의 작성·배포·시험 부담이 늘어납니다.**
+MULTI/EXEC는 묶은 명령을 다른 명령 없이 연속 실행하지만 그 사이에 결과를 보고 판단할 수 없습니다. 조건부 쓰기는 WATCH로 읽은 키를 감시하고, 감시한 키가 바뀌면 EXEC가 실패해 다시 시도합니다. 읽기만 하는 검증은 WATCH 없이 MULTI/EXEC로 같은 시점의 값을 읽을 수 있습니다. 따라서 Gateway 읽기 검증과 커머스 조건부 쓰기를 나눠 비교합니다. Lua는 두 경로 모두 판단과 변경을 서버 안에서 한 번에 실행합니다.
 
-| 기준 | WATCH/MULTI | Lua 스크립트 |
+WATCH/MULTI는 판단 로직이 길거나 자주 바뀔 때, 판단 중 외부 데이터나 무거운 계산이 필요할 때 유리합니다. 이 프로젝트의 판정은 키 2~3개를 비교하는 짧은 로직입니다.
+
+#### 비교 가정
+
+- 한 연결에서 앞 응답에 의존하지 않는 명령은 파이프라이닝으로 함께 보내고, MULTI부터 EXEC까지는 한 묶음으로 보냅니다. 파이프라이닝하지 않으면 WATCH/MULTI의 왕복은 명령 수만큼 늘고 Lua는 그대로 1번입니다.
+- WATCH·MULTI 상태는 연결에 묶입니다. [Lettuce 공유 연결은 트랜잭션 명령에 쓰지 않으므로](https://docs.spring.io/spring-data/redis/reference/redis/drivers.html) 전용 연결이 필요합니다. 매번 열지 풀로 재사용할지는 구현 선택이며 비교는 풀을 전제하지 않습니다. Lua는 명령 하나이므로 공유 연결로 실행합니다.
+- 단일 Redis 노드의 주 노드에서 읽고, 세션의 계정 종류·ID로 가드 키를 만드는 현재 키 구조를 전제합니다.
+- 왕복 수는 설계상 최소값입니다. 실제 지연은 구현 후 같은 조건에서 측정합니다.
+
+#### Gateway 읽기 검증
+
+MULTI/EXEC 방식은 ① 세션을 읽어 계정 종류·ID로 가드 키를 만들고 ② MULTI 안에서 세션·가드·`TIME`을 함께 다시 읽습니다. ②의 세션이 없거나 계정이 ①과 다르면 거절하고, 같으면 ②의 값으로 판정합니다. 쓰지 않으므로 WATCH가 필요 없고 EXEC 충돌·재시도도 없습니다.
+
+| 기준 | MULTI/EXEC 재조회 | Lua(`EVALSHA_RO`) |
 | --- | --- | --- |
-| 왕복 | 발급은 WATCH → 가드 읽기 → MULTI/EXEC로 최소 3번. 검증은 가드 키를 세션에서 얻으므로 최소 2번 | 발급·검증 모두 1번 |
-| 경합 | 감시 키가 바뀌면 EXEC가 실패함. 재시도 횟수·백오프·소진 시 503 처리를 구현 | 실행 중 다른 명령이 끼어들지 않아 재시도가 없음 |
-| 연결 | WATCH 상태가 연결에 묶임. [Lettuce 공유 연결은 트랜잭션 명령에 쓰지 않으므로](https://docs.spring.io/spring-data/redis/reference/redis/drivers.html) `SessionCallback`과 전용 연결·풀이 필요하고, [MULTI와 EXEC 사이 오류에는 DISCARD로 정리](https://docs.spring.io/spring-data/redis/reference/redis/transactions.html) | 명령 하나이므로 공유 연결 사용 |
-| Gateway(WebFlux) | Spring Data Redis 3.5.13의 reactive API에 multi·watch·exec가 없어 Lettuce 네이티브 연결을 직접 다룸 | 위 한계 표처럼 Lettuce `evalshaReadOnly`를 직접 호출 |
-| 코드·시험 | 조건을 Java로 읽고 단위 시험 가능 | Lua 리소스와 실제 Redis 통합 시험 필요 |
-| Redis 영향 | 판단하는 동안에도 다른 요청을 처리함 | 실행 중에는 다른 요청이 기다림. 짧은 스크립트로 제한 |
-| Cluster | 트랜잭션 키도 같은 슬롯이어야 하지만 키를 미리 선언하는 제약은 없음 | 스크립트 안에서 만드는 가드 키를 다시 설계 |
+| 왕복 | 2번: 세션 조회, MULTI 묶음 | 1번 |
+| 경합 | 재시도 없음. ②의 묶음이 같은 시점의 값 | 재시도 없음 |
+| 연결 | 전용 연결. Spring Data Redis 3.5.13의 reactive API에 multi·exec가 없어 Lettuce 네이티브 연결을 직접 다룸 | 공유 연결. Spring 템플릿에 `EVALSHA_RO`가 없어 Lettuce를 직접 호출 |
+| 판정 위치 | Java. 판정 분기를 단위 시험 가능 | Lua. 판정 분기도 실제 Redis 통합 시험 |
+| 권한 | `HMGET`·`TIME`·`MULTI`·`EXEC`와 인증 키 읽기 | `EVALSHA_RO`·`EVAL_RO`, 스크립트 안의 `HMGET`·`TIME`과 인증 키 읽기 |
+| 스크립트 캐시 | 관계없음 | `NOSCRIPT` 재적재 필요 |
 
-WATCH는 경합이 드물고 판단 로직이 길거나 자주 바뀔 때, 판단 중 외부 데이터나 무거운 계산이 필요할 때 유리합니다. 이 프로젝트의 판정은 키 2~3개를 비교하는 짧은 로직입니다. Gateway 검증은 매 보호 요청의 WebFlux 경로이므로 왕복과 연결 관리의 비용이 큽니다. 커머스 쓰기는 경합이 드물어 재시도 비용이 평소에는 작지만, 연결·재시도 코드를 따로 두지 않고 Gateway와 같은 방식으로 맞춥니다.
+두 방식 모두 재시도 없이 원자적으로 읽습니다. 차이는 매 보호 요청의 왕복 1번과 전용 연결 관리, 그 대신 감수하는 스크립트 배포·재적재 부담입니다. Gateway 검증은 모든 보호 요청에서 실행되므로 왕복과 연결 관리를 줄이는 Lua를 선택합니다.
+
+#### 커머스 조건부 쓰기
+
+세션 발급은 가드가 ACTIVE이고 버전이 같을 때만 세션을 저장합니다. 가드 선차단은 pendingChangeId를 조건부로 설정하고, 확정 반영은 같은 변경 ID만 허용합니다. 가드 키는 DB에서 확인한 계정으로 미리 알 수 있습니다.
+
+| 기준 | WATCH/MULTI | Lua(`EVALSHA`) |
+| --- | --- | --- |
+| 왕복 | 2번: WATCH와 가드 읽기, MULTI 묶음. 충돌마다 2번 추가 | 1번 |
+| 경합 | 감시한 가드가 바뀌면 EXEC 실패. 재시도 횟수·백오프·소진 시 503 처리를 구현 | 재시도 없음 |
+| 연결 | 전용 연결과 `SessionCallback`. [MULTI와 EXEC 사이 오류는 DISCARD로 정리](https://docs.spring.io/spring-data/redis/reference/redis/transactions.html) | 공유 연결과 Spring `RedisScript` |
+| 판정 위치 | Java. 판정 분기를 단위 시험 가능 | Lua. 판정 분기도 실제 Redis 통합 시험 |
+| Redis 영향 | 판단하는 동안에도 다른 요청을 처리 | 실행 중 다른 요청이 기다림. 짧은 스크립트로 제한 |
+
+충돌은 같은 계정의 동시 로그인·폐기에서만 생기므로 재시도 비용은 평소 작고, WATCH도 충분한 대안입니다. Gateway에 Lua 리소스·통합 시험·재적재를 이미 두므로 커머스도 같은 방식으로 맞춰 원자 처리 방식을 하나로 유지하고 재시도 경로를 두지 않습니다.
+
+#### 두 방식에 공통인 검증
+
+어느 방식이든 원자성은 실제 Redis에서 확인합니다. 동시 로그인·폐기 경합, 고정 만료 경계의 `TIME` 비교와 `PEXPIREAT`, Redis 재시작·재연결·복구 시험은 두 방식 모두 [Redis 세션 검증과 복구](../development.md#redis-세션-검증과-복구)대로 수행합니다. WATCH는 판정 분기를 단위 시험으로 확인할 수 있지만 EXEC 충돌·재시도 소진·DISCARD를 통합 시험해야 합니다. Lua는 판정 분기와 `NOSCRIPT` 재적재를 통합 시험합니다. Cluster에서는 두 방식 모두 세션과 가드 키가 같은 슬롯이어야 하며, Lua는 가드 키를 KEYS로 넘기도록 추가로 바꿉니다.
+
+### Gateway의 Redis 권한과 스크립트 재적재
+
+Gateway 인증용 Redis 사용자에게는 아래만 허용합니다. 스크립트 안의 명령도 [호출한 사용자의 ACL로 검사](https://redis.io/docs/latest/operate/oss_and_stack/management/security/acl/)하므로 조회·시각 명령을 따로 허용합니다.
+
+| 용도 | 명령 | 키 |
+| --- | --- | --- |
+| 검증 실행 | `EVALSHA_RO`, `NOSCRIPT` 때 `EVAL_RO` | 세션 키를 KEYS로 전달 |
+| 세션·가드 조회 | 스크립트 안의 `HMGET` | `%R~commerce-settle:auth:session:*`, `%R~commerce-settle:auth:subject:*` |
+| 시각 확인 | 스크립트 안의 `TIME` | 없음 |
+| 실행 식별자 확인 | `INFO server`의 run_id | 없음 |
+
+규칙은 `-@all +evalsha_ro +eval_ro +hmget +time +info`와 위 읽기 키 패턴입니다. 클라이언트가 연결할 때 보내는 명령은 구현 시 확인해 필요한 것만 추가합니다. `EVAL`·`EVALSHA`·`SCRIPT`(LOAD·FLUSH·KILL 포함)·쓰기 명령과 요청 제한 키는 허용하지 않습니다. `EVAL_RO`를 허용하므로 Gateway 자격으로 임의의 읽기 스크립트를 실행할 수 있지만 위 명령·키 권한을 넘지 못합니다. 그 대신 `SCRIPT LOAD` 권한을 주지 않습니다.
+
+재적재는 다음 순서입니다.
+
+1. 기동 때 Lua 리소스를 읽어 SHA1을 계산합니다. Redis에 미리 적재하지 않습니다.
+2. 검증은 Lettuce `evalshaReadOnly`로 실행합니다. 응답이 `NOSCRIPT`이면 같은 요청에서 같은 본문을 `evalReadOnly`(`EVAL_RO`)로 한 번 실행하고 그 결과로 판정합니다. 이 실행이 스크립트를 캐시에 넣으므로 이후 요청은 `EVALSHA_RO`로 돌아갑니다.
+3. 그 밖의 오류·시간 초과와 재실행 실패는 재시도하지 않고 503입니다. 여러 요청이 동시에 `NOSCRIPT`를 받아도 결과가 같으므로 잠금을 두지 않습니다.
+4. 재적재는 인증 게이트와 실행 식별자 확인을 대신하지 않습니다. 재시작으로 캐시가 사라졌다면 실행 식별자 변경으로 인증이 이미 차단되며, 재적재 성공을 근거로 인증을 재개하지 않습니다.
 
 ## 구현 계약과 감수하는 비용
 
@@ -100,7 +150,7 @@ WATCH는 경합이 드물고 판단 로직이 길거나 자주 바뀔 때, 판�
 - DB 계정 변경과 Redis 폐기는 분산된 변경입니다. 가드 선차단·DB 인증 버전·감사 기록·재조정으로 실패를 처리합니다. Redis 장애 때 보호 요청은 503이며 DB 세션으로 자동 전환하지 않습니다. 이 복구 복잡성은 DB 세션보다 늘어난 비용입니다.
 - Redis 복구 후 이전 폐기 상태가 사라질 가능성을 고려합니다. [AOF 영속화](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/)만으로 폐기 보존을 보장하지 않고 [인증 세대 교체·재로그인 절차](../development.md#redis-세션-검증과-복구)를 적용합니다. 일시 단절에도 사용자 인증을 차단하고 운영 복구를 거치는 가용성 비용이 있습니다.
 - 현재 단일 Redis·공용 캐시 구성에서는 메모리와 장애 영향이 공유됩니다. ACL 구현, 사용량 관측과 인증 영역 접근 제한이 필요합니다. 별도 인증 서버·새 업무 서비스·DB 세션 사본은 추가하지 않습니다.
-- 세션 발급·가드 선차단·확정 반영 스크립트는 커머스 자격으로만 실행합니다. Gateway 자격에는 `EVALSHA_RO`와 인증 키의 읽기 권한만 줍니다. 가드 키를 스크립트 안에서 만드는 검증은 단일 노드를 전제로 합니다.
+- 세션 발급·가드 선차단·확정 반영 스크립트는 커머스 자격으로만 실행합니다. Gateway 자격에는 [읽기 전용 검증에 필요한 명령과 인증 키 읽기 권한](#gateway의-redis-권한과-스크립트-재적재)만 줍니다. 가드 키를 스크립트 안에서 만드는 검증은 단일 노드를 전제로 합니다.
 
 ## 구현 후 검증과 재검토
 
