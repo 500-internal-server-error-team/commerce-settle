@@ -54,7 +54,7 @@ Gateway는 공유 인증 상태를 Redis에서 직접 조회하도록 설계했�
 
 ### 원자 검증에 Lua 스크립트를 쓰는 이유
 
-**세션·가드 확인과 조건부 변경은 Redis Lua 스크립트로 실행합니다.** [Redis는 스크립트를 실행하는 동안 다른 명령을 처리하지 않으므로](https://redis.io/docs/latest/develop/programmability/eval-intro/) 여러 키의 확인과 변경을 경합 없이 처리할 수 있습니다. WATCH/MULTI도 원자성을 보장하지만 왕복이 늘고 전용 연결과 충돌 재시도가 필요하므로 스크립트를 우선합니다.
+**세션·가드 확인과 조건부 변경은 Redis Lua 스크립트로 실행합니다.** [Redis는 스크립트를 실행하는 동안 다른 명령을 처리하지 않으므로](https://redis.io/docs/latest/develop/programmability/eval-intro/) 여러 키의 확인과 변경을 경합 없이 처리할 수 있습니다. WATCH/MULTI도 원자성을 보장하지만 왕복이 늘고 전용 연결과 충돌 재시도가 필요하므로 스크립트를 우선합니다. 두 방식의 트레이드오프는 [WATCH/MULTI와의 비교](#watchmulti와의-비교)에 정리합니다.
 
 | 이점 | 이 프로젝트에서 얻는 것 |
 | --- | --- |
@@ -76,6 +76,22 @@ Gateway는 공유 인증 상태를 Redis에서 직접 조회하도록 설계했�
 | 복제본에서 읽으면 폐기 전 값을 볼 수 있음 | 인증 검증은 주 노드에서만 실행함 |
 | 자동 재접속 뒤 실행 식별자를 확인하기 전에 AOF로 복원된 데이터로 인증할 수 있음 | 재연결을 감지하면 즉시 인증을 차단하고 [복구 절차](../development.md#redis-세션-검증과-복구)를 따름 |
 | Java 코드 안의 Lua 문자열은 단위 시험이 어려움 | 스크립트를 리소스 파일로 분리하고 실제 Redis 통합 시험으로 경합·폐기·만료를 검증함 |
+
+### WATCH/MULTI와의 비교
+
+WATCH/MULTI는 클라이언트가 값을 읽어 판단한 뒤 EXEC로 반영하고, 그 사이 감시한 키가 바뀌면 EXEC가 실패해 다시 시도합니다. Lua는 판단과 변경을 서버 안에서 한 번에 실행합니다. **WATCH는 조건을 Java로 쓰는 대신 왕복·연결·재시도 경로가 복잡해지고, Lua는 실행 경로가 단순한 대신 스크립트의 작성·배포·시험 부담이 늘어납니다.**
+
+| 기준 | WATCH/MULTI | Lua 스크립트 |
+| --- | --- | --- |
+| 왕복 | 발급은 WATCH → 가드 읽기 → MULTI/EXEC로 최소 3번. 검증은 가드 키를 세션에서 얻으므로 최소 2번 | 발급·검증 모두 1번 |
+| 경합 | 감시 키가 바뀌면 EXEC가 실패함. 재시도 횟수·백오프·소진 시 503 처리를 구현 | 실행 중 다른 명령이 끼어들지 않아 재시도가 없음 |
+| 연결 | WATCH 상태가 연결에 묶임. [Lettuce 공유 연결은 트랜잭션 명령에 쓰지 않으므로](https://docs.spring.io/spring-data/redis/reference/redis/drivers.html) `SessionCallback`과 전용 연결·풀이 필요하고, [MULTI와 EXEC 사이 오류에는 DISCARD로 정리](https://docs.spring.io/spring-data/redis/reference/redis/transactions.html) | 명령 하나이므로 공유 연결 사용 |
+| Gateway(WebFlux) | Spring Data Redis 3.5.13의 reactive API에 multi·watch·exec가 없어 Lettuce 네이티브 연결을 직접 다룸 | 위 한계 표처럼 Lettuce `evalshaReadOnly`를 직접 호출 |
+| 코드·시험 | 조건을 Java로 읽고 단위 시험 가능 | Lua 리소스와 실제 Redis 통합 시험 필요 |
+| Redis 영향 | 판단하는 동안에도 다른 요청을 처리함 | 실행 중에는 다른 요청이 기다림. 짧은 스크립트로 제한 |
+| Cluster | 트랜잭션 키도 같은 슬롯이어야 하지만 키를 미리 선언하는 제약은 없음 | 스크립트 안에서 만드는 가드 키를 다시 설계 |
+
+WATCH는 경합이 드물고 판단 로직이 길거나 자주 바뀔 때, 판단 중 외부 데이터나 무거운 계산이 필요할 때 유리합니다. 이 프로젝트의 판정은 키 2~3개를 비교하는 짧은 로직입니다. Gateway 검증은 매 보호 요청의 WebFlux 경로이므로 왕복과 연결 관리의 비용이 큽니다. 커머스 쓰기는 경합이 드물어 재시도 비용이 평소에는 작지만, 연결·재시도 코드를 따로 두지 않고 Gateway와 같은 방식으로 맞춥니다.
 
 ## 구현 계약과 감수하는 비용
 
