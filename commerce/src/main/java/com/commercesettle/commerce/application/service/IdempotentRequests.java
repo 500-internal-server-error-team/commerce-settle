@@ -93,5 +93,12 @@ public class IdempotentRequests {
    * @param body 리소스 ID를 포함해 요청 의미를 결정하는 값들. 순서도 비교에 포함된다.
    */
   public record Request(
-      String actorKind, String actorId, String operation, String key, List<?> body) {}
+      String actorKind, String actorId, String operation, String key, List<?> body) {
+    /** 멱등키 원문과 요청 본문 값은 로그·예외 메시지에 남기지 않는다. */
+    @Override
+    public String toString() {
+      return "Request[actorKind=%s, actorId=%s, operation=%s, key=<redacted>, body=<%d values>]"
+          .formatted(actorKind, actorId, operation, body == null ? 0 : body.size());
+    }
+  }
 }
