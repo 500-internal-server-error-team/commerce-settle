@@ -97,6 +97,10 @@ Compose DNS로 서비스를 찾습니다. 초기 구성에 별도 서비스 레�
 
 ## 정기 작업과 비동기 실행
 
+![앱 내부 배치·Consumer·지급 Worker의 실행과 저장 경계](diagrams/background-execution.svg)
+
+그룹은 서비스의 소유 범위이며 DB는 별도 PostgreSQL에 있습니다. Scheduler가 Job을 시작하고, 일배치가 저장한 지급 작업은 Worker가 임대합니다. 원장 Consumer는 이 흐름과 독립적으로 이벤트를 반영합니다.
+
 아래는 전체 서비스의 목표 실행 구조입니다. 조건·금액·상태는 연결한 업무 정책이 소유하고, 이 절은 실행 앱·방식과 복구 경계를 소유합니다. 실제 제공 동작은 코드·실행 설정·검증 결과로 확인합니다. 정산 배치·지급의 세부 동작은 [정산 정책](policies.md#정산재처리), 대조의 시점·완료 조건은 [측정 지표 결정](decisions/0002-performance-and-integrity-metrics.md#금액-불일치)을 따릅니다.
 
 | 작업 | 실행 앱 | 방식·시작 조건 | 기준 |
