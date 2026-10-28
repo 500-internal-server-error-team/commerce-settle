@@ -29,7 +29,7 @@ Gateway·서비스·운영자가 백엔드를 호출할 때 **발신자·대상 
 각 백엔드는 컨트롤러 전에 한 곳에서 아래 순서로 판정하고, 결과를 **검증된 발신자**(발신자 ID·종류, Gateway 경유면 계정 종류·ID) 하나로 응용 계층에 전달합니다.
 
 1. `Authorization`이 없거나 Bearer가 아니거나 일치하는 자격이 없으면 `401 COMMON_AUTHENTICATION_REQUIRED`입니다.
-2. 요청의 HTTP 메서드·정규화한 경로를 빌드에 포함한 OpenAPI 작업과 대조합니다. 명세에 없는 작업은 `404 COMMON_RESOURCE_NOT_FOUND`입니다. 작업의 `x-owner-service`가 자기 서비스가 아니거나 발신자 종류가 위 표의 `x-actor`와 맞지 않으면 `403 COMMON_ROLE_FORBIDDEN`입니다. 예를 들어 Gateway 자격으로 `/internal`을, Settlement 자격으로 `SERVICE:payment` 작업을, 운영자 자격으로 `/api/` 작업을 호출할 수 없습니다.
+2. 요청의 HTTP 메서드·정규화한 경로를 빌드에 포함한 OpenAPI 작업과 대조합니다. 명세에 없는 메서드·경로 조합은 같은 경로에 다른 메서드가 있어도 `404 COMMON_RESOURCE_NOT_FOUND`입니다. 작업의 `x-owner-service`가 자기 서비스가 아니거나 발신자 종류가 위 표의 `x-actor`와 맞지 않으면 `403 COMMON_ROLE_FORBIDDEN`입니다. 예를 들어 Gateway 자격으로 `/internal`을, Settlement 자격으로 `SERVICE:payment` 작업을, 운영자 자격으로 `/api/` 작업을 호출할 수 없습니다.
 3. `X-Authenticated-Actor-Kind`·`X-Authenticated-Actor-Id`·`X-Authenticated-Session-Hash`는 발신자가 `gateway`일 때만 읽습니다. 다른 발신자의 요청에 하나라도 있으면 `403 COMMON_ROLE_FORBIDDEN`입니다. 이 판정은 위 한 곳에서만 합니다.
 4. Gateway 경유 보호 작업은 [신원 전달 계약](../architecture.md#사용자-인증과-내부-신원-전달)을 따릅니다. 계정 종류·ID가 없거나 로그아웃에 세션 해시가 없으면 `401`, 계정 종류가 작업의 `x-actor`와 다르면 `403`입니다. PUBLIC 작업은 신원 헤더를 사용하지 않습니다.
 
@@ -83,7 +83,7 @@ HMAC이 더 막는 경우는 요청 하나의 헤더가 노출될 때뿐입니�
 구현 PR에서 다음을 HTTP 경계와 Compose smoke로 확인합니다.
 
 - 자격 없음·틀린 값·다른 대상의 자격은 `401`, 교체 중에는 두 값 모두 허용하고 제거 뒤에는 이전 값을 거절
-- 발신자와 맞지 않는 작업(Gateway의 `/internal`, Settlement의 `SERVICE:payment` 작업, 운영자의 `/api/`)과 같은 경로의 다른 메서드는 `403`
+- 발신자와 맞지 않는 등록 작업(Gateway의 `/internal`, Settlement의 `SERVICE:payment` 작업, 운영자의 `/api/`)은 `403`, 명세에 없는 메서드·경로 조합(커머스에 유효한 Gateway 자격으로 GET만 등록된 `/api/products`에 `POST`)은 `404`
 - Gateway가 아닌 자격에 신원 헤더가 있으면 `403`, 클라이언트가 보낸 신원 헤더는 Gateway에서 제거
 - 필수 자격 설정 누락·짧은 값에서 기동 실패, 로그·추적·응답에 자격 미포함
 
