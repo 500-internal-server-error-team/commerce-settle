@@ -129,9 +129,9 @@
     <line data-flow="event" x1="240" x2="280" y1="392" y2="392" stroke="#c56b00" stroke-width="2.2" stroke-dasharray="8 5" stroke-linecap="round" />
     <text x="292" y="396" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">Kafka 이벤트</text>
   </g>
-  <g id="background-execution" data-execution-scope="planned-in-process">
+  <g id="background-execution" data-execution-scope="target-in-process">
     <line x1="32" x2="848" y1="420" y2="420" stroke="#e2e8f0" stroke-width="0.8" />
-    <text x="32" y="444" font-size="12" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b">앱 내부의 정기·비동기 실행 · 구현 예정</text>
+    <text x="32" y="444" font-size="12" font-weight="600" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#1e293b">목표 실행 구조 · 앱 내부의 정기·비동기 실행</text>
     <text x="32" y="468" font-size="11" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176">commerce: 월간 선정·등급·쿠폰 발급 / 주문·만료·보존·알림 처리</text>
     <text x="32" y="488" font-size="11" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176">finance-mock: PG 입금 반영 / 생산·소비 앱: Outbox 발행·대기 작업 재처리</text>
     <text x="32" y="516" font-size="10" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" fill="#526176">실행 책임·주기·복구는 architecture.md의 정기 작업 표를 따릅니다. 독립 컨테이너 수는 유지합니다.</text>
