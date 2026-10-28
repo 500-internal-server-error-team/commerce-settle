@@ -1,6 +1,6 @@
 # 데이터 모델
 
-서비스별 PostgreSQL과 [Redis 인증 데이터](#redis-인증-데이터)의 설계입니다. PostgreSQL의 물리 FK는 만들지 않고 아래 관계를 애플리케이션에서 검증합니다. 공통 시간 컬럼은 [시간 정보와 감사 기록](architecture.md#시간-정보와-감사-기록)에 따라 채웁니다. 생성/수정 시각과 행위 감사 로그는 별개입니다. 식별자는 서버 생성 UUID, 금액·누적 수량은 bigint, PostgreSQL 시각은 UTC `timestamptz`입니다. `?`는 nullable, 나머지 컬럼은 NOT NULL입니다. 숫자 버전은 0부터 시작하고 조건부 갱신마다 증가합니다. 실제 Flyway migration은 아직 없으며 [DB 변경 정책](migrations.md)을 따릅니다.
+서비스별 PostgreSQL과 [Redis 인증 데이터](#redis-인증-데이터)의 설계입니다. PostgreSQL의 물리 FK는 만들지 않고 아래 관계를 애플리케이션에서 검증합니다. 공통 시간 컬럼은 [시간 정보와 감사 기록](architecture.md#시간-정보와-감사-기록)에 따라 채웁니다. 생성/수정 시각과 행위 감사 로그는 별개입니다. 식별자는 서버 생성 UUID, 금액·누적 수량은 bigint, PostgreSQL 시각은 `timestamptz`이며 조회 시간대는 KST입니다. 내부 저장은 같은 절대시각을 유지합니다. `?`는 nullable, 나머지 컬럼은 NOT NULL입니다. 숫자 버전은 0부터 시작하고 조건부 갱신마다 증가합니다. 실제 Flyway migration은 아직 없으며 [DB 변경 정책](migrations.md)을 따릅니다.
 
 아래 컬럼·제약·인덱스가 기준이고 ERD는 주요 필드와 관계를 요약합니다. 각 뷰는 같은 DB 안의 관계를 보여주며 외부 서비스 ID는 값으로만 저장합니다. 주소·연락처는 별도 암호화 사본이고 금융 이벤트에 포함하지 않습니다.
 
@@ -1000,7 +1000,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 | `recipient_kind` | `varchar(16)` | BUYER/SELLER |
 | `recipient_id` | `uuid` | 종류에 맞는 계정 ID; 논리 참조 |
 | `channel` | `varchar(24)` | MOCK_KAKAO 고정 |
-| `dedup_key` | `varchar(200)` | 단건=원업무 ID, 판매 묶음=UTC 구간 시작 |
+| `dedup_key` | `varchar(200)` | 단건=원업무 ID, 판매 묶음=KST 구간 시작 |
 | `item_count` | `integer` | 중복 제외 항목 수; 1 이상 |
 | `first_occurred_at` | `timestamptz` | 항목 중 가장 이른 발생 시각 |
 | `total_amount` | `bigint` | 판매 묶음의 주문 결제액 합계; 그 외 0 |
@@ -1190,7 +1190,7 @@ Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보�
 | `reason_code` | `varchar(80)?` | 거절·보상·운영 처리 사유 코드 |
 | `event_id` | `uuid?` | 수신 이벤트이면 원 eventId |
 | `correlation_id` | `varchar(100)` | 요청/이벤트/배치의 비밀값 없는 추적 ID |
-| `occurred_at` | `timestamptz` | 해당 서비스에서 변경한 UTC 시각 |
+| `occurred_at` | `timestamptz` | 해당 서비스에서 변경한 시각 |
 
 **제약:** 추가 전용이며 UPDATE/DELETE API를 만들지 않는다. 업무 변경·감사 행을 같은 트랜잭션으로 저장하고 둘 다 롤백한다. 멱등 재요청은 기존 결과를 반환하며 상태 변경 감사 행을 다시 만들지 않는다. 실제 운영 재처리는 새 실행 행위를 기록한다. 계정 인증 변경·가드 복구는 ACCOUNT_AUTH_CHANGED/ACCOUNT_AUTH_GUARD_RECOVERED로 기록하고 correlation_id에 pendingChangeId를 사용해 DB 확정 결과와 연결한다. 월간 오류 교정은 COUPON_ISSUE_RUN_REPLACED와 COUPON_ISSUE_RUN_CREATED를 같은 트랜잭션에 남기고 reason_code=AGGREGATION_ERROR, 검증한 OPERATOR와 원회차·대체 회차를 기록한다. 원금액 변화의 근거는 원결제·마일리지/정산 원장을 참조한다. 전체 요청/응답·주소·전화번호·비밀번호·토큰·자유 형식 본문을 저장하지 않는다. 인증 실패는 별도 보안 로그이며 성공한 업무 감사 행으로 위장하지 않는다.
 

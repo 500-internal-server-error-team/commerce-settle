@@ -3,7 +3,7 @@
   "info": {
     "title": "commerce-settle API 설계",
     "version": "0.1.0-design",
-    "description": "구현 예정 계약. 현재 Gateway/Swagger가 이업무API를제공한다는뜻이아님. 정책v1=policies.md, DB=data-model.md."
+    "description": "구현 예정인 업무 API 계약입니다. 시각은 KST(+09:00)로 출력하며 입력에는 Z를 포함한 오프셋이 필요합니다. 업무 정책은 policies.md, DB 모델은 data-model.md를 따릅니다."
   },
   "servers": [
     {
@@ -2843,8 +2843,8 @@
                 "discountAmount": 3000,
                 "minOrderAmount": 23000,
                 "issuanceLimit": 1000,
-                "validFrom": "2026-10-31T15:00:00Z",
-                "validUntil": "2026-11-30T15:00:00Z",
+                "validFrom": "2026-11-01T00:00:00+09:00",
+                "validUntil": "2026-12-01T00:00:00+09:00",
                 "totalBudget": 3000000,
                 "minSellerNetAmount": 17000,
                 "allowedMethods": [
@@ -3362,8 +3362,8 @@
                 "productId": "00000000-0000-4000-8000-000000000003",
                 "eventPrice": 10000,
                 "quota": 1000,
-                "startsAt": "2026-11-01T00:00:00Z",
-                "endsAt": "2026-11-02T00:00:00Z"
+                "startsAt": "2026-11-01T09:00:00+09:00",
+                "endsAt": "2026-11-02T09:00:00+09:00"
               }
             }
           }
@@ -4257,7 +4257,7 @@
                   "remainingQuantity": 0,
                   "percent": 70,
                   "admission": "WAITING_PAYMENTS",
-                  "asOf": "2026-11-01T00:10:00Z"
+                  "asOf": "2026-11-01T09:10:00+09:00"
                 }
               }
             }
@@ -4508,7 +4508,7 @@
                   "refundDeadlineAt": null,
                   "purchaseConfirmedAt": null,
                   "version": 0,
-                  "createdAt": "2026-11-01T00:00:00Z",
+                  "createdAt": "2026-11-01T09:00:00+09:00",
                   "sellerCouponAmount": 0,
                   "platformCouponAmount": 3000,
                   "settlementBaseAmount": 23000
@@ -10816,7 +10816,7 @@
               "type": "string",
               "format": "date-time"
             },
-            "description": "정산 회차의 고정 UTC 마감 시각. 원천 occurredAt이 이 시각 이하인 금융 이벤트만 포함한다."
+            "description": "정산 회차의 고정 마감 시각(KST 출력). 원천 occurredAt이 이 시각 이하인 금융 이벤트만 포함한다."
           },
           {
             "name": "cursor",
@@ -17501,11 +17501,11 @@
             "isMock": true,
             "status": "SENT",
             "title": "환불 완료",
-            "body": "10월 26일 03:00 UTC 거래: 외부 결제 7,000원 환불, 마일리지 2,000점 복원. 복원 직후 잔액 5,000점. 모의 발송입니다.",
+            "body": "10월 26일 12:00 KST 거래: 외부 결제 7,000원 환불, 마일리지 2,000점 복원. 복원 직후 잔액 5,000점. 모의 발송입니다.",
             "itemCount": 1,
-            "occurredAt": "2026-10-26T03:00:00Z",
-            "createdAt": "2026-10-26T03:00:01Z",
-            "sentAt": "2026-10-26T03:00:02Z"
+            "occurredAt": "2026-10-26T12:00:00+09:00",
+            "createdAt": "2026-10-26T12:00:01+09:00",
+            "sentAt": "2026-10-26T12:00:02+09:00"
           }
         ]
       },
@@ -17980,7 +17980,7 @@
             "mileageAmount": 2000,
             "mileageBalanceAfter": 5000,
             "walletVersion": 4,
-            "processedAt": "2026-10-26T03:00:00Z"
+            "processedAt": "2026-10-26T12:00:00+09:00"
           }
         ],
         "allOf": [

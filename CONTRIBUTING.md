@@ -86,7 +86,8 @@ type은 `feat`, `fix`, `refactor`, `docs`, `test`, `style`, `build`, `ci`, `chor
 
 ### 요청과 응답
 
-- JSON 필드는 `camelCase`, 식별자는 문자열, 금액은 KRW 원 단위 정수로 표현합니다. 금액 계산에 부동소수점을 사용하지 않습니다. 날짜·시간은 UTC의 ISO 8601 문자열로 주고받습니다.
+- JSON 필드는 `camelCase`, 식별자는 문자열, 금액은 KRW 원 단위 정수로 표현합니다. 금액 계산에 부동소수점을 사용하지 않습니다. 시각의 출력은 KST(`Asia/Seoul`)의 ISO 8601 문자열과 `+09:00`으로 통일합니다. 입력은 오프셋을 필수로 받고 `Z`를 포함한 같은 절대시각을 허용합니다.
+- 내부 시각·비교는 `Instant`, API·이벤트 DTO의 시각은 `OffsetDateTime`을 사용합니다. 출력 경계에서 KST로 변환하며 시각 값에 9시간을 더하지 않습니다. 절대시각에 `LocalDateTime`을 쓰지 않고, 업무 날짜는 KST에서 계산합니다. Jackson의 시간대 설정만으로 `Instant` 출력이 바뀌지는 않습니다.
 - 요청·응답 DTO는 엔티티와 분리합니다. 입력의 형식·범위는 요청 경계에서, 상태 전이·금액·참조의 유효성은 도메인에서 검증합니다. 응답에 엔티티를 직접 직렬화하지 않습니다.
 - 성공 응답은 기능별 Response DTO를 사용합니다. 조회·처리 완료는 `200`, 리소스 생성은 `201`과 `Location`, 비동기 접수는 `202`와 처리 ID·조회 경로, 본문 없는 성공은 `204`를 사용합니다. 접수와 금융 처리 완료를 구분합니다.
 - 목록은 `items`, `page`, `size`, `totalElements`, `totalPages`를 반환합니다. `page`는 0 이상, `size`는 1~100·기본 20으로 검증하며 정렬 필드는 허용 목록으로 제한합니다. 동일한 정렬 값에는 ID를 추가해 순서를 고정합니다.
@@ -123,11 +124,11 @@ HTTP 오류는 [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 `appli
 
 ### 로그
 
-다음은 앱 로그의 구현 계약입니다. UTF-8 **한 줄 JSON**을 stdout으로 출력하고 시각은 UTC로 통일합니다. 별도 인코더 없이 Spring Boot의 [내장 Logstash JSON](https://docs.spring.io/spring-boot/3.5/reference/features/logging.html#features.logging.structured.logstash)을 사용합니다(`logging.structured.format.console=logstash`). 현재 적용 상태는 [로그 수집](docs/architecture.md#로그-수집)을 따릅니다.
+다음은 앱 로그의 구현 계약입니다. UTF-8 **한 줄 JSON**을 stdout으로 출력하고 시각은 KST(`+09:00`)로 통일합니다. 별도 인코더 없이 Spring Boot의 [내장 Logstash JSON](https://docs.spring.io/spring-boot/3.5/reference/features/logging.html#features.logging.structured.logstash)을 사용합니다(`logging.structured.format.console=logstash`). 현재 적용 상태는 [로그 수집](docs/architecture.md#로그-수집)을 따릅니다.
 
 | 필드 | 기준 |
 | --- | --- |
-| `@timestamp`, `level`, `message` | UTC ISO 8601 시각, 로그 등급, 짧은 설명. Logstash 기본 필드는 유지합니다. |
+| `@timestamp`, `level`, `message` | KST ISO 8601 시각(`+09:00`), 로그 등급, 짧은 설명. Logstash 기본 필드는 유지합니다. |
 | `service`, `role`, `env` | 서버 설정에서 추가하는 앱·실행 역할·환경. 메트릭과 같은 값을 사용하며 Payment의 `api`·`worker`를 구분합니다. |
 | `event` | 자체 로그의 고정 작업명. 예: `payment.authorize`, `refund.execute`, `settlement.payout`, `notification.send`. 프레임워크 로그에는 강제하지 않습니다. |
 | `traceId`, `spanId` | 실제 추적 문맥이 있을 때만 기록합니다. 없는 값을 만들지 않습니다. |
@@ -142,7 +143,7 @@ HTTP 오류는 [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 `appli
 업무 필드 중심의 출력 예입니다.
 
 ```json
-{"@timestamp":"2026-10-26T06:00:00Z","level":"WARN","service":"payment","role":"worker","env":"local","event":"payment.authorize","message":"PG 응답을 확인하지 못함","result":"UNKNOWN","paymentId":"a38f71bc-3899-4b31-a2ea-762b234c7d71","providerId":"PG_B","traceId":"0123456789abcdef0123456789abcdef","durationMs":5000}
+{"@timestamp":"2026-10-26T15:00:00+09:00","level":"WARN","service":"payment","role":"worker","env":"local","event":"payment.authorize","message":"PG 응답을 확인하지 못함","result":"UNKNOWN","paymentId":"a38f71bc-3899-4b31-a2ea-762b234c7d71","providerId":"PG_B","traceId":"0123456789abcdef0123456789abcdef","durationMs":5000}
 ```
 
 ### 패키지·이름·파일 추가

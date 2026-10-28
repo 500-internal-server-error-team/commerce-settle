@@ -3,7 +3,7 @@ name: commerce-settle
 x-app: &app
   restart: unless-stopped
   environment: &app-env
-    JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=65 -XX:ActiveProcessorCount=2
+    JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=65 -XX:ActiveProcessorCount=2 -Duser.timezone=Asia/Seoul
     KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     SPRING_DATA_REDIS_HOST: redis
     SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?Run python3 scripts/init_env.py}
@@ -74,6 +74,7 @@ services:
     networks: [backend]
 
   postgres:
+    command: [postgres, -c, timezone=Asia/Seoul, -c, log_timezone=Asia/Seoul]
     build:
       context: .
       dockerfile: infra/postgres/Dockerfile
