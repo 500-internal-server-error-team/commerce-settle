@@ -1,8 +1,10 @@
 package com.commercesettle.payment.domain.model;
 
 import com.commercesettle.payment.domain.exception.InvalidPaymentAmountException;
+import jakarta.persistence.Embeddable;
 
 /** 커머스가 확정한 G·S·P·M으로 결제 금액을 계산한다. 생성 시 금액 불변식을 검사한다. */
+@Embeddable
 public record PaymentAmounts(
     long grossAmount, long sellerCouponAmount, long platformCouponAmount, long mileageAmount) {
 
