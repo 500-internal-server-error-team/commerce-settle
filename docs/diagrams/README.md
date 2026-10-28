@@ -7,6 +7,7 @@ GitHub 문서에서 SVG 미리보기를 사용합니다. SVG 자체가 편집 �
 | 통합 인프라 | [infrastructure.svg](infrastructure.svg) |
 | 서비스 설계 | [services.svg](services.svg) |
 | 애플리케이션과 인프라 | [runtime.svg](runtime.svg) |
+| 배치·Consumer·지급 Worker 실행 | [background-execution.svg](background-execution.svg) |
 | PG·간편결제·지급 대역 | [payment-providers.svg](payment-providers.svg) |
 | 관측과 운영 알람 | [observability.svg](observability.svg) |
 | 거래 알림 | [notifications.svg](notifications.svg) |
@@ -32,6 +33,7 @@ GitHub 문서에서 SVG 미리보기를 사용합니다. SVG 자체가 편집 �
 기술 로고는 각 제품을 식별하기 위한 문서용 표시이며 해당 상표의 소유권은 각 소유자에게 있습니다. 임의의 PG 회사 로고는 사용하지 않습니다.
 
 - [Simple Icons](https://github.com/simple-icons/simple-icons/tree/90646e4bf7f3b89df6c37e65baf3e7bc759a517c) — CC0. Spring Boot, Apache Kafka, k6, Prometheus, Grafana, Docker, PostgreSQL, Redis.
+- [Spring Batch 공식 심볼](https://spring.io/img/projects/spring-batch.svg) — Spring 프로젝트를 식별하는 표시.
 - [OpenZipkin](https://github.com/openzipkin/openzipkin.github.io/blob/master/public/img/logo_svg/zipkin_symbol.svg) — 공식 Zipkin 심볼.
 - [Provectus Kafka UI v0.7.2](https://github.com/provectus/kafka-ui/blob/v0.7.2/documentation/images/kafka-ui-logo.png) — 프로젝트 로고, Apache-2.0 저장소.
 - [Slack 공식 로고](https://a.slack-edge.com/9cc0056/marketing/img/nav/logo.svg) — [공식 미디어 키트](https://slack.com/media-kit).
