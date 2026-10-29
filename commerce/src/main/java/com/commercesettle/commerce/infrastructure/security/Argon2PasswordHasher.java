@@ -4,7 +4,7 @@ import com.commercesettle.commerce.application.port.PasswordHasher;
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.stereotype.Component;
 
-/** Argon2id. 정책의 시작 설정인 메모리 19MiB·반복 2·병렬 1과 16바이트 salt·32바이트 해시를 쓴다. */
+/** Argon2id. 비용 값을 바꿀 때는 docs/policies.md#비밀번호와-공통-요청과 대상 환경의 로그인 부하를 함께 확인한다. */
 @Component
 class Argon2PasswordHasher implements PasswordHasher {
   private static final int SALT_BYTES = 16;

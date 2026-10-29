@@ -119,6 +119,22 @@ class SessionControllerTest {
   }
 
   @Test
+  @DisplayName("앞뒤 공백이 있는 이메일도 공백을 지운 뒤 검증해 로그인한다")
+  void stripsEmailBeforeValidatingLogin() throws Exception {
+    SellerAccount account = seller();
+    given(sessions.login(ActorKind.SELLER, "seller@example.com", "password-123"))
+        .willReturn(
+            new SessionService.Login(
+                "opaque-token", Instant.parse("2026-10-29T00:30:00Z"), account));
+
+    mvc.perform(
+            post("/api/seller-sessions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"email\":\" seller@example.com \",\"password\":\"password-123\"}"))
+        .andExpect(status().isOk());
+  }
+
+  @Test
   @DisplayName("로그아웃은 Gateway가 전달한 신원과 세션 해시로 현재 세션을 지운다")
   void logsOutCurrentSession() throws Exception {
     mvc.perform(delete("/api/sessions/current").headers(identity("SELLER")))
@@ -176,7 +192,7 @@ class SessionControllerTest {
 
     mvc.perform(post("/api/sellers").contentType(MediaType.APPLICATION_JSON).content(body))
         .andExpect(status().isCreated())
-        .andExpect(header().string("Location", "/api/accounts/me"))
+        .andExpect(header().string("Location", "/api/sellers/" + ACTOR_ID))
         .andExpect(jsonPath("$.actorKind").value("SELLER"));
 
     given(accounts.registerSeller(anyString(), anyString(), anyString(), eq("ref")))
@@ -184,6 +200,22 @@ class SessionControllerTest {
     mvc.perform(post("/api/sellers").contentType(MediaType.APPLICATION_JSON).content(body))
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.code").value("ACCOUNT_EMAIL_DUPLICATED"));
+  }
+
+  @Test
+  @DisplayName("판매자 가입은 앞뒤 공백이 있는 이메일도 공백을 지운 뒤 검증한다")
+  void stripsEmailBeforeValidatingRegistration() throws Exception {
+    SellerAccount account = seller();
+    given(accounts.registerSeller("seller@example.com", "password-123", "판매자", "ref"))
+        .willReturn(account);
+
+    mvc.perform(
+            post("/api/sellers")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"email\":\" seller@example.com \",\"password\":\"password-123\","
+                        + "\"displayName\":\"판매자\",\"payoutAccountRef\":\"ref\"}"))
+        .andExpect(status().isCreated());
   }
 
   @Test
