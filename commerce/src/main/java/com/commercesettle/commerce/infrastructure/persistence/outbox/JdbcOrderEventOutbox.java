@@ -4,6 +4,7 @@ import com.commercesettle.commerce.application.event.EventEnvelope;
 import com.commercesettle.commerce.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.commerce.application.port.OrderEventOutbox;
 import com.commercesettle.commerce.infrastructure.messaging.OutboxAppended;
+import com.commercesettle.commerce.infrastructure.persistence.TransactionLimits;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
@@ -45,7 +46,7 @@ public class JdbcOrderEventOutbox implements OrderEventOutbox {
     } catch (JsonProcessingException exception) {
       throw new IllegalArgumentException("Cannot serialize order outbox event");
     }
-    OutboxTransactionLimits.apply(jdbc);
+    TransactionLimits.apply(jdbc.getJdbcOperations());
     var params =
         new MapSqlParameterSource("id", event.eventId())
             .addValue("aggregate", event.aggregateId())
