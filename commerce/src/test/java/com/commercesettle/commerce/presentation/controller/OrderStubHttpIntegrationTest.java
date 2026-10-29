@@ -4,15 +4,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.commercesettle.commerce.application.service.OrderStubService;
 import com.commercesettle.commerce.infrastructure.config.HttpJsonConfiguration;
+import com.commercesettle.commerce.infrastructure.config.OpenApiConfiguration;
 import com.commercesettle.commerce.presentation.exception.CommerceExceptionHandler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.networknt.schema.InputFormat;
+import com.networknt.schema.Schema;
+import com.networknt.schema.SchemaLocation;
+import com.networknt.schema.SchemaRegistry;
+import com.networknt.schema.SpecificationVersion;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration;
@@ -53,6 +62,7 @@ class OrderStubHttpIntegrationTest {
       """;
   @Autowired TestRestTemplate http;
   @Autowired ObjectMapper mapper;
+  private SchemaRegistry schemas;
 
   @Test
   void createsAndReplaysThenReadsSameOwnedSnapshotThroughRealHttp() throws Exception {
@@ -61,6 +71,8 @@ class OrderStubHttpIntegrationTest {
     assertThat(created.getStatusCode().value()).isEqualTo(201);
     JsonNode order = json(created);
     assertThat(order.size()).isEqualTo(28);
+    matchesSchema("OrderStubCreate", mapper.readTree(BODY));
+    matchesSchema("Order", order);
     assertThat(order.path("productName").asText()).isEqualTo("수납 상자");
     assertThat(order.path("status").asText()).isEqualTo("PAYMENT_PENDING");
     assertThat(order.path("createdAt").asText()).isEqualTo("2026-01-20T10:00:00.123456+09:00");
@@ -101,8 +113,10 @@ class OrderStubHttpIntegrationTest {
   void listsVariedSamplesWithStableDetailAndOwnedPagination() throws Exception {
     JsonNode page = json(call(HttpMethod.GET, "/api/orders?size=100", OTHER, "BUYER", null, null));
     assertThat(page.path("totalElements").asInt()).isEqualTo(10);
+    matchesSchema("OrderPage", page);
     for (JsonNode order : page.path("items")) {
       assertThat(order.path("buyerId").asText()).isEqualTo(OTHER);
+      matchesSchema("Order", order);
       String path = "/api/orders/" + order.path("id").asText();
       assertThat(json(call(HttpMethod.GET, path, OTHER, "BUYER", null, null))).isEqualTo(order);
     }
@@ -144,6 +158,8 @@ class OrderStubHttpIntegrationTest {
     for (String field : List.of("externalMethod", "methodAccountRef")) {
       var body = mapper.readTree(BODY).deepCopy();
       ((com.fasterxml.jackson.databind.node.ObjectNode) body).remove(field);
+      assertThat(schema("OrderStubCreate").validate(body.toString(), InputFormat.JSON))
+          .isNotEmpty();
       problem(
           call(
               HttpMethod.POST,
@@ -186,6 +202,8 @@ class OrderStubHttpIntegrationTest {
     for (String field : List.of("buyerCouponId", "eventId", "expectedEventVersion", "addressId")) {
       var body = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(BODY);
       body.putNull(field);
+      assertThat(schema("OrderStubCreate").validate(body.toString(), InputFormat.JSON))
+          .isNotEmpty();
       problem(
           call(
               HttpMethod.POST,
@@ -215,6 +233,8 @@ class OrderStubHttpIntegrationTest {
     assertThat(json(created).path("externalAmount").asLong()).isZero();
     assertThat(json(created).path("couponAmount").asLong()).isZero();
     assertThat(json(created).get("eventId").isNull()).isTrue();
+    matchesSchema("OrderStubCreate", body);
+    matchesSchema("Order", json(created));
     var api = http.getForEntity("/v3/api-docs", String.class);
     assertThat(api.getStatusCode().value()).isEqualTo(200);
     var properties =
@@ -223,6 +243,112 @@ class OrderStubHttpIntegrationTest {
     assertThat(properties.has("addressId")).isFalse();
     assertThat(properties.has("eventId")).isFalse();
     assertThat(properties.has("buyerCouponId")).isFalse();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"0", "1", "2", "\"0\"", "\"2\"", "true", "false"})
+  void rejectsNonLabelExternalMethodsBeforeCreatingOrder(String value) throws Exception {
+    var body = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(BODY);
+    body.set("externalMethod", mapper.readTree(value));
+    assertThat(schema("OrderStubCreate").validate(body.toString(), InputFormat.JSON)).isNotEmpty();
+    problem(
+        call(
+            HttpMethod.POST,
+            "/api/orders",
+            BUYER,
+            "BUYER",
+            UUID.randomUUID().toString(),
+            body.toString()),
+        400,
+        "COMMON_VALIDATION_FAILED");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"0", "0.5", "true", "false"})
+  void rejectsNonTextMethodAccountReferences(String value) throws Exception {
+    var body = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(BODY);
+    body.set("methodAccountRef", mapper.readTree(value));
+    assertThat(schema("OrderStubCreate").validate(body.toString(), InputFormat.JSON)).isNotEmpty();
+    problem(
+        call(
+            HttpMethod.POST,
+            "/api/orders",
+            BUYER,
+            "BUYER",
+            UUID.randomUUID().toString(),
+            body.toString()),
+        400,
+        "COMMON_VALIDATION_FAILED");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"CREDIT_CARD", "DEBIT_CARD", "EASY_PAY"})
+  void acceptsDeclaredMethodLabelsAndMatchingSchemas(String method) throws Exception {
+    var body = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(BODY);
+    body.put("externalMethod", method);
+    matchesSchema("OrderStubCreate", body);
+    var created =
+        call(
+            HttpMethod.POST,
+            "/api/orders",
+            BUYER,
+            "BUYER",
+            UUID.randomUUID().toString(),
+            body.toString());
+    assertThat(created.getStatusCode().value()).isEqualTo(201);
+    matchesSchema("Order", json(created));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"not-a-uuid", ""})
+  void rejectsMalformedActorIdentity(String actor) throws Exception {
+    problem(
+        call(HttpMethod.GET, "/api/orders", actor, "BUYER", null, null),
+        401,
+        "COMMON_AUTHENTICATION_REQUIRED");
+  }
+
+  @Test
+  void orderSchemaRequiresAllDeclaredResponseKeysIncludingNullableFields() throws Exception {
+    JsonNode page = json(call(HttpMethod.GET, "/api/orders?size=100", OTHER, "BUYER", null, null));
+    var order = (com.fasterxml.jackson.databind.node.ObjectNode) page.path("items").get(0);
+    matchesSchema("Order", order);
+    var fields = order.fieldNames();
+    while (fields.hasNext()) {
+      String field = fields.next();
+      var missing = order.deepCopy();
+      missing.remove(field);
+      assertThat(schema("Order").validate(missing.toString(), InputFormat.JSON))
+          .as(field)
+          .isNotEmpty();
+    }
+  }
+
+  private Schema schema(String name) throws Exception {
+    if (schemas == null) {
+      var document = http.getForEntity("/v3/api-docs", String.class);
+      assertThat(document.getStatusCode().value()).isEqualTo(200);
+      assertThat(json(document).path("openapi").asText()).startsWith("3.1.");
+      // 문서와 참조를 메모리에 등록해 외부 URL을 조회하지 않는다.
+      schemas =
+          SchemaRegistry.withDefaultDialect(
+              SpecificationVersion.DRAFT_2020_12,
+              builder -> builder.schemas(Map.of("urn:commerce:order-stub", document.getBody())));
+    }
+    return schemas.getSchema(
+        SchemaLocation.of("urn:commerce:order-stub#/components/schemas/" + name));
+  }
+
+  private void matchesSchema(String name, JsonNode payload) throws Exception {
+    assertThat(
+            schema(name)
+                .validate(
+                    payload.toString(),
+                    InputFormat.JSON,
+                    context ->
+                        context.executionConfig(config -> config.formatAssertionsEnabled(true))))
+        .as(name)
+        .isEmpty();
   }
 
   private ResponseEntity<String> call(
@@ -266,6 +392,7 @@ class OrderStubHttpIntegrationTest {
     OrderStubService.class,
     AuthenticatedActorResolver.class,
     HttpJsonConfiguration.class,
+    OpenApiConfiguration.class,
     CommerceExceptionHandler.class
   })
   static class TestApplication {

@@ -87,7 +87,7 @@ curl -i http://localhost:18080/api/orders \
 
 seed 기본값은 67입니다. 같은 seed·Clock이면 초기 주문과 주소 사본이 같습니다. 배송 소요일은 [배송 정책](policies.md#배송환불-기한과-자동-구매확정)의 SHA-256 규칙으로 2·3영업일을 정하고 `weekdays-v1`을 고정합니다. 이미 만든 시각·주소·배송 이력은 조회마다 바뀌지 않습니다. 목록은 `createdAt DESC, id DESC`, page는 0부터·size는 1~100이며 타인 주문은 없는 주문과 같은 404입니다.
 
-전용 HTTP 통합 테스트는 실제 HTTP 서버·Controller·서비스·JSON 검증·오류 응답을 연결하며 DB·Kafka·Redis를 사용하지 않습니다. 이 테스트가 Compose 전체 실행이나 금융 처리 완료를 증명하지는 않습니다.
+전용 HTTP 통합 테스트는 실제 HTTP 서버·Controller·서비스·JSON 검증·오류 응답을 연결하며 DB·Kafka·Redis를 사용하지 않습니다. 숫자·숫자 문자열의 결제수단 변환과 boolean의 문자열 변환을 거절하고, 실제 요청·응답을 생성된 OpenAPI 3.1 스키마로 검증합니다. null 허용과 키 필수 여부를 각각 검사합니다. 이 테스트가 Compose 전체 실행이나 금융 처리 완료를 증명하지는 않습니다.
 
 ```bash
 ./gradlew :commerce:test --tests '*OrderStubServiceTest' --tests '*OrderStubHttpIntegrationTest'
