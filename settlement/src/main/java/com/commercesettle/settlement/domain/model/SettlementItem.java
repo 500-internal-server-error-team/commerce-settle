@@ -6,7 +6,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 /** 거래별 정산 항목. 상태는 전이 규칙과 지급 준비 조건을 검사하는 메서드로만 바꾼다. */
-public class SettlementItem {
+public class SettlementItem extends AuditableEntity {
   private final UUID id;
   private final UUID paymentId;
   private final UUID orderId;
@@ -28,7 +28,9 @@ public class SettlementItem {
       UUID sellerId,
       SettlementAmounts amounts,
       long orderVersion,
-      SettlementItemStatus status) {
+      SettlementItemStatus status,
+      Instant now) {
+    super(now);
     this.id = id;
     this.paymentId = Objects.requireNonNull(paymentId, "paymentId");
     this.orderId = Objects.requireNonNull(orderId, "orderId");
@@ -45,7 +47,8 @@ public class SettlementItem {
       UUID productId,
       UUID sellerId,
       SettlementAmounts amounts,
-      long orderVersion) {
+      long orderVersion,
+      Instant now) {
     return new SettlementItem(
         UUID.randomUUID(),
         paymentId,
@@ -54,52 +57,55 @@ public class SettlementItem {
         sellerId,
         amounts,
         orderVersion,
-        SettlementItemStatus.WAITING_CONFIRMATION);
+        SettlementItemStatus.WAITING_CONFIRMATION,
+        now);
   }
 
   /** 구매확정과 선행 결제 원장이 모두 준비되면 지급 가능으로 바꾸고, 두 시각 중 늦은 쪽을 readyAt으로 남긴다. */
-  public void markPayable(Instant purchaseConfirmedAt, Instant eligibleReceivedAt) {
+  public void markPayable(Instant purchaseConfirmedAt, Instant eligibleReceivedAt, Instant now) {
     Objects.requireNonNull(purchaseConfirmedAt, "purchaseConfirmedAt");
     Objects.requireNonNull(eligibleReceivedAt, "eligibleReceivedAt");
     if (status != SettlementItemStatus.WAITING_CONFIRMATION) {
       throw new InvalidSettlementTransitionException(status, SettlementItemStatus.PAYABLE);
     }
-    transitionTo(SettlementItemStatus.PAYABLE);
-    this.purchaseConfirmedAt = purchaseConfirmedAt;
-    this.eligibleReceivedAt = eligibleReceivedAt;
+    transitionTo(SettlementItemStatus.PAYABLE, now);
+    this.purchaseConfirmedAt = truncate(purchaseConfirmedAt);
+    this.eligibleReceivedAt = truncate(eligibleReceivedAt);
     this.readyAt =
-        purchaseConfirmedAt.isAfter(eligibleReceivedAt) ? purchaseConfirmedAt : eligibleReceivedAt;
+        this.purchaseConfirmedAt.isAfter(this.eligibleReceivedAt)
+            ? this.purchaseConfirmedAt
+            : this.eligibleReceivedAt;
   }
 
-  public void reserveRefund() {
-    transitionTo(SettlementItemStatus.REFUND_RESERVED);
+  public void reserveRefund(Instant now) {
+    transitionTo(SettlementItemStatus.REFUND_RESERVED, now);
   }
 
-  public void completeRefund() {
-    transitionTo(SettlementItemStatus.REFUNDED);
+  public void completeRefund(Instant now) {
+    transitionTo(SettlementItemStatus.REFUNDED, now);
   }
 
   /**
    * 환불 예약을 보상해 예약 직전 상태로 되돌린다. 직전 상태와 최신 구매확정·환불 정보의 대조는 호출하는 쪽이 맡는다. 지급 준비 시각이 없으면 PAYABLE로 되돌리지
    * 않는다.
    */
-  public void cancelRefundReservation(SettlementItemStatus previousStatus) {
+  public void cancelRefundReservation(SettlementItemStatus previousStatus, Instant now) {
     Objects.requireNonNull(previousStatus, "previousStatus");
     if (previousStatus == SettlementItemStatus.PAYABLE && readyAt == null) {
       throw new InvalidSettlementTransitionException(status, previousStatus);
     }
-    transitionTo(previousStatus);
+    transitionTo(previousStatus, now);
   }
 
   /** 지급에 배정한다. payoutId를 연결한 뒤에는 다른 지급에 다시 배정하지 않는다. */
-  public void reservePayout(UUID payoutId) {
+  public void reservePayout(UUID payoutId, Instant now) {
     Objects.requireNonNull(payoutId, "payoutId");
-    transitionTo(SettlementItemStatus.PAYOUT_RESERVED);
+    transitionTo(SettlementItemStatus.PAYOUT_RESERVED, now);
     this.payoutId = payoutId;
   }
 
-  public void completePayout() {
-    transitionTo(SettlementItemStatus.PAID);
+  public void completePayout(Instant now) {
+    transitionTo(SettlementItemStatus.PAID, now);
   }
 
   public UUID getId() {
@@ -150,10 +156,12 @@ public class SettlementItem {
     return payoutId;
   }
 
-  private void transitionTo(SettlementItemStatus next) {
+  private void transitionTo(SettlementItemStatus next, Instant now) {
+    Objects.requireNonNull(now, "now");
     if (!status.canTransitionTo(next)) {
       throw new InvalidSettlementTransitionException(status, next);
     }
     status = next;
+    touch(now);
   }
 }
