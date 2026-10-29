@@ -1,24 +1,39 @@
 package com.commercesettle.settlement.domain.model;
 
 import com.commercesettle.settlement.domain.exception.InvalidSettlementTransitionException;
+import jakarta.persistence.Embedded;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
 /** 거래별 정산 항목. 상태는 전이 규칙과 지급 준비 조건을 검사하는 메서드로만 바꾼다. */
+@Entity
+@Table(name = "settlement_items")
 public class SettlementItem extends AuditableEntity {
-  private final UUID id;
-  private final UUID paymentId;
-  private final UUID orderId;
-  private final UUID productId;
-  private final UUID sellerId;
-  private final SettlementAmounts amounts;
-  private final long orderVersion;
+  @Id private UUID id;
+  private UUID paymentId;
+  private UUID orderId;
+  private UUID productId;
+  private UUID sellerId;
+  @Embedded private SettlementAmounts amounts;
+  private long orderVersion;
+
+  @Enumerated(EnumType.STRING)
   private SettlementItemStatus status;
+
   private Instant purchaseConfirmedAt;
   private Instant eligibleReceivedAt;
   private Instant readyAt;
   private UUID payoutId;
+  @Version private Long version;
+
+  protected SettlementItem() {}
 
   private SettlementItem(
       UUID id,
@@ -154,6 +169,10 @@ public class SettlementItem extends AuditableEntity {
 
   public UUID getPayoutId() {
     return payoutId;
+  }
+
+  public Long getVersion() {
+    return version;
   }
 
   private void transitionTo(SettlementItemStatus next, Instant now) {

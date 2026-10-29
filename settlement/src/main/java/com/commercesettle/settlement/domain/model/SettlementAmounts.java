@@ -1,12 +1,14 @@
 package com.commercesettle.settlement.domain.model;
 
 import com.commercesettle.settlement.domain.exception.InvalidSettlementAmountException;
+import jakarta.persistence.Embeddable;
 
 /**
  * Payment가 확정한 T·P·B·E·M·수수료·판매자 몫의 사본. 다시 계산하지 않고 금액 불변식만 검사한다.
  *
  * <p>완료된 거래는 현재 요율로 다시 계산하지 않으므로 수수료율은 검사하지 않는다.
  */
+@Embeddable
 public record SettlementAmounts(
     long totalAmount,
     long platformCouponAmount,
