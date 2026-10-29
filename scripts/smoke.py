@@ -105,6 +105,48 @@ def gateway_status(base, method, path, token=None):
         return error.code, json.loads(body) if body.startswith(b"{") else {}
 
 
+def gateway_json(base, method, path, body=None, token=None):
+    headers = {"Content-Type": "application/json"} if body is not None else {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = json.dumps(body).encode() if body is not None else None
+    try:
+        with urlopen(Request(base + path, data=data, method=method, headers=headers),
+                     timeout=15) as response:
+            payload = response.read()
+            return response.status, json.loads(payload) if payload else {}
+    except HTTPError as error:
+        payload = error.read()
+        return error.code, json.loads(payload) if payload.startswith(b"{") else {}
+
+
+def check_login_flow(base):
+    # A fresh email per run keeps reruns away from the per-email login limit.
+    email = f"smoke-{uuid.uuid4().hex}@example.com"
+    password = uuid.uuid4().hex
+    status, account = gateway_json(base, "POST", "/api/sellers", {
+        "email": email, "password": password, "displayName": "smoke", "payoutAccountRef": "smoke",
+    })
+    assert status == 201 and account["actorKind"] == "SELLER", (status, account)
+    status, _ = gateway_json(base, "POST", "/api/seller-sessions",
+                             {"email": email, "password": password + "x"})
+    assert status == 401, status
+    status, session = gateway_json(base, "POST", "/api/seller-sessions",
+                                   {"email": email.upper(), "password": password})
+    assert status == 200 and session["tokenType"] == "Bearer", (status, session)
+    assert session["expiresAt"].endswith("+09:00"), session
+    token = session["token"]
+
+    status, me = gateway_json(base, "GET", "/api/accounts/me", token=token)
+    assert status == 200 and me["id"] == account["id"], (status, me)
+    status, problem = gateway_json(base, "GET", "/api/buyers/me/coupons", token=token)
+    assert (status, problem.get("code")) == (403, "COMMON_ROLE_FORBIDDEN"), status
+    status, _ = gateway_json(base, "DELETE", "/api/sessions/current", token=token)
+    assert status == 204, status
+    status, problem = gateway_json(base, "GET", "/api/accounts/me", token=token)
+    assert (status, problem.get("code")) == (401, "COMMON_AUTHENTICATION_REQUIRED"), status
+
+
 def check_session_auth(config, base):
     epoch = config["services"]["gateway"]["environment"]["AUTH_SESSION_EPOCH"]
     token = uuid.uuid4().hex
@@ -199,6 +241,9 @@ def main():
 
     check_session_auth(config, base)
     print("PASS Gateway session: 401 without a session, Redis session pass, role 403, pending guard 503")
+
+    check_login_flow(base)
+    print("PASS Commerce login: seller signup, Gateway-verified session, logout then 401")
 
     trace_id = uuid.uuid4().hex
     parent_id = uuid.uuid4().hex[:16]

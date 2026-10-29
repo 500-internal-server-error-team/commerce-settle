@@ -150,8 +150,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "PUBLIC",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "판매자 계정을 만든다. 이메일은 앞뒤 공백을 지우고 소문자로 맞춰 저장하며, 같은 판매자 이메일이 있으면 삭제한 계정이어도 409 ACCOUNT_EMAIL_DUPLICATED다. 비밀번호는 Argon2id로 저장하고 응답에 넣지 않는다.",
         "security": [],
         "parameters": [],
         "responses": {
@@ -266,7 +266,7 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "PUBLIC",
-        "x-implemented": false,
+        "x-implemented": true,
         "description": "구매자 계정의 비밀번호·활성 상태를 PostgreSQL에서 확인한 뒤 Redis에 로그인 세션을 발급한다. 계정별 ACTIVE 인증 가드와 DB 인증 버전이 일치할 때만 저장하며 고정 30분 expiresAt과 TTL을 설정한다. 요청으로 만료를 연장하지 않는다. 자격 오류·확정 정지/삭제·자격 검증 뒤 버전 변경은 동일한 401이며 토큰을 발급하지 않는다. 변경 중 가드·Redis 저장 실패·쓰기 거절·복구 차단은 503이며 토큰을 반환하지 않는다. 계정 조회·비밀번호 검사 전에 policies.md의 로그인·복구 요청 제한을 적용한다. 계정 식별자별 고정 시간창의 상한 초과는 429와 Retry-After이며 계정 존재 여부를 구분하지 않는다. 제한 저장소 확인·원자 갱신 실패는 부작용 없이 503이다.",
         "security": [],
         "parameters": [],
@@ -382,7 +382,7 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "PUBLIC",
-        "x-implemented": false,
+        "x-implemented": true,
         "description": "판매자 계정의 비밀번호·활성 상태를 PostgreSQL에서 확인한 뒤 Redis에 로그인 세션을 발급한다. 계정별 ACTIVE 인증 가드와 DB 인증 버전이 일치할 때만 저장하며 고정 30분 expiresAt과 TTL을 설정한다. 요청으로 만료를 연장하지 않는다. 자격 오류·확정 정지/삭제·자격 검증 뒤 버전 변경은 동일한 401이며 토큰을 발급하지 않는다. 변경 중 가드·Redis 저장 실패·쓰기 거절·복구 차단은 503이며 토큰을 반환하지 않는다. 계정 조회·비밀번호 검사 전에 policies.md의 로그인·복구 요청 제한을 적용한다. 계정 식별자별 고정 시간창의 상한 초과는 429와 Retry-After이며 계정 존재 여부를 구분하지 않는다. 제한 저장소 확인·원자 갱신 실패는 부작용 없이 503이다.",
         "security": [],
         "parameters": [],
@@ -498,7 +498,7 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER|SELLER",
-        "x-implemented": false,
+        "x-implemented": true,
         "description": "Gateway가 검증해 전달한 계정 종류·ID와 현재 세션 해시로 Redis의 해당 세션만 조건부 삭제한다. 다른 계정 세션을 삭제하지 않으며 Redis 삭제 확인 뒤 204를 반환한다. expectedVersion·Idempotency-Key를 요구하지 않는다. 저장소 오류는 503이고 성공으로 안내하지 않는다. 이미 폐기된 토큰으로 다시 요청하면 Gateway에서 401이며 세션을 복원하지 않는다. 폐기 전에 인증된 진행 중 요청과 이미 접수한 금융 작업을 소급 취소하지 않는다.",
         "security": [
           {
@@ -592,8 +592,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER|SELLER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "Gateway가 검증해 전달한 계정 종류·ID의 계정을 반환한다. 삭제·정지된 계정이면 401이다.",
         "security": [
           {
             "accountSession": []
