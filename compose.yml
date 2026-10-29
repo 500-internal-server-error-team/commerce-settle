@@ -179,6 +179,8 @@ services:
       DB_PASSWORD: ${COMMERCE_DB_PASSWORD:?Run python3 scripts/init_env.py}
       SPRING_DATA_REDIS_USERNAME: commerce
       SPRING_DATA_REDIS_PASSWORD: ${COMMERCE_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      AUTH_SESSION_EPOCH: ${AUTH_SESSION_EPOCH:?Run python3 scripts/init_env.py}
+      AUTH_RATE_LIMIT_HMAC_KEY: ${AUTH_RATE_LIMIT_HMAC_KEY:?Run python3 scripts/init_env.py}
     depends_on:
       <<: *app-deps
       postgres:

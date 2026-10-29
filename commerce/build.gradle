@@ -1,12 +1,20 @@
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.kafka:spring-kafka'
+    // Argon2id 비밀번호 해시. spring-security-crypto의 Argon2 구현이 BouncyCastle을 사용한다.
+    implementation 'org.springframework.security:spring-security-crypto'
+    runtimeOnly 'org.bouncycastle:bcprov-jdk18on:1.85.2'
     runtimeOnly 'org.postgresql:postgresql'
     implementation "org.springdoc:springdoc-openapi-starter-webmvc-api:${rootProject.springdocVersion}"
-    implementation 'org.springframework.boot:spring-boot-starter-validation'
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:postgresql'
     testImplementation 'org.testcontainers:kafka'
     testImplementation 'org.testcontainers:junit-jupiter'
+}
+
+tasks.named('processTestResources') {
+    // 커머스가 발급한 세션을 Gateway의 실제 검증 스크립트로 확인한다.
+    from(rootProject.file('gateway/src/main/resources/redis/verify-session.lua')) { into 'gateway' }
 }

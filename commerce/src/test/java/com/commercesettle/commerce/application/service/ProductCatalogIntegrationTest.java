@@ -30,7 +30,13 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /** 실제 PostgreSQL에서 초기 SQL의 제약·잠금과 함께 상품·재고 유즈케이스의 커밋 결과를 확인한다. */
-@SpringBootTest(properties = "management.tracing.enabled=false")
+// 인증 설정은 필수 기동 값이다. 상품 시험은 Redis 인증 경로를 호출하지 않는다.
+@SpringBootTest(
+    properties = {
+      "management.tracing.enabled=false",
+      "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
+      "app.auth.rate-limit.identifier-hmac-key=product-catalog-test-hmac-key-32bytes"
+    })
 @Testcontainers
 class ProductCatalogIntegrationTest {
   @Container @ServiceConnection
