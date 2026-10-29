@@ -115,7 +115,7 @@ class SessionVerifierIntegrationTest {
 
   @ParameterizedTest(name = "{0}")
   @MethodSource("undecidableSessions")
-  @DisplayName("가드가 없거나 변경 중이면 판정 불가로 처리한다")
+  @DisplayName("가드가 없거나 변경 중이거나 데이터가 손상됐으면 판정 불가로 처리한다")
   void refusesUndecidableSession(String scenario, Runnable arrange) {
     arrange.run();
 
@@ -213,7 +213,29 @@ class SessionVerifierIntegrationTest {
                 () -> {
                   saveSession(session -> session.remove("actorId"));
                   saveGuard(guard -> {});
+                }),
+        corruptedSession("expiresAt", "nan"),
+        corruptedSession("expiresAt", "inf"),
+        corruptedSession("expiresAt", "0x7fffffffffff"),
+        corruptedSession("expiresAt", "9".repeat(16)),
+        corruptedSession("authVersion", "nan"),
+        Arguments.of(
+            "손상된 가드 authVersion=nan",
+            (Runnable)
+                () -> {
+                  saveSession(session -> {});
+                  saveGuard(guard -> guard.put("authVersion", "nan"));
                 }));
+  }
+
+  private static Arguments corruptedSession(String field, String value) {
+    return Arguments.of(
+        "손상된 세션 " + field + "=" + value,
+        (Runnable)
+            () -> {
+              saveSession(session -> session.put(field, value));
+              saveGuard(guard -> {});
+            });
   }
 
   private static SessionVerification verify() {
