@@ -167,7 +167,7 @@ Payment 금융 워커와 Settlement 지급 워커는 같은 임대 규칙(조회
 
 배치·지급 워커·이벤트 소비자·짧은 주기 스케줄러로 실행 방식이 넷으로 나뉘어 운영자가 볼 지표와 장애 지점이 늘어납니다. 대조를 매일 실행하면 그만큼 읽기 부하가 생기고, Payment 대조 조회 계약이라는 서비스 간 계약이 늘어납니다. 전달 확인을 위해 Outbox에 발행 위치를 저장하고 정산 원장에 원천 이벤트 시각을 남겨야 하며, 대조 Job이 Kafka 관리 API에 의존합니다. 강제 종료 복구는 실행자 부재 판정을 구현해야 하며 판정이 불확실하면 운영자 확인이 필요합니다. 판매자 쏠림 수치는 가정이며 실측하지 않았습니다.
 
-- 기준 문서: 지급일·복구는 [업무 정책](../policies.md#정산재처리), 조회·권한·필드는 [API 명세](../api.md#정산-대조-조회)·[OpenAPI](../openapi.json), 원장·발행 위치는 [데이터 모델](../data-model.md#settlement_entries), 대조 식·완료 조건은 [ADR 0002](0002-performance-and-integrity-metrics.md#금액-불일치)·[ADR 0006](0006-no-foreign-keys-within-service.md)이 소유합니다. 서비스 경계는 [아키텍처](../architecture.md#실행-단위), 판매자 안내는 [와이어프레임](../wirefrees.html)을 따릅니다. D8에서 프로세스·모듈 구성을 바꾸면 해당 기준 문서와 Compose를 함께 갱신합니다.
+- 기준 문서: 지급일·복구는 [업무 정책](../policies.md#정산재처리), 조회·권한·필드는 [API 명세](../api.md#정산-대조-조회)·[OpenAPI](../openapi.json), 원장·발행 위치는 [데이터 모델](../data-model.md#settlement_entries), 대조 식·완료 조건은 [ADR 0002](0002-performance-and-integrity-metrics.md#금액-불일치)·[ADR 0006](0006-no-foreign-keys-within-service.md)이 소유합니다. 서비스 경계는 [아키텍처](../architecture.md#실행-단위), 판매자 안내는 [와이어프레임](../wireframes.html)을 따릅니다. D8에서 프로세스·모듈 구성을 바꾸면 해당 기준 문서와 Compose를 함께 갱신합니다.
 - 검증: 아래를 주입한 Clock과 통합 테스트·부하 시험으로 확인합니다.
   - 재시작: 실패·정상 중단 뒤 재시작, 판매자 chunk 처리 중 프로세스 강제 종료 뒤 `STARTED` 잔류 상태에서 복구 절차를 거친 재시작. 어느 경우든 누락·중복 배정·중복 지급이 없고, 실행자가 살아 있는 동안에는 복구가 진행되지 않는지
   - 완료 후 재요청: `COMPLETED`인 `batchDate`를 스케줄러·운영자 API로 다시 요청하면 새 실행 없이 기존 배치를 반환하는지
