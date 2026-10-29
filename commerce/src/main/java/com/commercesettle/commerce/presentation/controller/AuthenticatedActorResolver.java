@@ -5,7 +5,9 @@ import com.commercesettle.commerce.domain.model.ActorKind;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.core.MethodParameter;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
+import org.springframework.web.ErrorResponseException;
 import org.springframework.web.bind.support.WebDataBinderFactory;
 import org.springframework.web.context.request.NativeWebRequest;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
@@ -30,11 +32,13 @@ class AuthenticatedActorResolver implements HandlerMethodArgumentResolver, WebMv
 
   @Override
   public boolean supportsParameter(MethodParameter parameter) {
-    return parameter.getParameterType() == AuthenticatedActor.class;
+    return parameter.getParameterType() == AuthenticatedActor.class
+        || parameter.getParameterType() == AuthenticatedBuyer.class
+        || parameter.getParameterType() == AuthenticatedSeller.class;
   }
 
   @Override
-  public AuthenticatedActor resolveArgument(
+  public Object resolveArgument(
       MethodParameter parameter,
       ModelAndViewContainer mavContainer,
       NativeWebRequest webRequest,
@@ -44,10 +48,19 @@ class AuthenticatedActorResolver implements HandlerMethodArgumentResolver, WebMv
     if (kind == null || id == null) {
       throw new AuthenticationFailedException();
     }
+    AuthenticatedActor actor;
     try {
-      return new AuthenticatedActor(ActorKind.valueOf(kind), UUID.fromString(id));
+      actor = new AuthenticatedActor(ActorKind.valueOf(kind), UUID.fromString(id));
     } catch (IllegalArgumentException e) {
       throw new AuthenticationFailedException();
     }
+    if (parameter.getParameterType() == AuthenticatedActor.class) {
+      return actor;
+    }
+    boolean buyer = parameter.getParameterType() == AuthenticatedBuyer.class;
+    if (actor.kind() != (buyer ? ActorKind.BUYER : ActorKind.SELLER)) {
+      throw new ErrorResponseException(HttpStatus.FORBIDDEN);
+    }
+    return buyer ? new AuthenticatedBuyer(actor.id()) : new AuthenticatedSeller(actor.id());
   }
 }

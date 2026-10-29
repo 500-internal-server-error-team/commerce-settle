@@ -5,6 +5,7 @@ import com.commercesettle.commerce.application.exception.AuthRateLimitedExceptio
 import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
 import com.commercesettle.commerce.application.exception.AuthenticationUnavailableException;
 import com.commercesettle.commerce.application.exception.IdempotencyConflictException;
+import com.commercesettle.commerce.application.exception.OrderStubException;
 import com.commercesettle.commerce.domain.exception.DuplicateAccountEmailException;
 import com.commercesettle.commerce.domain.exception.InsufficientInventoryException;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
@@ -64,6 +65,14 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
 
   public CommerceExceptionHandler(ObjectProvider<Tracer> tracer) {
     this.tracer = tracer;
+  }
+
+  @ExceptionHandler(OrderStubException.class)
+  ResponseEntity<Object> orderStubFailure(OrderStubException e, WebRequest request) {
+    return switch (e.kind()) {
+      case NOT_FOUND -> respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, request);
+      case INVALID_REQUEST -> invalid(List.of(error(e.field(), "입력값의 조합을 확인해 주세요.")), request);
+    };
   }
 
   @ExceptionHandler(ProductNotFoundException.class)
