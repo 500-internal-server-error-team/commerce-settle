@@ -200,7 +200,18 @@ def main():
                 assert result.returncode != 0 and "permission denied" in result.stderr, (
                     service, database, result.stderr
                 )
-    print("PASS PostgreSQL: four databases, own access and cross-service denial")
+        ownership = compose(
+            "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", service,
+            "-v", "ON_ERROR_STOP=1", "-v", f"service={service}", "-Atq",
+            input_text="""
+SELECT pg_get_userbyid(nspowner) = :'service'
+FROM pg_namespace WHERE nspname = :'service';
+SELECT coalesce(bool_and(tableowner = :'service'), true)
+FROM pg_tables WHERE schemaname = :'service';
+""",
+        ).stdout.splitlines()
+        assert ownership == ["t", "t"], (service, ownership)
+    print("PASS PostgreSQL: service-owned initial schemas/tables, own access and cross-service denial")
 
     times = compose(
         "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "postgres",

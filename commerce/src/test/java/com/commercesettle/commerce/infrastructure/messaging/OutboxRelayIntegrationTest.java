@@ -48,7 +48,6 @@ import org.springframework.boot.actuate.autoconfigure.tracing.MicrometerTracingA
 import org.springframework.boot.actuate.autoconfigure.tracing.OpenTelemetryTracingAutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
-import org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration;
 import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.JdbcTemplateAutoConfiguration;
@@ -88,6 +87,7 @@ class OutboxRelayIntegrationTest {
   @Container
   static final PostgreSQLContainer<?> POSTGRES =
       new PostgreSQLContainer<>("postgres:18.3")
+          .withInitScript("db/commerce.sql")
           .withCommand("postgres", "-c", "max_connections=20")
           .withCreateContainerCmdModifier(
               cmd -> cmd.getHostConfig().withMemory(512L * 1024 * 1024));
@@ -441,7 +441,6 @@ class OutboxRelayIntegrationTest {
                 JdbcTemplateAutoConfiguration.class,
                 HibernateJpaAutoConfiguration.class,
                 TransactionAutoConfiguration.class,
-                FlywayAutoConfiguration.class,
                 KafkaAutoConfiguration.class,
                 JacksonAutoConfiguration.class))
         .withUserConfiguration(

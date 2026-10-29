@@ -1,3 +1,8 @@
+-- 배포 전 개발용 초기 DDL. 빈 서비스 DB에서 한 번 실행합니다.
+CREATE SCHEMA commerce;
+
+COMMENT ON SCHEMA commerce IS 'Commerce service owned schema';
+
 CREATE TABLE commerce.outbox (
     id uuid PRIMARY KEY,
     sequence_no bigint GENERATED ALWAYS AS IDENTITY UNIQUE,

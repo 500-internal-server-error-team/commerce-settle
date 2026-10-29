@@ -22,11 +22,9 @@ spring:
       ddl-auto: validate
     properties:
       hibernate.default_schema: payment
-  flyway:
-    clean-disabled: true
-    validate-on-migrate: true
-    default-schema: payment
-    schemas: payment
+  sql:
+    init:
+      mode: never
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
     template:
@@ -80,5 +78,5 @@ logging:
 app:
   kafka:
     order-payment-requested:
-      # V3 Inbox 스키마 적용과 신규 그룹 offset 초기화 후에만 활성화한다.
+      # 개발용 초기 SQL 적용과 신규 그룹 offset 초기화 후에만 활성화한다.
       enabled: false

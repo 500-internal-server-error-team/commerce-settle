@@ -138,7 +138,7 @@ Gradle은 포맷·Checkstyle·계층 경계·패키징을 검사합니다. smoke
 
 ## 기술·개발 안내
 
-Java 21 · Spring Boot · Spring Cloud Gateway · PostgreSQL·Flyway · Kafka · Redis · Micrometer·OpenTelemetry·Zipkin · Prometheus·Grafana · Docker Compose · k6
+Java 21 · Spring Boot · Spring Cloud Gateway · PostgreSQL · Kafka · Redis · Micrometer·OpenTelemetry·Zipkin · Prometheus·Grafana · Docker Compose · k6
 
 기술 버전은 [build.gradle](build.gradle)·[Compose](compose.yml)·[앱 Dockerfile](Dockerfile)·[DB Dockerfile](infra/postgres/Dockerfile)을 기준으로 합니다. `.env`는 Git에서 제외하며 비밀번호는 환경 초기화 스크립트로 생성합니다.
 

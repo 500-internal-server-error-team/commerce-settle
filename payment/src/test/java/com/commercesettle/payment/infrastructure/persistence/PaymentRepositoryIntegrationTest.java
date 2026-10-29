@@ -36,7 +36,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class PaymentRepositoryIntegrationTest {
 
   @Container @ServiceConnection
-  static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:18.3");
+  static final PostgreSQLContainer<?> POSTGRES =
+      new PostgreSQLContainer<>("postgres:18.3").withInitScript("db/payment.sql");
 
   private static final Instant CREATED_AT = Instant.parse("2026-10-28T00:00:00.123456Z");
   private static final Instant CONFIRMED_AT = Instant.parse("2026-10-28T00:01:00.654321Z");
