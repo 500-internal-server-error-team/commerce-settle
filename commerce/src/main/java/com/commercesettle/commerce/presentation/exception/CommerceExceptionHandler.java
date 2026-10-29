@@ -1,6 +1,10 @@
 package com.commercesettle.commerce.presentation.exception;
 
+import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
+import com.commercesettle.commerce.application.exception.AuthenticationUnavailableException;
 import com.commercesettle.commerce.application.exception.IdempotencyConflictException;
+import com.commercesettle.commerce.application.exception.LoginRateLimitedException;
+import com.commercesettle.commerce.domain.exception.DuplicateAccountEmailException;
 import com.commercesettle.commerce.domain.exception.InsufficientInventoryException;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.exception.VersionConflictException;
@@ -82,6 +86,42 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
     return respond(ErrorCode.INVENTORY_INSUFFICIENT, request);
   }
 
+  @ExceptionHandler(DuplicateAccountEmailException.class)
+  ResponseEntity<Object> duplicateEmail(DuplicateAccountEmailException e, WebRequest request) {
+    return respond(ErrorCode.ACCOUNT_EMAIL_DUPLICATED, request);
+  }
+
+  @ExceptionHandler(AuthenticationFailedException.class)
+  ResponseEntity<Object> authenticationFailed(AuthenticationFailedException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_AUTHENTICATION_REQUIRED, request);
+  }
+
+  @ExceptionHandler(LoginRateLimitedException.class)
+  ResponseEntity<Object> rateLimited(LoginRateLimitedException e, WebRequest request) {
+    ErrorCode code = ErrorCode.COMMON_RATE_LIMITED;
+    return ResponseEntity.status(code.status())
+        .header(HttpHeaders.RETRY_AFTER, Long.toString(e.retryAfterSeconds()))
+        .body(problem(code.status(), code, code.detail(), request));
+  }
+
+  /** 인증 저장소를 확인할 수 없으면 인증 실패로 바꾸지 않는다. 세션은 발급되지 않았거나 삭제를 확인하지 못한 상태다. */
+  @ExceptionHandler(AuthenticationUnavailableException.class)
+  ResponseEntity<Object> authenticationUnavailable(
+      AuthenticationUnavailableException e, WebRequest request) {
+    LOGGER
+        .atWarn()
+        .addKeyValue("event", "commerce.auth")
+        .addKeyValue("errorCode", ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE.name())
+        .addKeyValue("errorType", errorType(e))
+        .addKeyValue("traceId", traceId())
+        .log("Auth store is temporarily unavailable");
+    return respond(
+        ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE,
+        "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+        null,
+        request);
+  }
+
   @ExceptionHandler({TransientDataAccessException.class, CannotCreateTransactionException.class})
   ResponseEntity<Object> temporarilyUnavailable(RuntimeException e, WebRequest request) {
     String traceId = traceId();
@@ -95,7 +135,7 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
         .log("Storage is temporarily unavailable");
     return respond(
         ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE,
-        "일시적으로 처리할 수 없습니다. 같은 멱등키로 결과를 다시 확인해 주세요.",
+        "일시적으로 처리할 수 없습니다. 멱등키를 보낸 요청은 같은 키로 결과를 다시 확인해 주세요.",
         null,
         request);
   }
@@ -221,6 +261,11 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
     problem.setProperty(CODE, code.name());
     problem.setProperty("traceId", traceId());
     return problem;
+  }
+
+  // 저장소 예외의 종류만 남기고 메시지는 기록하지 않는다.
+  private static String errorType(Exception e) {
+    return (e.getCause() == null ? e : e.getCause()).getClass().getName();
   }
 
   private String traceId() {

@@ -13,6 +13,7 @@ class InitEnvTest(unittest.TestCase):
         self.directory = Path(self.temp.name)
         (self.directory / ".env.example").write_text(
             "GATEWAY_PORT=8080\nPOSTGRES_PASSWORD=\nAUTH_SESSION_EPOCH=\n"
+            "AUTH_RATE_LIMIT_HMAC_KEY=\n"
         )
 
     def test_creates_private_settings_and_preserves_them_on_rerun(self):
@@ -20,6 +21,7 @@ class InitEnvTest(unittest.TestCase):
         target = self.directory / ".env"
         first = target.read_text()
         self.assertRegex(first, r"POSTGRES_PASSWORD=[A-Za-z0-9_-]{40,}")
+        self.assertRegex(first, r"AUTH_RATE_LIMIT_HMAC_KEY=[A-Za-z0-9_-]{40,}")
         self.assertRegex(first, r"AUTH_SESSION_EPOCH=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-")
         if os.name == "posix":
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)

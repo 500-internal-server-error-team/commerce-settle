@@ -86,3 +86,11 @@ app:
     max-in-flight: 8
     lease-ms: 240000
     max-attempts: 10
+  auth:
+    # 세션 키의 인증 세대. Gateway와 같은 UUID를 쓰며 없으면 기동하지 않는다.
+    session-epoch: ${AUTH_SESSION_EPOCH}
+    rate-limit:
+      identifier-hmac-key: ${AUTH_RATE_LIMIT_HMAC_KEY}
+      # 프로젝트 시작 기본값. docs/policies.md#로그인복구-요청-제한
+      login-max-requests: 5
+      login-window-seconds: 900
