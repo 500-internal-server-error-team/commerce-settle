@@ -13,7 +13,7 @@
 | 인프라 구조도·모듈·계층·데이터·네트워크 경계 | [서비스와 코드 경계](docs/architecture.md) |
 | 엔티티·DTO·포트·어댑터·새 파일 위치 | [서비스 내부 분류](docs/architecture.md#서비스-내부-분류) |
 | 테스트 형식·시나리오·중복·실행 경계 | [테스트 작성](CONTRIBUTING.md#테스트-작성) |
-| DB·초기 SQL·삭제·제약 조건 | [DB 정책](docs/migrations.md) |
+| DB·스키마·삭제·제약 조건 | [DB 정책](docs/migrations.md) |
 | 실행·접속·검증·종료 | [개발 환경](docs/development.md) |
 | 문서·주석·커밋·PR 작성과 리뷰 | [문서와 기록](CONTRIBUTING.md#문서와-기록) |
 | 최종 검토·변경 필요성 검토·간결화·윤문 | [review-change 스킬](.agents/skills/review-change/SKILL.md) |
