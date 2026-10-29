@@ -105,8 +105,10 @@ def gateway_status(base, method, path, token=None):
         return error.code, json.loads(body) if body.startswith(b"{") else {}
 
 
-def gateway_json(base, method, path, body=None, token=None):
-    headers = {"Content-Type": "application/json"} if body is not None else {}
+def gateway_json(base, method, path, body=None, token=None, headers=None):
+    headers = dict(headers or {})
+    if body is not None:
+        headers["Content-Type"] = "application/json"
     if token:
         headers["Authorization"] = f"Bearer {token}"
     data = json.dumps(body).encode() if body is not None else None
@@ -199,6 +201,45 @@ def check_session_auth(config, base):
         compose(*admin, "DEL", session, guard)
 
 
+def check_buyer_addresses(config, base):
+    # Buyer signup waits for the welcome coupon, so the buyer session is written to Redis directly.
+    epoch = config["services"]["gateway"]["environment"]["AUTH_SESSION_EPOCH"]
+    token = uuid.uuid4().hex
+    buyer_id = str(uuid.uuid4())
+    session = f"commerce-settle:auth:session:{epoch}:{hashlib.sha256(token.encode()).hexdigest()}"
+    guard = f"commerce-settle:auth:subject:{epoch}:BUYER:{buyer_id}"
+    admin = ["exec", "-T", "redis", "sh", "-c",
+             'export REDISCLI_AUTH="$REDIS_PASSWORD"; exec redis-cli --raw "$@"', "redis-smoke"]
+    address = {"recipient": "smoke", "phone": "010-0000-0000", "postalCode": "00000",
+               "addressLine1": "smoke street", "addressLine2": "", "isDefault": False}
+    try:
+        seconds, micros = compose(*admin, "TIME").stdout.split()
+        now = int(seconds) * 1000 + int(micros) // 1000
+        compose(*admin, "HSET", session, "actorKind", "BUYER", "actorId", buyer_id,
+                "purpose", "SESSION", "authVersion", "0", "issuedAt", str(now),
+                "expiresAt", str(now + 60_000))
+        compose(*admin, "HSET", guard, "authVersion", "0", "state", "ACTIVE")
+
+        key = {"Idempotency-Key": f"smoke-{uuid.uuid4().hex}"}
+        status, created = gateway_json(base, "POST", "/api/buyers/me/addresses", address,
+                                       token, key)
+        assert status == 201 and created["isDefault"] is True, (status, created)
+        status, replay = gateway_json(base, "POST", "/api/buyers/me/addresses", address,
+                                      token, key)
+        assert status == 201 and replay["id"] == created["id"], (status, replay)
+        status, page = gateway_json(base, "GET", "/api/buyers/me/addresses", token=token)
+        assert status == 200 and [item["id"] for item in page["items"]] == [created["id"]], page
+        status, _ = gateway_json(
+            base, "DELETE",
+            f"/api/buyers/me/addresses/{created['id']}?expectedVersion={created['version']}",
+            token=token, headers={"Idempotency-Key": f"smoke-{uuid.uuid4().hex}"})
+        assert status == 204, status
+        status, page = gateway_json(base, "GET", "/api/buyers/me/addresses", token=token)
+        assert status == 200 and page["totalElements"] == 0, page
+    finally:
+        compose(*admin, "DEL", session, guard)
+
+
 def main():
     # Reading the resolved port supports overrides in .env and COMPOSE_FILE.
     config = json.loads(compose("config", "--format", "json").stdout)
@@ -268,6 +309,9 @@ def main():
 
     check_password_reset(base)
     print("PASS Commerce password reset: same request response for unknown accounts, bad token 401")
+
+    check_buyer_addresses(config, base)
+    print("PASS Buyer addresses: first address default, idempotent replay, list, delete")
 
     trace_id = uuid.uuid4().hex
     parent_id = uuid.uuid4().hex[:16]
