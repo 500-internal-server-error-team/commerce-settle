@@ -2,7 +2,8 @@ package com.commercesettle.commerce.presentation.dto;
 
 import com.commercesettle.commerce.domain.model.Product;
 import io.swagger.v3.oas.annotations.media.Schema;
-import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.UUID;
 
 @Schema(name = "Product")
@@ -13,10 +14,13 @@ public record ProductResponse(
     UUID id,
     UUID sellerId,
     long version,
-    Instant createdAt) {
+    OffsetDateTime createdAt) {
   /** 판매자가 지정할 수 있는 상태. DELETED는 논리삭제로만 도달한다. */
   static final String SELLER_STATUSES = "DRAFT|ON_SALE|STOPPED";
 
+  private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+
+  /** 같은 절대시각을 KST 오프셋으로 내보낸다. */
   public static ProductResponse from(Product product) {
     return new ProductResponse(
         product.getName(),
@@ -25,6 +29,6 @@ public record ProductResponse(
         product.getId(),
         product.getSellerId(),
         product.getVersion(),
-        product.getCreatedAt());
+        product.getCreatedAt().atZone(KST).toOffsetDateTime());
   }
 }

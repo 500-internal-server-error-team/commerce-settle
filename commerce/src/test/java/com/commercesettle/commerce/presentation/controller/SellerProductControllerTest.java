@@ -62,7 +62,7 @@ class SellerProductControllerTest {
         .andExpect(jsonPath("$.sellerId").value(SELLER.toString()))
         .andExpect(jsonPath("$.status").value("ON_SALE"))
         .andExpect(jsonPath("$.version").value(0))
-        .andExpect(jsonPath("$.createdAt").value("2026-10-28T01:00:00Z"));
+        .andExpect(jsonPath("$.createdAt").value("2026-10-28T10:00:00+09:00"));
   }
 
   @Test
