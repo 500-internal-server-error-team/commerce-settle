@@ -13,6 +13,8 @@ class SettlementItemTest {
 
   private static final Instant EARLIER = Instant.parse("2026-10-28T00:00:00Z");
   private static final Instant LATER = Instant.parse("2026-10-28T01:00:00Z");
+  private static final Instant CREATED_AT = Instant.parse("2026-10-28T02:00:00Z");
+  private static final Instant CHANGED_AT = Instant.parse("2026-10-28T03:00:00Z");
   private static final UUID PAYOUT_ID = UUID.randomUUID();
 
   @Test
@@ -23,6 +25,35 @@ class SettlementItemTest {
     assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.WAITING_CONFIRMATION);
     assertThat(item.getReadyAt()).isNull();
     assertThat(item.getPayoutId()).isNull();
+    assertThat(item.getCreatedAt()).isEqualTo(CREATED_AT);
+    assertThat(item.getUpdatedAt()).isEqualTo(CREATED_AT);
+  }
+
+  @Test
+  @DisplayName("상태를 바꾸면 수정 시각만 갱신하고 생성 시각은 유지한다")
+  void touchesUpdatedAtOnTransition() {
+    SettlementItem item = item();
+
+    item.reserveRefund(CHANGED_AT);
+
+    assertThat(item.getCreatedAt()).isEqualTo(CREATED_AT);
+    assertThat(item.getUpdatedAt()).isEqualTo(CHANGED_AT);
+  }
+
+  @Test
+  @DisplayName("구매확정·원장 준비 시각은 마이크로초 단위로 남긴다")
+  void truncatesReadyTimesToMicroseconds() {
+    SettlementItem item = item();
+
+    item.markPayable(
+        Instant.parse("2026-10-28T00:00:00.123456789Z"),
+        Instant.parse("2026-10-28T00:00:00.000000001Z"),
+        CHANGED_AT);
+
+    assertThat(item.getPurchaseConfirmedAt())
+        .isEqualTo(Instant.parse("2026-10-28T00:00:00.123456Z"));
+    assertThat(item.getEligibleReceivedAt()).isEqualTo(Instant.parse("2026-10-28T00:00:00Z"));
+    assertThat(item.getReadyAt()).isEqualTo(Instant.parse("2026-10-28T00:00:00.123456Z"));
   }
 
   @Test
@@ -30,7 +61,7 @@ class SettlementItemTest {
   void usesPurchaseConfirmedAtWhenLater() {
     SettlementItem item = item();
 
-    item.markPayable(LATER, EARLIER);
+    item.markPayable(LATER, EARLIER, CHANGED_AT);
 
     assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.PAYABLE);
     assertThat(item.getPurchaseConfirmedAt()).isEqualTo(LATER);
@@ -43,29 +74,30 @@ class SettlementItemTest {
   void usesEligibleReceivedAtWhenLater() {
     SettlementItem item = item();
 
-    item.markPayable(EARLIER, LATER);
+    item.markPayable(EARLIER, LATER, CHANGED_AT);
 
     assertThat(item.getReadyAt()).isEqualTo(LATER);
   }
 
   @Test
-  @DisplayName("이미 지급 가능이면 다시 지급 가능으로 바꾸지 않고 readyAt을 유지한다")
+  @DisplayName("이미 지급 가능이면 다시 지급 가능으로 바꾸지 않고 readyAt과 수정 시각을 유지한다")
   void rejectsSecondMarkPayable() {
     SettlementItem item = payableItem();
 
-    assertThatThrownBy(() -> item.markPayable(LATER, LATER))
+    assertThatThrownBy(() -> item.markPayable(LATER, LATER, CHANGED_AT))
         .isInstanceOf(InvalidSettlementTransitionException.class);
     assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.PAYABLE);
     assertThat(item.getReadyAt()).isEqualTo(EARLIER);
+    assertThat(item.getUpdatedAt()).isEqualTo(CREATED_AT);
   }
 
   @Test
   @DisplayName("환불 예약 중에는 지급 가능으로 바꾸지 않는다")
   void rejectsMarkPayableWhileRefundReserved() {
     SettlementItem item = item();
-    item.reserveRefund();
+    item.reserveRefund(CREATED_AT);
 
-    assertThatThrownBy(() -> item.markPayable(EARLIER, EARLIER))
+    assertThatThrownBy(() -> item.markPayable(EARLIER, EARLIER, CHANGED_AT))
         .isInstanceOf(InvalidSettlementTransitionException.class);
     assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.REFUND_RESERVED);
     assertThat(item.getReadyAt()).isNull();
@@ -76,8 +108,8 @@ class SettlementItemTest {
   void refundsWaitingItem() {
     SettlementItem item = item();
 
-    item.reserveRefund();
-    item.completeRefund();
+    item.reserveRefund(CHANGED_AT);
+    item.completeRefund(CHANGED_AT);
 
     assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.REFUNDED);
   }
@@ -86,9 +118,9 @@ class SettlementItemTest {
   @DisplayName("환불 예약을 보상하면 예약 직전의 PAYABLE로 되돌린다")
   void restoresPayableAfterRefundReservation() {
     SettlementItem item = payableItem();
-    item.reserveRefund();
+    item.reserveRefund(CHANGED_AT);
 
-    item.cancelRefundReservation(SettlementItemStatus.PAYABLE);
+    item.cancelRefundReservation(SettlementItemStatus.PAYABLE, CHANGED_AT);
 
     assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.PAYABLE);
     assertThat(item.getReadyAt()).isEqualTo(EARLIER);
@@ -98,9 +130,9 @@ class SettlementItemTest {
   @DisplayName("환불 예약을 보상하면 예약 직전의 WAITING_CONFIRMATION으로 되돌린다")
   void restoresWaitingAfterRefundReservation() {
     SettlementItem item = item();
-    item.reserveRefund();
+    item.reserveRefund(CHANGED_AT);
 
-    item.cancelRefundReservation(SettlementItemStatus.WAITING_CONFIRMATION);
+    item.cancelRefundReservation(SettlementItemStatus.WAITING_CONFIRMATION, CHANGED_AT);
 
     assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.WAITING_CONFIRMATION);
   }
@@ -109,9 +141,9 @@ class SettlementItemTest {
   @DisplayName("지급 준비 시각이 없으면 환불 예약 보상으로 PAYABLE이 되지 않는다")
   void rejectsRestoringPayableWithoutReadyAt() {
     SettlementItem item = item();
-    item.reserveRefund();
+    item.reserveRefund(CHANGED_AT);
 
-    assertThatThrownBy(() -> item.cancelRefundReservation(SettlementItemStatus.PAYABLE))
+    assertThatThrownBy(() -> item.cancelRefundReservation(SettlementItemStatus.PAYABLE, CHANGED_AT))
         .isInstanceOf(InvalidSettlementTransitionException.class);
     assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.REFUND_RESERVED);
   }
@@ -121,8 +153,8 @@ class SettlementItemTest {
   void paysPayableItem() {
     SettlementItem item = payableItem();
 
-    item.reservePayout(PAYOUT_ID);
-    item.completePayout();
+    item.reservePayout(PAYOUT_ID, CHANGED_AT);
+    item.completePayout(CHANGED_AT);
 
     assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.PAID);
     assertThat(item.getPayoutId()).isEqualTo(PAYOUT_ID);
@@ -133,7 +165,7 @@ class SettlementItemTest {
   void rejectsPayoutBeforePayable() {
     SettlementItem item = item();
 
-    assertThatThrownBy(() -> item.reservePayout(PAYOUT_ID))
+    assertThatThrownBy(() -> item.reservePayout(PAYOUT_ID, CHANGED_AT))
         .isInstanceOf(InvalidSettlementTransitionException.class);
     assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.WAITING_CONFIRMATION);
     assertThat(item.getPayoutId()).isNull();
@@ -143,11 +175,11 @@ class SettlementItemTest {
   @DisplayName("지급에 배정된 항목은 환불 예약하거나 지급 가능으로 되돌리지 않는다")
   void keepsPayoutReservation() {
     SettlementItem item = payableItem();
-    item.reservePayout(PAYOUT_ID);
+    item.reservePayout(PAYOUT_ID, CHANGED_AT);
 
-    assertThatThrownBy(item::reserveRefund)
+    assertThatThrownBy(() -> item.reserveRefund(CHANGED_AT))
         .isInstanceOf(InvalidSettlementTransitionException.class);
-    assertThatThrownBy(() -> item.cancelRefundReservation(SettlementItemStatus.PAYABLE))
+    assertThatThrownBy(() -> item.cancelRefundReservation(SettlementItemStatus.PAYABLE, CHANGED_AT))
         .isInstanceOf(InvalidSettlementTransitionException.class);
     assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.PAYOUT_RESERVED);
     assertThat(item.getPayoutId()).isEqualTo(PAYOUT_ID);
@@ -160,12 +192,13 @@ class SettlementItemTest {
         UUID.randomUUID(),
         UUID.randomUUID(),
         new SettlementAmounts(10_000, 0, 10_000, 8_000, 2_000, 1_500, 8_500),
-        1L);
+        1L,
+        CREATED_AT);
   }
 
   private static SettlementItem payableItem() {
     SettlementItem item = item();
-    item.markPayable(EARLIER, EARLIER);
+    item.markPayable(EARLIER, EARLIER, CREATED_AT);
     return item;
   }
 }
