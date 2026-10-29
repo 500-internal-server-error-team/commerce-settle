@@ -116,3 +116,42 @@ CREATE TABLE commerce.idempotency_records (
 );
 CREATE INDEX ix_idempotency_records_expires ON commerce.idempotency_records (expires_at);
 CREATE INDEX ix_idempotency_records_resource ON commerce.idempotency_records (resource_id);
+
+CREATE TABLE commerce.buyer_accounts (
+    id               uuid         PRIMARY KEY,
+    email_normalized varchar(254) NOT NULL,
+    password_hash    varchar(255) NOT NULL,
+    display_name     varchar(80)  NOT NULL,
+    status           varchar(24)  NOT NULL,
+    auth_version     bigint       NOT NULL DEFAULT 0,
+    created_at       timestamptz  NOT NULL,
+    updated_at       timestamptz  NOT NULL,
+    version          bigint       NOT NULL,
+    deleted_at       timestamptz,
+
+    CONSTRAINT uk_buyer_accounts_email UNIQUE (email_normalized),
+    CONSTRAINT ck_buyer_accounts_status CHECK (status IN ('ACTIVE', 'SUSPENDED', 'DELETED')),
+    CONSTRAINT ck_buyer_accounts_deleted CHECK ((status = 'DELETED') = (deleted_at IS NOT NULL)),
+    CONSTRAINT ck_buyer_accounts_auth_version CHECK (auth_version >= 0)
+);
+CREATE INDEX ix_buyer_accounts_status ON commerce.buyer_accounts (status, id);
+
+CREATE TABLE commerce.seller_accounts (
+    id                 uuid         PRIMARY KEY,
+    email_normalized   varchar(254) NOT NULL,
+    password_hash      varchar(255) NOT NULL,
+    display_name       varchar(80)  NOT NULL,
+    status             varchar(24)  NOT NULL,
+    auth_version       bigint       NOT NULL DEFAULT 0,
+    payout_account_ref varchar(100) NOT NULL,
+    created_at         timestamptz  NOT NULL,
+    updated_at         timestamptz  NOT NULL,
+    version            bigint       NOT NULL,
+    deleted_at         timestamptz,
+
+    CONSTRAINT uk_seller_accounts_email UNIQUE (email_normalized),
+    CONSTRAINT ck_seller_accounts_status CHECK (status IN ('ACTIVE', 'SUSPENDED', 'DELETED')),
+    CONSTRAINT ck_seller_accounts_deleted CHECK ((status = 'DELETED') = (deleted_at IS NOT NULL)),
+    CONSTRAINT ck_seller_accounts_auth_version CHECK (auth_version >= 0)
+);
+CREATE INDEX ix_seller_accounts_status ON commerce.seller_accounts (status, id);
