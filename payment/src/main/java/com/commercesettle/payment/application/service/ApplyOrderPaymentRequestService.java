@@ -11,6 +11,7 @@ import com.commercesettle.payment.domain.repository.PaymentJobRepository;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -113,15 +114,28 @@ public class ApplyOrderPaymentRequestService {
         && payload.couponAmount() == amounts.couponAmount();
   }
 
-  /** 이미 있는 결제가 이번 요청과 같은 회차·주문 버전·당사자·금액인지 확인한다. */
+  /**
+   * 이미 있는 결제가 이번 요청과 같은 회차·주문 버전·당사자·금액·정책 버전인지 확인한다. 외부 결제액이 있으면 결제를 처음 만든 요청과 결제수단·계정 참조도 비교한다.
+   * 외부 결제액이 0원이면 결제수단 값은 쓰지 않으므로 비교하지 않는다.
+   */
   private boolean isSameRequest(
       Payment existing, OrderPaymentRequestedPayload payload, PaymentAmounts amounts) {
-    return existing.getCurrentCycleId().equals(payload.paymentCycleId())
-        && existing.getOrderVersion() == payload.orderVersion()
-        && existing.getBuyerId().equals(payload.buyerId())
-        && existing.getSellerId().equals(payload.sellerId())
-        && existing.getProductId().equals(payload.productId())
-        && existing.getAmounts().equals(amounts);
+    boolean samePayment =
+        existing.getCurrentCycleId().equals(payload.paymentCycleId())
+            && existing.getOrderVersion() == payload.orderVersion()
+            && existing.getBuyerId().equals(payload.buyerId())
+            && existing.getSellerId().equals(payload.sellerId())
+            && existing.getProductId().equals(payload.productId())
+            && existing.getAmounts().equals(amounts)
+            && existing.getPolicyVersion().equals(payload.policyVersion());
+    if (!samePayment || amounts.externalAmount() == 0) {
+      return samePayment;
+    }
+    return inbox
+        .findOriginalRequest(existing.getId())
+        .filter(original -> original.externalMethod() == payload.externalMethod())
+        .filter(original -> Objects.equals(original.methodAccountRef(), payload.methodAccountRef()))
+        .isPresent();
   }
 
   /** 결제를 만들고 외부 결제액이 있으면 승인 작업도 남긴다. */

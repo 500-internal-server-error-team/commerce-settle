@@ -17,4 +17,7 @@ public interface InboxStore {
   void markApplied(UUID inboxId, UUID resultRef, Instant now);
 
   void markReviewRequired(UUID inboxId, Instant now);
+
+  /** 결제를 처음 APPLIED로 만든 요청을 원문에서 다시 읽는다. 결제에 저장하지 않는 결제수단 비교에 쓴다. */
+  Optional<OrderPaymentRequestedPayload> findOriginalRequest(UUID paymentId);
 }

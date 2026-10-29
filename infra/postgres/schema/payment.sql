@@ -97,6 +97,7 @@ CREATE TABLE payment.inbox (
 );
 CREATE INDEX inbox_state ON payment.inbox(status, created_at, id);
 CREATE INDEX inbox_waiting ON payment.inbox(consumer, next_run_at, id) WHERE status = 'WAITING';
+CREATE INDEX inbox_applied_result ON payment.inbox(consumer, result_ref, created_at, id) WHERE status = 'APPLIED';
 
 CREATE TABLE payment.inbox_conflicts (
     id uuid PRIMARY KEY,

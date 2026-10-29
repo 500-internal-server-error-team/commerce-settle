@@ -29,6 +29,8 @@ import java.util.Queue;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class ApplyOrderPaymentRequestServiceTest {
 
@@ -204,6 +206,61 @@ class ApplyOrderPaymentRequestServiceTest {
     assertThat(inbox.reviewRequired).containsExactly(secondInboxId);
   }
 
+  @ParameterizedTest
+  @CsvSource({
+    "v2, CREDIT_CARD, card-ref",
+    "v1, DEBIT_CARD, card-ref",
+    "v1, CREDIT_CARD, other-card-ref"
+  })
+  @DisplayName("같은 주문·회차·금액이어도 정책 버전이나 결제수단이 다르면 확인 대상으로 남긴다")
+  void marksReviewWhenPolicyOrPaymentMethodDiffers(
+      String policyVersion, ExternalMethod method, String methodAccountRef) {
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    inbox.add(card(orderId, cycleId));
+    service.processNext();
+    UUID secondInboxId =
+        inbox.add(
+            withPolicyAndMethod(card(orderId, cycleId), policyVersion, method, methodAccountRef));
+
+    service.processNext();
+
+    assertThat(payments.all()).hasSize(1);
+    assertThat(inbox.reviewRequired).containsExactly(secondInboxId);
+  }
+
+  @Test
+  @DisplayName("마일리지 전액 결제는 결제수단 값이 달라도 같은 요청으로 본다")
+  void ignoresPaymentMethodWhenExternalAmountIsZero() {
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    OrderPaymentRequestedPayload mileageOnly =
+        payload(
+            orderId,
+            cycleId,
+            Status.PAYMENT_PENDING,
+            10_000,
+            0,
+            0,
+            10_000,
+            10_000,
+            10_000,
+            0,
+            0,
+            null,
+            null);
+    inbox.add(mileageOnly);
+    service.processNext();
+    UUID existingId = payments.all().get(0).getId();
+    UUID secondInboxId =
+        inbox.add(withPolicyAndMethod(mileageOnly, "v1", ExternalMethod.EASY_PAY, "wallet-ref"));
+
+    service.processNext();
+
+    assertThat(inbox.applied).containsEntry(secondInboxId, existingId);
+    assertThat(inbox.reviewRequired).isEmpty();
+  }
+
   private static OrderPaymentRequestedPayload card(UUID orderId, UUID cycleId) {
     return payload(
         orderId,
@@ -257,13 +314,43 @@ class ApplyOrderPaymentRequestServiceTest {
         base);
   }
 
+  private static OrderPaymentRequestedPayload withPolicyAndMethod(
+      OrderPaymentRequestedPayload source,
+      String policyVersion,
+      ExternalMethod method,
+      String methodAccountRef) {
+    return new OrderPaymentRequestedPayload(
+        source.orderId(),
+        source.buyerId(),
+        source.sellerId(),
+        source.paymentCycleId(),
+        source.productId(),
+        source.orderVersion(),
+        source.status(),
+        policyVersion,
+        source.paymentWaitUntil(),
+        method,
+        methodAccountRef,
+        source.grossAmount(),
+        source.couponAmount(),
+        source.totalAmount(),
+        source.mileageAmount(),
+        source.externalAmount(),
+        source.sellerCouponAmount(),
+        source.platformCouponAmount(),
+        source.settlementBaseAmount());
+  }
+
   private static final class FakeInbox implements InboxStore {
     private final Queue<WaitingInboxEvent> waiting = new ArrayDeque<>();
+    private final Map<UUID, OrderPaymentRequestedPayload> payloads = new HashMap<>();
     private final Map<UUID, UUID> applied = new HashMap<>();
+    private final Map<UUID, OrderPaymentRequestedPayload> originals = new HashMap<>();
     private final List<UUID> reviewRequired = new ArrayList<>();
 
     UUID add(OrderPaymentRequestedPayload payload) {
       UUID inboxId = UUID.randomUUID();
+      payloads.put(inboxId, payload);
       waiting.add(
           new WaitingInboxEvent(
               inboxId,
@@ -291,11 +378,17 @@ class ApplyOrderPaymentRequestServiceTest {
     @Override
     public void markApplied(UUID inboxId, UUID resultRef, Instant now) {
       applied.put(inboxId, resultRef);
+      originals.putIfAbsent(resultRef, payloads.get(inboxId));
     }
 
     @Override
     public void markReviewRequired(UUID inboxId, Instant now) {
       reviewRequired.add(inboxId);
+    }
+
+    @Override
+    public Optional<OrderPaymentRequestedPayload> findOriginalRequest(UUID paymentId) {
+      return Optional.ofNullable(originals.get(paymentId));
     }
   }
 
