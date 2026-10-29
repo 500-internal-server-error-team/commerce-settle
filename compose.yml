@@ -182,6 +182,7 @@ services:
       AUTH_SESSION_EPOCH: ${AUTH_SESSION_EPOCH:?Run python3 scripts/init_env.py}
       AUTH_RATE_LIMIT_HMAC_KEY: ${AUTH_RATE_LIMIT_HMAC_KEY:?Run python3 scripts/init_env.py}
       AUTH_RESET_DELIVERY_KEY: ${AUTH_RESET_DELIVERY_KEY:?Run python3 scripts/init_env.py}
+      ADDRESS_ENCRYPTION_KEY: ${ADDRESS_ENCRYPTION_KEY:?Run python3 scripts/init_env.py}
     depends_on:
       <<: *app-deps
       postgres:

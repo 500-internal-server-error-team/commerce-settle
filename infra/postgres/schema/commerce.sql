@@ -136,6 +136,24 @@ CREATE TABLE commerce.buyer_accounts (
 );
 CREATE INDEX ix_buyer_accounts_status ON commerce.buyer_accounts (status, id);
 
+CREATE TABLE commerce.buyer_addresses (
+    id                   uuid        PRIMARY KEY,
+    buyer_id             uuid        NOT NULL,
+    recipient_ciphertext bytea       NOT NULL,
+    phone_ciphertext     bytea       NOT NULL,
+    address_ciphertext   bytea       NOT NULL,
+    is_default           boolean     NOT NULL,
+    created_at           timestamptz NOT NULL,
+    updated_at           timestamptz NOT NULL,
+    version              bigint      NOT NULL DEFAULT 0,
+    deleted_at           timestamptz,
+
+    CONSTRAINT ck_buyer_addresses_deleted_default CHECK (deleted_at IS NULL OR NOT is_default)
+);
+CREATE UNIQUE INDEX uk_buyer_addresses_default ON commerce.buyer_addresses (buyer_id)
+    WHERE is_default AND deleted_at IS NULL;
+CREATE INDEX ix_buyer_addresses_buyer_created ON commerce.buyer_addresses (buyer_id, deleted_at, created_at, id);
+
 CREATE TABLE commerce.seller_accounts (
     id                 uuid         PRIMARY KEY,
     email_normalized   varchar(254) NOT NULL,

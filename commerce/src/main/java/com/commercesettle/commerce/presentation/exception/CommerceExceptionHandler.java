@@ -6,6 +6,8 @@ import com.commercesettle.commerce.application.exception.AuthenticationFailedExc
 import com.commercesettle.commerce.application.exception.AuthenticationUnavailableException;
 import com.commercesettle.commerce.application.exception.IdempotencyConflictException;
 import com.commercesettle.commerce.application.exception.OrderStubException;
+import com.commercesettle.commerce.domain.exception.BuyerAddressNotFoundException;
+import com.commercesettle.commerce.domain.exception.DefaultAddressConflictException;
 import com.commercesettle.commerce.domain.exception.DuplicateAccountEmailException;
 import com.commercesettle.commerce.domain.exception.InsufficientInventoryException;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
@@ -80,7 +82,16 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
     return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "상품을 찾을 수 없습니다.", null, request);
   }
 
-  @ExceptionHandler({VersionConflictException.class, OptimisticLockingFailureException.class})
+  @ExceptionHandler(BuyerAddressNotFoundException.class)
+  ResponseEntity<Object> addressNotFound(BuyerAddressNotFoundException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "주소를 찾을 수 없습니다.", null, request);
+  }
+
+  @ExceptionHandler({
+    VersionConflictException.class,
+    OptimisticLockingFailureException.class,
+    DefaultAddressConflictException.class
+  })
   ResponseEntity<Object> versionConflict(RuntimeException e, WebRequest request) {
     return respond(ErrorCode.COMMON_VERSION_CONFLICT, request);
   }

@@ -96,7 +96,7 @@
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 | `deleted_at` | `timestamptz?` | 논리삭제 |
 
-**제약:** 부분 UNIQUE(buyer_id) WHERE is_default AND deleted_at IS NULL. 타인 주소 접근 금지.
+**제약:** 부분 UNIQUE(buyer_id) WHERE is_default AND deleted_at IS NULL. CHECK(삭제한 주소는 기본 아님). 세 암호문은 AES-GCM이며 주소 ID·칸 이름에 묶습니다. 타인 주소 접근 금지.
 
 **인덱스:** (buyer_id,deleted_at,created_at,id).
 
