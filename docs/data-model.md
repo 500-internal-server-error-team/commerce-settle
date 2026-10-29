@@ -116,7 +116,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(product_id). 모든 수량>=0. 공개·일반 주문·이벤트 수량 배정은 동일 재고 행 잠금 순서를 사용.
+**제약:** UNIQUE(product_id). 모든 수량>=0. 공개·일반 주문·이벤트 수량 배정은 동일 재고 행 잠금 순서를 사용. `sold_qty`는 환불·반품 복원을 뺀 순판매량이며 누적 판매량은 inventory_movements에서 계산. 수량별 증감은 [재고 예약과 복원](policies.md#재고-예약과-복원)을 따름.
 
 **인덱스:** UNIQUE(product_id).
 
@@ -157,7 +157,17 @@
 | `reason` | `varchar(200)` | 업무 값 |
 | `created_at` | `timestamptz` | NOT NULL |
 
-**제약:** UNIQUE(product_id,operation,business_ref). 증감과 현재 재고를 같은 트랜잭션으로 기록.
+**제약:** UNIQUE(product_id,operation,business_ref). 증감과 현재 재고를 같은 트랜잭션으로 기록. 재전달·재처리는 이 유일성으로 한 번만 반영.
+
+| operation | business_ref |
+| --- | --- |
+| `SELLER_ADJUSTMENT` | 판매자 조정 요청의 멱등 기록 ID |
+| `ORDER_RESERVE`, `ORDER_CONSUME`, `ORDER_RELEASE` | 예약의 결제 회차 `cycle_id`. 재시도마다 새 값 |
+| `REFUND_RESTORE` | 미발송 주문 복구의 원환불 `refundId` |
+| `RETURN_RESTORE` | 반품 입고한 `order_refund_requests.id` |
+| `EVENT_ALLOCATE`, `EVENT_RETURN` | `sale_events.id` |
+
+선착순 주문의 확정과 이벤트 종료 뒤 해제는 재고 행이 바뀌므로 `ORDER_CONSUME`·`ORDER_RELEASE`로 기록합니다. 선착순 예약과 이벤트 진행 중 해제는 이벤트의 `R`만 바뀌므로 이 이력을 남기지 않고 event_participations가 참여 기록을 맡습니다.
 
 **인덱스:** (product_id,created_at,id).
 
@@ -292,7 +302,7 @@
 
 배송 소요일·seed·달력 사본은 생성 후 불변입니다. 발송/도착 예정 시각은 함께 설정하고 발송 재요청으로 바꾸지 않습니다. 배송완료 시 delivered_at=delivery_due_at, refund_deadline_at=delivered_at+168시간을 함께 저장합니다. 배송 전 deadline은 NULL이며 진행 중 취소·반품·환불은 자동 구매확정을 막습니다. 늦은 배송 작업과 환불 접수도 같은 주문 잠금으로 기한을 검사합니다.
 
-**인덱스:** (buyer_id,created_at,id); (seller_id,created_at,id); (fulfillment_status,delivery_due_at,id); (status,refund_deadline_at,id); UNIQUE(payment_id) WHERE payment_id IS NOT NULL.
+**인덱스:** (buyer_id,created_at,id); (seller_id,created_at,id); (fulfillment_status,delivery_due_at,id); (status,refund_deadline_at,id); (status,payment_wait_until,id); UNIQUE(payment_id) WHERE payment_id IS NOT NULL.
 
 ### order_refund_requests
 
@@ -332,14 +342,24 @@
 | `product_id` | `uuid` | →products.id |
 | `event_id` | `uuid?` | →sale_events.id |
 | `quantity` | `integer` | 업무 값 |
-| `cycle_id` | `uuid` | 업무 값 |
+| `cycle_id` | `uuid` | 현재 예약을 확보한 결제 회차; orders.payment_cycle_id와 일치 |
 | `status` | `varchar(24)` | 업무 값 |
-| `expires_at` | `timestamptz` | 업무 값 |
+| `expires_at` | `timestamptz` | 주문의 payment_wait_until; 취소 요청 대상 조회에만 사용 |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(order_id). quantity>0. status=RESERVED/CONSUMED/RELEASED/RESTORED. 기한만으로 RELEASED 전이 금지.
+
+| 전이 | 근거 | 조건 |
+| --- | --- | --- |
+| →RESERVED | 주문 생성 | 가용 재고 또는 이벤트 남은 수량·참여 한도 충족 |
+| RESERVED→CONSUMED | 결제 확정 | 결과의 결제 회차가 `cycle_id`와 같음 |
+| RESERVED→RELEASED | 확정 거절·승인 차단된 취소 | 결과의 결제 회차가 `cycle_id`와 같음 |
+| RELEASED→RESERVED | 확정 거절 뒤 재시도 | 새 회차로 수량을 다시 확보하고 `cycle_id` 교체 |
+| CONSUMED→RESTORED | 미발송 주문의 환불 복구 또는 발송 주문의 반품 입고 | 주문당 한 번 |
+
+재시도도 같은 행을 갱신하므로 주문당 예약 행은 하나입니다. 회차가 다른 늦은 결과와 이미 반영된 결과는 상태를 바꾸지 않습니다. 금지된 전이는 수량·이력을 바꾸지 않고 거절합니다. 수량 증감과 복원 시점은 [재고 예약과 복원](policies.md#재고-예약과-복원)을 따릅니다.
 
 **인덱스:** (status,expires_at,id); (product_id,status).
 
@@ -1236,6 +1256,7 @@ Payment는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니
 - `buyer_accounts/seller_accounts`는 독립 계정이다. Redis 세션과 password_reset_tokens의 계정 종류+ID가 해당 계정을 선택한다. 로그인 세션은 Redis, 복구 토큰과 인증 버전은 PostgreSQL에 두며 두 저장소의 변경을 단일 트랜잭션으로 취급하지 않는다.
 - 주문·주소 사본·재고/쿠폰/이벤트 예약·Outbox를 커머스 한 트랜잭션으로 저장한다. 멱등 기록도 같은 트랜잭션에 완료한다.
 - 이벤트 공개는 일반 가용 재고에서 Q를 배정하고, 참여는 R을 증가한다. 승인 시 R 감소·S 증가·배정 재고 감소·판매량 증가를 함께 반영한다. 종료 시 미사용분만 일반 재고로 반환하며 미확정 R은 유지한다.
+- 기존 주문의 재고 수량을 바꾸는 트랜잭션은 orders → product_inventory → sale_events → event_participations 순서로 행을 잠근다. 신규 주문은 products를 먼저 공유 잠금으로 읽어 판매 조건·버전을 확인한 뒤 product_inventory → sale_events → event_participations 순서로 잠근다. 상품 상태·가격 변경은 같은 products 행의 배타 잠금과 버전 증가로 직렬화한다. 선착순 예약은 재고 행을 잠그지 않고 sale_events의 조건부 갱신(`status=OPEN AND sold_count+reserved_count<quota`) 한 번으로 R을 늘린다. 잠금 경합 검증은 상품 상태 중단/가격 변경과 신규 주문의 잠금 획득 순서를 각각 확인한다. 주문이 먼저 잠그면 주문 저장 뒤 상품 변경이 진행되고, 상품 변경이 먼저 커밋되면 주문은 새 상태·버전을 반영해 거절되어야 한다.
 - 마일리지 잔액의 reserved_amount는 활성 예약 합계와 일치해야 한다. 사용 시 예약/잔액 차감·DEBIT·결제 확정·Outbox를 한 번에 기록하고, 환불 시 원외부 환불 확인 뒤 RESTORE·잔액·환불 상태·Outbox를 한 번에 기록한다.
 - 정산 항목은 결제당 하나, 지급은 배치당 하나이다. 활성 정산 예약은 항목당 하나여서 환불과 지급이 동시에 선점할 수 없다. partial UNIQUE로 보호하고 모든 상태/금액을 같은 DB에서 검사한다.
 - 정산 원장은 SOURCE(E/M/P)와 ALLOCATION(판매자/수수료)의 두 측을 분리한다. 각 측의 합계가 B이고 환불 뒤 0으로 상쇄된다. 두 측을 합쳐 매출을 두 배로 세지 않는다. reversal_of는 원원장 항목당 한 번이다.
@@ -1247,14 +1268,15 @@ Payment는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니
 
 | 대상 | 정상·실패 전이 |
 | --- | --- |
-| 주문 | 배송 UNSHIPPED→SHIPPED→DELIVERED이며 반품 입고는 SHIPPED/DELIVERED→RETURN_RECEIVED. PAYMENT_PENDING→PAID/DECLINED/CANCEL_PENDING→CANCELLED. PAID→REFUND_PENDING→REFUNDED 또는 안전한 종결 후 PAID. PAID→PURCHASE_CONFIRMED는 배송완료·환불 마감 초과·미진행 환불일 때만. |
+| 주문 | 배송 UNSHIPPED→SHIPPED→DELIVERED이며 반품 입고는 SHIPPED/DELIVERED→RETURN_RECEIVED. PAYMENT_PENDING→PAID/DECLINED/CANCEL_PENDING; 재시도 대기 DECLINED→CANCEL_PENDING; 승인 차단 확인 뒤 CANCEL_PENDING→CANCELLED. PAID→REFUND_PENDING→REFUNDED 또는 안전한 종결 후 PAID. PAID→PURCHASE_CONFIRMED는 배송완료·환불 마감 초과·미진행 환불일 때만. |
 | 결제 | PENDING→PROCESSING→CONFIRMED/DECLINED/UNKNOWN. E=0이면 PROCESSING 없이 PENDING→CONFIRMED. 외부 호출 전 미결제 취소만 PENDING→CANCELLED이며 PROCESSING·UNKNOWN은 취소하지 않고 예약을 유지·조회. UNKNOWN은 원대역 조회와 거래 부재 시의 원키 재요청 결과로만 확정하며 원업무 키·예약을 유지. DECLINED 재시도는 예약 재확보 후 새 attempt. 재시도 대기 중에는 DECLINED를 유지하고, 취소 요청을 처리해 이후 승인·재시도를 차단할 때만 DECLINED→CANCELLED. CONFIRMED·CANCELLED는 종료. |
 | 외부 시도 | PENDING→PROCESSING→APPROVED/DECLINED/UNKNOWN. M 전액이면 attempt 없음. |
 | 금융 환불 | RESERVING→EXTERNAL_PENDING→RESTORING→INTERNAL_PENDING→COMPLETED. 원장 상쇄·커머스 복구 확인 대기는 INTERNAL_PENDING이며, RefundCompleted 발행만으로 완료하지 않는다. RefundOrderRestored를 수신·반영한 뒤 COMPLETED로 전이한다. 외부 거절은 COMPENSATING→DECLINED, 결과 불명은 UNKNOWN. |
 | 정산 항목 | WAITING_CONFIRMATION/PAYABLE→REFUND_RESERVED→REFUNDED. 지급은 PAYABLE→PAYOUT_RESERVED→PAID만 허용. 보상은 previous_item_status와 최신 구매확정/환불 정보를 대조해 조건부 복귀. |
 | 거래 알림 | 판매 COLLECTING→PENDING, 나머지 PENDING→SENDING→SENT/RETRY/UNKNOWN/REVIEW_REQUIRED. UNKNOWN은 원수신 조회부터 재개. SENT는 모의 수신 확인이며 금융 성공 상태를 바꾸지 않는다. |
+| 재고 예약 | RESERVED→CONSUMED→RESTORED, RESERVED→RELEASED→RESERVED(새 결제 회차). 회차가 일치하는 결과만 반영하며 세부 조건은 [inventory_reservations](#inventory_reservations). |
 | 쿠폰·이벤트·예약 | [정책](policies.md)의 상태와 시각 조건을 함께 적용한다. 상태를 덮어써 사용/복원 이력을 지우지 않는다. |
 
 ## 구현 시 검증
 
-테이블을 구현할 때 위 부분 유니크·체크·인덱스와 실제 enum을 DDL에 명시한다. 동시에 같은 쿠폰·마일리지·마지막 재고를 쓰는 경우와 환불/지급 예약 경합, 자동 구매확정/환불 마감 경합을 실제 DB로 검사한다. 현재 문서·그림의 구조 검사는 DB 동작 검증을 대신하지 않는다.
+테이블을 구현할 때 위 부분 유니크·체크·인덱스와 실제 enum을 DDL에 명시한다. 동시에 같은 쿠폰·마일리지·마지막 재고를 쓰는 경우와 환불/지급 예약 경합, 자동 구매확정/환불 마감 경합을 실제 DB로 검사한다. 상품 변경과 신규 주문의 양쪽 잠금 순서, 미결제 기한 취소와 결제 확정/재시도의 경합도 실제 DB에서 검사하고, Payment의 승인 차단 확정 전에는 예약이 유지되는지 확인한다. 현재 문서·그림의 구조 검사는 DB 동작 검증을 대신하지 않는다.
