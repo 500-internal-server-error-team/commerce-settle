@@ -218,6 +218,23 @@ SELECT occurred_at = '2026-11-01T00:00:00.123456+09:00'::timestamptz FROM time_s
 
     kafka = ["exec", "-T", "kafka"]
     tool = "/opt/kafka/bin/"
+    for owner in ["commerce", "payment", "settlement", "commerce-notifications"]:
+        topics = [(f"commerce-settle.{owner}.v1.dlt", "604800000")]
+        if owner != "commerce-notifications":
+            topics.append((f"commerce-settle.{owner}.v1", "86400000"))
+        for name, retention in topics:
+            description = compose(
+                *kafka, tool + "kafka-topics.sh", "--bootstrap-server", "kafka:9092",
+                "--describe", "--topic", name,
+            ).stdout
+            summary = next(line for line in description.splitlines() if "Configs:" in line)
+            assert re.search(r"PartitionCount:\s*3\b", summary), description
+            assert re.search(r"ReplicationFactor:\s*1\b", summary), description
+            configs = dict(item.split("=", 1) for item in summary.split("Configs:", 1)[1].strip().split(","))
+            assert configs.get("cleanup.policy") == "delete", description
+            assert configs.get("retention.ms") == retention, description
+            assert configs.get("retention.bytes") == "-1", description
+    print("PASS Kafka: three original and four consumer DLT topic settings")
     topic = "bootstrap.smoke." + uuid.uuid4().hex
     compose(*kafka, tool + "kafka-topics.sh", "--bootstrap-server", "kafka:9092",
             "--create", "--topic", topic, "--partitions", "1", "--replication-factor", "1")

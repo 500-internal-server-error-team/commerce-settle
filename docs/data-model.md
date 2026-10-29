@@ -1097,14 +1097,16 @@ Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보�
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
+| `sequence_no` | `bigint` | DB identity; 같은 집계 버전 안의 저장 순번 |
 | `event_type` | `varchar(80)` | 업무 값 |
 | `event_version` | `integer` | 업무 값 |
 | `aggregate_id` | `uuid` | 업무 값 |
 | `aggregate_version` | `bigint` | 업무 값 |
 | `topic` | `varchar(100)` | 업무 값 |
-| `occurred_at` | `timestamptz` | 원천 Envelope의 occurredAt과 같은 불변 시각 |
+| `occurred_at` | `timestamptz` | 원천 occurredAt의 DB 정밀도 조회용 표현 |
 | `message_key` | `varchar(100)` | 업무 값 |
 | `payload` | `jsonb` | 업무 값 |
+| `raw_body` | `bytea` | 최초 직렬화한 Envelope 전체의 불변 UTF-8 bytes |
 | `status` | `varchar(16)` | 업무 값 |
 | `attempts` | `integer` | 업무 값 |
 | `next_run_at` | `timestamptz` | 업무 값 |
@@ -1116,9 +1118,13 @@ Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보�
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** id=eventId. occurred_at은 payload의 원천 occurredAt과 같고 업무 상태와 함께 원자 저장합니다. published_partition·published_offset·published_at은 모두 null이거나 모두 값이 있어야 하며 파티션·offset은 0 이상입니다. 발행 완료 상태와 위치를 같은 DB 트랜잭션으로 저장합니다. 미발행·ack 후 저장 전 중단은 위치 미확정이며 대조에서 제외하지 않습니다. 재발행은 원래 id·occurred_at·본문을 유지하고 확인한 위치를 갱신할 수 있습니다. 위치가 바뀌어도 소비자의 원래 eventId 처리 기록은 유효합니다. payload에 주소·비밀번호·인증 토큰·실결제 비밀값을 넣지 않습니다.
+**제약:** id=eventId. `payload`는 Envelope 전체의 JSON이며 `raw_body`를 JSON으로 해석한 값과 같아야 합니다. 업무 상태와 함께 원자 저장합니다. `occurred_at`은 원래 occurredAt을 PostgreSQL `timestamptz` 정밀도로 변환한 조회용 값이며, 마이크로초보다 세밀한 원시 시각은 `raw_body`·`payload`에 그대로 보존합니다. 발행할 때 조회용 시각으로 Envelope를 다시 만들거나 bytes를 재직렬화하지 않습니다. published_partition·published_offset·published_at은 모두 null이거나 모두 값이 있어야 하며 파티션·offset은 0 이상입니다. 발행 완료 상태와 위치를 같은 DB 트랜잭션으로 저장합니다. 미발행·ack 후 저장 전 중단은 위치 미확정이며 대조에서 제외하지 않습니다. 재발행은 원래 id·본문을 유지합니다. 위치가 바뀌어도 소비자의 원래 eventId 처리 기록은 유효합니다. payload에 주소·비밀번호·인증 토큰·실결제 비밀값을 넣지 않습니다.
+
+현재 Commerce 저장 상태는 PENDING/RUNNING/RETRY/PUBLISHED/REVIEW_REQUIRED입니다. 저장 포트는 호출자의 업무 트랜잭션에 참여하며 트랜잭션 밖 호출을 거절합니다. 같은 집계의 append는 트랜잭션 잠금으로 직렬화하고 이전보다 낮은 집계 버전의 신규 삽입을 거절합니다. 같은 버전은 `sequence_no` 순서로 처리하며 identity의 빈 번호는 의미가 없습니다. 선행 미발행 행이 임대·재시도 대기·수동 확인 상태여도 후행을 먼저 발행하지 않습니다. 선점마다 version을 증가하고 유효 임대·version이 맞는 결과만 반영합니다. 이 DB 검사는 이미 시작된 Kafka 전송을 취소하지 못하므로 늦은 중복도 원래 ID로 수용해야 합니다.
 
 **인덱스:** (status,next_run_at,lease_until,id); (occurred_at,created_at,id).
+
+Commerce는 추가로 전체 행의 (aggregate_id,aggregate_version,sequence_no)를 인덱싱해 완료 이력을 포함한 최대 버전 조회와 선행 미발행 검사를 지원합니다.
 
 ### inbox
 
@@ -1133,6 +1139,11 @@ Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보�
 | `event_version` | `integer` | 업무 값 |
 | `occurred_at` | `timestamptz` | 업무 값 |
 | `payload` | `jsonb` | 업무 값 |
+| `raw_body` | `bytea` | 최초 수신 Envelope 전체의 불변 bytes |
+| `body_hash` | `char(64)` | raw_body의 SHA-256 |
+| `source_topic` | `varchar(100)` | 최초 수신 원본 토픽 |
+| `source_partition` | `integer` | 최초 수신 파티션; 0 이상 |
+| `source_offset` | `bigint` | 최초 수신 offset; 0 이상 |
 | `next_run_at` | `timestamptz?` | 업무 값 |
 | `aggregate_id` | `uuid` | 업무 값 |
 | `aggregate_version` | `bigint` | 업무 값 |
@@ -1144,7 +1155,29 @@ Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보�
 
 **제약:** UNIQUE(consumer,event_id). status=RECEIVED/WAITING/APPLIED/REVIEW_REQUIRED. WAITING은 원 event_type/version/occurred_at/payload와 다음 재판정 시각을 보존해 Kafka ack·재시작 뒤에도 로컬에서 재개. payload에 금융 계약 외의 주소/인증 비밀값 금지.
 
+현재 Payment 수신은 원본과 `WAITING`·`next_run_at`을 한 행으로 저장해 메시지 처리 대기 작업을 영속화합니다. 별도 `inbox_jobs`는 만들지 않습니다. 조회용 `occurred_at`과 불변 bytes의 정밀도 구분은 Outbox와 같습니다. 같은 consumer·eventId의 동일 bytes 재전달은 원래 위치·상태·결과를 유지합니다. 다른 bytes는 아래 충돌 기록에 보존하고 그 격리 트랜잭션을 커밋한 뒤 ack합니다. 이는 금융 접수나 APPLIED를 뜻하지 않습니다. 후속 결제 유즈케이스가 대기 행을 읽고 결제·마일리지 예약·필요한 금융 `payment_jobs`와 Inbox 완료를 같은 트랜잭션에 저장해야 합니다. 현재 그 업무 처리기와 외부 금융 실행은 연결하지 않습니다.
+
 **인덱스:** (status,created_at,id).
+
+Payment는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니다.
+
+### inbox_conflicts
+
+소유: 현재 `payment`. 같은 consumer·eventId에 다른 bytes가 도착한 기록입니다. 원래 Inbox·처리 결과를 덮어쓰지 않습니다.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id` | `uuid` | PK |
+| `inbox_id` | `uuid` | 기존 Inbox의 애플리케이션 참조 |
+| `consumer`, `event_id` | `varchar(100)`, `uuid` | 충돌한 수신 업무 키 |
+| `raw_body`, `body_hash` | `bytea`, `char(64)` | 충돌 원본과 SHA-256 |
+| `source_topic`, `source_partition`, `source_offset` | `varchar(100)`, `integer`, `bigint` | 충돌 메시지의 원래 위치; 파티션·offset은 0 이상 |
+| `error_code`, `status` | `varchar(80)`, `varchar(24)` | EVENT_BODY_CONFLICT·REVIEW_REQUIRED |
+| `created_at` | `timestamptz` | 관측 시각 |
+
+**제약:** UNIQUE(consumer,event_id,source_topic,source_partition,source_offset). 자동 삭제하지 않습니다. 격리 저장이 실패하면 원본 offset을 ack하지 않습니다. 스키마 해석 불가 bytes의 별도 격리·DLT 실행은 아직 연결하지 않았으며 현재 Listener는 그 입력에서 무ack 중단합니다.
+
+**인덱스:** (consumer,event_id,created_at).
 
 ### idempotency_records
 
