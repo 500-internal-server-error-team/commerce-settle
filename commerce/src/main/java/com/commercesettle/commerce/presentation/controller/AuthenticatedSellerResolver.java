@@ -15,8 +15,8 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 /**
  * Gateway의 신원 헤더에서 판매자를 식별한다. 신원이 없으면 401, 판매자가 아닌 계정이면 403이다.
  *
- * <p>아직 Gateway의 세션 검증·헤더 제거와 백엔드의 Gateway 호출 자격 검사가 구현되지 않았다. 그 전에는 헤더를 위조할 수 있으므로 로컬 개발 환경에서만
- * 사용한다. 인증을 구현할 때 이 경계에서 Gateway 자격을 먼저 확인해야 한다.
+ * <p>Gateway는 세션을 검증하고 클라이언트의 신원 헤더를 제거한 뒤 다시 붙이지만, 백엔드의 Gateway 호출 자격 검사는 아직 없다. 그 전에는 Gateway를
+ * 우회한 직접 호출이 헤더를 위조할 수 있으므로 로컬 개발 환경에서만 사용한다. 자격 검사를 구현할 때 이 경계에서 Gateway 자격을 먼저 확인해야 한다.
  */
 @Component
 class AuthenticatedSellerResolver implements HandlerMethodArgumentResolver, WebMvcConfigurer {
