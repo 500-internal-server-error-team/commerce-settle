@@ -43,6 +43,14 @@ class JpaAccountRepository implements AccountRepository {
   }
 
   @Override
+  public Optional<Account> findLockedById(ActorKind kind, UUID id) {
+    return switch (kind) {
+      case BUYER -> buyers.findLockedById(id).map(Account.class::cast);
+      case SELLER -> sellers.findLockedById(id).map(Account.class::cast);
+    };
+  }
+
+  @Override
   public boolean existsByEmail(ActorKind kind, String emailNormalized) {
     return switch (kind) {
       case BUYER -> buyers.existsByEmailNormalized(emailNormalized);

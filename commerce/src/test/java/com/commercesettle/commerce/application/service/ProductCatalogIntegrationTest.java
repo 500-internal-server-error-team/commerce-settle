@@ -39,7 +39,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     properties = {
       "management.tracing.enabled=false",
       "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
-      "app.auth.rate-limit.identifier-hmac-key=product-catalog-test-hmac-key-32bytes"
+      "app.auth.rate-limit.identifier-hmac-key=product-catalog-test-hmac-key-32bytes",
+      "app.auth.password-reset.delivery-key=product-catalog-test-delivery-key-32bytes"
     })
 @Testcontainers
 class ProductCatalogIntegrationTest {

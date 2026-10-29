@@ -15,14 +15,26 @@ import org.springframework.validation.annotation.Validated;
  */
 @Validated
 @ConfigurationProperties("app.auth")
-public record AuthProperties(@NotNull UUID sessionEpoch, @NotNull @Valid RateLimit rateLimit) {
+public record AuthProperties(
+    @NotNull UUID sessionEpoch,
+    @NotNull @Valid RateLimit rateLimit,
+    @NotNull @Valid PasswordReset passwordReset) {
   /**
    * @param identifierHmacKey 이메일을 제한 키로 바꾸는 서버 키. 모든 커머스 인스턴스가 같은 값을 쓴다.
    * @param loginMaxRequests 계정 종류·이메일별 시간창 안의 로그인 허용 횟수
    * @param loginWindowSeconds 로그인 제한의 고정 시간창
+   * @param passwordResetMaxRequests 계정 종류·이메일별 시간창 안의 복구 요청 허용 횟수
+   * @param passwordResetWindowSeconds 복구 요청 제한의 고정 시간창
    */
   public record RateLimit(
       @NotNull @Size(min = 32) String identifierHmacKey,
       @NotNull @Positive Integer loginMaxRequests,
-      @NotNull @Positive Integer loginWindowSeconds) {}
+      @NotNull @Positive Integer loginWindowSeconds,
+      @NotNull @Positive Integer passwordResetMaxRequests,
+      @NotNull @Positive Integer passwordResetWindowSeconds) {}
+
+  /**
+   * @param deliveryKey 복구 토큰 전달용 암호문의 서버 키. 전달 작업이 같은 값으로 복호화한다.
+   */
+  public record PasswordReset(@NotNull @Size(min = 32) String deliveryKey) {}
 }

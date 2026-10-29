@@ -13,6 +13,9 @@ public interface AccountRepository {
 
   Optional<Account> findById(ActorKind kind, UUID id);
 
+  /** 인증 정보를 바꾸는 동안 같은 계정의 다른 변경을 기다리게 행을 잠근다. 트랜잭션 안에서만 호출한다. */
+  Optional<Account> findLockedById(ActorKind kind, UUID id);
+
   boolean existsByEmail(ActorKind kind, String emailNormalized);
 
   /** 이메일 유일성 위반은 DuplicateAccountEmailException이다. */

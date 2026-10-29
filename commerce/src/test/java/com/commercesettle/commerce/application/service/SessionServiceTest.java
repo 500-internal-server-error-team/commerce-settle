@@ -3,9 +3,9 @@ package com.commercesettle.commerce.application.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.commercesettle.commerce.application.exception.AuthRateLimitedException;
 import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
-import com.commercesettle.commerce.application.exception.LoginRateLimitedException;
-import com.commercesettle.commerce.application.port.LoginRateLimiter;
+import com.commercesettle.commerce.application.port.AuthRateLimiter;
 import com.commercesettle.commerce.application.port.PasswordHasher;
 import com.commercesettle.commerce.application.port.SessionStore;
 import com.commercesettle.commerce.domain.model.Account;
@@ -48,11 +48,11 @@ class SessionServiceTest {
             return passwordHash.equals("hash:" + rawPassword);
           }
         };
-    LoginRateLimiter limiter =
-        (kind, email) -> {
-          limited.add(kind + ":" + email);
+    AuthRateLimiter limiter =
+        (operation, kind, email) -> {
+          limited.add(operation + ":" + kind + ":" + email);
           if (rateLimited) {
-            throw new LoginRateLimitedException(30);
+            throw new AuthRateLimitedException(30);
           }
         };
     SessionStore sessions =
@@ -79,7 +79,7 @@ class SessionServiceTest {
 
     assertThat(login.token()).isEqualTo("token");
     assertThat(login.account()).isSameAs(stored);
-    assertThat(limited).containsExactly("SELLER:seller@example.com");
+    assertThat(limited).containsExactly("LOGIN:SELLER:seller@example.com");
     assertThat(issuedFor).containsExactly(stored.getId());
   }
 
@@ -110,7 +110,7 @@ class SessionServiceTest {
     rateLimited = true;
 
     assertThatThrownBy(() -> service.login(ActorKind.BUYER, "buyer@example.com", PASSWORD))
-        .isInstanceOf(LoginRateLimitedException.class);
+        .isInstanceOf(AuthRateLimitedException.class);
     assertThat(checkedHashes).isEmpty();
     assertThat(issuedFor).isEmpty();
   }
@@ -125,6 +125,11 @@ class SessionServiceTest {
     @Override
     public Optional<Account> findById(ActorKind kind, UUID id) {
       return Optional.ofNullable(stored).filter(a -> a.actorKind() == kind && a.getId().equals(id));
+    }
+
+    @Override
+    public Optional<Account> findLockedById(ActorKind kind, UUID id) {
+      return findById(kind, id);
     }
 
     @Override
