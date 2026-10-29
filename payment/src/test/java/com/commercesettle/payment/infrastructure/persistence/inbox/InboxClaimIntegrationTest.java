@@ -172,6 +172,22 @@ class InboxClaimIntegrationTest {
         .isEqualTo("APPLIED");
   }
 
+  @Test
+  @DisplayName("결제를 처음 APPLIED로 만든 요청을 원문에서 다시 읽는다")
+  void findsOriginalRequestOfPayment() {
+    EventEnvelope<OrderPaymentRequestedPayload> saved = saveWaiting();
+    UUID paymentId = UUID.randomUUID();
+    inTransaction(
+        () -> {
+          inbox.markApplied(
+              inbox.claimNextWaiting(LATER).orElseThrow().inboxId(), paymentId, LATER);
+          return null;
+        });
+
+    assertThat(inTransaction(() -> inbox.findOriginalRequest(paymentId))).contains(saved.payload());
+    assertThat(inTransaction(() -> inbox.findOriginalRequest(UUID.randomUUID()))).isEmpty();
+  }
+
   private EventEnvelope<OrderPaymentRequestedPayload> saveWaiting() {
     byte[] body = InboxIntegrationTest.EVENT_JSON.getBytes(StandardCharsets.UTF_8);
     try {

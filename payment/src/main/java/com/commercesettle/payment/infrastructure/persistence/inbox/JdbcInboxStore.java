@@ -149,6 +149,31 @@ public class JdbcInboxStore implements InboxStore {
     finishWaiting(inboxId, "REVIEW_REQUIRED", null, now);
   }
 
+  @Override
+  public Optional<OrderPaymentRequestedPayload> findOriginalRequest(UUID paymentId) {
+    List<Original> rows =
+        jdbc.query(
+            """
+            SELECT id, raw_body FROM payment.inbox
+            WHERE consumer = :consumer AND status = 'APPLIED' AND result_ref = :paymentId
+            ORDER BY created_at, id
+            LIMIT 1
+            """,
+            new MapSqlParameterSource("consumer", consumer).addValue("paymentId", paymentId),
+            (rs, row) -> new Original(rs.getObject("id", UUID.class), rs.getBytes("raw_body")));
+    if (rows.isEmpty()) {
+      return Optional.empty();
+    }
+    Original row = rows.get(0);
+    try {
+      EventEnvelope<OrderPaymentRequestedPayload> event =
+          mapper.readValue(row.body(), new TypeReference<>() {});
+      return Optional.of(event.payload());
+    } catch (IOException exception) {
+      throw new IllegalStateException("Stored inbox body cannot be read: " + row.id());
+    }
+  }
+
   private void finishWaiting(UUID inboxId, String status, UUID resultRef, Instant now) {
     int updated =
         jdbc.update(
