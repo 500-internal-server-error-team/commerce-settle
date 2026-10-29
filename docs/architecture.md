@@ -148,6 +148,8 @@ Compose DNS로 서비스를 찾습니다. 초기 구성에 별도 서비스 레�
 
 ## 4계층
 
+서비스 간 업무의 진행·완료·보상 책임과 전면 오케스트레이션·전면 코레오그래피의 비교는 [업무 흐름 조율 결정](decisions/0011-service-workflow-coordination.md)을 따릅니다.
+
 루트 패키지는 `com.commercesettle.<commerce|payment|settlement|financemock>`입니다.
 
 `finance-mock`은 모듈·실행 이름입니다. Java 패키지는 `financemock`, DB·계정·스키마는 `finance_mock`, 비밀번호 변수는 `FINANCE_MOCK_DB_PASSWORD`로 표기합니다.
