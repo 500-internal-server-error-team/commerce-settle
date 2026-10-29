@@ -25,7 +25,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
-import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -35,7 +34,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.DependsOn;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -59,6 +57,7 @@ class OutboxIntegrationTest {
   @Container
   static final PostgreSQLContainer<?> POSTGRES =
       new PostgreSQLContainer<>("postgres:18.3")
+          .withInitScript("db/commerce.sql")
           .withCommand("postgres", "-c", "max_connections=20")
           .withCreateContainerCmdModifier(
               cmd -> cmd.getHostConfig().withMemory(512L * 1024 * 1024));
@@ -690,17 +689,7 @@ class OutboxIntegrationTest {
       return pool;
     }
 
-    @Bean(initMethod = "migrate")
-    Flyway flyway(DataSource source) {
-      return Flyway.configure()
-          .dataSource(source)
-          .schemas("commerce")
-          .locations("classpath:db/migration")
-          .load();
-    }
-
     @Bean
-    @DependsOn("flyway")
     JdbcTemplate jdbc(DataSource source) {
       return new JdbcTemplate(source);
     }
@@ -711,7 +700,6 @@ class OutboxIntegrationTest {
     }
 
     @Bean
-    @DependsOn("flyway")
     LocalContainerEntityManagerFactoryBean entityManagerFactory(DataSource source) {
       var factory = new LocalContainerEntityManagerFactoryBean();
       factory.setDataSource(source);

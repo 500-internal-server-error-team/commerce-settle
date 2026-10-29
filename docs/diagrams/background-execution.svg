@@ -126,7 +126,7 @@
   <text x="288" y="744" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">대조는 지급 작업을 만들지 않음 · Payment·Mock API와 자기 Consumer 그룹의 커밋 offset 조회</text>
   <text x="48" y="244" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">상위 100위·동점자 전원 · 정상 회차 자동 실행 · 플랫폼 발급 수·월 할인 예산 상한 없음</text>
   <text x="48" y="264" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">동일 회차 재시작: 확정 대상·기존 쿠폰 보존 → 미발급분만 재개</text>
-  <text x="24" y="46" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">기존 앱 내부의 목표 구성 · Job·운영 API·메타데이터 migration은 구현 전</text>
+  <text x="24" y="46" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">기존 앱 내부의 목표 구성 · Job·운영 API·메타데이터 초기 SQL은 구현 전</text>
   <text x="24" y="940" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">Scheduler: 실행 계기</text>
   <text x="316" y="940" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">Spring Batch: Job·Step 실행 관리</text>
   <text x="680" y="940" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">Worker: 영속 작업 임대·처리</text>

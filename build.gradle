@@ -51,6 +51,12 @@ subprojects {
         reports { xml.required = true; html.required = true }
     }
     tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+    tasks.named('processTestResources') {
+        from(rootProject.file('infra/postgres/schema')) {
+            include "${project.name.replace('-', '_')}.sql"
+            into 'db'
+        }
+    }
     tasks.named('test') {
         useJUnitPlatform()
         testLogging { events 'failed', 'skipped'; exceptionFormat = 'full' }

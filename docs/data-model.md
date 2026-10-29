@@ -1,6 +1,6 @@
 # 데이터 모델
 
-서비스별 PostgreSQL과 [Redis 인증 데이터](#redis-인증-데이터)의 설계입니다. PostgreSQL의 물리 FK는 만들지 않고 아래 관계를 애플리케이션에서 검증합니다. 공통 시간 컬럼은 [시간 정보와 감사 기록](architecture.md#시간-정보와-감사-기록)에 따라 채웁니다. 생성/수정 시각과 행위 감사 로그는 별개입니다. 식별자는 서버 생성 UUID, 금액·누적 수량은 bigint, PostgreSQL 시각은 `timestamptz`이며 조회 시간대는 KST입니다. 내부 저장은 같은 절대시각을 유지합니다. `?`는 nullable, 나머지 컬럼은 NOT NULL입니다. 숫자 버전은 0부터 시작하고 조건부 갱신마다 증가합니다. Flyway migration은 Payment의 `payments`부터 적용했으며 나머지 테이블은 구현할 때 [DB 변경 정책](migrations.md)에 따라 추가합니다.
+서비스별 PostgreSQL과 [Redis 인증 데이터](#redis-인증-데이터)의 설계입니다. PostgreSQL의 물리 FK는 만들지 않고 아래 관계를 애플리케이션에서 검증합니다. 공통 시간 컬럼은 [시간 정보와 감사 기록](architecture.md#시간-정보와-감사-기록)에 따라 채웁니다. 생성/수정 시각과 행위 감사 로그는 별개입니다. 식별자는 서버 생성 UUID, 금액·누적 수량은 bigint, PostgreSQL 시각은 `timestamptz`이며 조회 시간대는 KST입니다. 내부 저장은 같은 절대시각을 유지합니다. `?`는 nullable, 나머지 컬럼은 NOT NULL입니다. 숫자 버전은 0부터 시작하고 조건부 갱신마다 증가합니다. 현재 구현된 테이블은 [서비스별 초기 SQL](migrations.md)에서 생성하며 나머지 테이블은 해당 업무 구현과 함께 같은 초기 SQL에 추가합니다.
 
 아래 컬럼·제약·인덱스가 기준이고 ERD는 주요 필드와 관계를 요약합니다. 각 뷰는 같은 DB 안의 관계를 보여주며 외부 서비스 ID는 값으로만 저장합니다. 주소·연락처는 별도 암호화 사본이고 금융 이벤트에 포함하지 않습니다.
 
@@ -482,7 +482,7 @@ Job 식별자는 targetMonth+runId다. 정상 재시작은 같은 값을 사용�
 
 교정·Job 실행 등록·대상 저장·발급 chunk는 회차 행을 먼저 잠그고 상태를 다시 확인한다. 교정은 원회차 PREPARING/ISSUING/COMPLETED, 활성 실행 없음·실행자 부재 확인, 발급 0건, 원래 발급 기한 전이라는 조건을 모두 확인한다. ISSUED 또는 buyer_coupon_id가 있는 대상·해당 대상의 ISSUE 이력이 있으면 거절하고, 이력의 정합성을 확인할 수 없으면 판정을 미룬다. 취소·대체 회차·감사·멱등 결과는 원자 저장한다. 취소가 먼저 커밋되면 이전 실행의 지연 저장을 거절하고 첫 발급이 먼저 커밋되면 취소를 거절한다. 원회차 대상과 이력은 보존한다. 호출·오류는 [운영 계약](api.md#월간-혜택-운영-조회와-오류-교정)을 따른다.
 
-**인덱스:** (status,target_month,id); 조건부 월 유일성과 replaces_run_id 유일성은 위 제약으로 관리한다. Job·메타데이터·업무 테이블의 실제 Flyway migration은 첫 구현에서 함께 검증한다.
+**인덱스:** (status,target_month,id); 조건부 월 유일성과 replaces_run_id 유일성은 위 제약으로 관리한다. Job·메타데이터·업무 테이블의 초기 SQL은 첫 구현에서 함께 검증한다.
 
 ### coupon_issue_targets
 
@@ -1088,7 +1088,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 ![메시지·멱등성·감사 ERD](diagrams/erd-integration.svg)
 
-Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보존·삭제 초기값](decisions/0005-kafka-event-delivery-and-capacity.md#보존과-삭제-초기값)을 따릅니다. 첫 구현은 이 DB 기록의 자동 삭제를 비활성화하며 일반 관리·가입의 기존 만료 정책은 유지합니다. 해석 불가 메시지의 격리는 원본 bytes·topic·partition·offset·실패 사유를 같은 소비자 DB에 저장할 수 있어야 하고, 구체 테이블·컬럼은 해당 소비자 migration에서 정의합니다.
+Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보존·삭제 초기값](decisions/0005-kafka-event-delivery-and-capacity.md#보존과-삭제-초기값)을 따릅니다. 첫 구현은 이 DB 기록의 자동 삭제를 비활성화하며 일반 관리·가입의 기존 만료 정책은 유지합니다. 해석 불가 메시지의 격리는 원본 bytes·topic·partition·offset·실패 사유를 같은 소비자 DB에 저장할 수 있어야 하고, 구체 테이블·컬럼은 해당 소비자의 초기 SQL에서 정의합니다.
 
 ### outbox
 
@@ -1255,4 +1255,4 @@ Payment는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니
 
 ## 구현 시 검증
 
-migration을 추가할 때 위 부분 유니크·체크·인덱스와 실제 enum을 DDL에 명시한다. 동시에 같은 쿠폰·마일리지·마지막 재고를 쓰는 경우와 환불/지급 예약 경합, 자동 구매확정/환불 마감 경합을 실제 DB로 검사한다. 현재 문서·그림의 구조 검사는 DB 동작 검증을 대신하지 않는다.
+초기 SQL에 테이블을 추가할 때 위 부분 유니크·체크·인덱스와 실제 enum을 DDL에 명시한다. 동시에 같은 쿠폰·마일리지·마지막 재고를 쓰는 경우와 환불/지급 예약 경합, 자동 구매확정/환불 마감 경합을 실제 DB로 검사한다. 현재 문서·그림의 구조 검사는 DB 동작 검증을 대신하지 않는다.

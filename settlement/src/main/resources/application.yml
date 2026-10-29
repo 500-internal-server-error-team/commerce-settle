@@ -22,11 +22,9 @@ spring:
       ddl-auto: validate
     properties:
       hibernate.default_schema: settlement
-  flyway:
-    clean-disabled: true
-    validate-on-migrate: true
-    default-schema: settlement
-    schemas: settlement
+  sql:
+    init:
+      mode: never
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
     template:

@@ -22,11 +22,9 @@ spring:
       ddl-auto: validate
     properties:
       hibernate.default_schema: finance_mock
-  flyway:
-    clean-disabled: true
-    validate-on-migrate: true
-    default-schema: finance_mock
-    schemas: finance_mock
+  sql:
+    init:
+      mode: never
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
 

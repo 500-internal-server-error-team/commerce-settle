@@ -1,17 +1,22 @@
-# DB 변경과 데이터 정책
+# DB 초기화와 데이터 정책
 
-서비스별 Flyway와 `ddl-auto=validate`를 사용합니다.
+배포 전 개발 단계에서는 **서비스 DB마다 초기 SQL 한 파일**을 관리합니다. 아직 초기 구조를 정하는 단계이므로 변경을 버전별 migration으로 나누지 않고, Flyway도 사용하지 않습니다. 이 방식은 운영 데이터의 변경 이력을 관리하는 절차가 아닙니다.
 
-1. 담당 서비스의 `src/main/resources/db/migration/`에 SQL을 추가합니다. 예: `commerce`의 `V2__create_sellers.sql`.
-2. 같은 서비스에서 버전이 겹치면 PR 병합 전에 다음 번호로 조정합니다. 서비스가 다르면 같은 번호를 써도 됩니다.
-3. 빈 로컬 DB와 기존 데이터를 유지한 DB에서 기동을 확인하고 PR로 리뷰합니다.
-4. 배포 시 앱 시작 과정에서 자기 DB에만 자동 적용합니다. Payment API·Worker는 같은 migration 이력을 공유하며 Flyway가 동시 적용을 조정합니다.
+| DB | 초기 SQL |
+| --- | --- |
+| commerce | [commerce.sql](../infra/postgres/schema/commerce.sql) |
+| payment | [payment.sql](../infra/postgres/schema/payment.sql) |
+| settlement | [settlement.sql](../infra/postgres/schema/settlement.sql) |
+| finance_mock | [finance_mock.sql](../infra/postgres/schema/finance_mock.sql) |
 
-이미 공용 환경에 적용한 파일은 수정·삭제하지 않고 다음 버전 SQL로 고칩니다. Hibernate `update`·`create`, Flyway `clean`·임의 `repair`, 공용 DB 볼륨 초기화로 변경 이력을 맞추지 않습니다. 실패하면 배포를 멈추고 원인과 현재 DB 상태를 먼저 확인합니다.
+1. 새 테이블·컬럼·제약·인덱스는 해당 파일의 초기 생성 정의에 반영합니다. 운영 데이터에 적용할 ALTER·데이터 이관 SQL을 개발 변경마다 추가하지 않습니다.
+2. PostgreSQL의 빈 데이터 볼륨 초기화 때 [01-init.sh](../infra/postgres/01-init.sh)가 DB·계정·권한을 만든 뒤 각 서비스 역할로 자기 초기 SQL을 한 번 실행합니다. 테이블·인덱스는 서비스 계정이 소유하며 다른 서비스 DB를 참조하지 않습니다.
+3. 앱은 초기 SQL을 실행하지 않고 `ddl-auto=validate`를 유지합니다. Payment API·Worker가 동시에 기동해도 DDL을 중복 실행하지 않습니다. 초기화 실패를 무시하거나 Hibernate `update`·`create`로 보완하지 않습니다.
+4. DB 통합 시험은 같은 파일을 테스트 리소스로 복사해 빈 전용 PostgreSQL에 적용합니다. Compose의 빈 볼륨 기동과 기존 데이터를 유지한 재기동도 확인합니다.
 
-기존 앱과 함께 동작해야 하는 변경은 컬럼·테이블 추가부터 진행하고, 데이터 이관·코드 전환을 마친 뒤 불필요한 항목을 제거합니다. 파괴적 변경 전에는 백업과 복구 절차를 확인합니다. 앱 버전만 되돌려도 DB가 자동으로 되돌아가지는 않습니다.
+**기존 볼륨에서는 초기 SQL이 다시 실행되지 않습니다.** 파일 수정·이미지 재빌드·앱 재시작만으로 기존 DB 구조를 바꾸지 않습니다. 구조를 바꿨으면 새 빈 개발 DB에서 검증하며, 기존 DB를 지우는 작업은 보존할 데이터가 없고 사용자가 삭제를 명시한 경우에만 실행합니다. 운영 또는 공유 데이터에 초기 SQL을 재실행하지 않습니다.
 
-Compose의 관리자 초기화는 DB·계정·접근 권한을 만들고, Flyway는 각 서비스 스키마 변경을 관리합니다.
+실제 배포를 준비하거나 기존 데이터를 보존하며 스키마를 변경해야 하는 시점에 migration 도구·초기 기준 버전·적용 및 복구 절차를 별도로 결정합니다. 지금의 초기 SQL을 운영 업그레이드나 롤백 스크립트로 사용하지 않습니다.
 
 ## 데이터 보존과 제약 조건
 
