@@ -3,9 +3,10 @@ package com.commercesettle.commerce.infrastructure.cache;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.commercesettle.commerce.application.exception.AuthRateLimitedException;
 import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
 import com.commercesettle.commerce.application.exception.AuthenticationUnavailableException;
-import com.commercesettle.commerce.application.exception.LoginRateLimitedException;
+import com.commercesettle.commerce.application.port.AuthRateLimiter.Operation;
 import com.commercesettle.commerce.application.port.SessionStore.IssuedSession;
 import com.commercesettle.commerce.domain.model.ActorKind;
 import com.commercesettle.commerce.infrastructure.config.AuthConfiguration;
@@ -55,7 +56,7 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-// 발급·삭제·제한 판정은 Lua 안에 있으므로 compose와 같은 ACL의 commerce 사용자로 실제 Redis에서 확인한다.
+// 발급·삭제·제한·가드 판정은 Lua 안에 있으므로 compose와 같은 ACL의 commerce 사용자로 실제 Redis에서 확인한다.
 @Testcontainers
 @Timeout(60)
 class RedisAuthIntegrationTest {
@@ -65,6 +66,7 @@ class RedisAuthIntegrationTest {
   private static final UUID ACTOR_ID = UUID.fromString("00000000-0000-4000-8000-000000000001");
   private static final String EMAIL = "seller@example.com";
   private static final int LOGIN_MAX_REQUESTS = 5;
+  private static final int RESET_MAX_REQUESTS = 3;
 
   @Container
   static final GenericContainer<?> REDIS =
@@ -101,7 +103,8 @@ class RedisAuthIntegrationTest {
   private static StatefulRedisConnection<String, String> admin;
   private static LettuceConnectionFactory commerce;
   private static RedisSessionStore sessions;
-  private static RedisLoginRateLimiter limiter;
+  private static RedisAuthRateLimiter limiter;
+  private static RedisAccountAuthGuard guards;
 
   @BeforeAll
   static void connect() {
@@ -116,7 +119,8 @@ class RedisAuthIntegrationTest {
     commerce = factory(REDIS.getMappedPort(6379));
     var template = new StringRedisTemplate(commerce);
     sessions = new RedisSessionStore(template, properties(LOGIN_MAX_REQUESTS, 900));
-    limiter = new RedisLoginRateLimiter(template, properties(LOGIN_MAX_REQUESTS, 900));
+    limiter = new RedisAuthRateLimiter(template, properties(LOGIN_MAX_REQUESTS, 900));
+    guards = new RedisAccountAuthGuard(template, properties(LOGIN_MAX_REQUESTS, 900));
   }
 
   @AfterEach
@@ -258,12 +262,12 @@ class RedisAuthIntegrationTest {
   @DisplayName("로그인 제한은 상한까지 허용하고 다음 요청에 남은 시간창을 초 단위로 올려 알린다")
   void limitsLoginAfterMaxRequests() {
     for (int i = 0; i < LOGIN_MAX_REQUESTS; i++) {
-      limiter.acquire(ActorKind.SELLER, EMAIL);
+      limiter.acquire(Operation.LOGIN, ActorKind.SELLER, EMAIL);
     }
 
-    assertThatThrownBy(() -> limiter.acquire(ActorKind.SELLER, EMAIL))
+    assertThatThrownBy(() -> limiter.acquire(Operation.LOGIN, ActorKind.SELLER, EMAIL))
         .isInstanceOfSatisfying(
-            LoginRateLimitedException.class,
+            AuthRateLimitedException.class,
             e -> assertThat(e.retryAfterSeconds()).isBetween(899L, 900L));
     String key = redis().keys("commerce-settle:auth:rate-limit:LOGIN:SELLER:*").getFirst();
     assertThat(key).doesNotContain(EMAIL).matches(".*:[0-9a-f]{64}");
@@ -274,13 +278,13 @@ class RedisAuthIntegrationTest {
   @DisplayName("구매자와 판매자의 로그인 제한은 같은 이메일이어도 따로 센다")
   void separatesLimitByActorKind() {
     for (int i = 0; i < LOGIN_MAX_REQUESTS; i++) {
-      limiter.acquire(ActorKind.SELLER, EMAIL);
+      limiter.acquire(Operation.LOGIN, ActorKind.SELLER, EMAIL);
     }
 
-    limiter.acquire(ActorKind.BUYER, EMAIL);
+    limiter.acquire(Operation.LOGIN, ActorKind.BUYER, EMAIL);
 
-    assertThatThrownBy(() -> limiter.acquire(ActorKind.SELLER, EMAIL))
-        .isInstanceOf(LoginRateLimitedException.class);
+    assertThatThrownBy(() -> limiter.acquire(Operation.LOGIN, ActorKind.SELLER, EMAIL))
+        .isInstanceOf(AuthRateLimitedException.class);
   }
 
   @Test
@@ -294,9 +298,9 @@ class RedisAuthIntegrationTest {
           () -> {
             start.await();
             try {
-              limiter.acquire(ActorKind.BUYER, EMAIL);
+              limiter.acquire(Operation.LOGIN, ActorKind.BUYER, EMAIL);
               return true;
-            } catch (LoginRateLimitedException e) {
+            } catch (AuthRateLimitedException e) {
               return false;
             }
           });
@@ -316,10 +320,10 @@ class RedisAuthIntegrationTest {
   @DisplayName("시간창이 끝나면 제한이 풀리고 새 시간창에서 다시 센다")
   void releasesLimitAfterWindow() throws InterruptedException {
     var shortLimiter =
-        new RedisLoginRateLimiter(new StringRedisTemplate(commerce), properties(1, 1));
-    shortLimiter.acquire(ActorKind.BUYER, EMAIL);
-    assertThatThrownBy(() -> shortLimiter.acquire(ActorKind.BUYER, EMAIL))
-        .isInstanceOf(LoginRateLimitedException.class);
+        new RedisAuthRateLimiter(new StringRedisTemplate(commerce), properties(1, 1));
+    shortLimiter.acquire(Operation.LOGIN, ActorKind.BUYER, EMAIL);
+    assertThatThrownBy(() -> shortLimiter.acquire(Operation.LOGIN, ActorKind.BUYER, EMAIL))
+        .isInstanceOf(AuthRateLimitedException.class);
 
     Instant deadline = Instant.now().plusSeconds(5);
     String key = redis().keys("commerce-settle:auth:rate-limit:LOGIN:BUYER:*").getFirst();
@@ -327,25 +331,29 @@ class RedisAuthIntegrationTest {
       Thread.sleep(50);
     }
 
-    shortLimiter.acquire(ActorKind.BUYER, EMAIL);
+    shortLimiter.acquire(Operation.LOGIN, ActorKind.BUYER, EMAIL);
     assertThat(redis().get(key)).isEqualTo("1");
   }
 
   @Test
-  @DisplayName("Redis에 연결할 수 없으면 세션 발급·삭제·제한을 확정하지 않고 판정 불가로 처리한다")
+  @DisplayName("Redis에 연결할 수 없으면 세션 발급·삭제·제한·가드 차단을 확정하지 않고 판정 불가로 처리한다")
   void refusesWhenStoreIsUnavailable() throws IOException {
     LettuceConnectionFactory closed = factory(unusedPort());
     try {
       var template = new StringRedisTemplate(closed);
       var unavailableSessions = new RedisSessionStore(template, properties(5, 900));
-      var unavailableLimiter = new RedisLoginRateLimiter(template, properties(5, 900));
+      var unavailableLimiter = new RedisAuthRateLimiter(template, properties(5, 900));
+      var unavailableGuards = new RedisAccountAuthGuard(template, properties(5, 900));
 
       assertThatThrownBy(() -> unavailableSessions.issue(ActorKind.SELLER, ACTOR_ID, 0))
           .isInstanceOf(AuthenticationUnavailableException.class);
       assertThatThrownBy(
               () -> unavailableSessions.delete("a".repeat(64), ActorKind.SELLER, ACTOR_ID))
           .isInstanceOf(AuthenticationUnavailableException.class);
-      assertThatThrownBy(() -> unavailableLimiter.acquire(ActorKind.SELLER, EMAIL))
+      assertThatThrownBy(() -> unavailableLimiter.acquire(Operation.LOGIN, ActorKind.SELLER, EMAIL))
+          .isInstanceOf(AuthenticationUnavailableException.class);
+      assertThatThrownBy(
+              () -> unavailableGuards.block(ActorKind.SELLER, ACTOR_ID, UUID.randomUUID(), 0))
           .isInstanceOf(AuthenticationUnavailableException.class);
     } finally {
       closed.destroy();
@@ -366,7 +374,10 @@ class RedisAuthIntegrationTest {
             "app.auth.session-epoch=" + EPOCH,
             "app.auth.rate-limit.identifier-hmac-key=" + "k".repeat(32),
             "app.auth.rate-limit.login-max-requests=5",
-            "app.auth.rate-limit.login-window-seconds=900")
+            "app.auth.rate-limit.login-window-seconds=900",
+            "app.auth.rate-limit.password-reset-max-requests=3",
+            "app.auth.rate-limit.password-reset-window-seconds=3600",
+            "app.auth.password-reset.delivery-key=" + "d".repeat(32))
         .run(
             context -> {
               var template = context.getBean(StringRedisTemplate.class);
@@ -414,6 +425,116 @@ class RedisAuthIntegrationTest {
     throw new AssertionError("Redis connection was not closed");
   }
 
+  @Test
+  @DisplayName("복구 요청 제한은 로그인과 예산을 공유하지 않고 1시간 3회까지 허용한다")
+  void limitsPasswordResetRequestsSeparately() {
+    for (int i = 0; i < LOGIN_MAX_REQUESTS; i++) {
+      limiter.acquire(Operation.LOGIN, ActorKind.BUYER, EMAIL);
+    }
+    for (int i = 0; i < RESET_MAX_REQUESTS; i++) {
+      limiter.acquire(Operation.PASSWORD_RESET_REQUEST, ActorKind.BUYER, EMAIL);
+    }
+
+    assertThatThrownBy(
+            () -> limiter.acquire(Operation.PASSWORD_RESET_REQUEST, ActorKind.BUYER, EMAIL))
+        .isInstanceOfSatisfying(
+            AuthRateLimitedException.class,
+            e -> assertThat(e.retryAfterSeconds()).isBetween(3599L, 3600L));
+    assertThat(redis().keys("commerce-settle:auth:rate-limit:PASSWORD_RESET_REQUEST:BUYER:*"))
+        .hasSize(1);
+  }
+
+  @Test
+  @DisplayName("가드 선차단은 변경 ID를 남겨 기존 세션 검증과 새 세션 발급을 판정 불가로 막는다")
+  void blockingGuardStopsSessionsUntilConfirmed() throws IOException {
+    IssuedSession issued = sessions.issue(ActorKind.SELLER, ACTOR_ID, 2);
+    UUID change = UUID.randomUUID();
+
+    guards.block(ActorKind.SELLER, ACTOR_ID, change, 2);
+
+    assertThat(redis().hgetall(guardKey(ActorKind.SELLER)))
+        .isEqualTo(
+            Map.of("authVersion", "2", "state", "BLOCKED", "pendingChangeId", change.toString()));
+    assertThat(verifyWithGateway(issued)).isEqualTo("UNAVAILABLE");
+    assertThatThrownBy(() -> sessions.issue(ActorKind.SELLER, ACTOR_ID, 2))
+        .isInstanceOf(AuthenticationUnavailableException.class);
+  }
+
+  @Test
+  @DisplayName("가드가 없어도 DB 인증 버전으로 변경 중 가드를 만든다")
+  void blocksMissingGuard() {
+    UUID change = UUID.randomUUID();
+
+    guards.block(ActorKind.BUYER, ACTOR_ID, change, 0);
+
+    assertThat(redis().hgetall(guardKey(ActorKind.BUYER)))
+        .isEqualTo(
+            Map.of("authVersion", "0", "state", "BLOCKED", "pendingChangeId", change.toString()));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("refusedBlocks")
+  @DisplayName("확정 BLOCKED·버전 불일치·다른 변경 진행 중·손상된 가드는 선차단하지 않고 가드를 그대로 둔다")
+  void refusesBlockWithoutMatchingActiveGuard(
+      String scenario, Consumer<Map<String, String>> guard, Class<? extends Exception> error) {
+    Map<String, String> fields = new HashMap<>(Map.of("authVersion", "3", "state", "ACTIVE"));
+    guard.accept(fields);
+    redis().hset(guardKey(ActorKind.SELLER), fields);
+
+    assertThatThrownBy(() -> guards.block(ActorKind.SELLER, ACTOR_ID, UUID.randomUUID(), 3))
+        .isInstanceOf(error);
+    assertThat(redis().hgetall(guardKey(ActorKind.SELLER))).isEqualTo(fields);
+  }
+
+  static Stream<Arguments> refusedBlocks() {
+    return Stream.of(
+        refused("확정 BLOCKED", g -> g.put("state", "BLOCKED"), AuthenticationFailedException.class),
+        refused(
+            "DB 확인 뒤 버전 변경", g -> g.put("authVersion", "4"), AuthenticationFailedException.class),
+        refused(
+            "다른 변경 진행 중",
+            g -> {
+              g.put("state", "BLOCKED");
+              g.put("pendingChangeId", UUID.randomUUID().toString());
+            },
+            AuthenticationUnavailableException.class),
+        refused("상태 누락", g -> g.remove("state"), AuthenticationUnavailableException.class),
+        refused(
+            "알 수 없는 상태", g -> g.put("state", "OPEN"), AuthenticationUnavailableException.class));
+  }
+
+  @Test
+  @DisplayName("확정 반영 뒤 이전 버전 세션은 Gateway에서 인증 실패이고 새 버전 세션은 발급된다")
+  void confirmedGuardRejectsOldSessions() throws IOException {
+    IssuedSession old = sessions.issue(ActorKind.SELLER, ACTOR_ID, 2);
+    UUID change = UUID.randomUUID();
+    guards.block(ActorKind.SELLER, ACTOR_ID, change, 2);
+
+    guards.confirm(ActorKind.SELLER, ACTOR_ID, change, 3, true);
+
+    assertThat(redis().hgetall(guardKey(ActorKind.SELLER)))
+        .isEqualTo(Map.of("authVersion", "3", "state", "ACTIVE"));
+    assertThat(verifyWithGateway(old)).isEqualTo("UNAUTHENTICATED");
+    assertThatThrownBy(() -> sessions.issue(ActorKind.SELLER, ACTOR_ID, 2))
+        .isInstanceOf(AuthenticationFailedException.class);
+    IssuedSession fresh = sessions.issue(ActorKind.SELLER, ACTOR_ID, 3);
+    assertThat(verifyWithGateway(fresh)).isEqualTo("AUTHENTICATED:SELLER:" + ACTOR_ID);
+  }
+
+  @Test
+  @DisplayName("다른 변경 ID나 이전 버전의 확정 반영은 거절하고 가드를 막아 둔다")
+  void refusesConfirmOfAnotherChangeOrOldVersion() {
+    UUID change = UUID.randomUUID();
+    guards.block(ActorKind.SELLER, ACTOR_ID, change, 2);
+    Map<String, String> blocked = redis().hgetall(guardKey(ActorKind.SELLER));
+
+    assertThatThrownBy(() -> guards.confirm(ActorKind.SELLER, ACTOR_ID, UUID.randomUUID(), 3, true))
+        .isInstanceOf(AuthenticationUnavailableException.class);
+    assertThatThrownBy(() -> guards.confirm(ActorKind.SELLER, ACTOR_ID, change, 2, true))
+        .isInstanceOf(AuthenticationUnavailableException.class);
+    assertThat(redis().hgetall(guardKey(ActorKind.SELLER))).isEqualTo(blocked);
+  }
+
   private static RedisCommands<String, String> redis() {
     return admin.sync();
   }
@@ -436,7 +557,10 @@ class RedisAuthIntegrationTest {
 
   private static AuthProperties properties(int maxRequests, int windowSeconds) {
     return new AuthProperties(
-        EPOCH, new AuthProperties.RateLimit("k".repeat(32), maxRequests, windowSeconds));
+        EPOCH,
+        new AuthProperties.RateLimit(
+            "k".repeat(32), maxRequests, windowSeconds, RESET_MAX_REQUESTS, 3600),
+        new AuthProperties.PasswordReset("d".repeat(32)));
   }
 
   private static LettuceConnectionFactory factory(int port) {

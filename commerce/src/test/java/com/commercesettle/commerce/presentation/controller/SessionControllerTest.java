@@ -14,9 +14,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.commercesettle.commerce.application.exception.AuthRateLimitedException;
 import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
 import com.commercesettle.commerce.application.exception.AuthenticationUnavailableException;
-import com.commercesettle.commerce.application.exception.LoginRateLimitedException;
 import com.commercesettle.commerce.application.service.AccountService;
 import com.commercesettle.commerce.application.service.SessionService;
 import com.commercesettle.commerce.domain.exception.DuplicateAccountEmailException;
@@ -84,7 +84,7 @@ class SessionControllerTest {
   @DisplayName("요청 제한은 429와 Retry-After로 알린다")
   void mapsRateLimit() throws Exception {
     given(sessions.login(any(), anyString(), anyString()))
-        .willThrow(new LoginRateLimitedException(120));
+        .willThrow(new AuthRateLimitedException(120));
 
     mvc.perform(post("/api/buyer-sessions").contentType(MediaType.APPLICATION_JSON).content(LOGIN))
         .andExpect(status().isTooManyRequests())

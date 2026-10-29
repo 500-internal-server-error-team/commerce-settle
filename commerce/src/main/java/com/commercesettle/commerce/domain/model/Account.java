@@ -47,6 +47,16 @@ public abstract class Account extends AuditableEntity {
     return status == AccountStatus.ACTIVE;
   }
 
+  /** 비밀번호를 바꾸고 인증 버전을 올려 이전 버전의 세션을 모두 무효로 만든다. */
+  public void changePassword(String newPasswordHash, Instant now) {
+    if (!canLogIn()) {
+      throw new IllegalStateException("Only active accounts can change password");
+    }
+    this.passwordHash = Objects.requireNonNull(newPasswordHash, "newPasswordHash");
+    this.authVersion++;
+    touch(now);
+  }
+
   public UUID getId() {
     return id;
   }

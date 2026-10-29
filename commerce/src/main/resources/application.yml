@@ -94,3 +94,7 @@ app:
       # 프로젝트 시작 기본값. docs/policies.md#로그인복구-요청-제한
       login-max-requests: 5
       login-window-seconds: 900
+      password-reset-max-requests: 3
+      password-reset-window-seconds: 3600
+    password-reset:
+      delivery-key: ${AUTH_RESET_DELIVERY_KEY}

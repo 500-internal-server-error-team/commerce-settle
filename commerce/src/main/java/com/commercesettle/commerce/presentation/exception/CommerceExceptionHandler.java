@@ -1,9 +1,10 @@
 package com.commercesettle.commerce.presentation.exception;
 
+import com.commercesettle.commerce.application.exception.AuthChangeUnconfirmedException;
+import com.commercesettle.commerce.application.exception.AuthRateLimitedException;
 import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
 import com.commercesettle.commerce.application.exception.AuthenticationUnavailableException;
 import com.commercesettle.commerce.application.exception.IdempotencyConflictException;
-import com.commercesettle.commerce.application.exception.LoginRateLimitedException;
 import com.commercesettle.commerce.domain.exception.DuplicateAccountEmailException;
 import com.commercesettle.commerce.domain.exception.InsufficientInventoryException;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
@@ -96,8 +97,8 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
     return respond(ErrorCode.COMMON_AUTHENTICATION_REQUIRED, request);
   }
 
-  @ExceptionHandler(LoginRateLimitedException.class)
-  ResponseEntity<Object> rateLimited(LoginRateLimitedException e, WebRequest request) {
+  @ExceptionHandler(AuthRateLimitedException.class)
+  ResponseEntity<Object> rateLimited(AuthRateLimitedException e, WebRequest request) {
     ErrorCode code = ErrorCode.COMMON_RATE_LIMITED;
     return ResponseEntity.status(code.status())
         .header(HttpHeaders.RETRY_AFTER, Long.toString(e.retryAfterSeconds()))
@@ -118,6 +119,26 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
     return respond(
         ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE,
         "인증 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+        null,
+        request);
+  }
+
+  /** 가드를 막은 뒤 결과를 확정하지 못했다. 비밀번호가 이미 바뀌었을 수 있으므로 재전송을 안내하지 않는다. 변경 ID는 재조정에 쓰는 추적 값이며 비밀값이 아니다. */
+  @ExceptionHandler(AuthChangeUnconfirmedException.class)
+  ResponseEntity<Object> authChangeUnconfirmed(
+      AuthChangeUnconfirmedException e, WebRequest request) {
+    LOGGER
+        .atWarn()
+        .addKeyValue("event", "commerce.auth.change")
+        .addKeyValue("result", "UNKNOWN")
+        .addKeyValue("changeId", e.changeId().toString())
+        .addKeyValue("errorCode", ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE.name())
+        .addKeyValue("errorType", errorType(e))
+        .addKeyValue("traceId", traceId())
+        .log("Account auth change is not confirmed");
+    return respond(
+        ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE,
+        "변경 결과를 확인할 수 없습니다. 같은 요청을 다시 보내지 말고 새 비밀번호로 로그인해 확인해 주세요.",
         null,
         request);
   }

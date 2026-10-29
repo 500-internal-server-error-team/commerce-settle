@@ -1,5 +1,6 @@
 package com.commercesettle.commerce.infrastructure.cache;
 
+import com.commercesettle.commerce.application.port.AuthRateLimiter.Operation;
 import com.commercesettle.commerce.domain.model.ActorKind;
 import java.util.UUID;
 
@@ -17,7 +18,7 @@ final class AuthKeys {
     return PREFIX + "subject:" + epoch + ":" + kind.name() + ":" + actorId;
   }
 
-  static String loginRateLimit(ActorKind kind, String identifierHash) {
-    return PREFIX + "rate-limit:LOGIN:" + kind.name() + ":" + identifierHash;
+  static String rateLimit(Operation operation, ActorKind kind, String identifierHash) {
+    return PREFIX + "rate-limit:" + operation.name() + ":" + kind.name() + ":" + identifierHash;
   }
 }

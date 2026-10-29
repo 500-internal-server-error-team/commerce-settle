@@ -155,3 +155,52 @@ CREATE TABLE commerce.seller_accounts (
     CONSTRAINT ck_seller_accounts_auth_version CHECK (auth_version >= 0)
 );
 CREATE INDEX ix_seller_accounts_status ON commerce.seller_accounts (status, id);
+
+CREATE TABLE commerce.password_reset_tokens (
+    id                  uuid        PRIMARY KEY,
+    actor_kind          varchar(16) NOT NULL,
+    actor_id            uuid        NOT NULL,
+    purpose             varchar(16) NOT NULL,
+    token_hash          char(64)    NOT NULL,
+    expires_at          timestamptz NOT NULL,
+    consumed_at         timestamptz,
+    revoked_at          timestamptz,
+    delivery_ciphertext bytea,
+    delivery_status     varchar(16),
+    created_at          timestamptz NOT NULL,
+    updated_at          timestamptz NOT NULL,
+    version             bigint      NOT NULL,
+
+    CONSTRAINT uk_password_reset_tokens_hash UNIQUE (token_hash),
+    CONSTRAINT ck_password_reset_tokens_actor_kind CHECK (actor_kind IN ('BUYER', 'SELLER')),
+    CONSTRAINT ck_password_reset_tokens_purpose CHECK (purpose = 'PASSWORD_RESET'),
+    CONSTRAINT ck_password_reset_tokens_closed CHECK (consumed_at IS NULL OR revoked_at IS NULL),
+    CONSTRAINT ck_password_reset_tokens_delivery CHECK (
+        (delivery_ciphertext IS NULL) = (delivery_status IS NULL)
+    )
+);
+CREATE INDEX ix_password_reset_tokens_actor
+    ON commerce.password_reset_tokens (actor_kind, actor_id, purpose);
+CREATE INDEX ix_password_reset_tokens_expires ON commerce.password_reset_tokens (expires_at);
+
+CREATE TABLE commerce.audit_logs (
+    id             uuid         PRIMARY KEY,
+    actor_kind     varchar(16)  NOT NULL,
+    actor_ref      varchar(100) NOT NULL,
+    action         varchar(80)  NOT NULL,
+    aggregate_type varchar(50)  NOT NULL,
+    aggregate_id   uuid         NOT NULL,
+    before_status  varchar(32),
+    after_status   varchar(32),
+    reason_code    varchar(80),
+    event_id       uuid,
+    correlation_id varchar(100) NOT NULL,
+    occurred_at    timestamptz  NOT NULL,
+
+    CONSTRAINT ck_audit_logs_actor_kind
+        CHECK (actor_kind IN ('BUYER', 'SELLER', 'SERVICE', 'OPERATOR', 'SYSTEM'))
+);
+CREATE INDEX ix_audit_logs_aggregate
+    ON commerce.audit_logs (aggregate_type, aggregate_id, occurred_at, id);
+CREATE INDEX ix_audit_logs_actor ON commerce.audit_logs (actor_kind, actor_ref, occurred_at, id);
+CREATE INDEX ix_audit_logs_correlation ON commerce.audit_logs (correlation_id);
