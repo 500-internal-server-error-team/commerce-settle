@@ -117,7 +117,7 @@ Compose DNS로 서비스를 찾습니다. 초기 구성에 별도 서비스 레�
 | 지급 실행·보류 재개·미확정 조회 | `settlement` | 저장된 지급 작업을 Worker가 임대·실행 | [지급 복구](policies.md#정산재처리) |
 | 참조·금액 대조 | 각 원천 서비스 | 각 서비스가 자기 데이터의 대조를 제공. 서비스 간 대조는 다른 DB 직접 조회 없이 계약으로 연결하고, 시점·판정은 연결한 ADR을 따름 | [대조 항목](decisions/0002-performance-and-integrity-metrics.md#금액-불일치), [내부 참조](decisions/0006-no-foreign-keys-within-service.md) |
 | PG 입금 반영 | `finance-mock` | 매분 도래한 미처리 입금을 원승인당 한 번 반영 | [PG 회수](policies.md#선지급-재원과-pg-회수) |
-| Outbox 발행·선행 상태 대기 재처리 | 각 생산·소비 앱 | Outbox는 100ms 간격으로 제한된 묶음 발행. 소비자는 영속 대기한 원업무를 재판정 | [전달·복구](decisions/0005-kafka-event-delivery-and-capacity.md#안전한-전달과-실행) |
+| Outbox 발행·선행 상태 대기 재처리 | 각 생산·소비 앱 | Commerce Relay는 커밋 후·슬롯 반환·시작 시 깨우고 신호 누락·재시도·만료 임대는 기본 1초 복구 조회로 처리. 소비자는 영속 대기한 원업무를 재판정 | [전달·복구](decisions/0005-kafka-event-delivery-and-capacity.md#안전한-전달과-실행) |
 | 신규 접수 제한·재개 판정 | `commerce` | 15초마다 묶어서 관측하고 기존 작업의 처리·복구는 계속 허용 | [접수 제한](decisions/0005-kafka-event-delivery-and-capacity.md#신규-접수-제한과-재개) |
 
 이 목표 구조에서 제안하는 초기 주기는 미결제 기한·이벤트 종료·쿠폰 만료 스케줄러 매분, 주소·알림 보존 작업 매일 한 번입니다. 실행 시각·묶음 크기·동시성은 서버 설정으로 명시하고 검증합니다. 사용 가능 여부는 요청 시에도 기한과 상태를 검사하므로 스케줄러 지연으로 만료 쿠폰·종료 이벤트를 허용하지 않습니다. 대량 작업은 제한된 묶음과 재시작 지점을 사용하고, 실제 소요 시간·실패 복구 비용에 따라 Spring Batch 적용을 추가 검토합니다.
@@ -246,9 +246,11 @@ Payment API·Worker는 패키지를 복제하지 않습니다. HTTP와 비동기
 
 ## Kafka
 
-로컬 Kafka는 단일 브로커이며 토픽 자동 생성을 끕니다. smoke는 연결 확인용 임시 토픽 하나에서 메시지를 왕복시키고 삭제합니다.
+로컬 Kafka는 단일 브로커이며 토픽 자동 생성을 끕니다. Commerce·Payment·Settlement가 생산자별 원본 3개와 소비자별 DLT 4개 토픽을 준비합니다. smoke는 실제 7개 토픽의 파티션·복제·보존 설정을 확인하고, 별도 임시 토픽에서 메시지를 왕복시킨 뒤 삭제합니다.
 
-전달·용량 산정과 선택 이유는 [Kafka 이벤트 전달과 용량 산정](decisions/0005-kafka-event-delivery-and-capacity.md)을 따릅니다. 생산자별 토픽·책임별 Consumer 그룹, 폴링 Outbox·Inbox 저장 후 offset 커밋·Worker 실행을 구현 기준으로 삼고 파티션·동시 실행·보존·접수 제한은 ADR의 초기값으로 시작하고 정상 부하와 장애 후 배출 시험으로 조정합니다. 이벤트 종류·key·그룹·payload는 [API 이벤트 계약](api.md#이벤트-연동)이 소유합니다. 토픽·서비스 사이의 전역 순서는 가정하지 않으며 금융 이벤트에 배송지·비밀번호·인증 토큰을 넣지 않습니다. 업무 전달·복구·성능은 아직 구현·검증 전입니다.
+전달·용량 산정과 선택 이유는 [Kafka 이벤트 전달과 용량 산정](decisions/0005-kafka-event-delivery-and-capacity.md)을 따릅니다. 생산자별 토픽·책임별 Consumer 그룹, 업무 상태·Outbox의 원자 저장과 Inbox·처리 대기 작업의 커밋 후 offset 승인을 구현 기준으로 삼고 파티션·동시 실행·보존·접수 제한은 ADR의 초기값으로 시작하고 정상 부하와 장애 후 배출 시험으로 조정합니다. 이벤트 종류·key·그룹·payload는 [API 이벤트 계약](api.md#이벤트-연동)이 소유합니다. 토픽·서비스 사이의 전역 순서는 가정하지 않으며 금융 이벤트에 배송지·비밀번호·인증 토큰을 넣지 않습니다.
+
+현재 Commerce의 Outbox·Relay와 Payment의 Inbox 영속 인계를 구현하고 전용 PostgreSQL·Kafka 시험으로 원문 전달·경합·재전달·ACK 경계를 확인했습니다. 발행·수신은 기본 비활성입니다. 주문 API·금융 Worker와의 전체 연결 및 금융 업무 전체의 정합성·처리량·장애 후 배출 목표는 구현·검증 전입니다. 활성화 절차와 시험 범위는 [Kafka 전달 기반](development.md#kafka-전달-기반)을 따릅니다.
 
 ## 네트워크와 관측
 
