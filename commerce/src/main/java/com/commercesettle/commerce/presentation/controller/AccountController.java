@@ -17,8 +17,6 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "Accounts", description = "판매자 가입과 본인 계정 조회")
 @RestController
 public class AccountController {
-  private static final URI CURRENT_ACCOUNT = URI.create("/api/accounts/me");
-
   private final AccountService accounts;
 
   public AccountController(AccountService accounts) {
@@ -35,7 +33,8 @@ public class AccountController {
     var account =
         accounts.registerSeller(
             request.email(), request.password(), request.displayName(), request.payoutAccountRef());
-    return ResponseEntity.created(CURRENT_ACCOUNT).body(AccountResponse.from(account));
+    return ResponseEntity.created(URI.create("/api/sellers/" + account.getId()))
+        .body(AccountResponse.from(account));
   }
 
   @Operation(operationId = "get_api_accounts_me", summary = "본인 계정")

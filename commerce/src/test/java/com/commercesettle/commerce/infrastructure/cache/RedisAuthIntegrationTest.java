@@ -8,11 +8,15 @@ import com.commercesettle.commerce.application.exception.AuthenticationUnavailab
 import com.commercesettle.commerce.application.exception.LoginRateLimitedException;
 import com.commercesettle.commerce.application.port.SessionStore.IssuedSession;
 import com.commercesettle.commerce.domain.model.ActorKind;
+import com.commercesettle.commerce.infrastructure.config.AuthConfiguration;
 import com.commercesettle.commerce.infrastructure.config.AuthProperties;
+import io.lettuce.core.AclSetuserArgs;
+import io.lettuce.core.KillArgs;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.api.StatefulRedisConnection;
+import io.lettuce.core.api.async.RedisAsyncCommands;
 import io.lettuce.core.api.sync.RedisCommands;
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -38,9 +42,14 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -173,6 +182,7 @@ class RedisAuthIntegrationTest {
 
     assertThatThrownBy(() -> sessions.issue(ActorKind.SELLER, ACTOR_ID, 3)).isInstanceOf(error);
     assertThat(redis().keys("commerce-settle:auth:session:*")).isEmpty();
+    assertThat(redis().hgetall(guardKey(ActorKind.SELLER))).isEqualTo(fields);
   }
 
   static Stream<Arguments> refusedGuards() {
@@ -192,6 +202,13 @@ class RedisAuthIntegrationTest {
             },
             AuthenticationUnavailableException.class),
         refused("상태 누락", g -> g.remove("state"), AuthenticationUnavailableException.class),
+        refused(
+            "필수 필드 없이 다른 필드만 남음",
+            g -> {
+              g.clear();
+              g.put("unexpected", "value");
+            },
+            AuthenticationUnavailableException.class),
         refused(
             "숫자가 아닌 버전",
             g -> g.put("authVersion", "nan"),
@@ -333,6 +350,68 @@ class RedisAuthIntegrationTest {
     } finally {
       closed.destroy();
     }
+  }
+
+  @Test
+  @DisplayName("앱 Redis 설정은 연결이 끊긴 동안의 새 명령을 쌓지 않고 즉시 판정 불가로 처리한다")
+  void rejectsCommandsWhileDisconnected() {
+    new ApplicationContextRunner()
+        .withConfiguration(AutoConfigurations.of(RedisAutoConfiguration.class))
+        .withUserConfiguration(AuthConfiguration.class)
+        .withPropertyValues(
+            "spring.data.redis.host=" + REDIS.getHost(),
+            "spring.data.redis.port=" + REDIS.getMappedPort(6379),
+            "spring.data.redis.username=commerce",
+            "spring.data.redis.password=" + COMMERCE_PASSWORD,
+            "app.auth.session-epoch=" + EPOCH,
+            "app.auth.rate-limit.identifier-hmac-key=" + "k".repeat(32),
+            "app.auth.rate-limit.login-max-requests=5",
+            "app.auth.rate-limit.login-window-seconds=900")
+        .run(
+            context -> {
+              var template = context.getBean(StringRedisTemplate.class);
+              var appSessions =
+                  new RedisSessionStore(template, context.getBean(AuthProperties.class));
+              Long clientId =
+                  template.execute(
+                      (RedisCallback<Long>)
+                          c ->
+                              ((RedisAsyncCommands<?, ?>) c.getNativeConnection())
+                                  .clientId()
+                                  .toCompletableFuture()
+                                  .join());
+              // 재연결 인증도 실패하게 해 연결이 끊긴 상태를 유지한다.
+              redis().aclSetuser("commerce", AclSetuserArgs.Builder.off());
+              try {
+                redis().clientKill(KillArgs.Builder.id(clientId));
+                awaitDisconnected(template);
+
+                long started = System.nanoTime();
+                assertThatThrownBy(() -> appSessions.issue(ActorKind.SELLER, ACTOR_ID, 0))
+                    .isInstanceOf(AuthenticationUnavailableException.class)
+                    .rootCause()
+                    .hasMessageContaining("Commands are rejected");
+                assertThat(Duration.ofNanos(System.nanoTime() - started))
+                    .isLessThan(Duration.ofSeconds(1));
+              } finally {
+                redis().aclSetuser("commerce", AclSetuserArgs.Builder.on());
+              }
+            });
+    assertThat(redis().keys("commerce-settle:auth:*")).isEmpty();
+  }
+
+  // 끊김 직후 이미 보낸 명령은 연결 종료로 실패하므로 거절 상태가 될 때까지 기다린다.
+  private static void awaitDisconnected(StringRedisTemplate template) throws InterruptedException {
+    Instant deadline = Instant.now().plusSeconds(5);
+    while (Instant.now().isBefore(deadline)) {
+      try {
+        template.hasKey("commerce-settle:auth:probe");
+      } catch (DataAccessException e) {
+        return;
+      }
+      Thread.sleep(50);
+    }
+    throw new AssertionError("Redis connection was not closed");
   }
 
   private static RedisCommands<String, String> redis() {

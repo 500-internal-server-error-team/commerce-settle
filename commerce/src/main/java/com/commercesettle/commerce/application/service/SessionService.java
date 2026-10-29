@@ -13,7 +13,6 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 
-/** 로그인 세션 발급과 현재 세션 로그아웃. */
 @Service
 public class SessionService {
   private final AccountRepository accounts;
@@ -35,7 +34,7 @@ public class SessionService {
     this.unknownAccountHash = passwords.hash(UUID.randomUUID().toString());
   }
 
-  /** 요청 제한 → 계정·비밀번호·상태 확인 → 가드와 버전이 맞을 때만 세션 저장 순서다. 실패 사유는 하나의 인증 실패로 묶는다. */
+  // 계정 없음·비밀번호 오류·로그인 불가 상태를 구분하지 않아 계정 존재 여부를 드러내지 않는다.
   public Login login(ActorKind kind, String email, String password) {
     String emailNormalized = Account.normalizeEmail(email);
     rateLimiter.acquire(kind, emailNormalized);

@@ -14,6 +14,11 @@ public record SellerRegistrationRequest(
     @Schema(description = "시험용 지급 계정 참조") @NotNull @Size(min = 1, max = 100)
         String payoutAccountRef) {
 
+  // 형식 검증이 앞뒤 공백 때문에 거절하지 않도록 검증 전에 지운다.
+  public SellerRegistrationRequest {
+    email = email == null ? null : email.strip();
+  }
+
   // 로그·예외 메시지에 비밀번호가 실리지 않게 한다.
   @Override
   public String toString() {
