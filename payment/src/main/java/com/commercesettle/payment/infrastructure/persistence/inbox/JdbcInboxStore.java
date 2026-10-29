@@ -4,14 +4,21 @@ import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
+import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.sql.Types;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -101,6 +108,67 @@ public class JdbcInboxStore implements InboxStore {
         ON CONFLICT (consumer,event_id,source_topic,source_partition,source_offset) DO NOTHING
         """,
         params);
+  }
+
+  @Override
+  public Optional<WaitingInboxEvent> claimNextWaiting(Instant now) {
+    var params = new MapSqlParameterSource("consumer", consumer).addValue("now", toTimestamp(now));
+    applyTransactionLimits();
+    List<Original> rows =
+        jdbc.query(
+            """
+            SELECT id, raw_body FROM payment.inbox
+            WHERE consumer = :consumer AND status = 'WAITING' AND next_run_at <= :now
+            ORDER BY next_run_at, id
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+            """,
+            params,
+            (rs, row) -> new Original(rs.getObject("id", UUID.class), rs.getBytes("raw_body")));
+    if (rows.isEmpty()) {
+      return Optional.empty();
+    }
+    Original row = rows.get(0);
+    try {
+      EventEnvelope<OrderPaymentRequestedPayload> event =
+          mapper.readValue(row.body(), new TypeReference<>() {});
+      return Optional.of(new WaitingInboxEvent(row.id(), event));
+    } catch (IOException exception) {
+      // 저장 시 검증한 원문이므로 읽기 실패는 데이터 손상이다. 원문을 예외에 싣지 않는다.
+      throw new IllegalStateException("Stored inbox body cannot be read: " + row.id());
+    }
+  }
+
+  @Override
+  public void markApplied(UUID inboxId, UUID resultRef, Instant now) {
+    finishWaiting(inboxId, "APPLIED", resultRef, now);
+  }
+
+  @Override
+  public void markReviewRequired(UUID inboxId, Instant now) {
+    finishWaiting(inboxId, "REVIEW_REQUIRED", null, now);
+  }
+
+  private void finishWaiting(UUID inboxId, String status, UUID resultRef, Instant now) {
+    int updated =
+        jdbc.update(
+            """
+            UPDATE payment.inbox
+            SET status = :status, result_ref = :resultRef, next_run_at = NULL,
+                updated_at = :now, version = version + 1
+            WHERE id = :inboxId AND status = 'WAITING'
+            """,
+            new MapSqlParameterSource("inboxId", inboxId)
+                .addValue("status", status)
+                .addValue("resultRef", resultRef, Types.OTHER)
+                .addValue("now", toTimestamp(now)));
+    if (updated != 1) {
+      throw new IllegalStateException("Inbox record is not waiting: " + inboxId);
+    }
+  }
+
+  private static OffsetDateTime toTimestamp(Instant instant) {
+    return instant.atOffset(ZoneOffset.UTC);
   }
 
   private void applyTransactionLimits() {
