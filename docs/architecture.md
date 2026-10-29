@@ -40,7 +40,7 @@ PostgreSQL·Kafka·Redis는 각각 `postgres-data`·`kafka-data`·`redis-data` �
 
 가입·로그인·복구·상품/이벤트 조회의 공개 여부는 OpenAPI의 PUBLIC 작업을 HTTP 메서드·정규화한 경로로 대조합니다. 경로 접두사만으로 공개하지 않으며 백엔드의 Gateway 허용 작업도 같은 기준을 사용합니다. 보호 작업에 검증된 계정 종류·ID가 없거나 로그아웃에 세션 해시가 없으면 `401`로 거절합니다. `/internal`·`/mock`는 Gateway 경로를 만들지 않으며 기존 서비스별/운영자별 자격과 허용 경로를 직접 확인합니다. Worker는 접수된 내부 명령·업무 키로 실행하며 사용자 세션을 재사용하지 않습니다. 컨테이너의 같은 네트워크나 클라이언트가 보낸 계정 ID만으로 호출을 신뢰하지 않습니다.
 
-인증용 Redis 쓰기는 커머스에만 허용합니다. Gateway는 해당 세션·가드의 읽기와 읽기 전용 검증 스크립트, Redis 실행 식별자 확인만 [허용](decisions/0003-redis-sessions.md#gateway의-redis-권한과-스크립트-재적재)하고 Payment·Settlement·Mock에는 인증 키 접근을 허용하지 않습니다. 키 접두사 대신 Redis ACL로 경계를 적용합니다. [Compose](../compose.yml)는 앱별 Redis 사용자를 두어 커머스에 인증 키 쓰기, Gateway에 위 읽기 권한만 주고, Payment·Settlement·Mock에는 아직 키 권한을 주지 않습니다. 키 패턴은 키 인자가 없는 명령을 제한하지 못하므로 커머스에는 `EVAL`·`EVALSHA`만 주고 `SCRIPT`·`FUNCTION`·키 목록(`SCAN`·`RANDOMKEY`·`DBSIZE`)·DB 전환은 허용하지 않습니다. 자기 키가 필요해지는 기능에서 해당 키 패턴을 추가합니다. `default` 사용자는 운영·검사용이며 앱에 전달하지 않습니다. 세션 처리·Gateway 신원 전달은 아직 구현 전입니다.
+인증용 Redis 쓰기는 커머스에만 허용합니다. Gateway는 해당 세션·가드의 읽기와 읽기 전용 검증 스크립트, Redis 실행 식별자 확인만 [허용](decisions/0003-redis-sessions.md#gateway의-redis-권한과-스크립트-재적재)하고 Payment·Settlement·Mock에는 인증 키 접근을 허용하지 않습니다. 키 접두사 대신 Redis ACL로 경계를 적용합니다. [Compose](../compose.yml)는 앱별 Redis 사용자를 두어 커머스에 인증 키 쓰기, Gateway에 위 읽기 권한만 주고, Payment·Settlement·Mock에는 아직 키 권한을 주지 않습니다. 키 패턴은 키 인자가 없는 명령을 제한하지 못하므로 커머스에는 `EVAL`·`EVALSHA`만 주고 `SCRIPT`·`FUNCTION`·키 목록(`SCAN`·`RANDOMKEY`·`DBSIZE`)·DB 전환은 허용하지 않습니다. 자기 키가 필요해지는 기능에서 해당 키 패턴을 추가합니다. `default` 사용자는 운영·검사용이며 앱에 전달하지 않습니다. Gateway는 `SessionAuthenticationFilter`에서 PUBLIC 판정·세션 검증·신원 헤더 교체를 수행하고, 세션 계정 종류가 작업의 `x-actor`와 다르면 `403`으로 거절합니다. 커머스의 세션 발급·폐기, 상류 `Authorization`의 내부 호출 자격 교체와 백엔드 판정, Redis 실행 식별자 확인은 아직 구현 전입니다. 그 전까지 Gateway는 상류에 `Authorization`을 보내지 않습니다.
 
 ### 거래 알림
 
@@ -254,7 +254,7 @@ Payment API·Worker는 패키지를 복제하지 않습니다. HTTP와 비동기
 
 Gateway는 빌드에 포함한 [OpenAPI](openapi.json)의 `/api/` 작업을 HTTP 메서드·경로와 `x-owner-service`로 대조해 커머스·Payment API·Settlement로 전달합니다. 경로 접두사가 같은 판매자 API도 상품·계정은 커머스, 정산·지급 조회는 Settlement로 구분합니다. 명세에 없는 경로·메서드와 `/internal`·`/mock`·관리 경로는 전달하지 않습니다. API 명세는 `/v3/api-docs/commerce|payment|settlement`, Swagger UI는 `/swagger-ui.html`입니다.
 
-라우팅은 구현했지만 각 업무 API와 인증·인가는 구현 전입니다. 인증을 구현하기 전에는 로컬 개발 환경에서만 사용합니다. Gateway 자체 오류는 [공통 오류 계약](../CONTRIBUTING.md#오류)으로 응답하고 백엔드의 오류 응답은 보존합니다. 전송 계층의 자동 재시도를 끄며 응답 전 연결 단절도 업무 실패로 확정하지 않습니다. 구매자의 주문·결제 요청과 판매자의 상품·정산 요청에 서로 다른 권한을 적용하고, 각 서비스에서도 계정 종류·거래 소유권을 검증해야 합니다.
+라우팅과 Gateway의 세션 검증은 구현했지만 각 업무 API, 세션 발급, 백엔드의 호출 자격 확인은 구현 전입니다. 백엔드가 Gateway 자격을 확인하기 전에는 신원 헤더를 위조한 직접 호출을 막지 못하므로 로컬 개발 환경에서만 사용합니다. Gateway 자체 오류는 [공통 오류 계약](../CONTRIBUTING.md#오류)으로 응답하고 백엔드의 오류 응답은 보존합니다. 전송 계층의 자동 재시도를 끄며 응답 전 연결 단절도 업무 실패로 확정하지 않습니다. 구매자의 주문·결제 요청과 판매자의 상품·정산 요청에 서로 다른 권한을 적용하고, 각 서비스에서도 계정 종류·거래 소유권을 검증해야 합니다.
 
 `v3`는 Springdoc의 OpenAPI 3 문서 경로이며 서비스 API의 세 번째 버전을 뜻하지 않습니다.
 
@@ -274,7 +274,7 @@ Prometheus는 6개 실행의 JVM·프로세스·HTTP 메트릭을 수집합니�
 
 Redis는 내부 네트워크에서 앱별 ACL 사용자로 연결합니다. AOF는 Redis의 변경 내역을 디스크에 기록해 재시작 때 복원하는 영속화 방식이며, `redis-data` 볼륨에 보존합니다. 결제·정산의 기준 데이터를 Redis에 저장한다는 뜻은 아닙니다. 키 접두사 자체는 보안 격리가 아니며, 앱이 접근할 수 있는 키는 [위 ACL](#사용자-인증과-내부-신원-전달)이 제한합니다. 키는 `commerce-settle:<domain>:<purpose>:<id>`로 구분하고 TTL·무효화·장애 시 동작은 해당 도메인 담당자가 설계합니다. 금액·멱등성의 최종 정합성을 캐시만으로 보장하지 않습니다. 128MB·noeviction 설정은 메모리 초과 쓰기를 거절하므로 사용량을 관측해야 합니다.
 
-로그인 세션은 Redis를 원본으로 사용하며 [세션 정책](policies.md#인증공통-api-기준)을 따릅니다. 고정 만료는 expiresAt과 TTL을 함께 검사하고 메모리 초과·인증 가드 누락·저장소 오류를 우회하지 않습니다. 세션 세대와 승인한 Redis 실행 식별자는 Gateway·커머스에 동일하게 배포할 인증 설정이며 구현 시 추가합니다. Redis 재접속 뒤에는 AOF 복원만으로 인증을 재개하지 않고 [복구 절차](development.md#redis-세션-검증과-복구)를 거칩니다.
+로그인 세션은 Redis를 원본으로 사용하며 [세션 정책](policies.md#인증공통-api-기준)을 따릅니다. 고정 만료는 expiresAt과 TTL을 함께 검사하고 메모리 초과·인증 가드 누락·저장소 오류를 우회하지 않습니다. 세션 세대와 승인한 Redis 실행 식별자는 Gateway·커머스에 동일하게 배포할 인증 설정입니다. 세션 세대는 `AUTH_SESSION_EPOCH`로 Gateway에 적용했고, 커머스 적용과 실행 식별자는 구현 시 추가합니다. Redis 재접속 뒤에는 AOF 복원만으로 인증을 재개하지 않고 [복구 절차](development.md#redis-세션-검증과-복구)를 거칩니다.
 
 Zipkin은 Micrometer·OpenTelemetry의 HTTP 추적을 수집합니다. 샘플링 기본값은 10%이며 환경 변수로 조정합니다. smoke는 sampled `traceparent`로 Gateway CLIENT→Commerce SERVER의 부모 관계를 확인합니다. Kafka 업무 이벤트의 추적 전파는 Producer·Consumer 구현 시 검증합니다. 개발용 메모리 저장소는 최대 10,000개 span을 보관하며 재시작하면 추적이 사라집니다.
 

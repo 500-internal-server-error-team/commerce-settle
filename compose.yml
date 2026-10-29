@@ -154,6 +154,7 @@ services:
       <<: *app-env
       SPRING_DATA_REDIS_USERNAME: gateway
       SPRING_DATA_REDIS_PASSWORD: ${GATEWAY_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      AUTH_SESSION_EPOCH: ${AUTH_SESSION_EPOCH:?Run python3 scripts/init_env.py}
     ports:
       - 127.0.0.1:${GATEWAY_PORT:-8080}:8080
     depends_on:
