@@ -29,7 +29,7 @@
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 | `deleted_at` | `timestamptz?` | 논리삭제 |
 
-**제약:** UNIQUE(email_normalized), 삭제 뒤에도 유지. status=ACTIVE/SUSPENDED/DELETED. auth_version은 인증에 영향 주는 계정 상태·비밀번호 변경과 가드 복구 때 증가하며 일반 엔티티 version과 구분한다.
+**제약:** UNIQUE(email_normalized), 삭제 뒤에도 유지. 이메일은 앞뒤 공백을 지우고 소문자로 맞춰 저장하며 로그인·요청 제한 키도 같은 값을 쓴다. status=ACTIVE/SUSPENDED/DELETED. auth_version은 인증에 영향 주는 계정 상태·비밀번호 변경과 가드 복구 때 증가하며 일반 엔티티 version과 구분한다.
 
 **인덱스:** (status,id).
 
@@ -75,7 +75,7 @@
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 | `deleted_at` | `timestamptz?` | 논리삭제 |
 
-**제약:** UNIQUE(email_normalized), 구매자 계정과 별도. status=ACTIVE/SUSPENDED/DELETED. 지급 계정은 시험용 참조. auth_version은 인증에 영향 주는 계정 상태·비밀번호 변경과 가드 복구 때 증가하며 일반 엔티티 version과 구분한다.
+**제약:** UNIQUE(email_normalized), 구매자 계정과 별도·같은 정규화. status=ACTIVE/SUSPENDED/DELETED. 지급 계정은 시험용 참조. auth_version은 인증에 영향 주는 계정 상태·비밀번호 변경과 가드 복구 때 증가하며 일반 엔티티 version과 구분한다.
 
 **인덱스:** (status,id).
 

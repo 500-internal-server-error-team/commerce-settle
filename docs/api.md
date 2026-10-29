@@ -7,7 +7,7 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 ## 공통 계약
 
 - 요청 형식·범위는 `@Valid`와 OpenAPI, 업무 불변식은 도메인, 최종 경합은 DB에서 검증합니다. [검증 경계](../CONTRIBUTING.md#검증-경계)를 따릅니다. 생성/수정 시각·행위 감사 필드는 서버가 기록하며 요청 DTO로 받지 않습니다.
-- 공개 `/api` 경로는 Gateway가 명세의 HTTP 메서드·경로·`x-owner-service`에 따라 소유 앱으로 전달합니다. `/internal`·`/mock`는 Gateway에 공개하지 않습니다. [라우팅](architecture.md#네트워크와-관측), Gateway의 세션 검증, 커머스의 상품·재고 API는 구현했으며 나머지 업무 API, 세션 발급, 백엔드의 Gateway 호출 자격 확인은 구현 전입니다. 상품 판매자 API는 Gateway가 전달한 `X-Authenticated-Actor-Kind`·`X-Authenticated-Actor-Id` 헤더를 사용하며, Gateway 자격을 확인하기 전에는 헤더를 위조한 직접 호출을 막지 못하므로 로컬 개발 환경에서만 사용합니다.
+- 공개 `/api` 경로는 Gateway가 명세의 HTTP 메서드·경로·`x-owner-service`에 따라 소유 앱으로 전달합니다. `/internal`·`/mock`는 Gateway에 공개하지 않습니다. [라우팅](architecture.md#네트워크와-관측), Gateway의 세션 검증, 커머스의 상품·재고 API와 판매자 가입·로그인·로그아웃·본인 계정 조회는 구현했으며 나머지 업무 API와 백엔드의 Gateway 호출 자격 확인은 구현 전입니다. 커머스 판매자 API는 Gateway가 전달한 `X-Authenticated-Actor-Kind`·`X-Authenticated-Actor-Id` 헤더를 사용하며, Gateway 자격을 확인하기 전에는 헤더를 위조한 직접 호출을 막지 못하므로 로컬 개발 환경에서만 사용합니다.
 - `x-actor`는 소비자 권한, `x-owner-service`는 처리 앱입니다. 자기 역할과 리소스 소유권을 함께 검사합니다. 구매자/판매자 토큰을 서비스 자격으로 쓸 수 없습니다.
 - 사용자 Bearer 토큰은 [Redis 세션 정책](policies.md#인증공통-api-기준)을 따릅니다. 커머스가 발급·폐기를 맡고 Gateway는 보호 요청마다 Redis 세션·계정 가드를 확인합니다. 외부 보안 스키마 accountSession과 백엔드의 Gateway 호출 자격은 [신원 전달 계약](architecture.md#사용자-인증과-내부-신원-전달)으로 구분합니다. 고정 30분이며 세션 없음·폐기/만료·버전 불일치·정지/삭제는 401, 변경 중 가드·가드 누락·Redis 검증 불가·복구 차단은 503입니다. PUBLIC은 메서드와 경로를 함께 대조합니다.
 - POST 주문은 주문 리소스 생성 `201`과 Location을 반환하며 결제는 비동기입니다. 비동기 재처리·대역 접수는 `202`+Location이고 승인/환불 완료를 뜻하지 않습니다. 상태 조회 응답으로 후속 완료를 확인합니다.
@@ -236,6 +236,7 @@ PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반�
 | COMMON_AUTHENTICATION_REQUIRED |401|자격 오류·세션 없음/만료/폐기·인증 버전 불일치·정지/삭제·소비/만료된 복구 토큰|
 | COMMON_ROLE_FORBIDDEN |403|계정/서비스 역할 혼용|
 | COMMON_RESOURCE_NOT_FOUND |404|없거나 타인 소유|
+| ACCOUNT_EMAIL_DUPLICATED |409|같은 계정 종류에 이미 등록된 이메일. 삭제한 계정 포함|
 | MOCK_TRANSACTION_NOT_FOUND |404|인증된 원대역 GET에서 지정한 provider·operation·businessKey의 거래 기록 없음. 실패 확정·예약 해제 근거가 아님|
 | COMMON_VERSION_CONFLICT / COMMON_IDEMPOTENCY_CONFLICT |409|버전 또는 같은키 다른본문|
 | COUPON_EXPIRED / COUPON_NOT_APPLICABLE |409|만료·상품/소유/최소 금액·허용 수단 조건 위반|
