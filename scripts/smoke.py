@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check the running local foundation, not payment business functionality."""
 
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -29,6 +30,69 @@ def internal_json(service, path):
         "exec", "-T", service, "curl", "--fail", "--silent",
         f"http://localhost:9091{path}",
     ).stdout)
+
+
+def redis_as(user, password_key, *command):
+    result = compose(
+        "exec", "-T", "redis", "sh", "-c",
+        f'export REDISCLI_AUTH="${password_key}"; '
+        f'exec redis-cli --no-auth-warning --raw --user {user} "$@"',
+        "redis-smoke", *command, check=False,
+    )
+    return (result.stdout + result.stderr).strip()
+
+
+def check_redis_acl(config):
+    redis_users = {
+        "gateway": "gateway", "commerce": "commerce", "payment-api": "payment",
+        "payment-worker": "payment", "settlement": "settlement", "finance-mock": "finance-mock",
+    }
+    admin_password = config["services"]["redis"]["environment"]["REDIS_PASSWORD"]
+    for service, user in redis_users.items():
+        environment = config["services"][service]["environment"]
+        assert environment.get("SPRING_DATA_REDIS_USERNAME") == user, service
+        assert environment.get("SPRING_DATA_REDIS_PASSWORD") not in (None, "", admin_password), service
+
+    gateway = ("gateway", "GATEWAY_REDIS_PASSWORD")
+    commerce = ("commerce", "COMMERCE_REDIS_PASSWORD")
+    session = "commerce-settle:auth:session:smoke:" + uuid.uuid4().hex
+    read_session = "redis.call('TIME'); return redis.call('HMGET', KEYS[1], 'purpose')"
+    read_sha = hashlib.sha1(read_session.encode()).hexdigest()
+    expire_session = "return redis.call('PEXPIRE', KEYS[1], 60000)"
+    try:
+        assert redis_as(*commerce, "HSET", session, "purpose", "SMOKE") == "1"
+        assert redis_as(*commerce, "EVAL", expire_session, "1", session) == "1"
+        assert redis_as(*commerce, "EVALSHA", hashlib.sha1(expire_session.encode()).hexdigest(),
+                        "1", session) == "1"
+        # EVAL_RO caches the script, so the following EVALSHA_RO covers Gateway's usual path.
+        assert redis_as(*gateway, "EVAL_RO", read_session, "1", session) == "SMOKE"
+        assert redis_as(*gateway, "EVALSHA_RO", read_sha, "1", session) == "SMOKE"
+        for command in [
+            ("HSET", session, "purpose", "FORGED"),
+            ("EVAL", read_session, "1", session),
+            ("EVALSHA", "0" * 40, "1", session),
+            ("SCRIPT", "LOAD", read_session),
+            ("SCRIPT", "FLUSH"),
+            ("HMGET", "commerce-settle:auth:rate-limit:smoke", "count"),
+        ]:
+            assert "NOPERM" in redis_as(*gateway, *command), command
+        for command in [
+            ("SET", "commerce-settle:payment:smoke", "1"),
+            ("SCRIPT", "FLUSH"),
+            ("FUNCTION", "FLUSH"),
+            ("SCAN", "0"),
+            ("RANDOMKEY",),
+            ("SELECT", "1"),
+        ]:
+            assert "NOPERM" in redis_as(*commerce, *command), command
+        for user, password_key in [
+            ("payment", "PAYMENT_REDIS_PASSWORD"), ("settlement", "SETTLEMENT_REDIS_PASSWORD"),
+            ("finance-mock", "FINANCE_MOCK_REDIS_PASSWORD"),
+        ]:
+            assert "NOPERM" in redis_as(user, password_key, "HMGET", session, "purpose"), user
+    finally:
+        compose("exec", "-T", "redis", "sh", "-c",
+                'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli DEL "$1"', "redis-smoke", session)
 
 
 def main():
@@ -88,6 +152,9 @@ def main():
     finally:
         compose(*redis_cli, "DEL", key)
     print("PASS Redis: all app connections, auth boundary and expiring key round trip")
+
+    check_redis_acl(config)
+    print("PASS Redis ACL: per-app users, Commerce auth writes and read-only Gateway checks")
 
     trace_id = uuid.uuid4().hex
     parent_id = uuid.uuid4().hex[:16]
