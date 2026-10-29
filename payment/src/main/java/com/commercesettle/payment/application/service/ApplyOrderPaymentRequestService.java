@@ -13,6 +13,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,6 +24,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 public class ApplyOrderPaymentRequestService {
+  private static final Logger LOG = LoggerFactory.getLogger(ApplyOrderPaymentRequestService.class);
+
   private final InboxStore inbox;
   private final PaymentRepository payments;
   private final PaymentJobRepository jobs;
@@ -47,27 +51,42 @@ public class ApplyOrderPaymentRequestService {
     OrderPaymentRequestedPayload payload = claimed.get().event().payload();
 
     if (payload.status() != OrderPaymentRequestedPayload.Status.PAYMENT_PENDING) {
-      inbox.markReviewRequired(inboxId, now);
-      return true;
+      return review(claimed.get(), "PAYMENT_REQUEST_ORDER_NOT_PENDING", now);
     }
     Optional<PaymentAmounts> amounts = toAmounts(payload);
-    if (amounts.isEmpty() || !matchesCommerceAmounts(payload, amounts.get())) {
-      inbox.markReviewRequired(inboxId, now);
-      return true;
+    if (amounts.isEmpty()) {
+      return review(claimed.get(), "PAYMENT_REQUEST_AMOUNT_INVALID", now);
+    }
+    if (!matchesCommerceAmounts(payload, amounts.get())) {
+      return review(claimed.get(), "PAYMENT_REQUEST_AMOUNT_MISMATCH", now);
     }
 
     Optional<Payment> existing = payments.findByOrderId(payload.orderId());
     if (existing.isPresent()) {
-      if (isSameRequest(existing.get(), payload, amounts.get())) {
-        inbox.markApplied(inboxId, existing.get().getId(), now);
-      } else {
-        inbox.markReviewRequired(inboxId, now);
+      if (!isSameRequest(existing.get(), payload, amounts.get())) {
+        return review(claimed.get(), "PAYMENT_REQUEST_ORDER_CONFLICT", now);
       }
+      inbox.markApplied(inboxId, existing.get().getId(), now);
       return true;
     }
 
     Payment payment = createPayment(payload, amounts.get(), now);
     inbox.markApplied(inboxId, payment.getId(), now);
+    return true;
+  }
+
+  /**
+   * 확인 대상으로 남기고 거절 이유를 로그에 남긴다. Inbox에는 사유 컬럼이 없으므로 이유는 로그로 추적한다. 결제수단 참조 같은 payload 원문은 기록하지 않는다.
+   */
+  private boolean review(WaitingInboxEvent claimed, String errorCode, Instant now) {
+    inbox.markReviewRequired(claimed.inboxId(), now);
+    LOG.atWarn()
+        .addKeyValue("event", "payment.accept")
+        .addKeyValue("eventId", claimed.event().eventId())
+        .addKeyValue("orderId", claimed.event().payload().orderId())
+        .addKeyValue("result", "REVIEW_REQUIRED")
+        .addKeyValue("errorCode", errorCode)
+        .log("Payment request needs review");
     return true;
   }
 
