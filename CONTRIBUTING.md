@@ -33,7 +33,9 @@ type은 `feat`, `fix`, `refactor`, `docs`, `test`, `style`, `build`, `ci`, `chor
 1. 이슈에 범위와 완료 조건을 적고 작업 브랜치를 만듭니다. 최초 bootstrap은 위 예외 브랜치를 사용합니다.
 2. PR에 변경 이유·주요 변경·검증 결과·연결 이슈를 적습니다.
 3. 팀원 리뷰와 승인은 선택입니다. API·이벤트·DB 계약 변경은 영향을 받는 담당자와 합의하고, 합의한 내용과 이유를 PR에 남깁니다.
-4. 최신 base와 최종 커밋 기준 `build-and-smoke` 통과와 미해결 대화가 없는지 확인하고 **Rebase and merge**합니다. base 동기화도 rebase합니다.
+4. 최신 base와 최종 커밋 기준 `build-and-smoke`·`pr-body-format` 통과와 미해결 대화가 없는지 확인하고 **Rebase and merge**합니다. base 동기화도 rebase합니다.
+
+PR의 `검증`은 항목 사이 빈 줄이 없는 단일 체크리스트로 작성하고 결과·근거·미실행 이유를 해당 항목에 씁니다. 결과 목록과 확인 체크리스트를 중복으로 붙이지 않습니다. 본문 수정은 `python3 scripts/pr_body.py publish --repo OWNER/REPO --pr NUMBER --account LOGIN --body-file /path/to/body.md`, 새 PR 생성은 같은 도구의 `create --repo OWNER/REPO --base develop --head BRANCH --title TITLE --account LOGIN --body-file /path/to/body.md`를 사용합니다. 형식·현재 계정·대상이 맞지 않으면 GitHub 쓰기 전에 중단합니다. 게시 없는 로컬 검사는 `check --body-file`로 실행합니다.
 
 `develop`·`main`의 보호 규칙은 관리자에게도 적용하며 두 브랜치의 삭제는 금지합니다. 위 조건을 충족한 PR은 작성자가 직접 병합할 수 있습니다.
 
@@ -242,6 +244,8 @@ API 기술 코드의 공유 범위와 도입 조건은 [공통 API 계약과 공
 ## CI
 
 `build-and-smoke`는 환경 생성기의 기존 값 보존, 운영·테스트 코드 포맷과 Checkstyle, 테스트·ArchUnit·패키징, Compose 기동·재기동, Gateway·DB 권한·Kafka·Redis 왕복, Zipkin 추적 전파와 k6 실행을 검사합니다. CI 화면에서 정적 검사와 테스트·패키징을 별도 단계로 표시하며 코드를 자동 수정하지 않습니다. 테스트·Checkstyle 보고서는 `verification-reports`에서 7일간 보관합니다.
+
+`pr-body-format`은 PR 생성·본문 수정·재개·커밋 갱신 때 검증 목록 형식을 확인합니다. 본문만 수정하면 이 경량 검사만 다시 실행하며 빌드·smoke의 통과를 대신하지 않습니다. 보호 규칙의 필수 체크 등록은 해당 워크플로가 기준 브랜치에 반영된 뒤 진행합니다.
 
 Gradle 캐시와 같은 PR의 이전 실행 취소를 사용합니다. CI의 Gradle 작업은 기존 worker 상한 2개 안에서 모듈을 병렬 실행합니다. 정적 검사와 빌드는 같은 Gradle 데몬을 재사용하고, Compose 기동 전에 데몬을 종료합니다. 매 실행의 불필요한 `clean`은 생략하고, 문서 변경에도 필수 검사를 유지합니다. 검사 생략이나 높은 부하의 성능 시험을 기본 CI 최적화 수단으로 삼지 않습니다.
 
