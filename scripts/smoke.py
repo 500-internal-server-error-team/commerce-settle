@@ -147,6 +147,27 @@ def check_login_flow(base):
     assert (status, problem.get("code")) == (401, "COMMON_AUTHENTICATION_REQUIRED"), status
 
 
+def check_password_reset(base):
+    # The token is only stored as a delivery ciphertext, so smoke checks the public contract only.
+    email = f"smoke-{uuid.uuid4().hex}@example.com"
+    status, _ = gateway_json(base, "POST", "/api/sellers", {
+        "email": email, "password": uuid.uuid4().hex, "displayName": "smoke",
+        "payoutAccountRef": "smoke",
+    })
+    assert status == 201, status
+    responses = [
+        gateway_json(base, "POST", "/api/password-reset-requests",
+                     {"actorKind": "SELLER", "email": address})
+        for address in (email, f"none-{uuid.uuid4().hex}@example.com")
+    ]
+    assert responses[0] == responses[1] and responses[0][0] == 200, responses
+    assert "token" not in responses[0][1], responses[0]
+    status, problem = gateway_json(base, "POST", "/api/password-resets", {
+        "actorKind": "SELLER", "token": uuid.uuid4().hex, "newPassword": uuid.uuid4().hex,
+    })
+    assert (status, problem.get("code")) == (401, "COMMON_AUTHENTICATION_REQUIRED"), status
+
+
 def check_session_auth(config, base):
     epoch = config["services"]["gateway"]["environment"]["AUTH_SESSION_EPOCH"]
     token = uuid.uuid4().hex
@@ -244,6 +265,9 @@ def main():
 
     check_login_flow(base)
     print("PASS Commerce login: seller signup, Gateway-verified session, logout then 401")
+
+    check_password_reset(base)
+    print("PASS Commerce password reset: same request response for unknown accounts, bad token 401")
 
     trace_id = uuid.uuid4().hex
     parent_id = uuid.uuid4().hex[:16]
