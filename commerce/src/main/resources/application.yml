@@ -80,6 +80,9 @@ logging:
     dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Seoul"
 
 app:
+  order-stub:
+    enabled: ${APP_ORDER_STUB_ENABLED:false}
+    seed: ${APP_ORDER_STUB_SEED:67}
   outbox:
     enabled: false
     recovery-interval-ms: 1000

@@ -85,8 +85,8 @@ class SellerProductControllerTest {
   void rejectsBuyerIdentity() throws Exception {
     mvc.perform(
             get(PRODUCTS)
-                .header(AuthenticatedSellerResolver.ACTOR_KIND, "BUYER")
-                .header(AuthenticatedSellerResolver.ACTOR_ID, SELLER.toString()))
+                .header(AuthenticatedActorResolver.ACTOR_KIND, "BUYER")
+                .header(AuthenticatedActorResolver.ACTOR_ID, SELLER.toString()))
         .andExpect(status().isForbidden())
         .andExpect(jsonPath("$.code").value("COMMON_ROLE_FORBIDDEN"));
     verifyNoInteractions(catalog);
@@ -244,8 +244,8 @@ class SellerProductControllerTest {
   private static MockHttpServletRequestBuilder asSeller(MockHttpServletRequestBuilder request) {
     return request
         .contentType(MediaType.APPLICATION_JSON)
-        .header(AuthenticatedSellerResolver.ACTOR_KIND, "SELLER")
-        .header(AuthenticatedSellerResolver.ACTOR_ID, SELLER.toString());
+        .header(AuthenticatedActorResolver.ACTOR_KIND, "SELLER")
+        .header(AuthenticatedActorResolver.ACTOR_ID, SELLER.toString());
   }
 
   private static Product product(ProductStatus status) {

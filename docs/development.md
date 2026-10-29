@@ -50,6 +50,49 @@ mkdir -p work/buildx
 export BUILDX_CONFIG="$PWD/work/buildx"
 ```
 
+## 주문 API stub
+
+주문 생성·본인 목록·단건 조회를 학습할 때만 `APP_ORDER_STUB_ENABLED=true`로 켭니다. 기본값은 false입니다. 상품·주문·멱등 결과와 주소 사본은 실제 DB와 별개인 메모리 데이터이며 재시작하면 초기화됩니다. 실제 주문 저장·재고/마일리지 예약·결제·Inbox/Outbox·자동 상태 전이는 구현하지 않습니다. 쿠폰·이벤트 연동은 TODO이고, 생성 주문과 초기 샘플 모두 할인액은 0원·eventId는 null입니다.
+
+이 stub의 `OrderStubCreate` 입력은 `productId`, `quantity`, `mileageAmount`, `expectedProductVersion`, `expectedTotalAmount`, `externalMethod`, `methodAccountRef`의 7개 키입니다. 두 외부 수단 값도 키는 필수이며 전액 마일리지일 때 null로 보냅니다. 아직 지원하지 않는 `buyerCouponId`, `eventId`, `expectedEventVersion`과 수동 `addressId`를 보내면 400으로 거절합니다. 정식 [OrderCreate 계약](openapi.json)은 11개 필드로 유지하며 `x-implemented: false`입니다. 켠 인스턴스의 `/v3/api-docs`에서 개발용 입력을 확인합니다.
+
+[처음 실행](#처음-실행)의 인프라가 준비된 환경에서 새 commerce jar와 이미지를 만든 뒤 로컬 전용 인스턴스를 엽니다.
+
+```bash
+./gradlew :commerce:bootJar
+docker compose build commerce
+docker compose run --rm --no-deps -p 127.0.0.1:18080:8080 -e APP_ORDER_STUB_ENABLED=true commerce
+```
+
+다른 터미널에서 호출합니다. 직접 전달하는 신원 헤더는 로컬 시험용입니다. 백엔드의 Gateway 호출 자격 검사는 아직 없어 운영 인증을 대신하지 못합니다.
+
+```bash
+curl http://localhost:18080/api/orders \
+  -H 'X-Authenticated-Actor-Kind: BUYER' \
+  -H 'X-Authenticated-Actor-Id: 00000000-0000-4000-8000-000000000001'
+
+curl -i http://localhost:18080/api/orders \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: order-stub-create-001' \
+  -H 'X-Authenticated-Actor-Kind: BUYER' \
+  -H 'X-Authenticated-Actor-Id: 00000000-0000-4000-8000-000000000001' \
+  -d '{"productId":"00000000-0000-4000-8000-000000000003","quantity":1,"mileageAmount":0,"expectedProductVersion":0,"expectedTotalAmount":23000,"externalMethod":"CREDIT_CARD","methodAccountRef":"stub-card"}'
+```
+
+`201` 응답의 `Location: /api/orders/{id}`를 같은 구매자로 조회하면 같은 주문이 나옵니다. 같은 멱등키·본문은 최초 결과를, 다른 본문은 `409 COMMON_IDEMPOTENCY_CONFLICT`를 반환합니다. 생성 주문은 `PAYMENT_PENDING`·`UNSHIPPED`로 유지됩니다. 서버 가격·버전과 예상 값을 비교하며 실제 잔액·재고는 검사하지 않습니다. 외부 결제액이 0원이면 수단 두 값은 모두 null이어야 합니다.
+
+가상 주소 풀은 수령인·연락처·우편번호·주소가 모두 합성 데이터인 1,000개입니다. 주문 ID와 `APP_ORDER_STUB_SEED`로 하나를 골라 `OrderView.address`에 보관합니다. 재요청·조회에서 다시 선택하지 않으며 다른 주문은 같은 주소를 뽑을 수 있습니다. 연락처는 실제 통신번호가 아닌 `000-` 접두사, 주소는 `가상시 테스트구`를 사용합니다. 기존 28필드 HTTP 주문 응답에 주소를 추가하거나 금융 이벤트로 보내지는 않습니다. 실제 주소록·택배사·배송 추적 API는 제공하지 않습니다.
+
+시작 시 구매자 `00000000-0000-4000-8000-000000000001`·`00000000-0000-4000-8000-000000000011`에 각각 10개 주문을 생성해 미결제·결제완료·발송·배송완료·구매확정을 보여줍니다. 그 외 구매자도 생성 요청을 보낼 수 있으며 새 주문은 본인에게만 보입니다. 상품 사본은 수납 상자(접미사 `000000000003`, 23,000원·판매자 `000000000002`), 키보드(`000000000023`, 39,000원·판매자 `000000000022`), 머그컵(`000000000033`, 10,000원·판매자 `000000000002`)입니다. 접미사 앞 UUID 구간은 모두 `00000000-0000-4000-8000-`이며 상품 버전은 0입니다.
+
+seed 기본값은 67입니다. 같은 seed·Clock이면 초기 주문과 주소 사본이 같습니다. 배송 소요일은 [배송 정책](policies.md#배송환불-기한과-자동-구매확정)의 SHA-256 규칙으로 2·3영업일을 정하고 `weekdays-v1`을 고정합니다. 이미 만든 시각·주소·배송 이력은 조회마다 바뀌지 않습니다. 목록은 `createdAt DESC, id DESC`, page는 0부터·size는 1~100이며 타인 주문은 없는 주문과 같은 404입니다.
+
+전용 HTTP 통합 테스트는 실제 HTTP 서버·Controller·서비스·JSON 검증·오류 응답을 연결하며 DB·Kafka·Redis를 사용하지 않습니다. 이 테스트가 Compose 전체 실행이나 금융 처리 완료를 증명하지는 않습니다.
+
+```bash
+./gradlew :commerce:test --tests '*OrderStubServiceTest' --tests '*OrderStubHttpIntegrationTest'
+```
+
 ## 시간대
 
 앱 로그·API·이벤트 출력과 업무 날짜는 [공통 시간 규약](../CONTRIBUTING.md#요청과-응답)의 KST를 따릅니다. API·이벤트 DTO는 `OffsetDateTime`으로 출력하며 내부 `Instant`·DB `timestamptz`·epoch 값은 유지합니다. 업무 API·이벤트 구현 시 이 변환 경계를 적용해야 합니다.
