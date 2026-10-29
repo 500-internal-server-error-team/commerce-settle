@@ -9,15 +9,19 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.util.UUID;
 
-@Schema(name = "OrderStubCreate", description = "로컬 개발용 입력. 주소는 자동 선택하며 쿠폰·이벤트 연동은 TODO이다.")
+@Schema(
+    name = "OrderStubCreate",
+    description = "로컬 개발용 입력. 주소는 자동 선택하며 쿠폰·이벤트 연동은 TODO이다.",
+    additionalProperties = Schema.AdditionalPropertiesValue.FALSE)
 public record CreateOrderRequest(
     @JsonProperty(required = true) @NotNull UUID productId,
     @JsonProperty(required = true) @NotNull @Min(1) @Max(10) Integer quantity,
     @JsonProperty(required = true) @NotNull @Min(0) @Max(10_000_000) Long mileageAmount,
     @JsonProperty(required = true) @NotNull @Min(0) Long expectedProductVersion,
     @JsonProperty(required = true) @NotNull @Min(1) @Max(10_000_000) Long expectedTotalAmount,
-    @JsonProperty(required = true) ExternalMethod externalMethod,
-    @JsonProperty(required = true) @Size(min = 1, max = 100) String methodAccountRef) {
+    @Schema(nullable = true) @JsonProperty(required = true) ExternalMethod externalMethod,
+    @Schema(nullable = true) @JsonProperty(required = true) @Size(min = 1, max = 100)
+        String methodAccountRef) {
   public CreateOrderCommand toCommand() {
     return new CreateOrderCommand(
         productId,

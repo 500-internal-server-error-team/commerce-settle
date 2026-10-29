@@ -27,7 +27,11 @@ public class HttpJsonConfiguration implements WebMvcConfigurer {
   }
 
   private static ObjectMapper strict(ObjectMapper shared) {
-    ObjectMapper mapper = shared.copy().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+    ObjectMapper mapper =
+        shared
+            .copy()
+            .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .enable(DeserializationFeature.FAIL_ON_NUMBERS_FOR_ENUMS);
     mapper
         .coercionConfigFor(LogicalType.Integer)
         .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
@@ -35,7 +39,8 @@ public class HttpJsonConfiguration implements WebMvcConfigurer {
     mapper
         .coercionConfigFor(LogicalType.Textual)
         .setCoercion(CoercionInputShape.Integer, CoercionAction.Fail)
-        .setCoercion(CoercionInputShape.Float, CoercionAction.Fail);
+        .setCoercion(CoercionInputShape.Float, CoercionAction.Fail)
+        .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail);
     return mapper;
   }
 }

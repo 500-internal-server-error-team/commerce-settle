@@ -20,8 +20,9 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -176,14 +177,29 @@ class OrderStubServiceTest {
   @Test
   void concurrentIdenticalRequestsCreateOneSnapshot() throws Exception {
     CreateOrderCommand command = command(id(3), 1, 0, 23_000, "CREDIT_CARD", "card");
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
     try (var executor = Executors.newFixedThreadPool(2)) {
-      List<Callable<OrderView>> calls = new ArrayList<>();
-      for (int i = 0; i < 12; i++) {
-        calls.add(() -> orders.create(BUYER, "concurrent", command));
+      List<java.util.concurrent.Future<OrderView>> results = new ArrayList<>();
+      try {
+        for (int i = 0; i < 12; i++) {
+          results.add(
+              executor.submit(
+                  () -> {
+                    ready.countDown();
+                    if (!start.await(5, TimeUnit.SECONDS)) {
+                      throw new IllegalStateException("Start timeout");
+                    }
+                    return orders.create(BUYER, "concurrent", command);
+                  }));
+        }
+        assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+      } finally {
+        start.countDown();
       }
-      var results = executor.invokeAll(calls);
+      OrderView first = results.getFirst().get(5, TimeUnit.SECONDS);
       for (var result : results) {
-        assertThat(result.get()).isEqualTo(results.getFirst().get());
+        assertThat(result.get(5, TimeUnit.SECONDS)).isEqualTo(first);
       }
     }
     assertThat(orders.list(BUYER, 0, 100).totalElements()).isEqualTo(11);
