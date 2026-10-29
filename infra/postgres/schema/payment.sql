@@ -114,3 +114,30 @@ CREATE TABLE payment.inbox_conflicts (
     UNIQUE (consumer, event_id, source_topic, source_partition, source_offset)
 );
 CREATE INDEX inbox_conflicts_event ON payment.inbox_conflicts(consumer, event_id, created_at);
+
+CREATE TABLE payment.payment_jobs (
+    id              uuid         PRIMARY KEY,
+    payment_id      uuid         NOT NULL,
+    refund_id       uuid,
+    operation       varchar(32)  NOT NULL,
+    business_key    uuid         NOT NULL,
+    status          varchar(24)  NOT NULL,
+    attempts        integer      NOT NULL,
+    next_run_at     timestamptz  NOT NULL,
+    lease_owner     varchar(100),
+    lease_token     uuid,
+    lease_until     timestamptz,
+    last_error_code varchar(80),
+    created_at      timestamptz  NOT NULL,
+    updated_at      timestamptz  NOT NULL,
+    version         bigint       NOT NULL,
+
+    CONSTRAINT uk_payment_jobs_operation_business_key UNIQUE (operation, business_key),
+    CONSTRAINT ck_payment_jobs_status
+        CHECK (status IN ('PENDING', 'RUNNING', 'RETRY', 'REVIEW_REQUIRED', 'DONE')),
+    CONSTRAINT ck_payment_jobs_lease_together
+        CHECK ((lease_owner IS NULL AND lease_token IS NULL AND lease_until IS NULL)
+            OR (lease_owner IS NOT NULL AND lease_token IS NOT NULL AND lease_until IS NOT NULL)),
+    CONSTRAINT ck_payment_jobs_counts CHECK (attempts >= 0 AND version >= 0)
+);
+CREATE INDEX ix_payment_jobs_status_next_run ON payment.payment_jobs (status, next_run_at, lease_until, id);
