@@ -6,4 +6,7 @@ dependencies {
     runtimeOnly 'org.flywaydb:flyway-database-postgresql'
     runtimeOnly 'org.postgresql:postgresql'
     implementation "org.springdoc:springdoc-openapi-starter-webmvc-api:${rootProject.springdocVersion}"
+    testImplementation 'org.testcontainers:postgresql'
+    testImplementation 'org.testcontainers:kafka'
+    testImplementation 'org.testcontainers:junit-jupiter'
 }

@@ -14,7 +14,7 @@ spring:
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
     hikari:
-      maximum-pool-size: 5
+      maximum-pool-size: 10
       minimum-idle: 1
   jpa:
     open-in-view: false
@@ -29,6 +29,29 @@ spring:
     schemas: payment
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+    template:
+      observation-enabled: true
+    producer:
+      acks: all
+      retries: 2147483647
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 120000
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+    consumer:
+      group-id: payment.v1
+      enable-auto-commit: false
+      auto-offset-reset: none
+      max-poll-records: 100
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+    listener:
+      observation-enabled: true
+      ack-mode: manual_immediate
+      concurrency: 1
+      missing-topics-fatal: true
 
 springdoc:
   paths-to-match: /api/**
@@ -53,3 +76,9 @@ management:
 logging:
   pattern:
     dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Seoul"
+
+app:
+  kafka:
+    order-payment-requested:
+      # V3 Inbox 스키마 적용과 신규 그룹 offset 초기화 후에만 활성화한다.
+      enabled: false
