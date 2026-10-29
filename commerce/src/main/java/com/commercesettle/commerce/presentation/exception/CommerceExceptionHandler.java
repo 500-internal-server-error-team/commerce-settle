@@ -23,7 +23,6 @@ import org.springframework.core.MethodParameter;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
@@ -64,35 +63,23 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
 
   @ExceptionHandler(ProductNotFoundException.class)
   ResponseEntity<Object> productNotFound(ProductNotFoundException e, WebRequest request) {
-    return respond(
-        HttpStatus.NOT_FOUND, "COMMON_RESOURCE_NOT_FOUND", "상품을 찾을 수 없습니다.", null, request);
+    return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "상품을 찾을 수 없습니다.", null, request);
   }
 
   @ExceptionHandler({VersionConflictException.class, OptimisticLockingFailureException.class})
   ResponseEntity<Object> versionConflict(RuntimeException e, WebRequest request) {
-    return respond(
-        HttpStatus.CONFLICT,
-        "COMMON_VERSION_CONFLICT",
-        "다른 변경이 먼저 반영됐습니다. 최신 상태를 조회한 뒤 다시 요청해 주세요.",
-        null,
-        request);
+    return respond(ErrorCode.COMMON_VERSION_CONFLICT, request);
   }
 
   @ExceptionHandler(IdempotencyConflictException.class)
   ResponseEntity<Object> idempotencyConflict(IdempotencyConflictException e, WebRequest request) {
-    return respond(
-        HttpStatus.CONFLICT,
-        "COMMON_IDEMPOTENCY_CONFLICT",
-        "같은 멱등키의 다른 요청이 있거나 처리 중입니다. 같은 본문이면 잠시 후 다시 요청해 주세요.",
-        null,
-        request);
+    return respond(ErrorCode.COMMON_IDEMPOTENCY_CONFLICT, request);
   }
 
   @ExceptionHandler(InsufficientInventoryException.class)
   ResponseEntity<Object> insufficientInventory(
       InsufficientInventoryException e, WebRequest request) {
-    return respond(
-        HttpStatus.CONFLICT, "INVENTORY_INSUFFICIENT", "가용 재고보다 많이 줄일 수 없습니다.", null, request);
+    return respond(ErrorCode.INVENTORY_INSUFFICIENT, request);
   }
 
   @ExceptionHandler({TransientDataAccessException.class, CannotCreateTransactionException.class})
@@ -102,13 +89,12 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
         .atWarn()
         .addKeyValue("event", "commerce.request")
         .addKeyValue("result", "UNKNOWN")
-        .addKeyValue("errorCode", "COMMON_TEMPORARILY_UNAVAILABLE")
+        .addKeyValue("errorCode", ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE.name())
         .addKeyValue("errorType", e.getClass().getName())
         .addKeyValue("traceId", traceId)
         .log("Storage is temporarily unavailable");
     return respond(
-        HttpStatus.SERVICE_UNAVAILABLE,
-        "COMMON_TEMPORARILY_UNAVAILABLE",
+        ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE,
         "일시적으로 처리할 수 없습니다. 같은 멱등키로 결과를 다시 확인해 주세요.",
         null,
         request);
@@ -119,16 +105,11 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
     LOGGER
         .atError()
         .addKeyValue("event", "commerce.request")
-        .addKeyValue("errorCode", "COMMON_INTERNAL_ERROR")
+        .addKeyValue("errorCode", ErrorCode.COMMON_INTERNAL_ERROR.name())
         .addKeyValue("errorType", e.getClass().getName())
         .addKeyValue("traceId", traceId())
         .log("Unexpected request failure");
-    return respond(
-        HttpStatus.INTERNAL_SERVER_ERROR,
-        "COMMON_INTERNAL_ERROR",
-        "요청을 처리하지 못했습니다.",
-        null,
-        request);
+    return respond(ErrorCode.COMMON_INTERNAL_ERROR, request);
   }
 
   @Override
@@ -203,42 +184,41 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
         && problem.getProperties().containsKey(CODE)) {
       return ResponseEntity.status(status).headers(headers).body(problem);
     }
-    ProblemDetail problem = problem(status, commonCode(status), commonDetail(status), request);
+    ErrorCode code = ErrorCode.forStatus(status);
+    ProblemDetail problem = problem(status, code, code.detail(), request);
     return ResponseEntity.status(status).headers(headers).body(problem);
   }
 
   private ResponseEntity<Object> invalid(List<Map<String, String>> errors, WebRequest request) {
-    return respond(
-        HttpStatus.BAD_REQUEST,
-        "COMMON_VALIDATION_FAILED",
-        "입력값을 확인해 주세요.",
-        errors.isEmpty() ? null : errors,
-        request);
+    ErrorCode code = ErrorCode.COMMON_VALIDATION_FAILED;
+    return respond(code, code.detail(), errors.isEmpty() ? null : errors, request);
   }
 
+  private ResponseEntity<Object> respond(ErrorCode code, WebRequest request) {
+    return respond(code, code.detail(), null, request);
+  }
+
+  /** 같은 code라도 상황에 맞는 안내가 따로 있으면 기본 설명 대신 detail로 넘긴다. */
   private ResponseEntity<Object> respond(
-      HttpStatus status,
-      String code,
-      String detail,
-      List<Map<String, String>> errors,
-      WebRequest request) {
-    ProblemDetail problem = problem(status, code, detail, request);
+      ErrorCode code, String detail, List<Map<String, String>> errors, WebRequest request) {
+    ProblemDetail problem = problem(code.status(), code, detail, request);
     if (errors != null) {
       problem.setProperty(ERRORS, errors);
     }
-    return ResponseEntity.status(status).body(problem);
+    return ResponseEntity.status(code.status()).body(problem);
   }
 
   private ProblemDetail problem(
-      HttpStatusCode status, String code, String detail, WebRequest request) {
+      HttpStatusCode status, ErrorCode code, String detail, WebRequest request) {
     ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
     problem.setType(
-        URI.create("urn:commerce-settle:error:" + code.toLowerCase(Locale.ROOT).replace('_', '-')));
+        URI.create(
+            "urn:commerce-settle:error:" + code.name().toLowerCase(Locale.ROOT).replace('_', '-')));
     problem.setTitle(title(status));
     if (request instanceof ServletWebRequest servlet) {
       problem.setInstance(URI.create(servlet.getRequest().getRequestURI()));
     }
-    problem.setProperty(CODE, code);
+    problem.setProperty(CODE, code.name());
     problem.setProperty("traceId", traceId());
     return problem;
   }
@@ -300,21 +280,6 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
     return Map.of("field", field, "reason", reason == null ? INVALID_FORMAT : reason);
   }
 
-  private static String commonCode(HttpStatusCode status) {
-    return switch (status.value()) {
-      case 400 -> "COMMON_VALIDATION_FAILED";
-      case 401 -> "COMMON_AUTHENTICATION_REQUIRED";
-      case 403 -> "COMMON_ROLE_FORBIDDEN";
-      case 404 -> "COMMON_RESOURCE_NOT_FOUND";
-      case 405 -> "COMMON_METHOD_NOT_ALLOWED";
-      case 406 -> "COMMON_NOT_ACCEPTABLE";
-      case 415 -> "COMMON_UNSUPPORTED_MEDIA_TYPE";
-      case 429 -> "COMMON_RATE_LIMITED";
-      case 503 -> "COMMON_TEMPORARILY_UNAVAILABLE";
-      default -> "COMMON_INTERNAL_ERROR";
-    };
-  }
-
   private static String title(HttpStatusCode status) {
     return switch (status.value()) {
       case 400 -> "잘못된 요청";
@@ -324,16 +289,6 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
       case 409 -> "요청 충돌";
       case 503 -> "일시적 서비스 불가";
       default -> status.is4xxClientError() ? "요청 거절" : "서버 오류";
-    };
-  }
-
-  private static String commonDetail(HttpStatusCode status) {
-    return switch (status.value()) {
-      case 400 -> "입력값을 확인해 주세요.";
-      case 401 -> "인증이 필요합니다.";
-      case 403 -> "이 작업을 수행할 권한이 없습니다.";
-      case 404 -> "요청한 대상을 찾을 수 없습니다.";
-      default -> "요청을 처리할 수 없습니다.";
     };
   }
 }
