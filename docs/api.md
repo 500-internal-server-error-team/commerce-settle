@@ -7,7 +7,8 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 ## 공통 계약
 
 - 요청 형식·범위는 `@Valid`와 OpenAPI, 업무 불변식은 도메인, 최종 경합은 DB에서 검증합니다. [검증 경계](../CONTRIBUTING.md#검증-경계)를 따릅니다. 생성/수정 시각·행위 감사 필드는 서버가 기록하며 요청 DTO로 받지 않습니다.
-- 공개 `/api` 경로는 Gateway가 명세의 HTTP 메서드·경로·`x-owner-service`에 따라 소유 앱으로 전달합니다. `/internal`·`/mock`는 Gateway에 공개하지 않습니다. [라우팅](architecture.md#네트워크와-관측), Gateway의 세션 검증, 커머스의 상품·재고 API와 판매자 가입·로그인·로그아웃·본인 계정 조회는 구현했으며 나머지 업무 API와 백엔드의 Gateway 호출 자격 확인은 구현 전입니다. 커머스 판매자 API는 Gateway가 전달한 `X-Authenticated-Actor-Kind`·`X-Authenticated-Actor-Id` 헤더를 사용하며, Gateway 자격을 확인하기 전에는 헤더를 위조한 직접 호출을 막지 못하므로 로컬 개발 환경에서만 사용합니다.
+- 공개 `/api` 경로는 Gateway가 명세의 HTTP 메서드·경로·`x-owner-service`에 따라 소유 앱으로 전달합니다. `/internal`·`/mock`는 Gateway에 공개하지 않습니다. 상세 라우팅은 [네트워크와 관측](architecture.md#네트워크와-관측)을 따릅니다.
+- 현재 커머스의 상품·재고 API, 판매자 가입, 구매자·판매자 로그인·로그아웃·본인 계정 조회와 해당 MVC 오류 처리를 제공합니다. 그 밖의 업무 API는 구현 전입니다. 세션 검증·신원 헤더·백엔드 호출 자격의 구현 범위는 [인증 경계](architecture.md#사용자-인증과-내부-신원-전달)에서 확인합니다. 백엔드의 Gateway 자격 검증 전에는 로컬 개발 환경에서만 사용합니다.
 - `x-actor`는 소비자 권한, `x-owner-service`는 처리 앱입니다. 자기 역할과 리소스 소유권을 함께 검사합니다. 구매자/판매자 토큰을 서비스 자격으로 쓸 수 없습니다.
 - 사용자 Bearer 토큰은 [Redis 세션 정책](policies.md#인증공통-api-기준)을 따릅니다. 커머스가 발급·폐기를 맡고 Gateway는 보호 요청마다 Redis 세션·계정 가드를 확인합니다. 외부 보안 스키마 accountSession과 백엔드의 Gateway 호출 자격은 [신원 전달 계약](architecture.md#사용자-인증과-내부-신원-전달)으로 구분합니다. 고정 30분이며 세션 없음·폐기/만료·버전 불일치·정지/삭제는 401, 변경 중 가드·가드 누락·Redis 검증 불가·복구 차단은 503입니다. PUBLIC은 메서드와 경로를 함께 대조합니다.
 - POST 주문은 주문 리소스 생성 `201`과 Location을 반환하며 결제는 비동기입니다. 비동기 재처리·대역 접수는 `202`+Location이고 승인/환불 완료를 뜻하지 않습니다. 상태 조회 응답으로 후속 완료를 확인합니다.
@@ -23,7 +24,7 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 
 ### 용량 부족 시 신규 접수
 
-`POST /api/orders`와 `POST /api/orders/{orderId}/payment-retries`는 [접수 제한·재개 기준](decisions/0005-kafka-event-delivery-and-capacity.md#신규-접수-제한과-재개)에 따라 신규 작업만 `503 COMMON_CAPACITY_EXCEEDED`와 `Retry-After: 30`으로 거절합니다. 기존 멱등 결과·본문 충돌 판정이 먼저이며 신규 예약·업무 저장 전 검사합니다. 거절을 멱등 완료로 캐시하지 않고 같은 키·본문의 재시도를 허용합니다. 기존 거래의 취소·환불·지급·재처리·조회는 이 gate의 대상이 아닙니다.
+`POST /api/orders`와 `POST /api/orders/{orderId}/payment-retries`는 [접수 제한·재개 기준](policies.md#신규-접수-제한과-재개)에 따라 신규 작업만 `503 COMMON_CAPACITY_EXCEEDED`와 `Retry-After: 30`으로 거절합니다. 기존 멱등 결과·본문 충돌 판정이 먼저이며 신규 예약·업무 저장 전 검사합니다. 거절을 멱등 완료로 캐시하지 않고 같은 키·본문의 재시도를 허용합니다. 기존 거래의 취소·환불·지급·재처리·조회는 이 gate의 대상이 아닙니다.
 
 ## 기능 목록
 
