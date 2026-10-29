@@ -7,7 +7,7 @@
 
 ## 결정
 
-서비스 간뿐 아니라 **같은 서비스 내부에서도 FK constraint를 두지 않는** [기존 정책](../migrations.md#데이터-보존과-제약-조건)을 유지합니다. 대신 FK가 막았을 고아 참조를 [금액 대조](0002-performance-and-integrity-metrics.md#금액-불일치)와 같은 시점에 실행하는 **서비스 내부 참조 대조**로 탐지합니다. 엔티티 간 참조는 JPA 연관관계가 아닌 식별자 값으로 둡니다. 저장 구조는 [데이터 모델](../data-model.md), 대조 시점과 완료 조건은 [측정 지표 결정](0002-performance-and-integrity-metrics.md)이 소유합니다. 추가 업무의 초기 SQL과 대조 쿼리는 해당 구현에서 검증합니다.
+서비스 간뿐 아니라 **같은 서비스 내부에서도 FK constraint를 두지 않는** [기존 정책](../migrations.md#데이터-보존과-제약-조건)을 유지합니다. 대신 FK가 막았을 고아 참조를 [금액 대조](0002-performance-and-integrity-metrics.md#금액-불일치)와 같은 시점에 실행하는 **서비스 내부 참조 대조**로 탐지합니다. 엔티티 간 참조는 JPA 연관관계가 아닌 식별자 값으로 둡니다. 저장 구조는 [데이터 모델](../data-model.md), 대조 시점과 완료 조건은 [측정 지표 결정](0002-performance-and-integrity-metrics.md)이 소유합니다. 추가 업무 테이블의 제약과 대조 쿼리는 해당 구현에서 검증합니다.
 
 Settlement의 내부 대조 대상은 다음과 같습니다. 완료 조건은 모든 항목 0건입니다.
 
