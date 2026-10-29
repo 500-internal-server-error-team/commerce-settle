@@ -6,7 +6,6 @@ x-app: &app
     JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=65 -XX:ActiveProcessorCount=2 -Duser.timezone=Asia/Seoul
     KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     SPRING_DATA_REDIS_HOST: redis
-    SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?Run python3 scripts/init_env.py}
     SPRING_DATA_REDIS_TIMEOUT: 2s
     SPRING_DATA_REDIS_CONNECT_TIMEOUT: 2s
     SPRING_DATA_REDIS_REPOSITORIES_ENABLED: 'false'
@@ -33,10 +32,30 @@ services:
     image: redis:8.10.2-alpine
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      GATEWAY_REDIS_PASSWORD: ${GATEWAY_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      COMMERCE_REDIS_PASSWORD: ${COMMERCE_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      PAYMENT_REDIS_PASSWORD: ${PAYMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      SETTLEMENT_REDIS_PASSWORD: ${SETTLEMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      FINANCE_MOCK_REDIS_PASSWORD: ${FINANCE_MOCK_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+    # default is the operator account. Apps get their own users: Gateway reads auth sessions only,
+    # Commerce writes auth keys, and the others have no key access until they own a key pattern.
+    # Keyless commands bypass key patterns, so Commerce gets EVAL/EVALSHA without SCRIPT/FUNCTION
+    # and loses key listing and database switching.
     command:
       - sh
       - -c
-      - exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --maxmemory 128mb --maxmemory-policy noeviction
+      - >-
+        exec redis-server --requirepass "$$REDIS_PASSWORD"
+        --user gateway on ">$$GATEWAY_REDIS_PASSWORD" resetkeys
+        "%R~commerce-settle:auth:session:*" "%R~commerce-settle:auth:subject:*"
+        resetchannels -@all +evalsha_ro +eval_ro +hmget +time +info
+        --user commerce on ">$$COMMERCE_REDIS_PASSWORD" resetkeys "~commerce-settle:auth:*"
+        resetchannels -@all +@connection +@read +@write +eval +evalsha -@dangerous -@admin
+        -function -scan -randomkey -dbsize -select +info +time
+        --user payment on ">$$PAYMENT_REDIS_PASSWORD" resetkeys resetchannels -@all +@connection -@dangerous +info
+        --user settlement on ">$$SETTLEMENT_REDIS_PASSWORD" resetkeys resetchannels -@all +@connection -@dangerous +info
+        --user finance-mock on ">$$FINANCE_MOCK_REDIS_PASSWORD" resetkeys resetchannels -@all +@connection -@dangerous +info
+        --appendonly yes --maxmemory 128mb --maxmemory-policy noeviction
     mem_limit: 256m
     volumes:
       - redis-data:/data
@@ -131,6 +150,10 @@ services:
       context: .
       args:
         MODULE: gateway
+    environment:
+      <<: *app-env
+      SPRING_DATA_REDIS_USERNAME: gateway
+      SPRING_DATA_REDIS_PASSWORD: ${GATEWAY_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
     ports:
       - 127.0.0.1:${GATEWAY_PORT:-8080}:8080
     depends_on:
@@ -153,6 +176,8 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/commerce
       DB_USERNAME: commerce
       DB_PASSWORD: ${COMMERCE_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      SPRING_DATA_REDIS_USERNAME: commerce
+      SPRING_DATA_REDIS_PASSWORD: ${COMMERCE_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
     depends_on:
       <<: *app-deps
       postgres:
@@ -172,6 +197,8 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/payment
       DB_USERNAME: payment
       DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      SPRING_DATA_REDIS_USERNAME: payment
+      SPRING_DATA_REDIS_PASSWORD: ${PAYMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
     depends_on:
       <<: *app-deps
       postgres:
@@ -192,6 +219,8 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/payment
       DB_USERNAME: payment
       DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      SPRING_DATA_REDIS_USERNAME: payment
+      SPRING_DATA_REDIS_PASSWORD: ${PAYMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
     depends_on:
       <<: *app-deps
       postgres:
@@ -210,6 +239,8 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/settlement
       DB_USERNAME: settlement
       DB_PASSWORD: ${SETTLEMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      SPRING_DATA_REDIS_USERNAME: settlement
+      SPRING_DATA_REDIS_PASSWORD: ${SETTLEMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
     depends_on:
       <<: *app-deps
       postgres:
@@ -228,6 +259,8 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/finance_mock
       DB_USERNAME: finance_mock
       DB_PASSWORD: ${FINANCE_MOCK_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      SPRING_DATA_REDIS_USERNAME: finance-mock
+      SPRING_DATA_REDIS_PASSWORD: ${FINANCE_MOCK_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
     depends_on:
       <<: *app-deps
       postgres:
