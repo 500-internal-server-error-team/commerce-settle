@@ -72,7 +72,13 @@ public class GatewayExceptionHandler implements ErrorWebExceptionHandler {
           final var ownSpan =
               currentSpan == null ? tracer.nextSpan().name("gateway.error").start() : null;
           final var traceId = (currentSpan == null ? ownSpan : currentSpan).context().traceId();
-          final var problem = ProblemDetail.forStatusAndDetail(status, detail(status));
+          final var notForwarded = error instanceof AuthenticationUnavailableException;
+          final var problem =
+              ProblemDetail.forStatusAndDetail(
+                  status,
+                  notForwarded
+                      ? "인증 상태를 확인할 수 없어 요청을 전달하지 않았습니다. 잠시 후 다시 시도해 주세요."
+                      : detail(status));
           problem.setType(
               URI.create(
                   "urn:commerce-settle:error:" + code.toLowerCase(Locale.ROOT).replace('_', '-')));
@@ -82,7 +88,7 @@ public class GatewayExceptionHandler implements ErrorWebExceptionHandler {
           problem.setProperty("traceId", traceId);
           if (status.is5xxServerError()) {
             final var event = status.value() == 503 ? LOGGER.atWarn() : LOGGER.atError();
-            if (status.value() == 503) {
+            if (status.value() == 503 && !notForwarded) {
               event.addKeyValue("result", "UNKNOWN");
             }
             event
@@ -151,6 +157,8 @@ public class GatewayExceptionHandler implements ErrorWebExceptionHandler {
   private static String detail(HttpStatusCode status) {
     return switch (status.value()) {
       case 400 -> "요청 형식과 값을 확인해 주세요.";
+      case 401 -> "로그인이 필요합니다.";
+      case 403 -> "이 요청을 수행할 권한이 없습니다.";
       case 404 -> "요청한 경로를 찾을 수 없습니다.";
       case 503 -> "연결된 서비스에 요청을 전달할 수 없습니다. 처리 결과는 확인이 필요합니다.";
       default -> "요청을 처리할 수 없습니다.";

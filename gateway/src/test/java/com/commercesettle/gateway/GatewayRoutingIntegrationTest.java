@@ -1,18 +1,28 @@
 package com.commercesettle.gateway;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
 
+import com.commercesettle.gateway.filter.SessionVerification;
+import com.commercesettle.gateway.filter.SessionVerifier;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,11 +38,13 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
@@ -44,7 +56,11 @@ import reactor.netty.http.server.HttpServer;
 
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-    properties = {"management.server.port=0", "management.zipkin.tracing.export.enabled=false"})
+    properties = {
+      "management.server.port=0",
+      "management.zipkin.tracing.export.enabled=false",
+      "gateway.auth.session-epoch=00000000-0000-4000-8000-0000000000aa"
+    })
 @Import(GatewayRoutingIntegrationTest.FailureRoutes.class)
 @ExtendWith(OutputCaptureExtension.class)
 @AutoConfigureObservability(metrics = false)
@@ -57,8 +73,18 @@ class GatewayRoutingIntegrationTest {
           "settlement", backend("settlement"));
   private static final JsonNode CONTRACT = contract();
   private static final String TRACE_ID = "0123456789abcdef0123456789abcdef";
+  private static final String TOKEN = "session-token-probe";
+  private static final String TOKEN_HASH = sha256(TOKEN);
+  private static final UUID ACCOUNT_ID = UUID.fromString("00000000-0000-4000-8000-0000000000b1");
 
   @Autowired private WebTestClient client;
+  @MockitoBean private SessionVerifier verifier;
+
+  @BeforeEach
+  void authenticateAsBuyer() {
+    given(verifier.verify(anyString()))
+        .willReturn(Mono.just(SessionVerification.authenticated("BUYER", ACCOUNT_ID)));
+  }
 
   @DynamicPropertySource
   static void properties(DynamicPropertyRegistry registry) {
@@ -76,10 +102,16 @@ class GatewayRoutingIntegrationTest {
   @ParameterizedTest(name = "{0} {1} → {2}")
   @MethodSource("externalOperations")
   @DisplayName("외부 API를 명세의 소유 서비스로 전달한다")
-  void routesEveryExternalOperation(String method, String path, String owner) {
+  void routesEveryExternalOperation(String method, String path, String owner, String actor) {
+    if (!"PUBLIC".equals(actor)) {
+      given(verifier.verify(anyString()))
+          .willReturn(Mono.just(SessionVerification.authenticated(actor, ACCOUNT_ID)));
+    }
+
     client
         .method(HttpMethod.valueOf(method.toUpperCase(Locale.ROOT)))
         .uri(concretePath(path))
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKEN)
         .exchange()
         .expectStatus()
         .isOk()
@@ -148,6 +180,7 @@ class GatewayRoutingIntegrationTest {
     client
         .post()
         .uri("/api/orders?probe=one&probe=two")
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKEN)
         .contentType(MediaType.APPLICATION_JSON)
         .header("Idempotency-Key", "gateway-routing-probe")
         .bodyValue(body)
@@ -191,6 +224,7 @@ class GatewayRoutingIntegrationTest {
     client
         .get()
         .uri("/api/payments?mode=problem")
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKEN)
         .exchange()
         .expectStatus()
         .isEqualTo(409)
@@ -301,6 +335,7 @@ class GatewayRoutingIntegrationTest {
     client
         .post()
         .uri("/api/orders?mode=disconnect")
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKEN)
         .bodyValue("probe")
         .exchange()
         .expectStatus()
@@ -310,6 +345,140 @@ class GatewayRoutingIntegrationTest {
         .isEqualTo("COMMON_TEMPORARILY_UNAVAILABLE");
 
     assertThat(BACKENDS.get("commerce").count().get()).isEqualTo(count + 1);
+  }
+
+  @Test
+  @DisplayName("보호 작업에는 위조 신원 헤더와 세션 토큰 대신 검증한 신원만 전달한다")
+  void forwardsVerifiedIdentityOnly() {
+    client
+        .get()
+        .uri("/api/payments")
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKEN)
+        .header("X-Authenticated-Actor-Kind", "SELLER")
+        .header("X-Authenticated-Actor-Id", UUID.randomUUID().toString())
+        .header("X-Authenticated-Session-Hash", "forged")
+        .header("x-authenticated-extra", "forged")
+        .exchange()
+        .expectStatus()
+        .isOk();
+
+    final var headers = BACKENDS.get("payment").last().get().headers();
+    assertThat(headers.get("X-Authenticated-Actor-Kind")).isEqualTo("BUYER");
+    assertThat(headers.get("X-Authenticated-Actor-Id")).isEqualTo(ACCOUNT_ID.toString());
+    assertThat(headers.names())
+        .noneMatch(name -> name.equalsIgnoreCase("X-Authenticated-Session-Hash"))
+        .noneMatch(name -> name.equalsIgnoreCase("X-Authenticated-Extra"))
+        .noneMatch(name -> name.equalsIgnoreCase(HttpHeaders.AUTHORIZATION));
+    then(verifier).should().verify(TOKEN_HASH);
+  }
+
+  @Test
+  @DisplayName("로그아웃에는 검증한 세션의 해시를 함께 전달한다")
+  void forwardsSessionHashOnLogout() {
+    client
+        .delete()
+        .uri("/api/sessions/current")
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKEN)
+        .exchange()
+        .expectStatus()
+        .isOk();
+
+    assertThat(BACKENDS.get("commerce").last().get().headers().get("X-Authenticated-Session-Hash"))
+        .isEqualTo(TOKEN_HASH);
+  }
+
+  @Test
+  @DisplayName("공개 작업은 세션을 확인하지 않고 클라이언트의 인증 헤더를 지운다")
+  void stripsAuthenticationHeadersOnPublicOperation() {
+    client
+        .get()
+        .uri("/api/products")
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKEN)
+        .header("X-Authenticated-Actor-Kind", "SELLER")
+        .exchange()
+        .expectStatus()
+        .isOk();
+
+    assertThat(BACKENDS.get("commerce").last().get().headers().names())
+        .noneMatch(name -> name.equalsIgnoreCase("X-Authenticated-Actor-Kind"))
+        .noneMatch(name -> name.equalsIgnoreCase(HttpHeaders.AUTHORIZATION));
+    then(verifier).shouldHaveNoInteractions();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"", "Basic c2VsbGVy", "Bearer ", "Bearer two parts"})
+  @DisplayName("Bearer 세션 토큰이 없거나 형식이 다르면 401로 거절한다")
+  void rejectsMissingOrMalformedToken(String authorization) {
+    final var count = BACKENDS.get("payment").count().get();
+
+    client
+        .get()
+        .uri("/api/payments")
+        .headers(
+            headers -> {
+              if (!authorization.isEmpty()) {
+                headers.set(HttpHeaders.AUTHORIZATION, authorization);
+              }
+            })
+        .exchange()
+        .expectStatus()
+        .isUnauthorized()
+        .expectBody()
+        .jsonPath("$.code")
+        .isEqualTo("COMMON_AUTHENTICATION_REQUIRED");
+
+    then(verifier).shouldHaveNoInteractions();
+    assertThat(BACKENDS.get("payment").count().get()).isEqualTo(count);
+  }
+
+  @ParameterizedTest(name = "{0} → {1}")
+  @MethodSource("rejectedVerifications")
+  @DisplayName("세션 판정에 따라 백엔드에 전달하지 않고 거절한다")
+  void rejectsUnverifiedRequest(
+      SessionVerification verification,
+      int status,
+      String code,
+      String detail,
+      CapturedOutput output) {
+    given(verifier.verify(anyString())).willReturn(Mono.just(verification));
+    final var count = BACKENDS.get("payment").count().get();
+
+    client
+        .get()
+        .uri("/api/payments")
+        .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKEN)
+        .exchange()
+        .expectStatus()
+        .isEqualTo(status)
+        .expectHeader()
+        .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+        .expectBody()
+        .jsonPath("$.code")
+        .isEqualTo(code)
+        .jsonPath("$.detail")
+        .isEqualTo(detail);
+
+    assertThat(BACKENDS.get("payment").count().get()).isEqualTo(count);
+    assertThat(output.getAll()).doesNotContain(TOKEN, TOKEN_HASH);
+  }
+
+  static Stream<Arguments> rejectedVerifications() {
+    return Stream.of(
+        Arguments.of(
+            SessionVerification.unauthenticated(),
+            401,
+            "COMMON_AUTHENTICATION_REQUIRED",
+            "로그인이 필요합니다."),
+        Arguments.of(
+            SessionVerification.authenticated("SELLER", ACCOUNT_ID),
+            403,
+            "COMMON_ROLE_FORBIDDEN",
+            "이 요청을 수행할 권한이 없습니다."),
+        Arguments.of(
+            SessionVerification.unavailable(),
+            503,
+            "COMMON_TEMPORARILY_UNAVAILABLE",
+            "인증 상태를 확인할 수 없어 요청을 전달하지 않았습니다. 잠시 후 다시 시도해 주세요."));
   }
 
   static Stream<Arguments> externalOperations() {
@@ -333,7 +502,12 @@ class GatewayRoutingIntegrationTest {
                                 ? Arguments.of(
                                     operation.getKey(),
                                     entry.getKey(),
-                                    operation.getValue().required("x-owner-service").asText())
+                                    operation.getValue().required("x-owner-service").asText(),
+                                    operation
+                                        .getValue()
+                                        .required("x-actor")
+                                        .asText()
+                                        .split("\\|")[0])
                                 : Arguments.of(operation.getKey(), entry.getKey())));
   }
 
@@ -373,7 +547,8 @@ class GatewayRoutingIntegrationTest {
                                       request.method().name(),
                                       uri.getRawQuery(),
                                       request.requestHeaders().get("Idempotency-Key"),
-                                      body));
+                                      body,
+                                      request.requestHeaders().copy()));
                               if ("mode=disconnect".equals(uri.getRawQuery())) {
                                 return response
                                     .withConnection(connection -> connection.dispose())
@@ -409,7 +584,22 @@ class GatewayRoutingIntegrationTest {
     return new Backend(server, last, count);
   }
 
-  record CapturedRequest(String method, String query, String idempotencyKey, String body) {}
+  record CapturedRequest(
+      String method,
+      String query,
+      String idempotencyKey,
+      String body,
+      io.netty.handler.codec.http.HttpHeaders headers) {}
+
+  private static String sha256(String value) {
+    try {
+      return HexFormat.of()
+          .formatHex(
+              MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+    } catch (NoSuchAlgorithmException error) {
+      throw new ExceptionInInitializerError(error);
+    }
+  }
 
   record Backend(
       DisposableServer server, AtomicReference<CapturedRequest> last, AtomicInteger count) {}

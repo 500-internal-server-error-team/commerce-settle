@@ -40,6 +40,9 @@ gateway:
     commerce: ${COMMERCE_URL:http://commerce:8080}
     payment: ${PAYMENT_URL:http://payment-api:8080}
     settlement: ${SETTLEMENT_URL:http://settlement:8080}
+  auth:
+    # 세션 키의 인증 세대. 커머스와 같은 UUID를 쓰며 없으면 기동하지 않는다.
+    session-epoch: ${AUTH_SESSION_EPOCH}
 
 springdoc:
   swagger-ui:

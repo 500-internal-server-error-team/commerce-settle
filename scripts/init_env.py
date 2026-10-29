@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import uuid
 
 
 def initialize(directory):
@@ -28,7 +29,12 @@ def initialize(directory):
         existing = values.get(key)
         if existing and existing[1].strip():
             continue
-        value = secrets.token_urlsafe(32) if key.endswith("PASSWORD") else default
+        if key.endswith("PASSWORD"):
+            value = secrets.token_urlsafe(32)
+        elif key.endswith("EPOCH"):
+            value = str(uuid.uuid4())
+        else:
+            value = default
         if existing:
             lines[existing[0]] = f"{key}={value}\n"
         else:

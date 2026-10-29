@@ -95,6 +95,47 @@ def check_redis_acl(config):
                 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli DEL "$1"', "redis-smoke", session)
 
 
+def gateway_status(base, method, path, token=None):
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    try:
+        with urlopen(Request(base + path, method=method, headers=headers), timeout=15) as response:
+            return response.status, {}
+    except HTTPError as error:
+        body = error.read()
+        return error.code, json.loads(body) if body.startswith(b"{") else {}
+
+
+def check_session_auth(config, base):
+    epoch = config["services"]["gateway"]["environment"]["AUTH_SESSION_EPOCH"]
+    token = uuid.uuid4().hex
+    seller_id = str(uuid.uuid4())
+    session = f"commerce-settle:auth:session:{epoch}:{hashlib.sha256(token.encode()).hexdigest()}"
+    guard = f"commerce-settle:auth:subject:{epoch}:SELLER:{seller_id}"
+    admin = ["exec", "-T", "redis", "sh", "-c",
+             'export REDISCLI_AUTH="$REDIS_PASSWORD"; exec redis-cli --raw "$@"', "redis-smoke"]
+    try:
+        status, problem = gateway_status(base, "GET", "/api/sellers/me")
+        assert (status, problem.get("code")) == (401, "COMMON_AUTHENTICATION_REQUIRED"), status
+
+        seconds, micros = compose(*admin, "TIME").stdout.split()
+        now = int(seconds) * 1000 + int(micros) // 1000
+        compose(*admin, "HSET", session, "actorKind", "SELLER", "actorId", seller_id,
+                "purpose", "SESSION", "authVersion", "0", "issuedAt", str(now),
+                "expiresAt", str(now + 60_000))
+        compose(*admin, "HSET", guard, "authVersion", "0", "state", "ACTIVE")
+        status, _ = gateway_status(base, "GET", "/api/sellers/me", token)
+        # Commerce has no seller profile controller yet, so any non-auth status shows the request passed.
+        assert status < 500 and status not in (401, 403), status
+        status, problem = gateway_status(base, "GET", "/api/buyers/me/coupons", token)
+        assert (status, problem.get("code")) == (403, "COMMON_ROLE_FORBIDDEN"), status
+
+        compose(*admin, "HSET", guard, "pendingChangeId", str(uuid.uuid4()))
+        status, problem = gateway_status(base, "GET", "/api/sellers/me", token)
+        assert (status, problem.get("code")) == (503, "COMMON_TEMPORARILY_UNAVAILABLE"), status
+    finally:
+        compose(*admin, "DEL", session, guard)
+
+
 def main():
     # Reading the resolved port supports overrides in .env and COMPOSE_FILE.
     config = json.loads(compose("config", "--format", "json").stdout)
@@ -155,6 +196,9 @@ def main():
 
     check_redis_acl(config)
     print("PASS Redis ACL: per-app users, Commerce auth writes and read-only Gateway checks")
+
+    check_session_auth(config, base)
+    print("PASS Gateway session: 401 without a session, Redis session pass, role 403, pending guard 503")
 
     trace_id = uuid.uuid4().hex
     parent_id = uuid.uuid4().hex[:16]

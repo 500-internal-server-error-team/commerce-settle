@@ -167,7 +167,7 @@
 
 ### 로그인 세션
 
-키는 `commerce-settle:auth:session:<epoch>:<tokenHash>`다. epoch는 배포한 인증 세대 UUID, tokenHash는 256비트 이상 임의 토큰의 SHA-256이다.
+키는 `commerce-settle:auth:session:<epoch>:<tokenHash>`다. epoch는 배포한 인증 세대 UUID의 소문자 표기, tokenHash는 256비트 이상 임의 토큰(UTF-8)의 SHA-256 소문자 16진수다. 로그아웃의 `X-Authenticated-Session-Hash`도 같은 값이다.
 
 | 필드 | 타입 | 의미 |
 | --- | --- | --- |
