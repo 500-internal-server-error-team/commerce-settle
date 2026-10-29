@@ -80,3 +80,8 @@ app:
     order-payment-requested:
       # 개발용 초기 SQL 적용과 신규 그룹 offset 초기화 후에만 활성화한다.
       enabled: false
+  payment-request-processor:
+    # PAYMENT_ROLE=worker에서만 동작한다. WAITING 결제 요청을 결제·승인 작업으로 처리한다.
+    enabled: false
+    interval-ms: 1000
+    batch-size: 100
