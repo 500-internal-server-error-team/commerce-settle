@@ -10,6 +10,7 @@ import com.commercesettle.commerce.domain.exception.VersionConflictException;
 import com.commercesettle.commerce.domain.model.Product;
 import com.commercesettle.commerce.domain.model.ProductInventory;
 import com.commercesettle.commerce.domain.model.ProductStatus;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -21,10 +22,13 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -45,6 +49,7 @@ class ProductCatalogIntegrationTest {
 
   @Autowired ProductCatalogService catalog;
   @Autowired JdbcTemplate jdbc;
+  @Autowired TransactionTemplate tx;
 
   @Test
   @DisplayName("상품 등록은 재고 0인 재고 행과 멱등 기록을 함께 저장한다")
@@ -262,6 +267,54 @@ class ProductCatalogIntegrationTest {
     assertThat(count("inventory_movements where product_id = ?", productId)).isEqualTo(1);
   }
 
+  @Test
+  @Timeout(30)
+  @DisplayName("다른 트랜잭션이 재고 행을 잠그고 있으면 대기 상한 안에 거절하고 아무것도 남기지 않는다")
+  void rejectsAdjustmentWithinLockTimeoutWhileInventoryIsLocked() throws Exception {
+    UUID seller = UUID.randomUUID();
+    UUID productId = catalog.register(seller, key(), "키보드", 39_000, ProductStatus.ON_SALE).getId();
+
+    try (HeldTransaction held =
+        holdTransaction(
+            () ->
+                jdbc.queryForList(
+                    "select id from commerce.product_inventory where product_id = ? for update",
+                    productId))) {
+      long started = System.nanoTime();
+      assertThatThrownBy(() -> catalog.adjustAvailable(seller, productId, key(), 5, 0, "입고"))
+          .isInstanceOf(PessimisticLockingFailureException.class);
+      assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+    }
+
+    assertThat(catalog.inventory(seller, productId).getVersion()).isZero();
+    assertThat(count("inventory_movements where product_id = ?", productId)).isZero();
+    assertThat(
+            count(
+                "idempotency_records where actor_id = ? and operation = 'INVENTORY_ADJUST'",
+                seller.toString()))
+        .isZero();
+  }
+
+  @Test
+  @Timeout(30)
+  @DisplayName("같은 키의 요청이 처리 중이면 대기 상한 안에 멱등 충돌로 거절한다")
+  void rejectsSameKeyWithinLockTimeoutWhileFirstRequestIsInProgress() throws Exception {
+    UUID seller = UUID.randomUUID();
+    String sameKey = key();
+
+    try (HeldTransaction held =
+        holdTransaction(
+            () -> catalog.register(seller, sameKey, "키보드", 39_000, ProductStatus.ON_SALE))) {
+      long started = System.nanoTime();
+      assertThatThrownBy(
+              () -> catalog.register(seller, sameKey, "키보드", 39_000, ProductStatus.ON_SALE))
+          .isInstanceOf(IdempotencyConflictException.class);
+      assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+    }
+
+    assertThat(count("products where seller_id = ?", seller)).isEqualTo(1);
+  }
+
   private long count(String fromWhere, Object... args) {
     return jdbc.queryForObject("select count(*) from commerce." + fromWhere, Long.class, args);
   }
@@ -296,6 +349,46 @@ class ProductCatalogIntegrationTest {
       return results;
     } finally {
       executor.shutdownNow();
+    }
+  }
+
+  /** 다른 스레드의 트랜잭션에서 작업을 실행하고, 닫을 때 커밋할 때까지 잠금을 유지한다. */
+  private HeldTransaction holdTransaction(Runnable work) throws Exception {
+    CountDownLatch acquired = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    Future<?> committed =
+        executor.submit(
+            () ->
+                tx.executeWithoutResult(
+                    status -> {
+                      work.run();
+                      acquired.countDown();
+                      try {
+                        release.await();
+                      } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(e);
+                      }
+                    }));
+    if (!acquired.await(10, TimeUnit.SECONDS)) {
+      committed.get(1, TimeUnit.SECONDS);
+      throw new IllegalStateException("holding transaction did not start");
+    }
+    return new HeldTransaction(release, committed, executor);
+  }
+
+  private record HeldTransaction(
+      CountDownLatch release, Future<?> committed, ExecutorService executor)
+      implements AutoCloseable {
+    @Override
+    public void close() throws Exception {
+      release.countDown();
+      try {
+        committed.get(10, TimeUnit.SECONDS);
+      } finally {
+        executor.shutdownNow();
+      }
     }
   }
 }

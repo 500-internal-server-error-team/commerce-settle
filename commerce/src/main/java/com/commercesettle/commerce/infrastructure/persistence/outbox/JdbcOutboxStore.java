@@ -2,6 +2,7 @@ package com.commercesettle.commerce.infrastructure.persistence.outbox;
 
 import com.commercesettle.commerce.application.port.OutboxStore;
 import com.commercesettle.commerce.application.port.OutboxStore.Publication;
+import com.commercesettle.commerce.infrastructure.persistence.TransactionLimits;
 import java.util.List;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -20,7 +21,7 @@ public class JdbcOutboxStore implements OutboxStore {
 
   @Override
   public List<Delivery> claim(int limit, long leaseMs, int maxAttempts) {
-    OutboxTransactionLimits.apply(jdbc);
+    TransactionLimits.apply(jdbc.getJdbcOperations());
     var params =
         new MapSqlParameterSource("limit", limit)
             .addValue("lease", leaseMs)
@@ -69,7 +70,7 @@ public class JdbcOutboxStore implements OutboxStore {
 
   @Override
   public boolean markPublished(Delivery delivery, Publication publication) {
-    OutboxTransactionLimits.apply(jdbc);
+    TransactionLimits.apply(jdbc.getJdbcOperations());
     if (!lockCurrentDelivery(delivery)) {
       return false;
     }
@@ -88,7 +89,7 @@ public class JdbcOutboxStore implements OutboxStore {
 
   @Override
   public boolean markFailed(Delivery delivery, int maxAttempts) {
-    OutboxTransactionLimits.apply(jdbc);
+    TransactionLimits.apply(jdbc.getJdbcOperations());
     if (!lockCurrentDelivery(delivery)) {
       return false;
     }

@@ -10,6 +10,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.jdbc.core.JdbcOperations;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -18,13 +19,17 @@ class JpaProductRepository implements ProductRepository {
       Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
 
   private final SpringDataProductRepository products;
+  private final JdbcOperations jdbc;
 
-  JpaProductRepository(SpringDataProductRepository products) {
+  JpaProductRepository(SpringDataProductRepository products, JdbcOperations jdbc) {
     this.products = products;
+    this.jdbc = jdbc;
   }
 
+  /** 다른 트랜잭션이 잡은 상품 행의 갱신 대기도 잠금 대기 상한 안에서 끝낸다. */
   @Override
   public Product save(Product product) {
+    TransactionLimits.apply(jdbc);
     return products.saveAndFlush(product);
   }
 
