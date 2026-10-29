@@ -1862,7 +1862,7 @@
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
         "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "판매자 본인 상품을 등록하고 재고 0인 재고 행을 함께 만든다. 같은 키·본문의 재요청은 기존 상품을 반환한다.",
         "security": [
           {
             "accountSession": []
@@ -1992,7 +1992,7 @@
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
         "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "논리삭제를 제외한 본인 상품을 createdAt DESC, id DESC 순서로 반환한다.",
         "security": [
           {
             "accountSession": []
@@ -2113,7 +2113,7 @@
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
         "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "expectedVersion이 현재 버전과 다르면 409이다. 기존 주문의 가격 사본은 바꾸지 않는다. 타인·삭제 상품은 404이다.",
         "security": [
           {
             "accountSession": []
@@ -2366,7 +2366,7 @@
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
         "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "본인의 미삭제 상품을 상태와 관계없이 반환한다. 타인·삭제 상품은 404이다.",
         "security": [
           {
             "accountSession": []
@@ -2477,7 +2477,7 @@
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
         "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "본인 상품의 가용·예약·이벤트 배정·판매 수량과 버전을 반환한다. 타인·삭제 상품은 404이다.",
         "security": [
           {
             "accountSession": []
