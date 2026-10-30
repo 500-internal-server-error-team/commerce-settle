@@ -16,9 +16,9 @@ if not version or not ARGV[1] or ARGV[1] == '' then
   return redis.error_reply('invalid guard arguments')
 end
 
-local guard = redis.call('HMGET', KEYS[1], 'authVersion', 'state', 'pendingChangeId')
-local missing = not (guard[1] or guard[2] or guard[3])
-if not missing then
+-- 필수 필드가 모두 빠졌어도 키가 있으면 손상된 가드이므로 덮어쓰지 않고 아래에서 UNAVAILABLE로 판정한다.
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  local guard = redis.call('HMGET', KEYS[1], 'authVersion', 'state', 'pendingChangeId')
   local guard_version, pending = integer(guard[1]), guard[3]
   if not guard[2] or (pending and pending ~= '') then
     return 'UNAVAILABLE'

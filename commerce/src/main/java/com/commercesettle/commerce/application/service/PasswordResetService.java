@@ -134,17 +134,18 @@ public class PasswordResetService {
       String tokenHash,
       String newPasswordHash,
       UUID changeId) {
-    Instant now = clock.instant();
     Account account =
         accounts
             .findLockedById(kind, actorId)
             .filter(locked -> locked.canLogIn() && locked.getAuthVersion() == authVersion)
             .orElseThrow(AuthenticationFailedException::new);
     PasswordResetToken token =
-        tokens
-            .findLockedByTokenHash(tokenHash)
-            .filter(locked -> locked.isUsableFor(kind, now) && locked.getActorId().equals(actorId))
-            .orElseThrow(AuthenticationFailedException::new);
+        tokens.findLockedByTokenHash(tokenHash).orElseThrow(AuthenticationFailedException::new);
+    // 잠금 대기 중 만료된 토큰을 거르도록 잠금을 모두 얻은 뒤 시각을 읽는다.
+    Instant now = clock.instant();
+    if (!token.isUsableFor(kind, now) || !token.getActorId().equals(actorId)) {
+      throw new AuthenticationFailedException();
+    }
 
     String beforeStatus = account.getStatus().name();
     account.changePassword(newPasswordHash, now);
