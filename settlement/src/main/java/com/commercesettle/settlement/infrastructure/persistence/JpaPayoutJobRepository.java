@@ -81,13 +81,14 @@ class JpaPayoutJobRepository implements PayoutJobRepository {
   @Override
   public boolean releaseLease(
       UUID jobId, UUID leaseToken, PayoutJobStatus status, Duration runAfter) {
+    // 임대 만료는 실제 현재 시각으로 본다. now()는 트랜잭션 시작 시각이라 앞선 잠금 대기 중 만료된 임대도 통과시킨다.
     return jdbc.update(
             "UPDATE settlement.payout_jobs"
                 + " SET status = :status, next_run_at = now() + make_interval(secs => :runAfter),"
                 + " lease_owner = NULL, lease_token = NULL, lease_until = NULL, updated_at = now(),"
                 + " version = version + 1"
                 + " WHERE id = :id AND status = 'RUNNING' AND lease_token = :token"
-                + " AND lease_until > now()",
+                + " AND lease_until > clock_timestamp()",
             new MapSqlParameterSource()
                 .addValue("id", jobId)
                 .addValue("token", leaseToken)
