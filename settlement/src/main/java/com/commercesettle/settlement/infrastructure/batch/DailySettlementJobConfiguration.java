@@ -1,7 +1,6 @@
 package com.commercesettle.settlement.infrastructure.batch;
 
 import com.commercesettle.settlement.application.service.SellerSettlementService;
-import com.commercesettle.settlement.domain.exception.PayoutNotAllowedException;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -10,9 +9,12 @@ import java.util.UUID;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.batch.core.ExitStatus;
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.SkipListener;
 import org.springframework.batch.core.Step;
+import org.springframework.batch.core.StepExecution;
+import org.springframework.batch.core.StepExecutionListener;
 import org.springframework.batch.core.configuration.annotation.StepScope;
 import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.repository.JobRepository;
@@ -25,7 +27,10 @@ import org.springframework.batch.item.database.support.PostgresPagingQueryProvid
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.dao.NonTransientDataAccessResourceException;
 import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.dao.RecoverableDataAccessException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
 
 /**
@@ -47,8 +52,9 @@ class DailySettlementJobConfiguration {
   }
 
   /**
-   * 지급 전 검증 실패와 항목 잠금 대기 초과는 그 판매자만 건너뛴다. 롤백된 항목은 PAYABLE로 남아 다음 실행에서 다시 고려한다. 그 밖의 오류는 Step을 실패시켜
-   * 재시작으로 이어서 처리한다.
+   * 판매자 한 명의 처리 오류는 그 판매자만 건너뛴다. 매번 같은 오류가 나는 판매자가 뒤 판매자를 막지 않게 한다. 롤백된 항목은 PAYABLE로 남아 다음 실행에서 다시
+   * 고려한다. DB 자원·일시 오류는 모든 판매자에게 같이 일어나므로 Step을 실패시켜 복구 뒤 재시작으로 이어서 처리한다. 항목 잠금 대기 초과는 일시 오류지만 그
+   * 판매자만의 경합이라 건너뛴다.
    */
   @Bean
   Step settleSellersStep(
@@ -61,10 +67,14 @@ class DailySettlementJobConfiguration {
         .reader(payableSellerReader)
         .writer(sellerSettlementWriter)
         .faultTolerant()
-        .skip(PayoutNotAllowedException.class)
+        .skip(Exception.class)
         .skip(PessimisticLockingFailureException.class)
+        .noSkip(TransientDataAccessException.class)
+        .noSkip(NonTransientDataAccessResourceException.class)
+        .noSkip(RecoverableDataAccessException.class)
         .skipLimit(Integer.MAX_VALUE)
         .listener(skippedSellerLogger())
+        .listener(skipSummary())
         .build();
   }
 
@@ -97,6 +107,31 @@ class DailySettlementJobConfiguration {
       SellerSettlementService sellers,
       @Value("#{jobParameters['batchDate']}") LocalDate batchDate) {
     return chunk -> chunk.forEach(sellerId -> sellers.settle(sellerId, batchDate));
+  }
+
+  /**
+   * 건너뛴 판매자가 있으면 종료 코드를 COMPLETED_WITH_SKIPS로 바꾸고 건너뛴 수를 남긴다. 실행 결과(BatchStatus)는 COMPLETED 그대로다.
+   */
+  private static StepExecutionListener skipSummary() {
+    return new StepExecutionListener() {
+      @Override
+      public ExitStatus afterStep(StepExecution stepExecution) {
+        long skipped = stepExecution.getWriteSkipCount();
+        if (skipped == 0
+            || !ExitStatus.COMPLETED
+                .getExitCode()
+                .equals(stepExecution.getExitStatus().getExitCode())) {
+          return null;
+        }
+        LOGGER
+            .atWarn()
+            .addKeyValue("event", "settlement.daily-batch")
+            .addKeyValue("result", "COMPLETED_WITH_SKIPS")
+            .addKeyValue("skippedSellers", skipped)
+            .log("Daily settlement completed with skipped sellers");
+        return new ExitStatus("COMPLETED_WITH_SKIPS");
+      }
+    };
   }
 
   private static SkipListener<UUID, UUID> skippedSellerLogger() {
