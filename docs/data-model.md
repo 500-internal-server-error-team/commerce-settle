@@ -1177,7 +1177,7 @@ Commerce는 추가로 전체 행의 (aggregate_id,aggregate_version,sequence_no)
 
 **제약:** UNIQUE(consumer,event_id). status=RECEIVED/WAITING/APPLIED/REVIEW_REQUIRED. WAITING은 원 event_type/version/occurred_at/payload와 다음 재판정 시각을 보존해 Kafka ack·재시작 뒤에도 로컬에서 재개. payload에 금융 계약 외의 주소/인증 비밀값 금지.
 
-현재 Payment 수신은 원본과 `WAITING`·`next_run_at`을 한 행으로 저장해 메시지 처리 대기 작업을 영속화합니다. 별도 `inbox_jobs`는 만들지 않습니다. 조회용 `occurred_at`과 불변 bytes의 정밀도 구분은 Outbox와 같습니다. 같은 consumer·eventId의 동일 bytes 재전달은 원래 위치·상태·결과를 유지합니다. 다른 bytes는 아래 충돌 기록에 보존하고 그 격리 트랜잭션을 커밋한 뒤 ack합니다. 이는 금융 접수나 APPLIED를 뜻하지 않습니다. 후속 결제 유즈케이스가 대기 행을 읽고 결제·마일리지 예약·필요한 금융 `payment_jobs`와 Inbox 완료를 같은 트랜잭션에 저장해야 합니다. 결제 요청 처리기는 Worker에서 대기 행을 선점해 결제·마일리지 예약·승인 `payment_jobs`·Inbox 완료를 같은 트랜잭션에 저장하며, 외부 결제액이 0원이면 같은 트랜잭션에서 마일리지를 차감하고 결제를 확정합니다. 가용 마일리지가 부족하거나 지갑이 없으면 결제를 만들지 않고 `REVIEW_REQUIRED`로 남깁니다. 기본 비활성이며 결과 Outbox·재시도 상한과 외부 금융 실행은 아직 연결하지 않습니다.
+현재 Payment 수신은 원본과 `WAITING`·`next_run_at`을 한 행으로 저장해 메시지 처리 대기 작업을 영속화합니다. 별도 `inbox_jobs`는 만들지 않습니다. 조회용 `occurred_at`과 불변 bytes의 정밀도 구분은 Outbox와 같습니다. 같은 consumer·eventId의 동일 bytes 재전달은 원래 위치·상태·결과를 유지합니다. 다른 bytes는 아래 충돌 기록에 보존하고 그 격리 트랜잭션을 커밋한 뒤 ack합니다. 이는 금융 접수나 APPLIED를 뜻하지 않습니다. 후속 결제 유즈케이스가 대기 행을 읽고 결제·마일리지 예약·필요한 금융 `payment_jobs`와 Inbox 완료를 같은 트랜잭션에 저장해야 합니다. 결제 요청 처리기는 Worker에서 대기 행을 선점해 결제·마일리지 예약·승인 `payment_jobs`·Inbox 완료를 같은 트랜잭션에 저장하며, 외부 결제액이 0원이면 같은 트랜잭션에서 마일리지를 차감하고 결제를 확정합니다. 가용 마일리지가 부족하거나 지갑이 없으면 결제를 만들지 않고 `REVIEW_REQUIRED`로 남깁니다. 새 결제를 만든 같은 트랜잭션에서 `PaymentAccepted`를 Outbox에 저장하며, Relay는 Worker에서만 발행합니다. 처리기와 Relay는 기본 비활성이며 재시도 상한과 외부 금융 실행은 아직 연결하지 않습니다.
 
 **인덱스:** (status,created_at,id).
 
