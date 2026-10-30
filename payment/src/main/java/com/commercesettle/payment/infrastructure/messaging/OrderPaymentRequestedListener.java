@@ -6,6 +6,8 @@ import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload.Status;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
+import com.commercesettle.payment.application.port.QuarantineStore;
+import com.commercesettle.payment.application.service.QuarantineService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -31,9 +33,14 @@ public class OrderPaymentRequestedListener {
   private final ObjectReader reader;
   private final ObjectMapper mapper;
   private final OrderPaymentRequestAcceptor acceptor;
+  private final QuarantineService quarantine;
+  private final String consumer;
 
   public OrderPaymentRequestedListener(
-      ObjectMapper objectMapper, OrderPaymentRequestAcceptor acceptor) {
+      ObjectMapper objectMapper,
+      OrderPaymentRequestAcceptor acceptor,
+      QuarantineService quarantine,
+      String consumer) {
     this.mapper = objectMapper.copy();
     this.mapper.enable(
         DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,
@@ -53,6 +60,8 @@ public class OrderPaymentRequestedListener {
     this.reader =
         this.mapper.readerFor(new TypeReference<EventEnvelope<OrderPaymentRequestedPayload>>() {});
     this.acceptor = acceptor;
+    this.quarantine = quarantine;
+    this.consumer = consumer;
   }
 
   @KafkaListener(
@@ -60,7 +69,25 @@ public class OrderPaymentRequestedListener {
       idIsGroup = false,
       topics = "commerce-settle.commerce.v1")
   public void receive(ConsumerRecord<String, byte[]> record, Acknowledgment acknowledgment) {
-    var event = decode(record);
+    EventEnvelope<OrderPaymentRequestedPayload> event;
+    try {
+      event = decode(record);
+    } catch (IllegalArgumentException exception) {
+      if (quarantine == null) {
+        throw exception;
+      }
+      // 해석 불가 원문도 별도 트랜잭션에 보존하고 커밋 성공 후에만 ACK한다.
+      quarantine.capture(
+          new QuarantineStore.Source(
+              consumer,
+              record.topic(),
+              record.partition(),
+              record.offset(),
+              record.key(),
+              record.value()));
+      acknowledgment.acknowledge();
+      return;
+    }
     acceptor.accept(
         event, new Source(record.topic(), record.partition(), record.offset(), record.value()));
     acknowledgment.acknowledge();

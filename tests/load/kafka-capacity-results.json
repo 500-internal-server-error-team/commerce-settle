@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "status": "blocked-before-load",
+  "boundary": "Kafka producer send → 실제 OrderPaymentRequestedListener → 실제 PostgreSQL Inbox 커밋 → Kafka offset 커밋",
+  "planSha256": "ba2b3ffa5a4b01deb5077958f6cc055b89537410378c3386fb14c93bada1b58c",
+  "preregisteredAt": "2026-10-30T11:10:50.098702+00:00",
+  "reviewedCandidateManifestSha256": "f09fc00f40b597cd26bac9ba4e82b3df544807613d9343b725f53ab98f3034dd",
+  "sourceSha256AtRegistration": {
+    "payment/build.gradle": "cf45108646e7ea2cb9709a6681453bfc0d3ee2861b2358d7060ae70af0c993a9",
+    "infra/postgres/schema/payment.sql": "020b11055c857fce5e1d636a64d614d9a297b431264c6061043add51725fbd39",
+    "payment/src/main/java/com/commercesettle/payment/application/port/QuarantineStore.java": "4dad0b6d6835e82ab58e176ebbd5a40cebc8565a252d32b1641d2696e90c2f04",
+    "payment/src/main/java/com/commercesettle/payment/application/service/QuarantineService.java": "649bf506e02c65eb3f44fa9861723ccde3311327a0f6dd6f016655a05eabcfc2",
+    "payment/src/main/java/com/commercesettle/payment/infrastructure/persistence/inbox/JdbcQuarantineStore.java": "9d9ae8a0147e8733b55e17352da030150302d2fe7e7f43b63f40a86e133b6410",
+    "payment/src/main/java/com/commercesettle/payment/infrastructure/messaging/QuarantineRelay.java": "aa22625bd2a4cca4db287b41ebb468c4868e2cfb9ec10d8865eb8d5ce9cb1fa1",
+    "payment/src/main/java/com/commercesettle/payment/infrastructure/messaging/OrderPaymentRequestedListener.java": "90612f0336c877c5c487909ada0644ddddfe47be963cf91a90bf6cfdf2c9f876",
+    "payment/src/main/java/com/commercesettle/payment/infrastructure/config/OrderPaymentRequestedListenerConfiguration.java": "d3afde379da2cd1682b61fa2c72d358322077266874345b120f5f5de4d01858a",
+    "payment/src/main/java/com/commercesettle/payment/infrastructure/config/QuarantineConfiguration.java": "d1b83b80b7fa2934d0176a7cb0562d7ba868b173dcd312d781410d00a7f40181",
+    "payment/src/main/resources/application.yml": "8aea13125beea21cfe01dd303b6e330adf703718dd822b4e710dc740e70e64f0",
+    "payment/src/test/java/com/commercesettle/payment/infrastructure/messaging/QuarantineIntegrationTest.java": "7673e49b0ecadbee557b5b648959c0b6a5064a81fa881464f5d1a742a08d1a71",
+    "payment/src/test/java/com/commercesettle/payment/infrastructure/messaging/OrderPaymentRequestedListenerTest.java": "f8ad2a8322a260ec20d2ffae1e9a7c5b115a2b01d4f0131d071872e217f02a1e",
+    "payment/src/test/java/com/commercesettle/payment/infrastructure/messaging/OrderPaymentRequestedListenerIntegrationTest.java": "da8537166ff7cb59ee0de5c270f4a28d24601b1be84e6b684503b68e4c4e9934",
+    "payment/src/test/java/com/commercesettle/payment/infrastructure/persistence/inbox/InboxIntegrationTest.java": "4399d3f1307d9768c13192c9b84cb109213aae31ec8cbe8fdc27296c03bf1ffa",
+    "payment/src/test/java/com/commercesettle/payment/infrastructure/messaging/KafkaCapacityExperiment.java": "30f905029338e189219fa36793d84ab33d87346bbf367b38a1a5c5d846fd0aa0",
+    "tests/load/kafka-capacity-plan.json": "ba2b3ffa5a4b01deb5077958f6cc055b89537410378c3386fb14c93bada1b58c",
+    "docs/data-model.md": "5b99642f6454e9635097c0f2fb42d6a27cb52bf787d5f1c6e85723ad20b41549",
+    "docs/development.md": "1ea5bced3ddadb2a4d2fcd91797cb9d62bce093f356ac6b6fbde43736818e9b5",
+    "docs/decisions/0005-kafka-event-delivery-and-capacity.md": "2bec64b160c8175d30df52d192e2729ab0604cfe5a5378e00db4ea6afeb3429b"
+  },
+  "hostDiskPreflight": {
+    "observedAt": "2026-10-30T11:15:48.965445+00:00",
+    "totalBytes": 494384795648,
+    "freeBytes": 3390238720,
+    "freeFraction": 0.006857489853741045,
+    "requiredFreeFraction": 0.3,
+    "passed": false
+  },
+  "guardAdmissions": [
+    {
+      "stage": "capacity-command",
+      "started": false,
+      "reason": "another-heavy-verification-owns-slot"
+    }
+  ],
+  "runs": [],
+  "executedCapacityTrials": 0,
+  "normalLoadExecuted": false,
+  "consumerOutageExecuted": false,
+  "partitionConsumerConclusion": "미판정",
+  "qualityVerification": {
+    "command": "./gradlew --no-daemon --max-workers=1 --continue :payment:spotlessApply :payment:build",
+    "javaVersion": 21,
+    "testCounts": {
+      "tests": 152,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "quarantineIntegrationTests": 6,
+    "elapsedSeconds": 54.39798858301947,
+    "maxRssBytes": 641253376
+  },
+  "remaining": [
+    "사전 등록한 호스트·Docker 디스크 여유 조건을 충족하는 격리 실행 환경 확보",
+    "고정 계획에 따른 A/B/C 비교 및 자격을 충족한 후보의 15분·장애 배출 시험",
+    "실측 결과를 검토한 뒤 Consumer·파티션 조정 여부 판단"
+  ],
+  "interpretation": "격리·재처리 기능 테스트의 통과이며 목표 부하·복구 성능의 관측이 아니다. 기준을 낮추거나 타 작업 데이터를 삭제하지 않았다."
+}

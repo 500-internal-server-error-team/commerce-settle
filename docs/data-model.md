@@ -1199,9 +1199,53 @@ Payment는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니
 | `error_code`, `status` | `varchar(80)`, `varchar(24)` | EVENT_BODY_CONFLICT·REVIEW_REQUIRED |
 | `created_at` | `timestamptz` | 관측 시각 |
 
-**제약:** UNIQUE(consumer,event_id,source_topic,source_partition,source_offset). 자동 삭제하지 않습니다. 격리 저장이 실패하면 원본 offset을 ack하지 않습니다. 스키마 해석 불가 bytes의 별도 격리·DLT 실행은 아직 연결하지 않았으며 현재 Listener는 그 입력에서 무ack 중단합니다.
+**제약:** UNIQUE(consumer,event_id,source_topic,source_partition,source_offset). 자동 삭제하지 않습니다. 격리 저장이 실패하면 원본 offset을 ack하지 않습니다. 스키마 해석 불가 bytes는 아래 별도 원문 격리 경로를 사용하며 이 충돌 기록을 덮어쓰지 않습니다.
 
 **인덱스:** (consumer,event_id,created_at).
+
+### inbox_quarantines
+
+소유: `payment`. 유효한 Envelope로 해석할 수 없는 입력의 원문입니다. `app.kafka.quarantine.enabled`를 명시적으로 켠 경우에만 수신 경로에 연결합니다.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id` | `uuid` | 격리 ID; 업무 eventId를 대신하지 않음 |
+| `consumer`, `source_topic` | `varchar(100)`, `varchar(249)` | 최초 수신 그룹·토픽 |
+| `source_partition`, `source_offset` | `integer`, `bigint` | 0 이상인 최초 위치 |
+| `message_key`, `raw_body` | `text?`, `bytea?` | 원래 키·원문; null과 빈 값을 구분 |
+| `error_code` | `varchar(80)` | 원문을 포함하지 않는 고정 오류 코드 |
+| `created_at`, `version` | `timestamptz`, `bigint` | 격리 시각·운영 재처리 요청의 예상 버전 |
+
+**제약:** UNIQUE(consumer,source_topic,source_partition,source_offset). 같은 위치의 같은 원문은 기존 기록에 연결하고 다른 bytes는 거절합니다. 원문·키·출처는 수정·자동 삭제하지 않습니다. 원문과 최초 DLT 발행 작업을 함께 커밋한 뒤 ACK합니다. DB 실패는 ACK하지 않습니다.
+
+### inbox_quarantine_deliveries
+
+소유: `payment`. 격리 원문의 DLT 발행과 운영 재처리 작업입니다. 원문은 위 행을 참조하며 별도로 복제하지 않습니다.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id`, `quarantine_id` | `uuid`, `uuid` | 작업 ID·격리 원문 참조 |
+| `kind`, `topic` | `varchar(8)`, `varchar(249)` | DLT/REPLAY·고정 목적지 |
+| `status` | `varchar(20)` | PENDING/RUNNING/RETRY/PUBLISHED/REVIEW_REQUIRED |
+| `operator_id`, `reason_code` | `varchar(100)?`, `varchar(80)?` | 재처리 요청자·사유; DLT 작업에는 null |
+| `attempts`, `next_run_at`, `lease_until` | `integer`, `timestamptz`, `timestamptz?` | 발행 시도 수·다음 시각·임대 만료 |
+| `created_at`, `updated_at`, `version` | `timestamptz`, `timestamptz`, `bigint` | 요청 이력·상태 갱신·늦은 결과 차단 |
+
+**제약:** 격리당 DLT 작업 하나. 격리당 활성 REPLAY(PENDING/RUNNING/RETRY) 하나. RUNNING일 때만 임대가 존재합니다. REPLAY는 DLT 가용성과 독립적으로 예상 원문 버전을 확인하고 원문 행 버전 증가·요청자·사유·작업을 원자 저장합니다. 기존 작업을 삭제하거나 재처리 요청 이력을 덮어쓰지 않습니다. 발행은 최대 10회·최대 60초 간격이며 소진하면 REVIEW_REQUIRED로 보존합니다. PUBLISHED는 Kafka 발행 완료이며 업무 성공을 뜻하지 않습니다. 원본 위치를 DLT 헤더로 전달하고, 재처리에서도 원래 bytes·key를 다시 검증합니다.
+
+**인덱스:** (status,next_run_at,lease_until,id). DLT와 활성 REPLAY 유일성은 부분 UNIQUE로 보호합니다.
+
+### inbox_quarantine_resumes
+
+소유: `payment`. 소진된 DLT/REPLAY 작업의 운영 재개 이력입니다.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id`, `delivery_id` | `uuid`, `uuid` | 재개 요청 ID·기존 발행 작업 참조 |
+| `expected_version`, `previous_attempts` | `bigint`, `integer` | 재개 전 버전·누적 시도 수 |
+| `operator_id`, `reason_code`, `created_at` | `varchar(100)`, `varchar(80)`, `timestamptz` | 요청자·사유·요청 시각 |
+
+**제약:** UNIQUE(delivery_id,expected_version). REVIEW_REQUIRED와 예상 버전을 잠금 안에서 확인한 뒤 이력을 추가하고 같은 작업을 PENDING·시도 수0·새 버전으로 원자 전환합니다. 이전 재개 이력은 수정하지 않습니다. 임대 판단과 결과 반영에는 행 잠금을 얻은 뒤의 DB 시각을 사용합니다.
 
 ### idempotency_records
 

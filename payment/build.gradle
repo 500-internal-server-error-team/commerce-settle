@@ -9,3 +9,14 @@ dependencies {
     testImplementation 'org.testcontainers:postgresql'
     testImplementation 'org.testcontainers:kafka'
 }
+
+tasks.register('kafkaCapacityExperiment', JavaExec) {
+    description = '격리된 Kafka/PostgreSQL에서 사전 등록한 수신 용량 실험을 실행한다.'
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.commercesettle.payment.infrastructure.messaging.KafkaCapacityExperiment'
+    workingDir rootProject.projectDir
+    maxHeapSize = '512m'
+    args rootProject.file('tests/load/kafka-capacity-plan.json').absolutePath,
+         providers.gradleProperty('capacityOutput').getOrElse(rootProject.file('tests/load/kafka-capacity-results.json').absolutePath)
+}
