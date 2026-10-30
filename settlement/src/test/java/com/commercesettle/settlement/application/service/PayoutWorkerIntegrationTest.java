@@ -1,12 +1,15 @@
 package com.commercesettle.settlement.application.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.commercesettle.settlement.application.port.PayoutGateway;
 import com.commercesettle.settlement.domain.model.SettlementAmounts;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.commercesettle.settlement.domain.model.SettlementItem;
+import com.commercesettle.settlement.domain.repository.PayoutJobRepository;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -54,6 +57,7 @@ class PayoutWorkerIntegrationTest {
   @Autowired PayoutWorker worker;
   @Autowired SellerSettlementService sellers;
   @Autowired SettlementItemRepository items;
+  @Autowired PayoutJobRepository jobs;
   @Autowired JdbcTemplate jdbc;
   @Autowired ScriptedGateway gateway;
 
@@ -219,6 +223,87 @@ class PayoutWorkerIntegrationTest {
     assertThat(batchStatus()).isEqualTo("REVIEW_REQUIRED");
     assertThat(reservationStatuses()).containsOnly("ACTIVE");
     assertThat(worker.runOnce()).isFalse();
+  }
+
+  @Test
+  @DisplayName("호출이 예외로 끝나고 임대 회수가 반복되면 상한에서 호출 없이 운영 확인으로 넘긴다")
+  void repeatedFailuresStopAtAttemptLimit() {
+    gateway.beforeResult =
+        () -> {
+          throw new IllegalStateException("worker stopped during the call");
+        };
+    for (int i = 0; i < 3; i++) {
+      assertThatThrownBy(worker::runOnce).isInstanceOf(IllegalStateException.class);
+      expireLease();
+    }
+
+    assertThat(worker.runOnce()).isTrue();
+
+    assertThat(job()).containsEntry("status", "REVIEW_REQUIRED").containsEntry("attempts", 4);
+    assertThat(payout()).containsEntry("status", "UNKNOWN").containsEntry("hold_reason", "UNKNOWN");
+    assertThat(batchStatus()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(reservationStatuses()).containsOnly("ACTIVE");
+    assertThat(gateway.executed.size() + gateway.lookedUp.size()).isEqualTo(3);
+    assertThat(worker.runOnce()).isFalse();
+  }
+
+  @Test
+  @DisplayName("호출 전에 중단된 임대가 상한까지 회수되면 지급은 대기 그대로 두고 운영 확인으로 넘긴다")
+  void abandonedLeasesStopAtAttemptLimit() {
+    for (int i = 0; i < 3; i++) {
+      assertThat(jobs.leaseNext("stopped-worker", Duration.ofSeconds(30))).isPresent();
+      expireLease();
+    }
+
+    assertThat(worker.runOnce()).isTrue();
+
+    assertThat(job()).containsEntry("status", "REVIEW_REQUIRED").containsEntry("attempts", 4);
+    assertThat(payout()).containsEntry("status", "PENDING");
+    assertThat(batchStatus()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(gateway.executed).isEmpty();
+    assertThat(gateway.lookedUp).isEmpty();
+  }
+
+  @Test
+  @DisplayName("거래 부재를 확인했어도 임대에 호출 제한 시간만큼 남지 않았으면 재전송하지 않고 다음 조회를 기다린다")
+  void doesNotResendWithoutEnoughLeaseTime() {
+    gateway.executeResults.add(new PayoutGateway.Result.Unconfirmed("connection reset"));
+    gateway.lookupResults.add(new PayoutGateway.Result.NotFound());
+    worker.runOnce();
+    gateway.beforeResult =
+        () ->
+            jdbc.update(
+                "UPDATE settlement.payout_jobs SET lease_until = now() + interval '2 seconds'");
+
+    worker.runOnce();
+
+    assertThat(gateway.executed).hasSize(1);
+    assertThat(job()).containsEntry("status", "RETRY");
+    assertThat(payout()).containsEntry("status", "UNKNOWN");
+  }
+
+  @Test
+  @DisplayName("성공했지만 완료할 항목 합계가 지급 금액과 다르면 성공만 남기고 항목·예약은 두고 운영 확인으로 넘긴다")
+  void successWithChangedItemsRequiresReview() {
+    gateway.beforeResult =
+        () ->
+            jdbc.update(
+                "UPDATE settlement.settlement_items SET status = 'REFUND_RESERVED' WHERE id ="
+                    + " (SELECT id FROM settlement.settlement_items WHERE payout_id = ? LIMIT 1)",
+                payoutId);
+    gateway.executeResults.add(new PayoutGateway.Result.Succeeded(EXTERNAL, SUCCEEDED_AT));
+
+    worker.runOnce();
+
+    assertThat(payout()).containsEntry("status", "SUCCEEDED");
+    assertThat(job()).containsEntry("status", "REVIEW_REQUIRED");
+    assertThat(batchStatus()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(itemStatuses()).containsExactlyInAnyOrder("PAYOUT_RESERVED", "REFUND_RESERVED");
+    assertThat(reservationStatuses()).containsOnly("ACTIVE");
+  }
+
+  private void expireLease() {
+    jdbc.update("UPDATE settlement.payout_jobs SET lease_until = now() - interval '1 second'");
   }
 
   private Map<String, Object> payout() {

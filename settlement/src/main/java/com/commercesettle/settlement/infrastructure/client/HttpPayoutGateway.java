@@ -12,7 +12,8 @@ import org.springframework.web.client.RestClientException;
 
 /**
  * finance-mock 지급 대역의 HTTP 구현. 성공·확정 거절만 확정 결과로 보고, 처리 중·5xx·504(응답 유실)·타임아웃은 미확정으로 돌려준다. 조회의 404는
- * 대역이 MOCK_TRANSACTION_NOT_FOUND라고 답했을 때만 거래 부재로 본다. 응답의 업무 키·금액·작업이 요청과 다르면 결과를 믿지 않는다.
+ * 대역이 MOCK_TRANSACTION_NOT_FOUND라고 답했을 때만 거래 부재로 본다. 응답의 업무 키·금액·작업·출금 계정·금융 시나리오 버전이 요청과 다르면 결과를
+ * 믿지 않는다.
  */
 public class HttpPayoutGateway implements PayoutGateway {
   private static final String NOT_FOUND_CODE = "MOCK_TRANSACTION_NOT_FOUND";
@@ -81,7 +82,9 @@ public class HttpPayoutGateway implements PayoutGateway {
     }
     if (!request.businessKey().equals(body.businessKey())
         || body.amount() != request.amount()
-        || !"PAYOUT".equals(body.operation())) {
+        || !"PAYOUT".equals(body.operation())
+        || !request.fundingAccountRef().equals(body.fundingAccountRef())
+        || !request.scenarioVersion().equals(body.scenarioVersion())) {
       return new Result.Rejected("response does not match the original payout");
     }
     return switch (body.status()) {
@@ -94,10 +97,12 @@ public class HttpPayoutGateway implements PayoutGateway {
     };
   }
 
-  /** 형식 오류·본문 충돌은 같은 요청을 다시 보내도 해결되지 않는다. 그 밖의 4xx는 판단할 수 없어 미확정으로 둔다. */
+  /**
+   * 형식 오류는 같은 요청을 다시 보내도 해결되지 않는다. 409는 다른 본문뿐 아니라 같은 키의 앞선 요청이 처리 중일 때도 오므로 미확정으로 두고, 다음 조회에서 원거래를
+   * 요청과 비교해 가린다. 그 밖의 4xx도 판단할 수 없어 미확정으로 둔다.
+   */
   private static Result rejectedOrUnconfirmed(HttpClientErrorException e) {
-    HttpStatus status = HttpStatus.resolve(e.getStatusCode().value());
-    if (status == HttpStatus.BAD_REQUEST || status == HttpStatus.CONFLICT) {
+    if (HttpStatus.resolve(e.getStatusCode().value()) == HttpStatus.BAD_REQUEST) {
       return new Result.Rejected("HTTP " + e.getStatusCode().value());
     }
     return new Result.Unconfirmed("HTTP " + e.getStatusCode().value());
@@ -126,7 +131,9 @@ public class HttpPayoutGateway implements PayoutGateway {
       UUID businessKey,
       long amount,
       String status,
-      OffsetDateTime succeededAt) {}
+      String scenarioVersion,
+      OffsetDateTime succeededAt,
+      String fundingAccountRef) {}
 
   @JsonIgnoreProperties(ignoreUnknown = true)
   record Problem(String code) {}

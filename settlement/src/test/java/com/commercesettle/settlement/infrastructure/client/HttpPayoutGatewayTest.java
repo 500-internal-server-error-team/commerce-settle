@@ -99,30 +99,60 @@ class HttpPayoutGatewayTest {
   }
 
   @Test
-  @DisplayName("본문 충돌과 원거래와 다른 응답은 재시도로 풀리지 않아 운영 확인 대상이다")
-  void conflictAndMismatchAreRejected() {
+  @DisplayName("409는 같은 키가 처리 중일 수도 있어 미확정이고, 원거래가 요청과 다르면 운영 확인 대상이다")
+  void conflictIsUnconfirmedAndMismatchIsRejected() {
+    String lookupUri = "http://finance-mock/mock/payouts/" + KEY + "?scenarioVersion=lookup-v1";
     server
         .expect(requestTo("http://finance-mock/mock/payouts"))
         .andRespond(problem(HttpStatus.CONFLICT, "COMMON_IDEMPOTENCY_CONFLICT"));
     server
         .expect(requestTo("http://finance-mock/mock/payouts"))
         .andRespond(transaction(HttpStatus.ACCEPTED, KEY, 30_000, "SUCCEEDED"));
+    server
+        .expect(requestTo(lookupUri))
+        .andRespond(
+            transaction(HttpStatus.OK, KEY, 25_500, "SUCCEEDED", "payout-v1", "other-funding"));
+    server
+        .expect(requestTo(lookupUri))
+        .andRespond(
+            transaction(
+                HttpStatus.OK, KEY, 25_500, "SUCCEEDED", "payout-v2", "payout-funding-default"));
 
+    assertThat(gateway.execute(REQUEST)).isInstanceOf(Result.Unconfirmed.class);
     assertThat(gateway.execute(REQUEST)).isInstanceOf(Result.Rejected.class);
-    assertThat(gateway.execute(REQUEST)).isInstanceOf(Result.Rejected.class);
+    assertThat(gateway.lookup(REQUEST)).isInstanceOf(Result.Rejected.class);
+    assertThat(gateway.lookup(REQUEST)).isInstanceOf(Result.Rejected.class);
   }
 
   private static org.springframework.test.web.client.ResponseCreator transaction(
       HttpStatus status, UUID businessKey, long amount, String transactionStatus) {
+    return transaction(
+        status, businessKey, amount, transactionStatus, "payout-v1", "payout-funding-default");
+  }
+
+  private static org.springframework.test.web.client.ResponseCreator transaction(
+      HttpStatus status,
+      UUID businessKey,
+      long amount,
+      String transactionStatus,
+      String scenarioVersion,
+      String fundingAccountRef) {
     String succeededAt =
         "SUCCEEDED".equals(transactionStatus) ? "\"2026-10-30T10:00:03.123456+09:00\"" : "null";
     String body =
         """
         {"id":"%s","providerId":"PAYOUT","operation":"PAYOUT","businessKey":"%s",\
-        "originalId":null,"amount":%d,"status":"%s","scenarioVersion":"payout-v1",\
+        "originalId":null,"amount":%d,"status":"%s","scenarioVersion":"%s",\
         "createdAt":"2026-10-30T10:00:00+09:00","succeededAt":%s,"pgReceiptDueAt":null,\
-        "pgReceivedAt":null,"pgReceivedAmount":null,"fundingAccountRef":"payout-funding-default"}"""
-            .formatted(EXTERNAL, businessKey, amount, transactionStatus, succeededAt);
+        "pgReceivedAt":null,"pgReceivedAmount":null,"fundingAccountRef":"%s"}"""
+            .formatted(
+                EXTERNAL,
+                businessKey,
+                amount,
+                transactionStatus,
+                scenarioVersion,
+                succeededAt,
+                fundingAccountRef);
     return withStatus(status).contentType(MediaType.APPLICATION_JSON).body(body);
   }
 
