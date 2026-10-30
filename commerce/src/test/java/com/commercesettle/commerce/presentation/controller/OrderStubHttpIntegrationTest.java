@@ -8,6 +8,7 @@ import com.commercesettle.commerce.infrastructure.config.OrderStubConfiguration;
 import com.commercesettle.commerce.presentation.exception.CommerceExceptionHandler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.networknt.schema.InputFormat;
 import com.networknt.schema.Schema;
 import com.networknt.schema.SchemaLocation;
@@ -16,11 +17,14 @@ import com.networknt.schema.SpecificationVersion;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
@@ -63,6 +67,9 @@ class OrderStubHttpIntegrationTest {
   @Autowired TestRestTemplate http;
   @Autowired ObjectMapper mapper;
   private SchemaRegistry schemas;
+  private SchemaRegistry canonicalSchemas;
+  private JsonNode canonicalApi;
+  private JsonNode generatedApi;
 
   @Test
   void rejectsUnknownProductFromInventoryStub() throws Exception {
@@ -340,11 +347,159 @@ class OrderStubHttpIntegrationTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"Order", "OrderPage", "OrderStubCreate"})
+  void generatedSchemasPreserveCanonicalContracts(String name) throws Exception {
+    JsonNode sample = contractSample(name);
+    matchesSchema(name, sample);
+    JsonNode expected = canonicalApi.path("components").path("schemas").path(name);
+    JsonNode actual = generatedApi.path("components").path("schemas").path(name);
+
+    assertThat(actual.path("properties").properties().stream().map(Map.Entry::getKey).toList())
+        .containsExactlyInAnyOrderElementsOf(
+            expected.path("properties").properties().stream().map(Map.Entry::getKey).toList());
+    assertThat(elements(actual.path("required"))).isEqualTo(elements(expected.path("required")));
+    assertThat(actual.get("additionalProperties")).isEqualTo(expected.get("additionalProperties"));
+    assertThat(schemaTypes(actual)).isEqualTo(schemaTypes(expected));
+    for (var property : expected.path("properties").properties()) {
+      String field = property.getKey();
+      JsonNode declared = actual.path("properties").path(field);
+      assertThat(schemaTypes(declared))
+          .as(name + "." + field + " type")
+          .isEqualTo(schemaTypes(property.getValue()));
+      JsonNode expectedValue = nonNullSchema(property.getValue());
+      JsonNode actualValue = nonNullSchema(declared);
+      for (String keyword :
+          List.of("minimum", "maximum", "minLength", "maxLength", "pattern", "items")) {
+        assertThat(actualValue.get(keyword))
+            .as(name + "." + field + "." + keyword)
+            .isEqualTo(expectedValue.get(keyword));
+      }
+      if (expectedValue.has("format")) {
+        assertThat(actualValue.get("format"))
+            .as(name + "." + field + ".format")
+            .isEqualTo(expectedValue.get("format"));
+      }
+      Set<JsonNode> expectedValues = elements(expectedValue.path("enum"));
+      Set<JsonNode> actualValues = elements(actualValue.path("enum"));
+      actualValues.remove(mapper.getNodeFactory().nullNode());
+      assertThat(actualValues).as(name + "." + field + " enum").isEqualTo(expectedValues);
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "OrderPage,totalPages,",
+    "Order,status,'\"UNKNOWN\"'",
+    "Order,fulfillmentStatus,'\"UNKNOWN\"'",
+    "Order,deliveryBusinessDays,4",
+    "Order,grossAmount,-1",
+    "Order,id,"
+  })
+  void bothContractsRejectMissingKeysAndInvalidResponseValues(
+      String name, String field, String value) throws Exception {
+    ObjectNode invalid = (ObjectNode) contractSample(name);
+    if (value == null) {
+      invalid.remove(field);
+    } else {
+      invalid.set(field, mapper.readTree(value));
+    }
+    rejectedByContracts(name, invalid);
+  }
+
+  @Test
+  void pageContractsValidateNestedOrders() throws Exception {
+    ObjectNode page = (ObjectNode) contractSample("OrderPage");
+    ((ObjectNode) page.path("items").get(0)).put("status", "UNKNOWN");
+
+    rejectedByContracts("OrderPage", page);
+  }
+
+  private JsonNode contractSample(String name) throws Exception {
+    if (name.equals("OrderStubCreate")) {
+      return mapper.readTree(BODY);
+    }
+    JsonNode page = json(call(HttpMethod.GET, "/api/orders?size=100", OTHER, "BUYER", null, null));
+    return name.equals("OrderPage") ? page : page.path("items").get(0);
+  }
+
+  private Set<JsonNode> elements(JsonNode values) {
+    Set<JsonNode> result = new HashSet<>();
+    values.forEach(result::add);
+    return result;
+  }
+
+  private Set<String> schemaTypes(JsonNode definition) {
+    Set<String> result = new HashSet<>();
+    JsonNode type = definition.path("type");
+    if (type.isArray()) {
+      type.forEach(value -> result.add(value.asText()));
+    } else if (type.isTextual()) {
+      result.add(type.asText());
+    }
+    for (String union : List.of("anyOf", "oneOf")) {
+      definition.path(union).forEach(value -> result.addAll(schemaTypes(value)));
+    }
+    return result;
+  }
+
+  private JsonNode nonNullSchema(JsonNode definition) {
+    for (JsonNode option : definition.path("anyOf")) {
+      if (!option.path("type").asText().equals("null")) {
+        return option;
+      }
+    }
+    return definition;
+  }
+
+  private Schema canonicalSchema(String name) throws Exception {
+    if (canonicalSchemas == null) {
+      try (var input = getClass().getResourceAsStream("/contracts/openapi.json")) {
+        assertThat(input).as("정식 OpenAPI 테스트 리소스").isNotNull();
+        canonicalApi = mapper.readTree(input);
+      }
+      ObjectNode definitions = (ObjectNode) canonicalApi.path("components").path("schemas");
+      ObjectNode stub = definitions.path("OrderCreate").deepCopy();
+      List<String> unsupported =
+          List.of("eventId", "buyerCouponId", "addressId", "expectedEventVersion");
+      ((ObjectNode) stub.path("properties")).remove(unsupported);
+      var required = mapper.createArrayNode();
+      for (JsonNode field : stub.path("required")) {
+        if (!unsupported.contains(field.asText())) {
+          required.add(field);
+        }
+      }
+      stub.set("required", required);
+      definitions.set("OrderStubCreate", stub);
+      canonicalSchemas =
+          SchemaRegistry.withDefaultDialect(
+              SpecificationVersion.DRAFT_2020_12,
+              builder ->
+                  builder.schemas(Map.of("urn:commerce:canonical", canonicalApi.toString())));
+    }
+    return canonicalSchemas.getSchema(
+        SchemaLocation.of("urn:commerce:canonical#/components/schemas/" + name));
+  }
+
+  private void rejectedByContracts(String name, JsonNode payload) throws Exception {
+    for (Schema contract : List.of(schema(name), canonicalSchema(name))) {
+      assertThat(
+              contract.validate(
+                  payload.toString(),
+                  InputFormat.JSON,
+                  context ->
+                      context.executionConfig(config -> config.formatAssertionsEnabled(true))))
+          .as(name)
+          .isNotEmpty();
+    }
+  }
+
   private Schema schema(String name) throws Exception {
     if (schemas == null) {
       var document = http.getForEntity("/v3/api-docs", String.class);
       assertThat(document.getStatusCode().value()).isEqualTo(200);
       assertThat(json(document).path("openapi").asText()).startsWith("3.1.");
+      generatedApi = json(document);
       // 문서와 참조를 메모리에 등록해 외부 URL을 조회하지 않는다.
       schemas =
           SchemaRegistry.withDefaultDialect(
@@ -356,15 +511,16 @@ class OrderStubHttpIntegrationTest {
   }
 
   private void matchesSchema(String name, JsonNode payload) throws Exception {
-    assertThat(
-            schema(name)
-                .validate(
-                    payload.toString(),
-                    InputFormat.JSON,
-                    context ->
-                        context.executionConfig(config -> config.formatAssertionsEnabled(true))))
-        .as(name)
-        .isEmpty();
+    for (Schema contract : List.of(schema(name), canonicalSchema(name))) {
+      assertThat(
+              contract.validate(
+                  payload.toString(),
+                  InputFormat.JSON,
+                  context ->
+                      context.executionConfig(config -> config.formatAssertionsEnabled(true))))
+          .as(name)
+          .isEmpty();
+    }
   }
 
   private ResponseEntity<String> call(

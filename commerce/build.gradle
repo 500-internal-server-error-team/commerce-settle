@@ -8,7 +8,7 @@ dependencies {
     runtimeOnly 'org.bouncycastle:bcprov-jdk18on:1.85.2'
     runtimeOnly 'org.postgresql:postgresql'
     implementation "org.springdoc:springdoc-openapi-starter-webmvc-api:${rootProject.springdocVersion}"
-    // 실제 요청·응답을 생성한 OpenAPI 3.1 스키마에 대조한다.
+    // 실제 요청·응답과 생성 명세를 정식 OpenAPI 계약에 대조한다.
     testImplementation 'com.networknt:json-schema-validator:2.0.4'
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.testcontainers:postgresql'
@@ -17,6 +17,7 @@ dependencies {
 }
 
 tasks.named('processTestResources') {
+    from(rootProject.file('docs/openapi.json')) { into 'contracts' }
     // 커머스가 발급한 세션을 Gateway의 실제 검증 스크립트로 확인한다.
     from(rootProject.file('gateway/src/main/resources/redis/verify-session.lua')) { into 'gateway' }
 }

@@ -2,6 +2,8 @@ package com.commercesettle.commerce.presentation.dto;
 
 import com.commercesettle.commerce.application.dto.OrderView;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.swagger.v3.oas.annotations.extensions.Extension;
+import io.swagger.v3.oas.annotations.extensions.ExtensionProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -14,24 +16,49 @@ public record OrderResponse(
     @JsonProperty(required = true) UUID buyerId,
     @JsonProperty(required = true) UUID sellerId,
     @JsonProperty(required = true) UUID productId,
-    @JsonProperty(required = true) String productName,
-    @JsonProperty(required = true) int quantity,
-    @JsonProperty(required = true) long grossAmount,
-    @JsonProperty(required = true) long couponAmount,
-    @JsonProperty(required = true) long totalAmount,
-    @JsonProperty(required = true) long mileageAmount,
-    @JsonProperty(required = true) long externalAmount,
-    @JsonProperty(required = true) long sellerCouponAmount,
-    @JsonProperty(required = true) long platformCouponAmount,
-    @JsonProperty(required = true) long settlementBaseAmount,
+    @Schema(minLength = 1, maxLength = 120) @JsonProperty(required = true) String productName,
+    @Schema(minimum = "1") @JsonProperty(required = true) int quantity,
+    @Schema(minimum = "0", maximum = "10000000") @JsonProperty(required = true) long grossAmount,
+    @Schema(minimum = "0", maximum = "10000000") @JsonProperty(required = true) long couponAmount,
+    @Schema(minimum = "1", maximum = "10000000") @JsonProperty(required = true) long totalAmount,
+    @Schema(minimum = "0", maximum = "10000000") @JsonProperty(required = true) long mileageAmount,
+    @Schema(minimum = "0", maximum = "10000000") @JsonProperty(required = true) long externalAmount,
+    @Schema(minimum = "0", maximum = "10000000") @JsonProperty(required = true)
+        long sellerCouponAmount,
+    @Schema(minimum = "0", maximum = "10000000") @JsonProperty(required = true)
+        long platformCouponAmount,
+    @Schema(minimum = "0", maximum = "10000000") @JsonProperty(required = true)
+        long settlementBaseAmount,
     @Schema(nullable = true) @JsonProperty(required = true) UUID eventId,
     @Schema(nullable = true) @JsonProperty(required = true) UUID paymentId,
-    @JsonProperty(required = true) String status,
-    @JsonProperty(required = true) String fulfillmentStatus,
-    @JsonProperty(required = true) long version,
+    @Schema(
+            allowableValues = {
+              "PAYMENT_PENDING",
+              "PAID",
+              "DECLINED",
+              "CANCEL_PENDING",
+              "CANCELLED",
+              "REFUND_PENDING",
+              "REFUNDED",
+              "PURCHASE_CONFIRMED"
+            })
+        @JsonProperty(required = true)
+        String status,
+    @Schema(allowableValues = {"UNSHIPPED", "SHIPPED", "DELIVERED", "RETURN_RECEIVED"})
+        @JsonProperty(required = true)
+        String fulfillmentStatus,
+    @Schema(minimum = "0") @JsonProperty(required = true) long version,
     @JsonProperty(required = true) OffsetDateTime createdAt,
-    @JsonProperty(required = true) int deliveryBusinessDays,
-    @JsonProperty(required = true) String deliveryCalendarVersion,
+    // OpenAPI 3.1의 allowableValues는 문자열 enum이 되므로 정수 JSON 값을 지정한다.
+    @Schema(
+            extensions =
+                @Extension(
+                    properties =
+                        @ExtensionProperty(name = "enum", value = "[2,3]", parseValue = true)))
+        @JsonProperty(required = true)
+        int deliveryBusinessDays,
+    @Schema(minLength = 1, maxLength = 32) @JsonProperty(required = true)
+        String deliveryCalendarVersion,
     @Schema(nullable = true) @JsonProperty(required = true) OffsetDateTime paymentConfirmedAt,
     @Schema(nullable = true) @JsonProperty(required = true) OffsetDateTime shippedAt,
     @Schema(nullable = true) @JsonProperty(required = true) OffsetDateTime deliveryDueAt,
