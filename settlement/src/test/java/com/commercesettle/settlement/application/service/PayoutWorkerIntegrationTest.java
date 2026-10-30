@@ -9,6 +9,11 @@ import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.commercesettle.settlement.domain.model.SettlementItem;
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -29,6 +34,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -63,10 +69,17 @@ class PayoutWorkerIntegrationTest {
 
   private UUID payoutId;
   private UUID batchId;
+  private Connection itemLock;
 
   @BeforeEach
   void createPayout() {
-    UUID seller = UUID.randomUUID();
+    batchId = settle(UUID.randomUUID());
+    payoutId =
+        jdbc.queryForObject(
+            "SELECT id FROM settlement.payouts WHERE batch_id = ?", UUID.class, batchId);
+  }
+
+  private UUID settle(UUID seller) {
     Instant readyAt = SettlementBatch.cutoffOf(BATCH_DATE).minusSeconds(60);
     for (long base : List.of(10_000L, 20_000L)) {
       long fee = base * 15 / 100;
@@ -82,14 +95,12 @@ class PayoutWorkerIntegrationTest {
       item.markPayable(readyAt, readyAt, readyAt);
       items.save(item);
     }
-    batchId = sellers.settle(seller, BATCH_DATE).orElseThrow().getId();
-    payoutId =
-        jdbc.queryForObject(
-            "SELECT id FROM settlement.payouts WHERE batch_id = ?", UUID.class, batchId);
+    return sellers.settle(seller, BATCH_DATE).orElseThrow().getId();
   }
 
   @AfterEach
-  void deleteRows() {
+  void deleteRows() throws SQLException {
+    releaseItemLock();
     for (String table :
         List.of(
             "settlement_items",
@@ -300,6 +311,86 @@ class PayoutWorkerIntegrationTest {
     assertThat(batchStatus()).isEqualTo("REVIEW_REQUIRED");
     assertThat(itemStatuses()).containsExactlyInAnyOrder("PAYOUT_RESERVED", "REFUND_RESERVED");
     assertThat(reservationStatuses()).containsOnly("ACTIVE");
+  }
+
+  @Test
+  @DisplayName("항목 잠금 대기가 상한을 넘으면 결과 반영을 롤백하고 임대를 둔 채 다음 작업을 처리하며, 만료 뒤 조회로 이어받는다")
+  void lockTimeoutRollsBackResultAndNextJobRuns() throws SQLException {
+    UUID otherPayoutId =
+        jdbc.queryForObject(
+            "SELECT id FROM settlement.payouts WHERE batch_id = ?",
+            UUID.class,
+            settle(UUID.randomUUID()));
+    // 잠글 지급의 작업을 먼저 임대하게 한다.
+    jdbc.update(
+        "UPDATE settlement.payout_jobs SET next_run_at = next_run_at - interval '1 minute'"
+            + " WHERE payout_id = ?",
+        payoutId);
+    gateway.beforeResult = this::lockItems;
+    gateway.executeResults.add(new PayoutGateway.Result.Succeeded(EXTERNAL, SUCCEEDED_AT));
+    gateway.executeResults.add(new PayoutGateway.Result.Succeeded(UUID.randomUUID(), SUCCEEDED_AT));
+
+    assertThatThrownBy(worker::runOnce).isInstanceOf(DataAccessException.class);
+
+    assertThat(payout()).containsEntry("status", "PROCESSING");
+    assertThat(itemStatuses()).containsOnly("PAYOUT_RESERVED");
+    assertThat(reservationStatuses()).containsOnly("ACTIVE");
+    assertThat(batchStatus()).isEqualTo("PROCESSING");
+    assertThat(job()).containsEntry("status", "RUNNING").doesNotContainEntry("lease_token", null);
+
+    assertThat(worker.runOnce()).isTrue();
+
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM settlement.payout_jobs WHERE payout_id = ?",
+                String.class,
+                otherPayoutId))
+        .isEqualTo("DONE");
+
+    gateway.beforeResult = () -> {};
+    releaseItemLock();
+    jdbc.update(
+        "UPDATE settlement.payout_jobs SET lease_until = now() - interval '1 second'"
+            + " WHERE payout_id = ?",
+        payoutId);
+    gateway.lookupResults.add(new PayoutGateway.Result.Succeeded(EXTERNAL, SUCCEEDED_AT));
+
+    assertThat(worker.runOnce()).isTrue();
+
+    assertThat(payout()).containsEntry("status", "SUCCEEDED");
+    assertThat(job()).containsEntry("status", "DONE").containsEntry("attempts", 2);
+    assertThat(itemStatuses()).containsOnly("PAID");
+  }
+
+  /** 애플리케이션 풀 밖의 별도 연결로 이 지급의 항목을 잠근다. 이미 잠갔으면 그대로 둔다. */
+  private void lockItems() {
+    if (itemLock != null) {
+      return;
+    }
+    try {
+      itemLock =
+          DriverManager.getConnection(
+              POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+      itemLock.setAutoCommit(false);
+      try (Statement timeout = itemLock.createStatement();
+          PreparedStatement lock =
+              itemLock.prepareStatement(
+                  "SELECT id FROM settlement.settlement_items WHERE payout_id = ? FOR UPDATE")) {
+        // 잠금 대기 상한이 빠지는 회귀에도 테스트가 멈추지 않고 잠금이 풀려 단언에서 실패하게 한다.
+        timeout.execute("SET idle_in_transaction_session_timeout = '10s'");
+        lock.setObject(1, payoutId);
+        lock.executeQuery().close();
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  private void releaseItemLock() throws SQLException {
+    if (itemLock != null) {
+      itemLock.close();
+      itemLock = null;
+    }
   }
 
   private void expireLease() {
