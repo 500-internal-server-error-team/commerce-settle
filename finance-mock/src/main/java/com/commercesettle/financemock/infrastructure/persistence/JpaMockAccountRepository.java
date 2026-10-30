@@ -39,10 +39,4 @@ class JpaMockAccountRepository implements MockAccountRepository {
     TransactionLimits.apply(jdbc);
     return repository.findForUpdate(providerId, accountRef, purpose);
   }
-
-  @Override
-  public Optional<MockAccount> findByIdForUpdate(UUID id) {
-    TransactionLimits.apply(jdbc);
-    return repository.findByIdForUpdate(id);
-  }
 }
