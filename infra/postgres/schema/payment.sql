@@ -142,3 +142,57 @@ CREATE TABLE payment.payment_jobs (
     CONSTRAINT ck_payment_jobs_counts CHECK (attempts >= 0 AND version >= 0)
 );
 CREATE INDEX ix_payment_jobs_status_next_run ON payment.payment_jobs (status, next_run_at, lease_until, id);
+
+CREATE TABLE payment.mileage_wallets (
+    id              uuid        PRIMARY KEY,
+    buyer_id        uuid        NOT NULL,
+    balance         bigint      NOT NULL,
+    reserved_amount bigint      NOT NULL,
+    created_at      timestamptz NOT NULL,
+    updated_at      timestamptz NOT NULL,
+    version         bigint      NOT NULL,
+
+    CONSTRAINT uk_mileage_wallets_buyer UNIQUE (buyer_id),
+    CONSTRAINT ck_mileage_wallets_reserved
+        CHECK (reserved_amount >= 0 AND reserved_amount <= balance),
+    CONSTRAINT ck_mileage_wallets_version CHECK (version >= 0)
+);
+
+CREATE TABLE payment.mileage_reservations (
+    id         uuid        PRIMARY KEY,
+    wallet_id  uuid        NOT NULL,
+    payment_id uuid        NOT NULL,
+    cycle_id   uuid        NOT NULL,
+    amount     bigint      NOT NULL,
+    status     varchar(16) NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version    bigint      NOT NULL,
+
+    CONSTRAINT uk_mileage_reservations_payment UNIQUE (payment_id),
+    CONSTRAINT ck_mileage_reservations_amount CHECK (amount > 0),
+    CONSTRAINT ck_mileage_reservations_status CHECK (status IN ('RESERVED', 'CONSUMED', 'RELEASED')),
+    CONSTRAINT ck_mileage_reservations_version CHECK (version >= 0)
+);
+CREATE INDEX ix_mileage_reservations_wallet_status ON payment.mileage_reservations (wallet_id, status);
+CREATE INDEX ix_mileage_reservations_status_updated ON payment.mileage_reservations (status, updated_at, id);
+
+CREATE TABLE payment.mileage_entries (
+    id            uuid        PRIMARY KEY,
+    wallet_id     uuid        NOT NULL,
+    payment_id    uuid,
+    refund_id     uuid,
+    kind          varchar(16) NOT NULL,
+    business_ref  uuid        NOT NULL,
+    amount        bigint      NOT NULL,
+    balance_after bigint      NOT NULL,
+    created_at    timestamptz NOT NULL,
+
+    CONSTRAINT uk_mileage_entries_wallet_kind_ref UNIQUE (wallet_id, kind, business_ref),
+    CONSTRAINT ck_mileage_entries_kind CHECK (kind IN ('SEED', 'RESERVE', 'RELEASE', 'DEBIT', 'RESTORE')),
+    CONSTRAINT ck_mileage_entries_amount CHECK (amount > 0),
+    CONSTRAINT ck_mileage_entries_balance_after CHECK (balance_after >= 0)
+);
+CREATE INDEX ix_mileage_entries_wallet_created ON payment.mileage_entries (wallet_id, created_at, id);
+CREATE UNIQUE INDEX uk_mileage_entries_payment_once
+    ON payment.mileage_entries (payment_id, kind) WHERE kind IN ('DEBIT', 'RESTORE');
