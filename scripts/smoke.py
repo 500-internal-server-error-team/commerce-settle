@@ -202,7 +202,7 @@ def check_session_auth(config, base):
 
 
 def check_buyer_addresses(config, base):
-    # Buyer signup waits for the welcome coupon, so the buyer session is written to Redis directly.
+    # Buyer signup waits for the welcome coupon, so the buyer row and session are written directly.
     epoch = config["services"]["gateway"]["environment"]["AUTH_SESSION_EPOCH"]
     token = uuid.uuid4().hex
     buyer_id = str(uuid.uuid4())
@@ -210,9 +210,16 @@ def check_buyer_addresses(config, base):
     guard = f"commerce-settle:auth:subject:{epoch}:BUYER:{buyer_id}"
     admin = ["exec", "-T", "redis", "sh", "-c",
              'export REDISCLI_AUTH="$REDIS_PASSWORD"; exec redis-cli --raw "$@"', "redis-smoke"]
+    psql = ["exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "commerce",
+            "-v", "ON_ERROR_STOP=1", "-v", f"buyer={buyer_id}", "-Atq"]
     address = {"recipient": "smoke", "phone": "010-0000-0000", "postalCode": "00000",
                "addressLine1": "smoke street", "addressLine2": "", "isDefault": False}
     try:
+        compose(*psql, input_text="""
+INSERT INTO commerce.buyer_accounts
+    (id, email_normalized, password_hash, display_name, status, created_at, updated_at, version)
+VALUES (:'buyer', :'buyer' || '@smoke.local', 'smoke', 'smoke', 'ACTIVE', now(), now(), 0);
+""")
         seconds, micros = compose(*admin, "TIME").stdout.split()
         now = int(seconds) * 1000 + int(micros) // 1000
         compose(*admin, "HSET", session, "actorKind", "BUYER", "actorId", buyer_id,
@@ -238,6 +245,11 @@ def check_buyer_addresses(config, base):
         assert status == 200 and page["totalElements"] == 0, page
     finally:
         compose(*admin, "DEL", session, guard)
+        compose(*psql, input_text="""
+DELETE FROM commerce.idempotency_records WHERE actor_kind = 'BUYER' AND actor_id = :'buyer';
+DELETE FROM commerce.buyer_addresses WHERE buyer_id = :'buyer';
+DELETE FROM commerce.buyer_accounts WHERE id = :'buyer';
+""")
 
 
 def main():

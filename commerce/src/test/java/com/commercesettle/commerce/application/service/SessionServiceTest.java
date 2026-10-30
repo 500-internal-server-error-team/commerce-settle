@@ -138,6 +138,11 @@ class SessionServiceTest {
     }
 
     @Override
+    public Optional<BuyerAccount> findBuyerForUpdate(UUID id) {
+      return findById(ActorKind.BUYER, id).map(BuyerAccount.class::cast);
+    }
+
+    @Override
     public BuyerAccount save(BuyerAccount account) {
       return account;
     }

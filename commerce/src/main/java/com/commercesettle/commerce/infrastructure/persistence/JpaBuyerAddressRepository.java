@@ -29,14 +29,6 @@ class JpaBuyerAddressRepository implements BuyerAddressRepository {
     this.jdbc = jdbc;
   }
 
-  // 잠금 대기에도 DB 대기 상한을 적용한다.
-  @Override
-  public void lockBuyer(UUID buyerId) {
-    TransactionLimits.apply(jdbc);
-    jdbc.queryForList(
-        "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", "buyer-address:" + buyerId);
-  }
-
   // 즉시 flush해 기본 주소 유일성 위반을 커밋 시점이 아닌 저장 호출에서 업무 예외로 바꾼다.
   @Override
   public BuyerAddress save(BuyerAddress address) {

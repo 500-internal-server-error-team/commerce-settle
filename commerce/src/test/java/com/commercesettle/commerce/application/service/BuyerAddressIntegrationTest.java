@@ -3,6 +3,7 @@ package com.commercesettle.commerce.application.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
 import com.commercesettle.commerce.application.exception.IdempotencyConflictException;
 import com.commercesettle.commerce.application.service.BuyerAddressService.StoredAddress;
 import com.commercesettle.commerce.domain.exception.BuyerAddressNotFoundException;
@@ -52,7 +53,7 @@ class BuyerAddressIntegrationTest {
   @Test
   @DisplayName("첫 주소는 기본 요청이 없어도 기본이 되고 배송 정보는 암호문으로만 저장한다")
   void firstAddressBecomesDefaultAndIsEncrypted() {
-    UUID buyer = UUID.randomUUID();
+    UUID buyer = buyer();
 
     StoredAddress first = addresses.register(buyer, key(), HOME, false);
 
@@ -69,7 +70,7 @@ class BuyerAddressIntegrationTest {
   @Test
   @DisplayName("다른 주소를 기본으로 등록하면 기존 기본을 해제하고 목록은 기본 주소가 먼저다")
   void movesDefaultOnRegister() {
-    UUID buyer = UUID.randomUUID();
+    UUID buyer = buyer();
     StoredAddress home = addresses.register(buyer, key(), HOME, false);
 
     StoredAddress office = addresses.register(buyer, key(), OFFICE, true);
@@ -85,7 +86,7 @@ class BuyerAddressIntegrationTest {
   @Test
   @DisplayName("변경으로 기본을 옮기면 기존 기본 주소의 버전도 올라간다")
   void movesDefaultOnChange() {
-    UUID buyer = UUID.randomUUID();
+    UUID buyer = buyer();
     StoredAddress home = addresses.register(buyer, key(), HOME, false);
     StoredAddress office = addresses.register(buyer, key(), OFFICE, false);
 
@@ -102,7 +103,7 @@ class BuyerAddressIntegrationTest {
   @Test
   @DisplayName("기본 주소를 삭제하면 남은 주소에 기본을 넘기지 않는다")
   void deletingDefaultLeavesNoDefault() {
-    UUID buyer = UUID.randomUUID();
+    UUID buyer = buyer();
     StoredAddress home = addresses.register(buyer, key(), HOME, false);
     addresses.register(buyer, key(), OFFICE, false);
 
@@ -116,11 +117,10 @@ class BuyerAddressIntegrationTest {
   @Test
   @DisplayName("타인·삭제 주소는 존재하지 않는 주소와 같게 거절한다")
   void hidesOthersAndDeletedAddresses() {
-    UUID buyer = UUID.randomUUID();
+    UUID buyer = buyer();
     StoredAddress home = addresses.register(buyer, key(), HOME, false);
 
-    assertThatThrownBy(
-            () -> addresses.change(UUID.randomUUID(), home.id(), key(), OFFICE, false, 0))
+    assertThatThrownBy(() -> addresses.change(buyer(), home.id(), key(), OFFICE, false, 0))
         .isInstanceOf(BuyerAddressNotFoundException.class);
 
     addresses.delete(buyer, home.id(), key(), 0);
@@ -131,7 +131,7 @@ class BuyerAddressIntegrationTest {
   @Test
   @DisplayName("기대 버전이 다르면 변경을 거절하고 멱등 기록도 남기지 않는다")
   void rejectsStaleVersion() {
-    UUID buyer = UUID.randomUUID();
+    UUID buyer = buyer();
     StoredAddress home = addresses.register(buyer, key(), HOME, false);
     String key = key();
 
@@ -143,9 +143,44 @@ class BuyerAddressIntegrationTest {
   }
 
   @Test
+  @DisplayName("기본 이동 중 변경이 실패하면 기존 기본 해제와 멱등 기록도 함께 롤백한다")
+  void rollsBackDefaultMoveAndIdempotencyRecordOnFailure() {
+    UUID buyer = buyer();
+    StoredAddress home = addresses.register(buyer, key(), HOME, false);
+    StoredAddress office = addresses.register(buyer, key(), OFFICE, false);
+    String key = key();
+
+    assertThatThrownBy(() -> addresses.change(buyer, office.id(), key, OFFICE, true, 7))
+        .isInstanceOf(VersionConflictException.class);
+
+    StoredAddress previous = find(buyer, home.id());
+    assertThat(previous.isDefault()).isTrue();
+    assertThat(previous.version()).isEqualTo(home.version());
+    StoredAddress changed = addresses.change(buyer, office.id(), key, OFFICE, true, 0);
+    assertThat(changed.isDefault()).isTrue();
+  }
+
+  @Test
+  @DisplayName("구매자 계정이 없으면 인증 실패이며 주소와 멱등 기록을 남기지 않는다")
+  void rejectsMissingBuyerAccount() {
+    UUID missing = UUID.randomUUID();
+
+    assertThatThrownBy(() -> addresses.register(missing, key(), HOME, false))
+        .isInstanceOf(AuthenticationFailedException.class);
+
+    assertThat(addresses.addresses(missing, 0, 20).totalElements()).isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from commerce.idempotency_records where actor_id = ?",
+                Long.class,
+                missing.toString()))
+        .isZero();
+  }
+
+  @Test
   @DisplayName("같은 키·본문은 기존 주소를 돌려주고 같은 키의 다른 본문은 충돌이다")
   void replaysAndRejectsByIdempotencyKey() {
-    UUID buyer = UUID.randomUUID();
+    UUID buyer = buyer();
     String key = key();
 
     StoredAddress first = addresses.register(buyer, key, HOME, false);
@@ -160,7 +195,7 @@ class BuyerAddressIntegrationTest {
   @Test
   @DisplayName("주소가 없는 구매자의 동시 등록은 모두 성공하고 기본 주소는 하나다")
   void concurrentFirstRegistrationsKeepOneDefault() throws Exception {
-    UUID buyer = UUID.randomUUID();
+    UUID buyer = buyer();
     CountDownLatch start = new CountDownLatch(1);
     ExecutorService pool = Executors.newFixedThreadPool(2);
     try {
@@ -190,7 +225,7 @@ class BuyerAddressIntegrationTest {
   @Test
   @DisplayName("DB는 구매자당 삭제되지 않은 기본 주소를 하나만 허용한다")
   void databaseAllowsOneDefault() {
-    UUID buyer = UUID.randomUUID();
+    UUID buyer = buyer();
     addresses.register(buyer, key(), HOME, false);
 
     assertThatThrownBy(
@@ -212,6 +247,21 @@ class BuyerAddressIntegrationTest {
         .filter(address -> address.id().equals(addressId))
         .findFirst()
         .orElseThrow();
+  }
+
+  // 주소록 쓰기는 구매자 행을 잠그므로 실제 계정 행을 준비한다.
+  private UUID buyer() {
+    UUID id = UUID.randomUUID();
+    jdbc.update(
+        """
+        insert into commerce.buyer_accounts
+          (id, email_normalized, password_hash, display_name, status, created_at, updated_at,
+           version)
+        values (?, ?, 'hash', '구매자', 'ACTIVE', now(), now(), 0)
+        """,
+        id,
+        id + "@example.com");
+    return id;
   }
 
   private static String key() {

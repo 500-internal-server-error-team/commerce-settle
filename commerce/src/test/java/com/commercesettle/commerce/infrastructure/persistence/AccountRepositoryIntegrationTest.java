@@ -20,8 +20,10 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -41,6 +43,7 @@ class AccountRepositoryIntegrationTest {
 
   @Autowired private AccountRepository accounts;
   @Autowired private JdbcTemplate jdbc;
+  @Autowired private PlatformTransactionManager transactions;
 
   @AfterEach
   void deleteAccounts() {
@@ -95,6 +98,25 @@ class AccountRepositoryIntegrationTest {
     assertThat(accounts.findByEmail(ActorKind.SELLER, "seller@example.com")).isEmpty();
     assertThat(accounts.findById(ActorKind.SELLER, saved.getId())).isEmpty();
     assertThat(accounts.existsByEmail(ActorKind.SELLER, "seller@example.com")).isTrue();
+  }
+
+  @Test
+  @DisplayName("구매자 행 잠금은 삭제한 구매자를 찾지 않는다")
+  void locksOnlyActiveBuyerRow() {
+    BuyerAccount buyer =
+        accounts.save(BuyerAccount.register("buyer@example.com", "hash", "구매자", NOW));
+    TransactionTemplate tx = new TransactionTemplate(transactions);
+
+    Boolean activeLocked =
+        tx.execute(status -> accounts.findBuyerForUpdate(buyer.getId()).isPresent());
+    jdbc.update(
+        "UPDATE commerce.buyer_accounts SET status = 'DELETED', deleted_at = now() WHERE id = ?",
+        buyer.getId());
+    Boolean deletedLocked =
+        tx.execute(status -> accounts.findBuyerForUpdate(buyer.getId()).isPresent());
+
+    assertThat(activeLocked).isTrue();
+    assertThat(deletedLocked).isFalse();
   }
 
   @Test

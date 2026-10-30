@@ -18,6 +18,9 @@ public interface AccountRepository {
 
   boolean existsByEmail(ActorKind kind, String emailNormalized);
 
+  /** 구매자 행을 트랜잭션이 끝날 때까지 잠가 같은 구매자의 하위 데이터 쓰기를 직렬화한다. */
+  Optional<BuyerAccount> findBuyerForUpdate(UUID id);
+
   /** 이메일 유일성 위반은 DuplicateAccountEmailException이다. */
   BuyerAccount save(BuyerAccount account);
 
