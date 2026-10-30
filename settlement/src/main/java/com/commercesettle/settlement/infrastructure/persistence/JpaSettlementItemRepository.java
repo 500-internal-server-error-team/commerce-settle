@@ -88,7 +88,7 @@ class JpaSettlementItemRepository implements SettlementItemRepository {
                       rs.getObject("product_id", UUID.class),
                       rs.getLong("net_amount")));
     } catch (UncategorizedSQLException e) {
-      // JdbcTemplate 기본 변환기는 55P03을 분류하지 않는다. 잠금 실패로 바꿔야 일배치가 이 판매자만 건너뛴다.
+      // JdbcTemplate 기본 변환기는 55P03을 분류하지 않는다. 잠금 실패로 분류해 일배치의 잠금 초과 건너뛰기 규칙에 맞춘다.
       if (LOCK_NOT_AVAILABLE.equals(e.getSQLException().getSQLState())) {
         throw new CannotAcquireLockException("settlement items are locked", e);
       }
@@ -112,6 +112,8 @@ class JpaSettlementItemRepository implements SettlementItemRepository {
             .addValue("payoutId", payoutId)
             .addValue("expectedAmount", expectedAmount)
             .addValue("now", time(now));
+    // 다른 트랜잭션이 잡은 항목 잠금은 상한까지만 기다린다. 넘으면 결과 반영 전체를 롤백하고 임대 만료 뒤 다시 조회한다.
+    jdbc.queryForList("SELECT set_config('lock_timeout', '1000', true)", params);
     // 합계 확인과 갱신을 한 문장에 둬 일부 항목만 PAID가 되지 않게 한다.
     int paid =
         jdbc.update(
