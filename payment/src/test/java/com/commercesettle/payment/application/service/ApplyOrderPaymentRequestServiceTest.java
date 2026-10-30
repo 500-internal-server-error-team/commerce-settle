@@ -7,8 +7,10 @@ import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload.ExternalMethod;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload.Status;
+import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
+import com.commercesettle.payment.application.port.PaymentEventOutbox;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.commercesettle.payment.domain.model.MileageEntry;
 import com.commercesettle.payment.domain.model.MileageEntryKind;
@@ -24,6 +26,7 @@ import com.commercesettle.payment.domain.repository.MileageReservationRepository
 import com.commercesettle.payment.domain.repository.MileageWalletRepository;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -52,9 +55,17 @@ class ApplyOrderPaymentRequestServiceTest {
   private final FakeWallets wallets = new FakeWallets();
   private final FakeReservations reservations = new FakeReservations();
   private final FakeEntries entries = new FakeEntries();
+  private final FakeOutbox outbox = new FakeOutbox();
   private final ApplyOrderPaymentRequestService service =
       new ApplyOrderPaymentRequestService(
-          inbox, payments, jobs, wallets, reservations, entries, Clock.fixed(NOW, ZoneOffset.UTC));
+          inbox,
+          payments,
+          jobs,
+          wallets,
+          reservations,
+          entries,
+          outbox,
+          Clock.fixed(NOW, ZoneOffset.UTC));
 
   @Test
   @DisplayName("처리할 WAITING이 없으면 아무것도 바꾸지 않는다")
@@ -81,6 +92,34 @@ class ApplyOrderPaymentRequestServiceTest {
               assertThat(job.getOperation()).isEqualTo(PaymentJobOperation.APPROVE);
             });
     assertThat(inbox.applied).containsEntry(inboxId, payment.getId());
+  }
+
+  @Test
+  @DisplayName("새 결제를 만들면 결제 ID로 고정한 PaymentAccepted를 Outbox에 남긴다")
+  void appendsPaymentAcceptedForNewPayment() {
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    inbox.add(card(orderId, cycleId));
+
+    service.processNext();
+
+    Payment payment = payments.all().get(0);
+    assertThat(outbox.accepted)
+        .singleElement()
+        .satisfies(
+            event -> {
+              assertThat(event.eventId())
+                  .isEqualTo(
+                      UUID.nameUUIDFromBytes(
+                          ("PaymentAccepted:" + payment.getId()).getBytes(StandardCharsets.UTF_8)));
+              assertThat(event.eventType()).isEqualTo("PaymentAccepted");
+              assertThat(event.eventVersion()).isEqualTo(1);
+              assertThat(event.occurredAt().toInstant()).isEqualTo(NOW);
+              assertThat(event.aggregateId()).isEqualTo(payment.getId());
+              assertThat(event.aggregateVersion()).isZero();
+              assertThat(event.payload())
+                  .isEqualTo(new PaymentAcceptedPayload(payment.getId(), orderId, 0, cycleId));
+            });
   }
 
   @Test
@@ -120,6 +159,10 @@ class ApplyOrderPaymentRequestServiceTest {
         .extracting(MileageEntry::getKind, MileageEntry::getBalanceAfter)
         .containsExactly(
             tuple(MileageEntryKind.RESERVE, 12_000L), tuple(MileageEntryKind.DEBIT, 2_000L));
+    assertThat(outbox.accepted)
+        .singleElement()
+        .extracting(e -> e.aggregateId())
+        .isEqualTo(payment.getId());
     assertThat(inbox.applied).containsEntry(inboxId, payment.getId());
   }
 
@@ -161,6 +204,7 @@ class ApplyOrderPaymentRequestServiceTest {
     assertThat(payments.all()).isEmpty();
     assertThat(wallet.getReservedAmount()).isZero();
     assertThat(reservations.saved).isEmpty();
+    assertThat(outbox.accepted).isEmpty();
     assertThat(inbox.reviewRequired).containsExactly(inboxId);
   }
 
@@ -279,6 +323,7 @@ class ApplyOrderPaymentRequestServiceTest {
 
     assertThat(payments.all()).hasSize(1);
     assertThat(jobs.saved).hasSize(1);
+    assertThat(outbox.accepted).hasSize(1);
     assertThat(inbox.applied).containsEntry(secondInboxId, existingId);
   }
 
@@ -587,6 +632,16 @@ class ApplyOrderPaymentRequestServiceTest {
     public MileageEntry save(MileageEntry entry) {
       saved.add(entry);
       return entry;
+    }
+  }
+
+  private static final class FakeOutbox implements PaymentEventOutbox {
+    private final List<EventEnvelope<PaymentAcceptedPayload>> accepted = new ArrayList<>();
+
+    @Override
+    public UUID appendPaymentAccepted(EventEnvelope<PaymentAcceptedPayload> event) {
+      accepted.add(event);
+      return event.eventId();
     }
   }
 }
