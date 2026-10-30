@@ -11,6 +11,7 @@ import com.commercesettle.financemock.domain.model.MockAccount;
 import com.commercesettle.financemock.domain.model.MockOperation;
 import com.commercesettle.financemock.domain.model.MockScenario;
 import com.commercesettle.financemock.domain.model.MockTransaction;
+import com.commercesettle.financemock.domain.model.MockTransactionStatus;
 import com.commercesettle.financemock.domain.repository.CashEntryRepository;
 import com.commercesettle.financemock.domain.repository.FundsReservationRepository;
 import com.commercesettle.financemock.domain.repository.MockAccountRepository;
@@ -87,11 +88,17 @@ class PayoutTransactions {
     return new MockTransactionView(transaction, account.getAccountRef());
   }
 
-  /** 성공이면 선점을 소비해 잔액을 차감하고 현금 기록을 남긴다. 확정 거절이면 선점만 해제한다. */
+  /**
+   * 성공이면 선점을 소비해 잔액을 차감하고 현금 기록을 남긴다. 확정 거절이면 선점만 해제한다. 거래 행을 먼저 잠가, 원요청과 재개가 겹쳐도 한 번만 확정하고 이미 확정된
+   * 거래는 바꾸지 않고 돌려준다.
+   */
   @Transactional
   public MockTransactionView complete(UUID transactionId, boolean rejected) {
     Instant now = clock.instant();
-    MockTransaction transaction = transactions.findById(transactionId).orElseThrow();
+    MockTransaction transaction = transactions.findByIdForUpdate(transactionId).orElseThrow();
+    if (transaction.getStatus() != MockTransactionStatus.PROCESSING) {
+      return view(transaction);
+    }
     FundsReservation reservation = reservations.findByTransactionId(transactionId).orElseThrow();
     MockAccount account = accounts.findByIdForUpdate(reservation.getAccountId()).orElseThrow();
     if (rejected) {
