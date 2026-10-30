@@ -32,6 +32,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -73,7 +75,7 @@ class PayoutWorkerIntegrationTest {
 
   private UUID payoutId;
   private UUID batchId;
-  private Connection itemLock;
+  private Connection rowLock;
 
   @BeforeEach
   void createPayout() {
@@ -104,7 +106,7 @@ class PayoutWorkerIntegrationTest {
 
   @AfterEach
   void deleteRows() throws SQLException {
-    releaseItemLock();
+    releaseRowLock();
     for (String table :
         List.of(
             "settlement_items",
@@ -352,7 +354,7 @@ class PayoutWorkerIntegrationTest {
         .isEqualTo("DONE");
 
     gateway.beforeResult = () -> {};
-    releaseItemLock();
+    releaseRowLock();
     jdbc.update(
         "UPDATE settlement.payout_jobs SET lease_until = now() - interval '1 second'"
             + " WHERE payout_id = ?",
@@ -380,7 +382,7 @@ class PayoutWorkerIntegrationTest {
       jdbc.update(
           "UPDATE settlement.payout_jobs SET lease_until = clock_timestamp() WHERE payout_id = ?",
           payoutId);
-      releaseItemLock();
+      releaseRowLock();
 
       assertThat(run.get(10, TimeUnit.SECONDS)).isTrue();
     } finally {
@@ -394,20 +396,75 @@ class PayoutWorkerIntegrationTest {
     assertThat(job()).containsEntry("status", "RUNNING");
   }
 
-  /** 애플리케이션 풀 밖의 별도 연결로 이 지급의 항목을 잠근다. 이미 잠갔으면 그대로 둔다. */
+  enum NonSuccessPath {
+    DECLINED,
+    REJECTED,
+    UNCONFIRMED,
+    EXHAUSTED
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @EnumSource(NonSuccessPath.class)
+  @DisplayName("거절·요청 거부·미확정·시도 소진에서도 작업 잠금 대기가 상한을 넘으면 결과 반영을 롤백하고 다음 작업을 처리한다")
+  void lockTimeoutOnNonSuccessPathRollsBackAndNextJobRuns(NonSuccessPath path) {
+    UUID otherPayoutId =
+        jdbc.queryForObject(
+            "SELECT id FROM settlement.payouts WHERE batch_id = ?",
+            UUID.class,
+            settle(UUID.randomUUID()));
+    // 잠글 지급의 작업을 먼저 임대하게 한다. 소진은 이번 임대로 시도 상한(3)에 닿게 한다.
+    jdbc.update(
+        "UPDATE settlement.payout_jobs SET next_run_at = next_run_at - interval '1 minute',"
+            + " attempts = ? WHERE payout_id = ?",
+        path == NonSuccessPath.EXHAUSTED ? 2 : 0,
+        payoutId);
+    gateway.beforeResult = this::lockJob;
+    gateway.executeResults.add(
+        switch (path) {
+          case DECLINED -> new PayoutGateway.Result.Declined(EXTERNAL);
+          case REJECTED -> new PayoutGateway.Result.Rejected("HTTP 422");
+          case UNCONFIRMED, EXHAUSTED -> new PayoutGateway.Result.Unconfirmed("HTTP 504");
+        });
+    gateway.executeResults.add(new PayoutGateway.Result.Succeeded(UUID.randomUUID(), SUCCEEDED_AT));
+
+    assertThatThrownBy(worker::runOnce).isInstanceOf(DataAccessException.class);
+
+    assertThat(payout()).containsEntry("status", "PROCESSING");
+    assertThat(itemStatuses()).containsOnly("PAYOUT_RESERVED");
+    assertThat(reservationStatuses()).containsOnly("ACTIVE");
+    assertThat(batchStatus()).isEqualTo("PROCESSING");
+    assertThat(job()).containsEntry("status", "RUNNING").doesNotContainEntry("lease_token", null);
+
+    assertThat(worker.runOnce()).isTrue();
+
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM settlement.payout_jobs WHERE payout_id = ?",
+                String.class,
+                otherPayoutId))
+        .isEqualTo("DONE");
+  }
+
   private void lockItems() {
-    if (itemLock != null) {
+    lockRows("SELECT id FROM settlement.settlement_items WHERE payout_id = ? FOR UPDATE");
+  }
+
+  private void lockJob() {
+    lockRows("SELECT id FROM settlement.payout_jobs WHERE payout_id = ? FOR UPDATE");
+  }
+
+  /** 애플리케이션 풀 밖의 별도 연결로 이 지급의 행을 잠근다. 이미 잠갔으면 그대로 둔다. */
+  private void lockRows(String sql) {
+    if (rowLock != null) {
       return;
     }
     try {
-      itemLock =
+      rowLock =
           DriverManager.getConnection(
               POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
-      itemLock.setAutoCommit(false);
-      try (Statement timeout = itemLock.createStatement();
-          PreparedStatement lock =
-              itemLock.prepareStatement(
-                  "SELECT id FROM settlement.settlement_items WHERE payout_id = ? FOR UPDATE")) {
+      rowLock.setAutoCommit(false);
+      try (Statement timeout = rowLock.createStatement();
+          PreparedStatement lock = rowLock.prepareStatement(sql)) {
         // 잠금 대기 상한이 빠지는 회귀에도 테스트가 멈추지 않고 잠금이 풀려 단언에서 실패하게 한다.
         timeout.execute("SET idle_in_transaction_session_timeout = '10s'");
         lock.setObject(1, payoutId);
@@ -418,10 +475,10 @@ class PayoutWorkerIntegrationTest {
     }
   }
 
-  private void releaseItemLock() throws SQLException {
-    if (itemLock != null) {
-      itemLock.close();
-      itemLock = null;
+  private void releaseRowLock() throws SQLException {
+    if (rowLock != null) {
+      rowLock.close();
+      rowLock = null;
     }
   }
 

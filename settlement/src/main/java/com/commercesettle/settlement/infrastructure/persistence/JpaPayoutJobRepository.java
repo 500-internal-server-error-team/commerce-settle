@@ -81,6 +81,15 @@ class JpaPayoutJobRepository implements PayoutJobRepository {
   @Override
   public boolean releaseLease(
       UUID jobId, UUID leaseToken, PayoutJobStatus status, Duration runAfter) {
+    MapSqlParameterSource params =
+        new MapSqlParameterSource()
+            .addValue("id", jobId)
+            .addValue("token", leaseToken)
+            .addValue("status", status.name())
+            .addValue("runAfter", seconds(runAfter));
+    // 거절·미확정·시도 소진은 결과 반영에서 이 갱신이 첫 쓰기다. 다른 트랜잭션이 잡은 작업 잠금은 상한까지만 기다리고,
+    // 넘으면 결과 반영 전체를 롤백하고 임대 만료 뒤 다시 조회한다. 이후 커밋 때 flush에도 같은 상한이 적용된다.
+    jdbc.queryForList("SELECT set_config('lock_timeout', '1000', true)", params);
     // 임대 만료는 실제 현재 시각으로 본다. now()는 트랜잭션 시작 시각이라 앞선 잠금 대기 중 만료된 임대도 통과시킨다.
     return jdbc.update(
             "UPDATE settlement.payout_jobs"
@@ -89,11 +98,7 @@ class JpaPayoutJobRepository implements PayoutJobRepository {
                 + " version = version + 1"
                 + " WHERE id = :id AND status = 'RUNNING' AND lease_token = :token"
                 + " AND lease_until > clock_timestamp()",
-            new MapSqlParameterSource()
-                .addValue("id", jobId)
-                .addValue("token", leaseToken)
-                .addValue("status", status.name())
-                .addValue("runAfter", seconds(runAfter)))
+            params)
         == 1;
   }
 
