@@ -6,7 +6,10 @@ import com.commercesettle.commerce.application.dto.OrderView;
 import com.commercesettle.commerce.application.exception.IdempotencyConflictException;
 import com.commercesettle.commerce.application.exception.OrderStubException;
 import com.commercesettle.commerce.application.exception.OrderStubException.Kind;
+import com.commercesettle.commerce.application.port.OrderInventory;
+import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.exception.VersionConflictException;
+import com.commercesettle.commerce.domain.model.Product;
 import com.commercesettle.commerce.domain.repository.PageResult;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -24,16 +27,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.IntStream;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Service;
 
 /**
  * 로컬 API 학습용 메모리 stub. 주문 예약·결제·Outbox나 실제 계정/상품 저장소를 호출하지 않는다. 모든 조회 사본은 한 번 만들며, 재시작하면 생성 주문·멱등
  * 결과도 사라진다.
  */
-@Service
-@ConditionalOnProperty(name = "app.order-stub.enabled", havingValue = "true")
 public class OrderStubService {
   private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
   private static final UUID BUYER_A = id(1);
@@ -51,23 +49,22 @@ public class OrderStubService {
                       "가상시 테스트구 샘플로 " + (index / 10 + 1),
                       "테스트동 " + (index + 101) + "호"))
           .toList();
-  private static final Map<UUID, ProductSample> PRODUCTS =
-      Map.of(
-          id(3), new ProductSample(id(2), "수납 상자", 23_000),
-          id(23), new ProductSample(id(22), "키보드", 39_000),
-          id(33), new ProductSample(id(2), "머그컵", 10_000));
   private final Clock clock;
   private final String seed;
+  private final OrderInventory inventory;
   private final Map<UUID, OrderView> orders = new HashMap<>();
   private final Map<RequestKey, Created> requests = new HashMap<>();
 
-  public OrderStubService(Clock clock, @Value("${app.order-stub.seed:67}") String seed) {
+  public OrderStubService(
+      Clock clock, String seed, OrderInventory inventory, List<Product> sampleProducts) {
     this.clock = clock;
     this.seed = seed;
+    this.inventory = inventory;
     Instant baseline = now();
     for (UUID buyer : List.of(BUYER_A, BUYER_B)) {
       for (int index = 0; index < 10; index++) {
-        OrderView order = sample(buyer, index, baseline);
+        OrderView order =
+            sample(buyer, index, baseline, sampleProducts.get(index % sampleProducts.size()));
         orders.put(order.id(), order);
       }
     }
@@ -82,16 +79,19 @@ public class OrderStubService {
       }
       return existing.order();
     }
-    ProductSample product = PRODUCTS.get(command.productId());
-    if (product == null) {
-      throw new OrderStubException(Kind.NOT_FOUND, "request");
-    }
     if (command.quantity() < 1 || command.quantity() > 10) {
       throw invalid("quantity");
     }
-    requireVersion("product", command.expectedProductVersion());
+    Product product = inventory.lockInventoryAndReadProduct(command.productId());
+    if (!product.isPubliclyVisible()) {
+      throw new ProductNotFoundException(command.productId());
+    }
+    if (command.expectedProductVersion() != product.getVersion()) {
+      throw new VersionConflictException(
+          "product", command.expectedProductVersion(), product.getVersion());
+    }
     // TODO: 쿠폰·이벤트가 구현되면 검증·예약 포트를 연결한다. 현재 할인과 이벤트는 지원하지 않는다.
-    long gross = product.unitPrice() * command.quantity();
+    long gross = product.getUnitPrice() * command.quantity();
     long total = gross;
     if (command.expectedTotalAmount() != total) {
       throw new VersionConflictException("totalAmount", command.expectedTotalAmount(), total);
@@ -116,9 +116,9 @@ public class OrderStubService {
         new OrderView(
             orderId,
             buyer,
-            product.sellerId(),
+            product.getSellerId(),
             command.productId(),
-            product.name(),
+            product.getName(),
             command.quantity(),
             gross,
             0,
@@ -173,12 +173,10 @@ public class OrderStubService {
     return order;
   }
 
-  private OrderView sample(UUID buyer, int index, Instant baseline) {
+  private OrderView sample(UUID buyer, int index, Instant baseline, Product product) {
     UUID orderId = named("order:" + buyer + ":" + index);
-    UUID productId = List.of(id(3), id(23), id(33)).get(index % 3);
-    ProductSample product = PRODUCTS.get(productId);
     int quantity = 1 + index % 3;
-    long gross = product.unitPrice() * quantity;
+    long gross = product.getUnitPrice() * quantity;
     long total = gross;
     long mileage = index % 3 == 0 ? (index % 2 == 0 ? total : 1_000) : 0;
     int phase = index % 5;
@@ -221,9 +219,9 @@ public class OrderStubService {
     return new OrderView(
         orderId,
         buyer,
-        product.sellerId(),
-        productId,
-        product.name(),
+        product.getSellerId(),
+        product.getId(),
+        product.getName(),
         quantity,
         gross,
         0,
@@ -297,17 +295,9 @@ public class OrderStubService {
     return UUID.fromString("00000000-0000-4000-8000-" + String.format("%012d", suffix));
   }
 
-  private static void requireVersion(String target, long version) {
-    if (version != 0) {
-      throw new VersionConflictException(target, version, 0);
-    }
-  }
-
   private static OrderStubException invalid(String field) {
     return new OrderStubException(Kind.INVALID_REQUEST, field);
   }
-
-  private record ProductSample(UUID sellerId, String name, long unitPrice) {}
 
   private record RequestKey(UUID buyer, String key) {}
 

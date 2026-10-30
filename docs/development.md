@@ -56,6 +56,8 @@ export BUILDX_CONFIG="$PWD/work/buildx"
 
 이 stub의 `OrderStubCreate` 입력은 `productId`, `quantity`, `mileageAmount`, `expectedProductVersion`, `expectedTotalAmount`, `externalMethod`, `methodAccountRef`의 7개 키입니다. 두 외부 수단 값도 키는 필수이며 전액 마일리지일 때 null로 보냅니다. 아직 지원하지 않는 `buyerCouponId`, `eventId`, `expectedEventVersion`과 수동 `addressId`를 보내면 400으로 거절합니다. 정식 [OrderCreate 계약](openapi.json)은 11개 필드로 유지하며 `x-implemented: false`입니다. 켠 인스턴스의 `/v3/api-docs`에서 개발용 입력을 확인합니다.
 
+신규 생성은 `OrderInventory.lockInventoryAndReadProduct(productId)`로 상품을 받은 뒤 기존 상품 도메인 규칙으로 판매 가능 여부를 확인하고, 반환된 가격·버전을 검증해 주문에 값을 복사합니다. 멱등 재요청은 상품을 다시 읽지 않고 최초 주문 사본을 반환합니다. `OrderStubConfiguration`은 같은 상품 샘플 목록으로 메모리 포트와 초기 주문을 조립하며, 초기 샘플 생성은 이 포트를 호출하지 않습니다. 실제 DB 구현이 지켜야 할 호출자 트랜잭션 참여·재고 행 우선 잠금 계약은 [포트](../commerce/src/main/java/com/commercesettle/commerce/application/port/OrderInventory.java)에 명시합니다. 현재 메모리 구현은 DB 트랜잭션이나 행 잠금·재고 예약을 수행하지 않습니다.
+
 [처음 실행](#처음-실행)의 인프라가 준비된 환경에서 새 commerce jar와 이미지를 만든 뒤 로컬 전용 인스턴스를 엽니다.
 
 ```bash
