@@ -352,7 +352,8 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
   }
 
   private static Map<String, String> error(String field, String reason) {
-    return Map.of("field", field, "reason", reason == null ? INVALID_FORMAT : reason);
+    String name = field == null || field.isBlank() || field.length() > 100 ? "request" : field;
+    return Map.of("field", name, "reason", reason == null ? INVALID_FORMAT : reason);
   }
 
   private static String title(HttpStatusCode status) {
