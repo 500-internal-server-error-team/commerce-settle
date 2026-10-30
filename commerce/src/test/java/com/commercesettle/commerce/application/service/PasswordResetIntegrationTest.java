@@ -19,7 +19,11 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +46,7 @@ import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.convention.TestBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -64,6 +69,7 @@ class PasswordResetIntegrationTest {
   private static final String NEW_PASSWORD = "new-password-1";
   private static final RedisScript<String> VERIFY =
       RedisScript.of(new ClassPathResource("gateway/verify-session.lua"), String.class);
+  private static final ShiftedClock CLOCK = new ShiftedClock();
 
   @Container @ServiceConnection
   static final PostgreSQLContainer<?> POSTGRES =
@@ -81,9 +87,15 @@ class PasswordResetIntegrationTest {
   @Autowired DataSource dataSource;
   @Autowired StringRedisTemplate redis;
   @MockitoSpyBean PasswordResetDelivery delivery;
+  @TestBean Clock clock;
+
+  static Clock clock() {
+    return CLOCK;
+  }
 
   @AfterEach
   void clear() {
+    CLOCK.shift(Duration.ZERO);
     jdbc.update("DELETE FROM commerce.audit_logs");
     jdbc.update("DELETE FROM commerce.password_reset_tokens");
     jdbc.update("DELETE FROM commerce.seller_accounts");
@@ -295,14 +307,14 @@ class PasswordResetIntegrationTest {
   void rejectsTokenExpiredWhileWaitingForLock() throws Exception {
     SellerAccount seller = register();
     String token = requestToken(EMAIL);
-    jdbc.update(
-        "UPDATE commerce.password_reset_tokens SET expires_at = clock_timestamp() + interval '500 milliseconds'");
 
     try (Connection holder = lockAccount(seller);
         var executor = Executors.newSingleThreadExecutor()) {
       Future<?> reset =
           executor.submit(() -> passwordResets.reset(ActorKind.SELLER, token, NEW_PASSWORD));
-      Thread.sleep(900);
+      // 차단 전 검사를 통과해 계정 잠금을 기다리는 것을 확인한 뒤 만료 이후로 시각을 옮기고 잠금을 푼다.
+      awaitLockWaiter(reset);
+      CLOCK.shift(PasswordResetToken.LIFETIME.plusMinutes(1));
       holder.rollback();
       assertThatThrownBy(reset::get)
           .hasCauseInstanceOf(AuthChangeUnconfirmedException.class)
@@ -353,6 +365,20 @@ class PasswordResetIntegrationTest {
     return connection;
   }
 
+  // 재설정 작업이 계정 행 잠금을 기다릴 때까지 기다린다. 잠금 대기 상한(1초)보다 짧은 간격으로 확인한다.
+  private void awaitLockWaiter(Future<?> reset) throws InterruptedException {
+    long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+    while (jdbc.queryForObject(
+            "SELECT count(*) FROM pg_stat_activity"
+                + " WHERE datname = current_database() AND wait_event_type = 'Lock'",
+            Long.class)
+        == 0) {
+      assertThat(reset).as("잠금 대기 전에 재설정이 끝났다").isNotDone();
+      assertThat(System.nanoTime()).as("잠금 대기를 확인하지 못했다").isLessThan(deadline);
+      Thread.sleep(10);
+    }
+  }
+
   private String requestToken(String email) {
     passwordResets.request(ActorKind.SELLER, email);
     ArgumentCaptor<String> token = ArgumentCaptor.forClass(String.class);
@@ -389,6 +415,30 @@ class PasswordResetIntegrationTest {
       return future.get();
     } catch (Exception e) {
       throw new IllegalStateException(e);
+    }
+  }
+
+  // 시스템 시각에 테스트가 정한 만큼 더한 시각을 돌려준다.
+  private static final class ShiftedClock extends Clock {
+    private volatile Duration offset = Duration.ZERO;
+
+    void shift(Duration offset) {
+      this.offset = offset;
+    }
+
+    @Override
+    public ZoneId getZone() {
+      return ZoneOffset.UTC;
+    }
+
+    @Override
+    public Clock withZone(ZoneId zone) {
+      return Clock.offset(Clock.system(zone), offset);
+    }
+
+    @Override
+    public Instant instant() {
+      return Instant.now().plus(offset);
     }
   }
 }
