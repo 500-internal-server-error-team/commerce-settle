@@ -2,9 +2,9 @@ package com.commercesettle.commerce.presentation.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.commercesettle.commerce.application.service.OrderStubService;
 import com.commercesettle.commerce.infrastructure.config.HttpJsonConfiguration;
 import com.commercesettle.commerce.infrastructure.config.OpenApiConfiguration;
+import com.commercesettle.commerce.infrastructure.config.OrderStubConfiguration;
 import com.commercesettle.commerce.presentation.exception.CommerceExceptionHandler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -63,6 +63,22 @@ class OrderStubHttpIntegrationTest {
   @Autowired TestRestTemplate http;
   @Autowired ObjectMapper mapper;
   private SchemaRegistry schemas;
+
+  @Test
+  void rejectsUnknownProductFromInventoryStub() throws Exception {
+    var body = (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(BODY);
+    body.put("productId", UUID.randomUUID().toString());
+    problem(
+        call(
+            HttpMethod.POST,
+            "/api/orders",
+            BUYER,
+            "BUYER",
+            UUID.randomUUID().toString(),
+            body.toString()),
+        404,
+        "COMMON_RESOURCE_NOT_FOUND");
+  }
 
   @Test
   void createsAndReplaysThenReadsSameOwnedSnapshotThroughRealHttp() throws Exception {
@@ -389,7 +405,7 @@ class OrderStubHttpIntegrationTest {
       })
   @Import({
     OrderStubController.class,
-    OrderStubService.class,
+    OrderStubConfiguration.class,
     AuthenticatedActorResolver.class,
     HttpJsonConfiguration.class,
     OpenApiConfiguration.class,
