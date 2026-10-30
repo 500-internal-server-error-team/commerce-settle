@@ -1,5 +1,7 @@
 package com.commercesettle.commerce.application.service;
 
+import static com.commercesettle.commerce.support.ConcurrentTransactions.holdTransaction;
+import static com.commercesettle.commerce.support.ConcurrentTransactions.runConcurrently;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -10,16 +12,10 @@ import com.commercesettle.commerce.domain.exception.VersionConflictException;
 import com.commercesettle.commerce.domain.model.Product;
 import com.commercesettle.commerce.domain.model.ProductInventory;
 import com.commercesettle.commerce.domain.model.ProductStatus;
+import com.commercesettle.commerce.support.ConcurrentTransactions.HeldTransaction;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.Callable;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -278,6 +274,7 @@ class ProductCatalogIntegrationTest {
 
     try (HeldTransaction held =
         holdTransaction(
+            tx,
             () ->
                 jdbc.queryForList(
                     "select id from commerce.product_inventory where product_id = ? for update",
@@ -306,6 +303,7 @@ class ProductCatalogIntegrationTest {
 
     try (HeldTransaction held =
         holdTransaction(
+            tx,
             () ->
                 jdbc.queryForList(
                     "select id from commerce.product_inventory where product_id = ? for update",
@@ -333,7 +331,7 @@ class ProductCatalogIntegrationTest {
 
     try (HeldTransaction held =
         holdTransaction(
-            () -> catalog.register(seller, sameKey, "키보드", 39_000, ProductStatus.ON_SALE))) {
+            tx, () -> catalog.register(seller, sameKey, "키보드", 39_000, ProductStatus.ON_SALE))) {
       long started = System.nanoTime();
       assertThatThrownBy(
               () -> catalog.register(seller, sameKey, "키보드", 39_000, ProductStatus.ON_SALE))
@@ -350,74 +348,5 @@ class ProductCatalogIntegrationTest {
 
   private static String key() {
     return UUID.randomUUID().toString();
-  }
-
-  /** 모든 작업을 동시에 시작하고 각 결과값 또는 발생한 예외를 모은다. */
-  private static List<Object> runConcurrently(int count, Callable<Object> task) throws Exception {
-    ExecutorService executor = Executors.newFixedThreadPool(count);
-    CountDownLatch start = new CountDownLatch(1);
-    try {
-      List<Future<Object>> futures = new ArrayList<>();
-      for (int i = 0; i < count; i++) {
-        futures.add(
-            executor.submit(
-                () -> {
-                  start.await();
-                  try {
-                    return task.call();
-                  } catch (RuntimeException e) {
-                    return e;
-                  }
-                }));
-      }
-      start.countDown();
-      List<Object> results = new ArrayList<>();
-      for (Future<Object> future : futures) {
-        results.add(future.get(30, TimeUnit.SECONDS));
-      }
-      return results;
-    } finally {
-      executor.shutdownNow();
-    }
-  }
-
-  /** 다른 스레드의 트랜잭션에서 작업을 실행하고, 닫을 때 커밋할 때까지 잠금을 유지한다. */
-  private HeldTransaction holdTransaction(Runnable work) throws Exception {
-    CountDownLatch acquired = new CountDownLatch(1);
-    CountDownLatch release = new CountDownLatch(1);
-    ExecutorService executor = Executors.newSingleThreadExecutor();
-    Future<?> committed =
-        executor.submit(
-            () ->
-                tx.executeWithoutResult(
-                    status -> {
-                      work.run();
-                      acquired.countDown();
-                      try {
-                        release.await();
-                      } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new IllegalStateException(e);
-                      }
-                    }));
-    if (!acquired.await(10, TimeUnit.SECONDS)) {
-      committed.get(1, TimeUnit.SECONDS);
-      throw new IllegalStateException("holding transaction did not start");
-    }
-    return new HeldTransaction(release, committed, executor);
-  }
-
-  private record HeldTransaction(
-      CountDownLatch release, Future<?> committed, ExecutorService executor)
-      implements AutoCloseable {
-    @Override
-    public void close() throws Exception {
-      release.countDown();
-      try {
-        committed.get(10, TimeUnit.SECONDS);
-      } finally {
-        executor.shutdownNow();
-      }
-    }
   }
 }
