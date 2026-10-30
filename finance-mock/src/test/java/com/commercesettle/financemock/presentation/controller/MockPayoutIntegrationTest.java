@@ -203,6 +203,21 @@ class MockPayoutIntegrationTest {
   }
 
   @Test
+  @DisplayName("정수 금액에 소수를 보내면 400으로 거절하고 거래·선점·차감을 만들지 않는다")
+  void rejectsFractionalAmount() throws Exception {
+    MockAccount account = account(OPENING_BALANCE);
+    String scenario = scenario(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+
+    for (String amount : List.of("1000.9", "1000.0")) {
+      UUID key = UUID.randomUUID();
+      payout(key, account.getAccountRef(), amount, scenario).andExpect(status().isBadRequest());
+      assertThat(transactionCount(key)).isZero();
+    }
+    assertFunds(account, OPENING_BALANCE, 0);
+    assertThat(cashEntries(account)).isEmpty();
+  }
+
+  @Test
   @Timeout(30)
   @DisplayName("같은 업무 키의 동시 요청도 거래 하나와 차감 한 번만 만든다")
   void concurrentSameBusinessKeyDebitsOnce() throws Exception {
@@ -240,10 +255,16 @@ class MockPayoutIntegrationTest {
 
   private ResultActions payout(UUID key, String accountRef, long amount, String scenario)
       throws Exception {
+    return payout(key, accountRef, Long.toString(amount), scenario);
+  }
+
+  /** 금액을 JSON 숫자 원문으로 보낸다. */
+  private ResultActions payout(UUID key, String accountRef, String amount, String scenario)
+      throws Exception {
     String body =
         """
         {"businessKey":"%s","accountRef":"%s","sellerAccountRef":"%s",\
-        "amount":%d,"scenarioVersion":"%s"}"""
+        "amount":%s,"scenarioVersion":"%s"}"""
             .formatted(key, accountRef, SELLER_ACCOUNT, amount, scenario);
     return mvc.perform(
         post("/mock/payouts")
