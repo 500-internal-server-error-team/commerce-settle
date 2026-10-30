@@ -686,6 +686,39 @@ class OrderStubHttpIntegrationTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({
+    "0,CREDIT_CARD,missing,methodAccountRef",
+    "0,CREDIT_CARD,blank,methodAccountRef",
+    "0,CREDIT_CARD,long,methodAccountRef",
+    "23000,,unexpected,methodAccountRef",
+    "23000,EASY_PAY,missing,externalMethod",
+    "0,,valid,externalMethod"
+  })
+  void paymentCombinationErrorsIdentifyTheInvalidField(
+      long mileage, String method, String accountCase, String field) throws Exception {
+    ObjectNode body = (ObjectNode) mapper.readTree(BODY);
+    body.put("mileageAmount", mileage);
+    if (method == null) body.putNull("externalMethod");
+    else body.put("externalMethod", method);
+    switch (accountCase) {
+      case "missing" -> body.putNull("methodAccountRef");
+      case "blank" -> body.put("methodAccountRef", " ");
+      case "long" -> body.put("methodAccountRef", "x".repeat(101));
+      default -> body.put("methodAccountRef", "card");
+    }
+    var response =
+        call(
+            HttpMethod.POST,
+            "/api/orders",
+            BUYER,
+            "BUYER",
+            UUID.randomUUID().toString(),
+            body.toString());
+    problem(response, 400, "COMMON_VALIDATION_FAILED");
+    assertThat(json(response).path("errors").findValuesAsText("field")).contains(field);
+  }
+
   private Set<JsonNode> elements(JsonNode values) {
     Set<JsonNode> result = new HashSet<>();
     values.forEach(result::add);

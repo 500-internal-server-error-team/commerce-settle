@@ -9,5 +9,11 @@ public record CreateOrderCommand(
     long mileageAmount,
     long expectedProductVersion,
     long expectedTotalAmount,
-    String externalMethod,
-    String methodAccountRef) {}
+    ExternalMethod externalMethod,
+    String methodAccountRef) {
+  public enum ExternalMethod {
+    CREDIT_CARD,
+    DEBIT_CARD,
+    EASY_PAY
+  }
+}

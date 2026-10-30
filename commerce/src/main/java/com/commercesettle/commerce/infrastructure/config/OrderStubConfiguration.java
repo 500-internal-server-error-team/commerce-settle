@@ -28,8 +28,7 @@ public class OrderStubConfiguration {
           product(23, 22, "키보드", 39_000),
           product(33, 2, "머그컵", 10_000));
 
-  @Bean
-  public OrderInventory orderInventory() {
+  private OrderInventory sampleInventory() {
     Map<UUID, Product> byId =
         products.stream()
             .collect(Collectors.toUnmodifiableMap(Product::getId, Function.identity()));
@@ -44,9 +43,9 @@ public class OrderStubConfiguration {
 
   @Bean
   public OrderStubService orderStubService(
-      Clock clock, @Value("${app.order-stub.seed:67}") String seed, OrderInventory inventory) {
+      Clock clock, @Value("${app.order-stub.seed:67}") String seed) {
     OrderStubDataFactory snapshots = new OrderStubDataFactory(clock, seed);
-    return new OrderStubService(inventory, snapshots, snapshots.initialOrders(products));
+    return new OrderStubService(sampleInventory(), snapshots, snapshots.initialOrders(products));
   }
 
   private static Product product(int productId, int sellerId, String name, long unitPrice) {
