@@ -66,15 +66,20 @@ public class OrderStubService {
     }
     long external = total - command.mileageAmount();
     if (external == 0) {
-      if (command.externalMethod() != null || command.methodAccountRef() != null) {
+      if (command.externalMethod() != null) {
         throw invalid("externalMethod");
       }
-    } else if (!List.of("CREDIT_CARD", "DEBIT_CARD", "EASY_PAY")
-            .contains(command.externalMethod() == null ? "" : command.externalMethod())
-        || command.methodAccountRef() == null
-        || command.methodAccountRef().isBlank()
-        || command.methodAccountRef().length() > 100) {
-      throw invalid("externalMethod");
+      if (command.methodAccountRef() != null) {
+        throw invalid("methodAccountRef");
+      }
+    } else {
+      if (command.externalMethod() == null) {
+        throw invalid("externalMethod");
+      }
+      String account = command.methodAccountRef();
+      if (account == null || account.isBlank() || account.length() > 100) {
+        throw invalid("methodAccountRef");
+      }
     }
     OrderView order = snapshots.pending(buyer, product, command, gross);
     orders.put(order.id(), order);

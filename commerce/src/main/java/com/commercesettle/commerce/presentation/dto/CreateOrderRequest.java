@@ -1,6 +1,7 @@
 package com.commercesettle.commerce.presentation.dto;
 
 import com.commercesettle.commerce.application.dto.CreateOrderCommand;
+import com.commercesettle.commerce.application.dto.CreateOrderCommand.ExternalMethod;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Max;
@@ -29,13 +30,7 @@ public record CreateOrderRequest(
         mileageAmount,
         expectedProductVersion,
         expectedTotalAmount,
-        externalMethod == null ? null : externalMethod.name(),
+        externalMethod,
         methodAccountRef);
-  }
-
-  public enum ExternalMethod {
-    CREDIT_CARD,
-    DEBIT_CARD,
-    EASY_PAY
   }
 }

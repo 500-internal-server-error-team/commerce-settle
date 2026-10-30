@@ -6,6 +6,7 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.spy;
 
 import com.commercesettle.commerce.application.dto.CreateOrderCommand;
+import com.commercesettle.commerce.application.dto.CreateOrderCommand.ExternalMethod;
 import com.commercesettle.commerce.application.dto.OrderView;
 import com.commercesettle.commerce.application.exception.IdempotencyConflictException;
 import com.commercesettle.commerce.application.exception.OrderStubException;
@@ -34,6 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -44,8 +46,7 @@ class OrderStubServiceTest {
   private static final Instant NOW = Instant.parse("2026-01-20T01:00:00.123456789Z");
   private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
   private final OrderStubConfiguration configuration = new OrderStubConfiguration();
-  private final OrderStubService orders =
-      configuration.orderStubService(CLOCK, "67", configuration.orderInventory());
+  private final OrderStubService orders = configuration.orderStubService(CLOCK, "67");
 
   @Test
   void samplesAreStableVariedAndFollowAmountAndTimelinePolicies() throws Exception {
@@ -53,11 +54,7 @@ class OrderStubServiceTest {
     List<OrderView> samples = orders.list(BUYER, 0, 100).items();
     assertThat(samples)
         .hasSize(10)
-        .isEqualTo(
-            restarted
-                .orderStubService(CLOCK, "67", restarted.orderInventory())
-                .list(BUYER, 0, 100)
-                .items());
+        .isEqualTo(restarted.orderStubService(CLOCK, "67").list(BUYER, 0, 100).items());
     assertThat(samples).extracting(OrderView::deliveryBusinessDays).contains(2, 3);
     assertThat(samples)
         .extracting(OrderView::status)
@@ -108,7 +105,8 @@ class OrderStubServiceTest {
 
   @Test
   void createsPendingSnapshotAndReplaysBeforeGeneratingAnotherOrder() {
-    CreateOrderCommand command = command(id(3), 1, 1_000, 23_000, "CREDIT_CARD", "card-a");
+    CreateOrderCommand command =
+        command(id(3), 1, 1_000, 23_000, ExternalMethod.CREDIT_CARD, "card-a");
     OrderView created = orders.create(BUYER, "create-order", command);
     assertThat(created.productName()).isEqualTo("수납 상자");
     assertThat(created.sellerId()).isEqualTo(id(2));
@@ -125,17 +123,24 @@ class OrderStubServiceTest {
     assertThatThrownBy(
             () ->
                 orders.create(
-                    BUYER, "create-order", command(id(3), 2, 0, 46_000, "EASY_PAY", "wallet")))
+                    BUYER,
+                    "create-order",
+                    command(id(3), 2, 0, 46_000, ExternalMethod.EASY_PAY, "wallet")))
         .isInstanceOf(IdempotencyConflictException.class);
   }
 
   @Test
   void validatesServerPriceAndMileageWithoutConsumingFailedKey() {
     assertThatThrownBy(
-            () -> orders.create(BUYER, "retry-key", command(id(3), 1, 0, 1, "CREDIT_CARD", "card")))
+            () ->
+                orders.create(
+                    BUYER,
+                    "retry-key",
+                    command(id(3), 1, 0, 1, ExternalMethod.CREDIT_CARD, "card")))
         .isInstanceOf(VersionConflictException.class);
     OrderView created =
-        orders.create(BUYER, "retry-key", command(id(3), 1, 0, 23_000, "CREDIT_CARD", "card"));
+        orders.create(
+            BUYER, "retry-key", command(id(3), 1, 0, 23_000, ExternalMethod.CREDIT_CARD, "card"));
     assertThat(created.couponAmount()).isZero();
     assertThat(created.eventId()).isNull();
     OrderView mileage =
@@ -146,7 +151,7 @@ class OrderStubServiceTest {
                 orders.create(
                     BUYER,
                     "wrong-method",
-                    command(id(33), 1, 10_000, 10_000, "EASY_PAY", "wallet")))
+                    command(id(33), 1, 10_000, 10_000, ExternalMethod.EASY_PAY, "wallet")))
         .isInstanceOf(OrderStubException.class);
     assertThatThrownBy(
             () ->
@@ -171,7 +176,7 @@ class OrderStubServiceTest {
               assertThat(order.eventId()).isNull();
             });
     UUID arbitraryBuyer = UUID.fromString("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
-    CreateOrderCommand command = command(id(3), 1, 0, 23_000, "CREDIT_CARD", "card");
+    CreateOrderCommand command = command(id(3), 1, 0, 23_000, ExternalMethod.CREDIT_CARD, "card");
     OrderView created = orders.create(arbitraryBuyer, "automatic-address", command);
     assertThat(created.address()).isNotNull();
     assertThat(orders.get(arbitraryBuyer, created.id()).address()).isEqualTo(created.address());
@@ -195,7 +200,7 @@ class OrderStubServiceTest {
 
   @Test
   void concurrentIdenticalRequestsCreateOneSnapshot() throws Exception {
-    CreateOrderCommand command = command(id(3), 1, 0, 23_000, "CREDIT_CARD", "card");
+    CreateOrderCommand command = command(id(3), 1, 0, 23_000, ExternalMethod.CREDIT_CARD, "card");
     CountDownLatch ready = new CountDownLatch(2);
     CountDownLatch start = new CountDownLatch(1);
     try (var executor = Executors.newFixedThreadPool(2)) {
@@ -246,7 +251,7 @@ class OrderStubServiceTest {
             context -> {
               assertThat(context).hasSingleBean(OrderStubService.class);
               assertThat(context).hasSingleBean(OrderStubController.class);
-              assertThat(context).hasSingleBean(OrderInventory.class);
+              assertThat(context).doesNotHaveBean(OrderInventory.class);
             });
   }
 
@@ -257,9 +262,7 @@ class OrderStubServiceTest {
         new AtomicReference<>(
             Product.register(id(3), id(2), "수납 상자", 23_000, ProductStatus.ON_SALE, NOW));
     OrderStubService subject =
-        configuration.orderStubService(
-            CLOCK,
-            "67",
+        withInventory(
             productId -> {
               reads.incrementAndGet();
               assertThat(productId).isEqualTo(id(3));
@@ -267,7 +270,7 @@ class OrderStubServiceTest {
             });
     assertThat(reads).hasValue(0);
 
-    CreateOrderCommand original = command(id(3), 1, 0, 23_000, "CREDIT_CARD", "card");
+    CreateOrderCommand original = command(id(3), 1, 0, 23_000, ExternalMethod.CREDIT_CARD, "card");
     OrderView first = subject.create(BUYER, "snapshot", original);
     current.set(Product.register(id(3), id(2), "변경 상품", 25_000, ProductStatus.ON_SALE, NOW));
 
@@ -278,12 +281,15 @@ class OrderStubServiceTest {
     assertThatThrownBy(
             () ->
                 subject.create(
-                    BUYER, "snapshot", command(id(3), 1, 0, 25_000, "CREDIT_CARD", "card")))
+                    BUYER,
+                    "snapshot",
+                    command(id(3), 1, 0, 25_000, ExternalMethod.CREDIT_CARD, "card")))
         .isInstanceOf(IdempotencyConflictException.class);
     assertThat(reads).hasValue(1);
 
     OrderView second =
-        subject.create(BUYER, "new-price", command(id(3), 1, 0, 25_000, "CREDIT_CARD", "card"));
+        subject.create(
+            BUYER, "new-price", command(id(3), 1, 0, 25_000, ExternalMethod.CREDIT_CARD, "card"));
     assertThat(second.productName()).isEqualTo("변경 상품");
     assertThat(second.grossAmount()).isEqualTo(25_000);
     assertThat(reads).hasValue(2);
@@ -294,12 +300,14 @@ class OrderStubServiceTest {
     Product product =
         spy(Product.register(id(3), id(2), "수납 상자", 23_000, ProductStatus.ON_SALE, NOW));
     doReturn(7L).when(product).getVersion();
-    OrderStubService subject = configuration.orderStubService(CLOCK, "67", productId -> product);
+    OrderStubService subject = withInventory(productId -> product);
 
     assertThatThrownBy(
             () ->
                 subject.create(
-                    BUYER, "version", command(id(3), 1, 0, 23_000, "CREDIT_CARD", "card")))
+                    BUYER,
+                    "version",
+                    command(id(3), 1, 0, 23_000, ExternalMethod.CREDIT_CARD, "card")))
         .isInstanceOf(VersionConflictException.class);
     assertThat(subject.list(BUYER, 0, 100).totalElements()).isEqualTo(10);
 
@@ -307,7 +315,7 @@ class OrderStubServiceTest {
         subject.create(
             BUYER,
             "version",
-            new CreateOrderCommand(id(3), 1, 0, 7, 23_000, "CREDIT_CARD", "card"));
+            new CreateOrderCommand(id(3), 1, 0, 7, 23_000, ExternalMethod.CREDIT_CARD, "card"));
     assertThat(created.grossAmount()).isEqualTo(23_000);
     assertThat(subject.list(BUYER, 0, 100).totalElements()).isEqualTo(11);
   }
@@ -329,9 +337,8 @@ class OrderStubServiceTest {
       product.delete(0, NOW);
     }
     AtomicReference<Product> current = new AtomicReference<>(product);
-    OrderStubService subject =
-        configuration.orderStubService(CLOCK, "67", productId -> current.get());
-    CreateOrderCommand command = command(id(3), 1, 0, 23_000, "CREDIT_CARD", "card");
+    OrderStubService subject = withInventory(productId -> current.get());
+    CreateOrderCommand command = command(id(3), 1, 0, 23_000, ExternalMethod.CREDIT_CARD, "card");
 
     assertThatThrownBy(() -> subject.create(BUYER, "saleability", command))
         .isInstanceOf(ProductNotFoundException.class);
@@ -345,9 +352,7 @@ class OrderStubServiceTest {
   @ValueSource(ints = {0, 11})
   void rejectsInvalidQuantityBeforeAccessingInventory(int quantity) {
     OrderStubService subject =
-        configuration.orderStubService(
-            CLOCK,
-            "67",
+        withInventory(
             productId -> {
               throw new AssertionError("Inventory must not be accessed");
             });
@@ -355,13 +360,81 @@ class OrderStubServiceTest {
     assertThatThrownBy(
             () ->
                 subject.create(
-                    BUYER, "quantity", command(id(3), quantity, 0, 23_000, "CREDIT_CARD", "card")))
+                    BUYER,
+                    "quantity",
+                    command(id(3), quantity, 0, 23_000, ExternalMethod.CREDIT_CARD, "card")))
         .isInstanceOf(OrderStubException.class);
     assertThat(subject.list(BUYER, 0, 100).totalElements()).isEqualTo(10);
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"orderInventory", "databaseOrderInventory"})
+  void isolatesStubFromAnExistingInventoryBean(String beanName) {
+    OrderInventory database =
+        productId -> {
+          throw new AssertionError("Stub must not call DB inventory");
+        };
+    new ApplicationContextRunner()
+        .withUserConfiguration(OrderStubConfiguration.class, OrderStubController.class)
+        .withBean(Clock.class, () -> CLOCK)
+        .withBean(beanName, OrderInventory.class, () -> database)
+        .withPropertyValues("app.order-stub.enabled=true")
+        .run(
+            context -> {
+              assertThat(context).hasNotFailed();
+              assertThat(context).hasSingleBean(OrderInventory.class);
+              assertThat(context.getBean(OrderInventory.class)).isSameAs(database);
+              OrderView order =
+                  context
+                      .getBean(OrderStubService.class)
+                      .create(
+                          BUYER,
+                          "isolated-stub",
+                          command(id(3), 1, 0, 23_000, ExternalMethod.CREDIT_CARD, "card"));
+              assertThat(order.productName()).isEqualTo("수납 상자");
+              assertThat(order.grossAmount()).isEqualTo(23_000);
+            });
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "0,CREDIT_CARD,missing,methodAccountRef",
+    "0,CREDIT_CARD,blank,methodAccountRef",
+    "0,CREDIT_CARD,long,methodAccountRef",
+    "23000,,unexpected,methodAccountRef",
+    "23000,EASY_PAY,missing,externalMethod",
+    "0,,valid,externalMethod"
+  })
+  void reportsThePaymentFieldThatViolatesTheCombination(
+      long mileage, ExternalMethod method, String accountCase, String field) {
+    String account =
+        switch (accountCase) {
+          case "missing" -> null;
+          case "blank" -> " ";
+          case "long" -> "x".repeat(101);
+          default -> "card";
+        };
+    assertThatThrownBy(
+            () ->
+                orders.create(
+                    BUYER, "invalid-payment", command(id(3), 1, mileage, 23_000, method, account)))
+        .isInstanceOf(OrderStubException.class)
+        .extracting(error -> ((OrderStubException) error).field())
+        .isEqualTo(field);
+  }
+
+  private OrderStubService withInventory(OrderInventory inventory) {
+    return new OrderStubService(
+        inventory, new OrderStubDataFactory(CLOCK, "67"), orders.list(BUYER, 0, 100).items());
+  }
+
   private static CreateOrderCommand command(
-      UUID product, int quantity, long mileage, long expected, String method, String account) {
+      UUID product,
+      int quantity,
+      long mileage,
+      long expected,
+      ExternalMethod method,
+      String account) {
     return new CreateOrderCommand(product, quantity, mileage, 0, expected, method, account);
   }
 
