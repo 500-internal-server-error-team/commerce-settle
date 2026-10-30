@@ -237,7 +237,7 @@ public class DevFixtureLoader {
     if (index == 4) reservations.restoreForReturn(order, order);
   }
 
-  /** 주문 저장 모델의 요청 사본이다. 미구현 주문 유즈케이스·Outbox 실행 결과와 구분한다. */
+  /** 주문 저장 모델의 요청 사본이다. 실제 주문 생성·Outbox 실행 결과와 구분한다. */
   private void orderSnapshot(int index) {
     UUID order = fixtureId("request-order-" + index);
     UUID cycle = fixtureId("request-cycle-" + index);

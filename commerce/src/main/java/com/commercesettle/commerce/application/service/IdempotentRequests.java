@@ -16,8 +16,8 @@ import java.util.function.Function;
 import org.springframework.stereotype.Component;
 
 /**
- * 판매자 관리 작업의 멱등 실행. 기록과 업무 변경을 호출자의 트랜잭션에 함께 저장하므로 실패하면 둘 다 롤백되고 같은 키로 다시 시도할 수 있다. 키와 본문 원문은 저장하지
- * 않고 SHA-256 해시만 저장한다.
+ * 요청의 멱등 실행. 기록과 업무 변경을 호출자의 트랜잭션에 함께 저장하므로 실패하면 둘 다 롤백되고 같은 키로 다시 시도할 수 있다. 키와 본문 원문은 저장하지 않고
+ * SHA-256 해시만 저장한다.
  */
 @Component
 public class IdempotentRequests {
@@ -45,16 +45,41 @@ public class IdempotentRequests {
       int responseStatus,
       Function<UUID, T> firstRun,
       Function<UUID, T> replay) {
+    return execute(request, resourceId, responseStatus, firstRun, replay, GENERAL_RETENTION);
+  }
+
+  /** 주문·금융 키는 거래 이력과 함께 보존하며 만료시키지 않는다. */
+  public <T> T executePermanent(
+      Request request,
+      UUID resourceId,
+      int responseStatus,
+      Function<UUID, T> firstRun,
+      Function<UUID, T> replay) {
+    return execute(request, resourceId, responseStatus, firstRun, replay, null);
+  }
+
+  private <T> T execute(
+      Request request,
+      UUID resourceId,
+      int responseStatus,
+      Function<UUID, T> firstRun,
+      Function<UUID, T> replay,
+      Duration retention) {
     IdempotencyStore.Scope scope =
         new IdempotencyStore.Scope(
             request.actorKind(), request.actorId(), request.operation(), sha256(request.key()));
-    String requestHash = sha256(fingerprint(request.body()));
+    // 기존 24시간 키의 해시는 유지한다. 새 영구 키는 null과 문자열 "null"을 구별한다.
+    List<?> body =
+        retention == null
+            ? request.body().stream().map(value -> value == null ? "N" : "V" + value).toList()
+            : request.body();
+    String requestHash = sha256(fingerprint(body));
     Instant now = clock.instant();
 
     Optional<IdempotencyStore.CompletedRequest> existing = store.find(scope);
     if (existing.isPresent()) {
       IdempotencyStore.CompletedRequest completed = existing.get();
-      if (!completed.expiresAt().isAfter(now)) {
+      if (completed.expiresAt() != null && !completed.expiresAt().isAfter(now)) {
         store.delete(scope);
       } else if (completed.requestHash().equals(requestHash)) {
         return replay.apply(completed.resourceId());
@@ -65,7 +90,13 @@ public class IdempotentRequests {
 
     UUID recordId = UUID.randomUUID();
     store.saveCompleted(
-        recordId, scope, requestHash, resourceId, responseStatus, now, now.plus(GENERAL_RETENTION));
+        recordId,
+        scope,
+        requestHash,
+        resourceId,
+        responseStatus,
+        now,
+        retention == null ? null : now.plus(retention));
     return firstRun.apply(recordId);
   }
 

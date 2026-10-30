@@ -59,7 +59,7 @@ python3 scripts/init_env.py
 ./gradlew bootJar
 APP_DEV_FIXTURES_ENABLED=true APP_DEV_FIXTURE_SCENARIOS_ENABLED=true \
 SETTLEMENT_DAILY_BATCH_ENABLED=false SETTLEMENT_PAYOUT_WORKER_ENABLED=false \
-APP_ORDER_STUB_ENABLED=true \
+APP_ORDER_STUB_ENABLED=false \
 docker compose up -d --build --wait --wait-timeout 300
 ```
 
@@ -122,23 +122,45 @@ docker compose exec postgres psql -U postgres -d finance_mock -c \
 
 서비스별 초기 데이터·설정은 한 트랜잭션에서 적재하고 기존 수정·논리삭제·잔액·원장을 보존합니다. 고정 계정 ID/이메일·상품 소유자·금융 스냅샷 주문 ID 충돌은 적재를 롤백합니다. 업무 시나리오는 초기 적재 커밋 후 개별 업무 트랜잭션으로 실행합니다. 중간 실패 때 이미 커밋한 금융 효과를 되돌리지 않고 고정 이벤트·업무 키로 남은 처리를 이어갑니다. 옵션을 꺼도 기존 데이터는 남습니다. 전체 DB를 아우르는 원자적 초기화나 기존 실험 상태의 리셋은 제공하지 않습니다.
 
-#94에서 추가된 DB 저장 모델에도 PAYMENT_PENDING/UNSHIPPED 주문과 독립 암호화 배송지 사본을 각 4행 넣습니다. 이름은 `request-order-0`~`3`, 회차는 `request-cycle-0`~`3`, 주소는 `request-address-0`~`3`이며 Payment 요청과 ID·구매자·판매자·상품·금액·생성 후 10분 대기 기한을 맞춥니다. 배송 seed는 20261030, 달력은 `fixture-calendar-v1`/공휴일 없는 Asia/Seoul 사본입니다. 이 주문은 저장·조회 모델용 사본입니다. 주문 생성 유즈케이스·예약·Outbox·결과 이벤트 반영이 연결되지 않아 금융 시나리오를 실행해도 DB 주문 상태를 임의 전이시키지 않습니다. DB의 구매자별 조회·주소 복호화·페이지·보존으로 확인하며 공개 HTTP API와 구분합니다.
+#94에서 추가된 DB 저장 모델에도 PAYMENT_PENDING/UNSHIPPED 주문과 독립 암호화 배송지 사본을 각 4행 넣습니다. 이름은 `request-order-0`~`3`, 회차는 `request-cycle-0`~`3`, 주소는 `request-address-0`~`3`이며 Payment 요청과 ID·구매자·판매자·상품·금액·생성 후 10분 대기 기한을 맞춥니다. 배송 seed는 20261030, 달력은 `fixture-calendar-v1`/공휴일 없는 Asia/Seoul 사본입니다. 이 fixture는 저장·조회 모델용 사본이며 재고 예약·Outbox를 새로 실행하지 않습니다. 기본 주문 API에서 본인 자료를 조회할 수 있습니다. 결제 결과 반영은 구현 전이므로 금융 시나리오를 실행해도 DB 주문 상태를 임의 전이시키지 않습니다.
 
-주문은 `APP_ORDER_STUB_ENABLED=true`일 때 구매자 A/B별 메모리 샘플 10개를 별도로 조회합니다. DB 주문·금융 데이터와 연결되지 않으며 DB 상품·주소 변경도 반영하지 않습니다. 정식 주문 생성 유즈케이스·배송/구매확정, 환불/SAGA, 마일리지 해제/복원, 쿠폰·이벤트·알림, PG·간편결제·PG 입금 대역은 선행 업무 구현 후 fixture를 추가합니다. 부하 시험용 대량 데이터 생성도 이 기능 fixture와 별개입니다.
+주문은 `APP_ORDER_STUB_ENABLED=true`일 때 구매자 A/B별 메모리 샘플 10개를 별도로 조회합니다. DB 주문·금융 데이터와 연결되지 않으며 DB 상품·주소 변경도 반영하지 않습니다. 배송/구매확정, 환불/SAGA, 마일리지 해제/복원, 쿠폰·이벤트·알림, PG·간편결제·PG 입금 대역은 선행 업무 구현 후 fixture를 추가합니다. 부하 시험용 대량 데이터 생성도 이 기능 fixture와 별개입니다.
 
 ## 주문 영속 저장 기반
 
 `Order.pendingRegular`는 쿠폰·이벤트 없는 일반 주문의 상품·금액·결제 구성과 최초 회차, 생성 후 10분 대기 기한을 고정합니다. 마일리지 잔액 확인이나 외부 승인·예약은 수행하지 않습니다. 배송 소요일·공휴일 달력은 [배송 정책](policies.md#배송환불-기한과-자동-구매확정)을 사본으로 보존합니다.
 
-`OrderRepository.save`는 호출자의 트랜잭션 안에서 주문과 `OrderAddress`를 함께 저장하며 트랜잭션 밖 호출은 거절합니다. 호출자는 주소록의 암호문을 복사하지 않고, 기존 `AddressCipher`로 새 주문 주소 ID에 묶어 다시 암호화한 사본을 넘겨야 합니다. 목록·단건·주소 조회는 구매자 ID로 제한합니다. 상품·구매자·주소의 현재 유효성 확인, 재고·쿠폰 예약과 Outbox·멱등 기록 연결은 후속 주문 유즈케이스가 맡습니다. 공개 주문 API는 아래 메모리 stub을 유지합니다.
+`OrderRepository.save`는 호출자의 트랜잭션 안에서 주문과 `OrderAddress`를 함께 저장하며 트랜잭션 밖 호출은 거절합니다. 호출자는 주소록의 암호문을 복사하지 않고, 기존 `AddressCipher`로 새 주문 주소 ID에 묶어 다시 암호화한 사본을 넘겨야 합니다. 목록·단건·주소 조회는 구매자 ID로 제한합니다. 일반 주문 응용 서비스가 상품·활성 구매자·주소의 현재 유효성을 확인하고 재고 예약·Outbox·영구 멱등 기록까지 같은 트랜잭션에 연결합니다. 쿠폰·이벤트 예약과 결제 결과 반영은 구현 전입니다.
 
 `OrderTest`와 `OrderRepositoryIntegrationTest`는 금액·결제 구성, 배송 정책·주소 사본, 실제 PostgreSQL 재조회·구매자별 목록·원자 저장·유일성·잠금 대기 상한을 검사합니다. 다른 DB 시험과 같이 빈 전용 컨테이너에 commerce 초기 SQL을 적용하고 종료 때 제거합니다. 기존 개발 DB에는 초기 SQL을 재실행하지 않으며 [DB 적용 정책](migrations.md#현재-개발-환경의-적용-방식)을 따릅니다.
+
+## 일반 주문 API
+
+`APP_ORDER_STUB_ENABLED`의 기본값 false에서는 실제 DB의 `POST /api/orders`, `GET /api/orders`, `GET /api/orders/{orderId}`를 제공합니다. 개발 fixture를 켜고 구매자 A로 로그인하면 초기 DB 주문과 새 주문을 조회할 수 있습니다. 같은 인스턴스에서 메모리 stub과 DB API를 함께 켜지는 않습니다.
+
+요청은 정식 `OrderCreate`의 11개 키가 모두 필수이며 `eventId`, `buyerCouponId`, `expectedEventVersion`은 현재 null만 허용합니다. 본인 `addressId`를 명시하고 조회한 상품 버전·총액을 보냅니다. 카드·혼합·전액 마일리지 구성을 결제 요청에 보존하지만, 마일리지 확인·예약은 Payment의 책임이며 이 API가 잔액 확보나 결제 승인을 보장하지 않습니다.
+
+```bash
+curl -i http://localhost:8080/api/orders \
+  -H "Authorization: Bearer $BUYER_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: regular-order-create-001' \
+  -d '{"productId":"00000000-0000-4000-8000-000000000003","quantity":1,"eventId":null,"buyerCouponId":null,"mileageAmount":0,"addressId":"00000000-0000-4000-8000-000000000101","expectedProductVersion":0,"expectedEventVersion":null,"expectedTotalAmount":23000,"externalMethod":"CREDIT_CARD","methodAccountRef":"fixture-card"}'
+```
+
+`BUYER_TOKEN`에는 로그인 응답의 token을 넣습니다. `201`과 `Location`은 `PAYMENT_PENDING` 주문 접수이며 결제 완료가 아닙니다. 주문·배송지 사본·재고 예약·멱등 기록·`OrderPaymentRequested` Outbox는 전부 커밋되거나 롤백됩니다. 재고 행을 먼저 잠근 뒤 상품의 판매 상태·가격·버전을 확인합니다. 주문 키는 만료시키지 않고 같은 키·본문의 재요청은 현재 본인 주문을 반환합니다. 상품·주소가 바뀌어도 다시 예약하지 않으며 다른 본문은 409입니다. 주소록 변경·삭제와 별개로 주문 배송지 사본을 보존합니다.
+
+목록은 `createdAt DESC, id DESC`, 기본 20개·최대 100개입니다. 타인·없는 주문은 404이며 정지·삭제 구매자는 접근할 수 없습니다. DB 재기동 뒤에도 주문과 키를 보존합니다. 배송 사본은 기존 `weekdays-v1`(Asia/Seoul, 공휴일 없는 달력), seed 기본 67과 `order-regular-v1` 정책 버전을 사용합니다. seed는 `app.orders.simulation-seed`로 지정할 수 있습니다.
+
+Outbox relay는 기존 `app.outbox.enabled=false` 기본값을 유지합니다. 격리한 실험 인스턴스에서 켜면 `commerce-settle.commerce.v1`에 주문 ID를 key로 발행합니다. Payment의 접수 결과 Outbox·재시도 상한(#75·#76)과 Commerce의 결과 소비·주문 확정, 신규 접수 제한 gate는 아직 구현 전입니다. 따라서 이 API의 주문은 대기 상태를 유지하며 10분이 지났다는 이유로 예약을 해제하지 않습니다. 새 주문의 재고 예약이 누적되는 실험은 전용 DB에서 실행합니다.
+
+`OrderIntegrationTest`는 실제 HTTP·PostgreSQL에서 11필드 입력·본인 조회·금액/이벤트 계약·영구 멱등·동시 요청·마지막 재고 경쟁·DB 저장 실패의 전체 롤백을 검증합니다.
 
 ## 주문 API stub
 
 주문 생성·본인 목록·단건 조회를 학습할 때만 `APP_ORDER_STUB_ENABLED=true`로 켭니다. 기본값은 false입니다. 상품·주문·멱등 결과와 주소 사본은 실제 DB와 별개인 메모리 데이터이며 재시작하면 초기화됩니다. 실제 주문 저장·재고/마일리지 예약·결제·Inbox/Outbox·자동 상태 전이는 구현하지 않습니다. 쿠폰·이벤트 연동은 TODO이고, 생성 주문과 초기 샘플 모두 할인액은 0원·eventId는 null입니다.
 
-이 stub의 `OrderStubCreate` 입력은 `productId`, `quantity`, `mileageAmount`, `expectedProductVersion`, `expectedTotalAmount`, `externalMethod`, `methodAccountRef`의 7개 키입니다. 두 외부 수단 값도 키는 필수이며 전액 마일리지일 때 null로 보냅니다. 아직 지원하지 않는 `buyerCouponId`, `eventId`, `expectedEventVersion`과 수동 `addressId`를 보내면 400으로 거절합니다. 정식 [OrderCreate 계약](openapi.json)은 11개 필드로 유지하며 `x-implemented: false`입니다. 켠 인스턴스의 `/v3/api-docs`에서 개발용 입력을 확인합니다.
+이 stub의 `OrderStubCreate` 입력은 `productId`, `quantity`, `mileageAmount`, `expectedProductVersion`, `expectedTotalAmount`, `externalMethod`, `methodAccountRef`의 7개 키입니다. 두 외부 수단 값도 키는 필수이며 전액 마일리지일 때 null로 보냅니다. 아직 지원하지 않는 `buyerCouponId`, `eventId`, `expectedEventVersion`과 수동 `addressId`를 보내면 400으로 거절합니다. 정식 [OrderCreate 계약](openapi.json)은 기본 DB API에서 11개 필드를 받습니다. 켠 인스턴스의 `/v3/api-docs`에서 개발용 입력을 확인합니다.
 
 신규 생성은 `OrderInventory.lockInventoryAndReadProduct(productId)`로 상품을 받은 뒤 기존 상품 도메인 규칙으로 판매 가능 여부를 확인하고, 반환된 가격·버전을 검증해 주문에 값을 복사합니다. 멱등 재요청은 상품을 다시 읽지 않고 최초 주문 사본을 반환합니다. `OrderStubConfiguration`은 같은 상품 샘플 목록으로 메모리 포트와 초기 주문을 조립하며, 초기 샘플 생성은 이 포트를 호출하지 않습니다. 실제 DB 구현이 지켜야 할 호출자 트랜잭션 참여·재고 행 우선 잠금 계약은 [포트](../commerce/src/main/java/com/commercesettle/commerce/application/port/OrderInventory.java)에 명시합니다. 현재 메모리 구현은 DB 트랜잭션이나 행 잠금·재고 예약을 수행하지 않습니다.
 

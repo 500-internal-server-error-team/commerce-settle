@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
-/** 일반 주문의 최초 사본. 예약·결제 실행과 이후 상태 전이는 후속 유즈케이스가 맡는다. */
+/** 일반 주문의 가격·결제 구성·배송 정책 사본. 예약·이벤트 저장은 주문 응용 서비스가 조율한다. */
 @Entity(name = "CommerceOrder")
 @Table(name = "orders")
 public class Order extends AuditableEntity {
@@ -73,6 +73,7 @@ public class Order extends AuditableEntity {
   protected Order() {}
 
   private Order(
+      UUID id,
       UUID buyerId,
       Product product,
       int quantity,
@@ -104,7 +105,7 @@ public class Order extends AuditableEntity {
     if (policyVersion == null || policyVersion.isBlank() || policyVersion.length() > 32) {
       throw new IllegalArgumentException("Invalid order policy version");
     }
-    this.id = UUID.randomUUID();
+    this.id = Objects.requireNonNull(id, "id");
     this.buyerId = Objects.requireNonNull(buyerId, "buyerId");
     this.sellerId = product.getSellerId();
     this.productId = product.getId();
@@ -138,7 +139,37 @@ public class Order extends AuditableEntity {
       List<LocalDate> holidays,
       String policyVersion,
       Instant now) {
+    return pendingRegular(
+        UUID.randomUUID(),
+        buyerId,
+        product,
+        quantity,
+        mileageAmount,
+        externalMethod,
+        methodAccountRef,
+        seed,
+        calendarVersion,
+        holidays,
+        policyVersion,
+        now);
+  }
+
+  /** 멱등 기록에 먼저 연결한 주문 ID를 사용한다. */
+  public static Order pendingRegular(
+      UUID id,
+      UUID buyerId,
+      Product product,
+      int quantity,
+      long mileageAmount,
+      ExternalMethod externalMethod,
+      String methodAccountRef,
+      long seed,
+      String calendarVersion,
+      List<LocalDate> holidays,
+      String policyVersion,
+      Instant now) {
     return new Order(
+        id,
         buyerId,
         product,
         quantity,
@@ -166,6 +197,38 @@ public class Order extends AuditableEntity {
 
   public UUID getProductId() {
     return productId;
+  }
+
+  public UUID getEventId() {
+    return eventId;
+  }
+
+  public UUID getPaymentId() {
+    return paymentId;
+  }
+
+  public Instant getPaymentConfirmedAt() {
+    return paymentConfirmedAt;
+  }
+
+  public Instant getShippedAt() {
+    return shippedAt;
+  }
+
+  public Instant getDeliveryDueAt() {
+    return deliveryDueAt;
+  }
+
+  public Instant getDeliveredAt() {
+    return deliveredAt;
+  }
+
+  public Instant getRefundDeadlineAt() {
+    return refundDeadlineAt;
+  }
+
+  public Instant getPurchaseConfirmedAt() {
+    return purchaseConfirmedAt;
   }
 
   public String getProductName() {
