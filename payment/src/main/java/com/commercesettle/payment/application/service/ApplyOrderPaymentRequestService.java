@@ -4,9 +4,15 @@ import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.commercesettle.payment.domain.exception.InvalidPaymentAmountException;
+import com.commercesettle.payment.domain.model.MileageEntry;
+import com.commercesettle.payment.domain.model.MileageReservation;
+import com.commercesettle.payment.domain.model.MileageWallet;
 import com.commercesettle.payment.domain.model.Payment;
 import com.commercesettle.payment.domain.model.PaymentAmounts;
 import com.commercesettle.payment.domain.model.PaymentJob;
+import com.commercesettle.payment.domain.repository.MileageEntryRepository;
+import com.commercesettle.payment.domain.repository.MileageReservationRepository;
+import com.commercesettle.payment.domain.repository.MileageWalletRepository;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
 import java.time.Clock;
@@ -20,8 +26,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * WAITING Inbox의 결제 요청을 검사해 결제와 승인 작업을 만들고 처리 결과를 기록한다. 재시도해도 결과가 같은 업무상 거절은 예외 없이 REVIEW_REQUIRED로
- * 남기고, 그 밖의 예외는 롤백되어 WAITING으로 다시 처리된다.
+ * WAITING Inbox의 결제 요청을 검사해 결제·마일리지 예약·승인 작업을 만들고 처리 결과를 기록한다. 마일리지 전액 결제는 같은 트랜잭션에서 차감·확정한다. 재시도해도
+ * 결과가 같은 업무상 거절은 예외 없이 REVIEW_REQUIRED로 남기고, 그 밖의 예외는 롤백되어 WAITING으로 다시 처리된다.
  */
 @Service
 public class ApplyOrderPaymentRequestService {
@@ -30,13 +36,25 @@ public class ApplyOrderPaymentRequestService {
   private final InboxStore inbox;
   private final PaymentRepository payments;
   private final PaymentJobRepository jobs;
+  private final MileageWalletRepository wallets;
+  private final MileageReservationRepository reservations;
+  private final MileageEntryRepository entries;
   private final Clock clock;
 
   public ApplyOrderPaymentRequestService(
-      InboxStore inbox, PaymentRepository payments, PaymentJobRepository jobs, Clock clock) {
+      InboxStore inbox,
+      PaymentRepository payments,
+      PaymentJobRepository jobs,
+      MileageWalletRepository wallets,
+      MileageReservationRepository reservations,
+      MileageEntryRepository entries,
+      Clock clock) {
     this.inbox = inbox;
     this.payments = payments;
     this.jobs = jobs;
+    this.wallets = wallets;
+    this.reservations = reservations;
+    this.entries = entries;
     this.clock = clock;
   }
 
@@ -71,9 +89,41 @@ public class ApplyOrderPaymentRequestService {
       return true;
     }
 
+    long mileage = amounts.get().mileageAmount();
+    Optional<MileageWallet> wallet = Optional.empty();
+    if (mileage > 0) {
+      // 같은 구매자의 다른 처리는 이 트랜잭션이 끝날 때까지 기다린 뒤 줄어든 가용 잔액을 본다.
+      wallet = wallets.findByBuyerIdForUpdate(payload.buyerId());
+      if (wallet.isEmpty() || wallet.get().available() < mileage) {
+        return review(claimed.get(), "PAYMENT_REQUEST_MILEAGE_INSUFFICIENT", now);
+      }
+    }
+
     Payment payment = createPayment(payload, amounts.get(), now);
+    if (mileage > 0) {
+      reserveMileage(wallet.get(), payment, now);
+    }
     inbox.markApplied(inboxId, payment.getId(), now);
     return true;
+  }
+
+  /**
+   * 결제의 사용 마일리지를 예약하고 원장에 남긴다. 외부 결제액이 0원이면 PG 승인이 필요 없으므로 같은 트랜잭션에서 바로 차감하고 결제를 확정한다. 차감 원장은 지갑에서
+   * 차감한 뒤 기록해야 차감 후 잔액이 남는다.
+   */
+  private void reserveMileage(MileageWallet wallet, Payment payment, Instant now) {
+    wallet.reserve(payment.getAmounts().mileageAmount(), now);
+    MileageReservation reservation =
+        reservations.save(MileageReservation.forPayment(wallet, payment, now));
+    entries.save(MileageEntry.reserve(wallet, reservation, now));
+
+    if (payment.getAmounts().externalAmount() == 0) {
+      wallet.consumeReserved(reservation.getAmount(), now);
+      reservation.consume(now);
+      entries.save(MileageEntry.debit(wallet, reservation, now));
+      payment.confirm(now);
+    }
+    wallets.save(wallet);
   }
 
   /**
