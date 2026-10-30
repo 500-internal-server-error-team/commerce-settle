@@ -1,6 +1,7 @@
 package com.commercesettle.payment.application.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
@@ -9,10 +10,18 @@ import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
+import com.commercesettle.payment.domain.model.MileageEntry;
+import com.commercesettle.payment.domain.model.MileageEntryKind;
+import com.commercesettle.payment.domain.model.MileageReservation;
+import com.commercesettle.payment.domain.model.MileageReservationStatus;
+import com.commercesettle.payment.domain.model.MileageWallet;
 import com.commercesettle.payment.domain.model.Payment;
 import com.commercesettle.payment.domain.model.PaymentJob;
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
 import com.commercesettle.payment.domain.model.PaymentStatus;
+import com.commercesettle.payment.domain.repository.MileageEntryRepository;
+import com.commercesettle.payment.domain.repository.MileageReservationRepository;
+import com.commercesettle.payment.domain.repository.MileageWalletRepository;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
 import java.time.Clock;
@@ -35,12 +44,17 @@ import org.junit.jupiter.params.provider.CsvSource;
 class ApplyOrderPaymentRequestServiceTest {
 
   private static final Instant NOW = Instant.parse("2026-10-29T00:00:00Z");
+  private static final UUID BUYER_ID = new UUID(0, 2);
 
   private final FakeInbox inbox = new FakeInbox();
   private final FakePayments payments = new FakePayments();
   private final FakeJobs jobs = new FakeJobs();
+  private final FakeWallets wallets = new FakeWallets();
+  private final FakeReservations reservations = new FakeReservations();
+  private final FakeEntries entries = new FakeEntries();
   private final ApplyOrderPaymentRequestService service =
-      new ApplyOrderPaymentRequestService(inbox, payments, jobs, Clock.fixed(NOW, ZoneOffset.UTC));
+      new ApplyOrderPaymentRequestService(
+          inbox, payments, jobs, wallets, reservations, entries, Clock.fixed(NOW, ZoneOffset.UTC));
 
   @Test
   @DisplayName("처리할 WAITING이 없으면 아무것도 바꾸지 않는다")
@@ -70,8 +84,9 @@ class ApplyOrderPaymentRequestServiceTest {
   }
 
   @Test
-  @DisplayName("마일리지 전액 결제는 승인 작업 없이 결제만 만든다")
-  void createsPaymentWithoutJobWhenExternalAmountIsZero() {
+  @DisplayName("마일리지 전액 결제는 승인 작업 없이 마일리지를 차감하고 바로 확정한다")
+  void confirmsMileageOnlyPaymentWithDebit() {
+    MileageWallet wallet = wallets.fund(BUYER_ID, 12_000);
     UUID inboxId =
         inbox.add(
             payload(
@@ -91,9 +106,84 @@ class ApplyOrderPaymentRequestServiceTest {
 
     service.processNext();
 
-    assertThat(payments.all()).hasSize(1);
+    Payment payment = payments.all().get(0);
+    assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CONFIRMED);
+    assertThat(payment.getConfirmedAt()).isEqualTo(NOW);
     assertThat(jobs.saved).isEmpty();
-    assertThat(inbox.applied).containsKey(inboxId);
+    assertThat(wallet.getBalance()).isEqualTo(2_000);
+    assertThat(wallet.getReservedAmount()).isZero();
+    assertThat(reservations.saved)
+        .singleElement()
+        .extracting(MileageReservation::getStatus)
+        .isEqualTo(MileageReservationStatus.CONSUMED);
+    assertThat(entries.saved)
+        .extracting(MileageEntry::getKind, MileageEntry::getBalanceAfter)
+        .containsExactly(
+            tuple(MileageEntryKind.RESERVE, 12_000L), tuple(MileageEntryKind.DEBIT, 2_000L));
+    assertThat(inbox.applied).containsEntry(inboxId, payment.getId());
+  }
+
+  @Test
+  @DisplayName("마일리지와 카드를 함께 쓰면 마일리지를 예약하고 승인 작업을 남긴 채 PENDING으로 둔다")
+  void reservesMileageForMixedPayment() {
+    MileageWallet wallet = wallets.fund(BUYER_ID, 5_000);
+    inbox.add(mixed(UUID.randomUUID(), UUID.randomUUID()));
+
+    service.processNext();
+
+    Payment payment = payments.all().get(0);
+    assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PENDING);
+    assertThat(jobs.saved).hasSize(1);
+    assertThat(wallet.getBalance()).isEqualTo(5_000);
+    assertThat(wallet.getReservedAmount()).isEqualTo(2_000);
+    assertThat(reservations.saved)
+        .singleElement()
+        .satisfies(
+            reservation -> {
+              assertThat(reservation.getStatus()).isEqualTo(MileageReservationStatus.RESERVED);
+              assertThat(reservation.getPaymentId()).isEqualTo(payment.getId());
+              assertThat(reservation.getAmount()).isEqualTo(2_000);
+            });
+    assertThat(entries.saved)
+        .singleElement()
+        .extracting(MileageEntry::getKind)
+        .isEqualTo(MileageEntryKind.RESERVE);
+  }
+
+  @Test
+  @DisplayName("가용 마일리지가 부족하면 결제를 만들지 않고 확인 대상으로 남긴다")
+  void marksReviewWhenMileageIsInsufficient() {
+    MileageWallet wallet = wallets.fund(BUYER_ID, 1_999);
+    UUID inboxId = inbox.add(mixed(UUID.randomUUID(), UUID.randomUUID()));
+
+    service.processNext();
+
+    assertThat(payments.all()).isEmpty();
+    assertThat(wallet.getReservedAmount()).isZero();
+    assertThat(reservations.saved).isEmpty();
+    assertThat(inbox.reviewRequired).containsExactly(inboxId);
+  }
+
+  @Test
+  @DisplayName("지갑이 없는 구매자는 잔액 0으로 보고 확인 대상으로 남긴다")
+  void marksReviewWhenWalletIsMissing() {
+    UUID inboxId = inbox.add(mixed(UUID.randomUUID(), UUID.randomUUID()));
+
+    service.processNext();
+
+    assertThat(payments.all()).isEmpty();
+    assertThat(inbox.reviewRequired).containsExactly(inboxId);
+  }
+
+  @Test
+  @DisplayName("마일리지를 쓰지 않는 결제는 지갑을 조회하지 않는다")
+  void skipsWalletForCardOnlyPayment() {
+    inbox.add(card(UUID.randomUUID(), UUID.randomUUID()));
+
+    service.processNext();
+
+    assertThat(wallets.lookups).isZero();
+    assertThat(reservations.saved).isEmpty();
   }
 
   @Test
@@ -232,6 +322,7 @@ class ApplyOrderPaymentRequestServiceTest {
   @Test
   @DisplayName("마일리지 전액 결제는 결제수단 값이 달라도 같은 요청으로 본다")
   void ignoresPaymentMethodWhenExternalAmountIsZero() {
+    wallets.fund(BUYER_ID, 10_000);
     UUID orderId = UUID.randomUUID();
     UUID cycleId = UUID.randomUUID();
     OrderPaymentRequestedPayload mileageOnly =
@@ -259,6 +350,23 @@ class ApplyOrderPaymentRequestServiceTest {
 
     assertThat(inbox.applied).containsEntry(secondInboxId, existingId);
     assertThat(inbox.reviewRequired).isEmpty();
+  }
+
+  private static OrderPaymentRequestedPayload mixed(UUID orderId, UUID cycleId) {
+    return payload(
+        orderId,
+        cycleId,
+        Status.PAYMENT_PENDING,
+        10_000,
+        0,
+        0,
+        2_000,
+        10_000,
+        10_000,
+        8_000,
+        0,
+        ExternalMethod.CREDIT_CARD,
+        "card-ref");
   }
 
   private static OrderPaymentRequestedPayload card(UUID orderId, UUID cycleId) {
@@ -431,6 +539,54 @@ class ApplyOrderPaymentRequestServiceTest {
       return saved.stream()
           .filter(j -> j.getOperation() == operation && j.getBusinessKey().equals(businessKey))
           .findFirst();
+    }
+  }
+
+  private static final class FakeWallets implements MileageWalletRepository {
+    private final Map<UUID, MileageWallet> byBuyer = new HashMap<>();
+    private int lookups;
+
+    MileageWallet fund(UUID buyerId, long balance) {
+      MileageWallet wallet = MileageWallet.open(buyerId, balance, NOW);
+      byBuyer.put(buyerId, wallet);
+      return wallet;
+    }
+
+    @Override
+    public Optional<MileageWallet> findByBuyerIdForUpdate(UUID buyerId) {
+      lookups++;
+      return Optional.ofNullable(byBuyer.get(buyerId));
+    }
+
+    @Override
+    public MileageWallet save(MileageWallet wallet) {
+      byBuyer.put(wallet.getBuyerId(), wallet);
+      return wallet;
+    }
+  }
+
+  private static final class FakeReservations implements MileageReservationRepository {
+    private final List<MileageReservation> saved = new ArrayList<>();
+
+    @Override
+    public MileageReservation save(MileageReservation reservation) {
+      saved.add(reservation);
+      return reservation;
+    }
+
+    @Override
+    public Optional<MileageReservation> findByPaymentId(UUID paymentId) {
+      return saved.stream().filter(r -> r.getPaymentId().equals(paymentId)).findFirst();
+    }
+  }
+
+  private static final class FakeEntries implements MileageEntryRepository {
+    private final List<MileageEntry> saved = new ArrayList<>();
+
+    @Override
+    public MileageEntry save(MileageEntry entry) {
+      saved.add(entry);
+      return entry;
     }
   }
 }
