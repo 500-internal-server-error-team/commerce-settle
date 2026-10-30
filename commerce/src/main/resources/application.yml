@@ -80,6 +80,9 @@ logging:
     dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Seoul"
 
 app:
+  dev-fixtures:
+    enabled: ${APP_DEV_FIXTURES_ENABLED:false}
+    password: ${DEV_FIXTURE_PASSWORD:}
   order-stub:
     enabled: ${APP_ORDER_STUB_ENABLED:false}
     seed: ${APP_ORDER_STUB_SEED:67}

@@ -50,6 +50,31 @@ mkdir -p work/buildx
 export BUILDX_CONFIG="$PWD/work/buildx"
 ```
 
+## 개발용 DB fixture
+
+로그인·상품·재고·배송지 API를 실험할 때 `APP_DEV_FIXTURES_ENABLED=true`로 켭니다. 기본값은 false이며 실제 커머스 DB에 아래 합성 데이터를 넣습니다. `init_env.py`가 `.env`에 생성한 `DEV_FIXTURE_PASSWORD`를 네 계정의 최초 비밀번호로 사용하고, 기존 Argon2id 해시·주소 AES-GCM 암호화를 그대로 적용합니다. 운영·공유 환경에서는 켜지 않습니다.
+
+```bash
+python3 scripts/init_env.py
+./gradlew :commerce:bootJar
+APP_DEV_FIXTURES_ENABLED=true docker compose up -d --build --wait commerce gateway
+```
+
+| 계정 | 이메일 | UUID 접미사 |
+| --- | --- | --- |
+| 구매자 A | `fixture-buyer-a@example.test` | `000000000001` |
+| 구매자 B | `fixture-buyer-b@example.test` | `000000000011` |
+| 판매자 A | `fixture-seller-a@example.test` | `000000000002` |
+| 판매자 B | `fixture-seller-b@example.test` | `000000000022` |
+
+UUID 앞 구간은 모두 `00000000-0000-4000-8000-`입니다. 수납 상자(상품 접미사 `000000000003`, 23,000원), 키보드(`000000000023`, 39,000원), 머그컵(`000000000033`, 10,000원)를 판매 중 상태로 만들고 각각 재고 100개와 초기 재고 이력을 기록합니다. 수납 상자·머그컵은 판매자 A, 키보드는 판매자 B의 상품입니다. 구매자별 기본 주소 한 개(주소 접미사 `000000000101`·`000000000111`)도 추가하며 연락처는 `000-`, 주소는 `가상시 테스트구`인 합성 데이터입니다.
+
+기동 후 [Swagger UI](http://localhost:8080/swagger-ui.html)에서 `/api/buyer-sessions` 또는 `/api/seller-sessions`에 위 이메일과 `.env`의 비밀번호로 로그인하고, 응답의 `token`을 Authorize에 입력합니다. `/api/products`, `/api/buyers/me/addresses`, 판매자 본인의 상품·재고 API를 바로 조회할 수 있습니다. 포트를 바꿨으면 `.env`의 `GATEWAY_PORT`를 사용합니다.
+
+적재는 앱 기동마다 한 트랜잭션으로 수행하며 없는 fixture만 추가합니다. 재기동해도 가격·재고·비밀번호·주소와 버전·암호문을 갱신하지 않고 논리삭제한 데이터도 되살리지 않습니다. 이후 `.env`의 비밀번호를 바꿔도 기존 계정 비밀번호는 바뀌지 않습니다. 고정 계정 ID·이메일이나 상품 소유자가 기존 데이터와 충돌하면 기존 행을 덮어쓰지 않고 이번 적재를 롤백해 기동을 실패시킵니다. 설정을 꺼도 이미 적재한 데이터는 보존합니다.
+
+이 fixture는 주문·결제·마일리지·정산 이력을 만들지 않습니다. 샘플 주문도 보려면 같은 명령에 `APP_ORDER_STUB_ENABLED=true`를 함께 지정합니다. 구매자 ID가 아래 주문 샘플과 같아 구매자별 10개 주문을 조회할 수 있지만, 주문은 계속 별도의 메모리 stub이며 DB 상품·주소의 변경이 반영되지는 않습니다.
+
 ## 주문 영속 저장 기반
 
 `Order.pendingRegular`는 쿠폰·이벤트 없는 일반 주문의 상품·금액·결제 구성과 최초 회차, 생성 후 10분 대기 기한을 고정합니다. 마일리지 잔액 확인이나 외부 승인·예약은 수행하지 않습니다. 배송 소요일·공휴일 달력은 [배송 정책](policies.md#배송환불-기한과-자동-구매확정)을 사본으로 보존합니다.
