@@ -7,6 +7,9 @@ spring:
     serialization:
       write-dates-as-timestamps: false
       write-dates-with-context-time-zone: true
+    # 정수 금액에 소수가 오면 버림 변환 대신 400으로 거절한다.
+    deserialization:
+      accept-float-as-int: false
   application:
     name: finance-mock
   datasource:
