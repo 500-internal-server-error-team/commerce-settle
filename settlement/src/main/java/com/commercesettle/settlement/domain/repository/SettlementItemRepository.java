@@ -24,10 +24,10 @@ public interface SettlementItemRepository {
   List<ReservedItem> reserveForPayout(UUID sellerId, Instant cutoffAt, UUID payoutId, Instant now);
 
   /**
-   * 지급 성공을 항목에 반영한다. 지급에 배정된 PAYOUT_RESERVED 항목을 PAID로, 그 ACTIVE 지급 예약을 CONSUMED로 바꾸고 바꾼 항목 수를
-   * 돌려준다. 호출자의 트랜잭션에서 실행한다.
+   * 지급 성공을 항목에 반영한다. 지급에 배정된 PAYOUT_RESERVED 항목의 순액 합계가 {@code expectedAmount}와 같을 때만 그 항목을 PAID로,
+   * ACTIVE 지급 예약을 CONSUMED로 바꾼다. 합계가 다르면 아무것도 바꾸지 않고 false를 돌려준다. 호출자의 트랜잭션에서 실행한다.
    */
-  int completePayout(UUID payoutId, Instant now);
+  boolean completePayout(UUID payoutId, long expectedAmount, Instant now);
 
   record ReservedItem(UUID id, UUID productId, long netAmount) {}
 }

@@ -14,7 +14,7 @@ import org.springframework.stereotype.Service;
 
 /**
  * 지급 Worker. 도래한 지급 작업 하나를 임대해 대역을 호출하고 결과를 반영한다. 처음 실행하는 지급만 실행 요청을 보내고, 결과를 모르는 지급은 원거래 조회부터 한다.
- * 조회가 거래 부재(404)면 임대를 다시 확인한 뒤 같은 업무 키·본문으로 재전송한다.
+ * 조회가 거래 부재(404)면 임대에 호출 제한 시간만큼 남았는지 다시 확인한 뒤 같은 업무 키·본문으로 재전송한다.
  */
 @Service
 public class PayoutWorker {
@@ -76,7 +76,8 @@ public class PayoutWorker {
       return gateway.execute(prepared.request());
     }
     Result found = gateway.lookup(prepared.request());
-    if (found instanceof Result.NotFound && jobs.holdsLease(job.jobId(), job.leaseToken())) {
+    if (found instanceof Result.NotFound
+        && jobs.holdsLease(job.jobId(), job.leaseToken(), settings.httpTimeout())) {
       return gateway.execute(prepared.request());
     }
     return found;

@@ -18,8 +18,8 @@ public interface PayoutJobRepository {
    */
   Optional<LeasedJob> leaseNext(String owner, Duration leaseDuration);
 
-  /** 이 token의 임대가 아직 유효한지 확인한다. 외부 호출 직전에 쓴다. */
-  boolean holdsLease(UUID jobId, UUID leaseToken);
+  /** 이 token의 임대가 {@code minRemaining}보다 더 남아 있는지 확인한다. 외부 호출 직전에 호출 제한 시간을 넘겨 쓴다. */
+  boolean holdsLease(UUID jobId, UUID leaseToken, Duration minRemaining);
 
   /**
    * 유효한 임대를 가진 경우에만 작업을 끝내거나 다시 대기시키고 임대를 비운다. 다음 실행 시각은 DB 시각에 {@code runAfter}를 더해 정한다. 호출자의

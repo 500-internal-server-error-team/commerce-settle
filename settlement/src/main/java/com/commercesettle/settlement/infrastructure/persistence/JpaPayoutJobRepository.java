@@ -64,12 +64,16 @@ class JpaPayoutJobRepository implements PayoutJobRepository {
   }
 
   @Override
-  public boolean holdsLease(UUID jobId, UUID leaseToken) {
+  public boolean holdsLease(UUID jobId, UUID leaseToken, Duration minRemaining) {
     Boolean holds =
         jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM settlement.payout_jobs WHERE id = :id"
-                + " AND status = 'RUNNING' AND lease_token = :token AND lease_until > now())",
-            new MapSqlParameterSource().addValue("id", jobId).addValue("token", leaseToken),
+                + " AND status = 'RUNNING' AND lease_token = :token"
+                + " AND lease_until > now() + make_interval(secs => :minRemaining))",
+            new MapSqlParameterSource()
+                .addValue("id", jobId)
+                .addValue("token", leaseToken)
+                .addValue("minRemaining", seconds(minRemaining)),
             Boolean.class);
     return Boolean.TRUE.equals(holds);
   }

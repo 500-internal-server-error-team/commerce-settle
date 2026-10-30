@@ -106,21 +106,31 @@ class JpaSettlementItemRepository implements SettlementItemRepository {
   }
 
   @Override
-  public int completePayout(UUID payoutId, Instant now) {
+  public boolean completePayout(UUID payoutId, long expectedAmount, Instant now) {
     MapSqlParameterSource params =
-        new MapSqlParameterSource().addValue("payoutId", payoutId).addValue("now", time(now));
+        new MapSqlParameterSource()
+            .addValue("payoutId", payoutId)
+            .addValue("expectedAmount", expectedAmount)
+            .addValue("now", time(now));
+    // 합계 확인과 갱신을 한 문장에 둬 일부 항목만 PAID가 되지 않게 한다.
     int paid =
         jdbc.update(
             "UPDATE settlement.settlement_items"
                 + " SET status = 'PAID', updated_at = :now, version = version + 1"
-                + " WHERE payout_id = :payoutId AND status = 'PAYOUT_RESERVED'",
+                + " WHERE payout_id = :payoutId AND status = 'PAYOUT_RESERVED'"
+                + " AND (SELECT sum(net_amount) FROM settlement.settlement_items"
+                + "      WHERE payout_id = :payoutId AND status = 'PAYOUT_RESERVED')"
+                + "     = :expectedAmount",
             params);
+    if (paid == 0) {
+      return false;
+    }
     jdbc.update(
         "UPDATE settlement.settlement_reservations"
             + " SET status = 'CONSUMED', updated_at = :now, version = version + 1"
             + " WHERE payout_id = :payoutId AND kind = 'PAYOUT' AND status = 'ACTIVE'",
         params);
-    return paid;
+    return true;
   }
 
   private static OffsetDateTime time(Instant instant) {

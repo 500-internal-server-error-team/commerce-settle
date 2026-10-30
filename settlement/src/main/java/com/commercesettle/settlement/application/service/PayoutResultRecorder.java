@@ -17,6 +17,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +28,8 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Component
 class PayoutResultRecorder {
+  private static final Logger LOGGER = LoggerFactory.getLogger(PayoutResultRecorder.class);
+
   private final PayoutJobRepository jobs;
   private final PayoutRepository payouts;
   private final SettlementBatchRepository batches;
@@ -50,14 +54,20 @@ class PayoutResultRecorder {
 
   /**
    * 호출할 요청을 준비한다. 처음 실행하는 지급이면 지급·배치를 처리 중으로 바꿔 두고 실행(POST)을, 이미 처리 중이었으면 결과를 모르므로 원거래 조회부터 하게 한다.
+   * 임대에 호출 제한 시간만큼 남지 않았거나, 반복 중단으로 회수돼 시도 상한을 넘었으면 호출하지 않는다.
    */
   @Transactional
   public Optional<Prepared> prepare(LeasedJob job) {
-    if (!jobs.holdsLease(job.jobId(), job.leaseToken())) {
+    if (!jobs.holdsLease(job.jobId(), job.leaseToken(), settings.httpTimeout())) {
       return Optional.empty();
     }
     Instant now = clock.instant();
     Payout payout = payouts.findById(job.payoutId()).orElseThrow();
+    // 임대할 때 시도가 하나 늘었으므로 상한보다 크면 이미 상한만큼 실행한 뒤 다시 회수된 것이다.
+    if (job.attempts() > settings.maxAttempts()) {
+      exhaust(job, payout, now);
+      return Optional.empty();
+    }
     boolean firstCall = payout.getStatus() == PayoutStatus.PENDING;
     if (firstCall) {
       payout.startProcessing(now);
@@ -72,10 +82,15 @@ class PayoutResultRecorder {
     Payout payout = payouts.findById(job.payoutId()).orElseThrow();
     switch (result) {
       case Result.Succeeded succeeded -> {
-        release(job, PayoutJobStatus.DONE, Duration.ZERO);
         payout.succeed(succeeded.succeededAt(), succeeded.externalRef(), now);
-        items.completePayout(payout.getId(), now);
-        batch(payout).complete(now);
+        if (items.completePayout(payout.getId(), payout.getAmount(), now)) {
+          release(job, PayoutJobStatus.DONE, Duration.ZERO);
+          batch(payout).complete(now);
+        } else {
+          // 돈은 나갔지만 완료할 항목이 지급 금액과 맞지 않는다. 성공만 남기고 항목·예약은 운영 확인에 맡긴다.
+          release(job, PayoutJobStatus.REVIEW_REQUIRED, Duration.ZERO);
+          batch(payout).requireReview(now);
+        }
       }
       case Result.Declined declined -> {
         release(job, PayoutJobStatus.REVIEW_REQUIRED, Duration.ZERO);
@@ -94,13 +109,29 @@ class PayoutResultRecorder {
 
   /** 예약과 업무 키를 유지한 채 나중에 같은 원거래를 다시 조회한다. 시도 상한을 넘으면 운영 확인으로 넘긴다. */
   private void keepUnconfirmed(LeasedJob job, Payout payout, Instant now) {
-    payout.markUnknown(now);
     if (job.attempts() >= settings.maxAttempts()) {
-      release(job, PayoutJobStatus.REVIEW_REQUIRED, Duration.ZERO);
-      batch(payout).requireReview(now);
+      exhaust(job, payout, now);
       return;
     }
+    payout.markUnknown(now);
     release(job, PayoutJobStatus.RETRY, settings.unconfirmedRetryDelay());
+  }
+
+  /** 자동 시도를 다 썼다. 금융 상태·업무 키·예약은 그대로 두고 운영 확인으로 넘긴다. 호출한 적 없는 대기 지급은 대기로 둔다. */
+  private void exhaust(LeasedJob job, Payout payout, Instant now) {
+    release(job, PayoutJobStatus.REVIEW_REQUIRED, Duration.ZERO);
+    if (payout.getStatus() != PayoutStatus.PENDING) {
+      payout.markUnknown(now);
+    }
+    batch(payout).requireReview(now);
+    LOGGER
+        .atWarn()
+        .addKeyValue("event", "settlement.payout")
+        .addKeyValue("payoutId", job.payoutId())
+        .addKeyValue("jobId", job.jobId())
+        .addKeyValue("attempt", job.attempts())
+        .addKeyValue("result", "ATTEMPTS_EXHAUSTED")
+        .log("Payout job requires review after exhausting attempts");
   }
 
   private void release(LeasedJob job, PayoutJobStatus status, Duration runAfter) {
