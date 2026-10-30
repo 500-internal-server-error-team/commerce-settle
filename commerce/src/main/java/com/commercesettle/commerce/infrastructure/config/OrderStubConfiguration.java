@@ -1,6 +1,7 @@
 package com.commercesettle.commerce.infrastructure.config;
 
 import com.commercesettle.commerce.application.port.OrderInventory;
+import com.commercesettle.commerce.application.service.OrderStubDataFactory;
 import com.commercesettle.commerce.application.service.OrderStubService;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.model.Product;
@@ -44,7 +45,8 @@ public class OrderStubConfiguration {
   @Bean
   public OrderStubService orderStubService(
       Clock clock, @Value("${app.order-stub.seed:67}") String seed, OrderInventory inventory) {
-    return new OrderStubService(clock, seed, inventory, products);
+    OrderStubDataFactory snapshots = new OrderStubDataFactory(clock, seed);
+    return new OrderStubService(inventory, snapshots, snapshots.initialOrders(products));
   }
 
   private static Product product(int productId, int sellerId, String name, long unitPrice) {
