@@ -372,6 +372,35 @@ class OrderIntegrationTest {
     problem(get(f.buyer(), "/api/orders?page=-1"), 400, "COMMON_VALIDATION_FAILED");
   }
 
+  @ParameterizedTest
+  @CsvSource({"21474837,100,1", "2147483647,100,1", "2147483647,1,2"})
+  @DisplayName("큰 페이지도 빈 목록과 본인 주문 수를 반환한다")
+  void returnsEmptyOwnedPageAcrossJpaOffsetBoundary(int page, int size, int totalPages) {
+    var f = fixture(2);
+    for (int i = 0; i < 2; i++) {
+      assertThat(post(f.buyer(), key(), body(f)).getStatusCode().value()).isEqualTo(201);
+    }
+    var other = fixture(1);
+    assertThat(post(other.buyer(), key(), body(other)).getStatusCode().value()).isEqualTo(201);
+
+    var response = get(f.buyer(), "/api/orders?page=" + page + "&size=" + size);
+
+    assertThat(response.getStatusCode().value()).isEqualTo(200);
+    var result = response.getBody();
+    assertThat(result.path("items").isArray()).isTrue();
+    assertThat(result.path("items")).isEmpty();
+    assertThat(result.path("page").asInt()).isEqualTo(page);
+    assertThat(result.path("size").asInt()).isEqualTo(size);
+    assertThat(result.path("totalElements").asLong()).isEqualTo(2);
+    assertThat(result.path("totalPages").asInt()).isEqualTo(totalPages);
+    assertThat(
+            get(other.buyer(), "/api/orders?page=" + page + "&size=" + size)
+                .getBody()
+                .path("totalElements")
+                .asLong())
+        .isEqualTo(1);
+  }
+
   @Test
   @DisplayName("가격·버전 변경과 판매 중단·타인/삭제 주소를 거절하고 예약을 남기지 않는다")
   void rejectsInvalidReferencesAndPrices() {
