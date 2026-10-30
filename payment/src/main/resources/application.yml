@@ -76,6 +76,9 @@ logging:
     dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Seoul"
 
 app:
+  dev-fixtures:
+    enabled: ${APP_DEV_FIXTURES_ENABLED:false}
+    run-scenarios: ${APP_DEV_FIXTURE_SCENARIOS_ENABLED:false}
   kafka:
     order-payment-requested:
       # 개발용 초기 SQL 적용과 신규 그룹 offset 초기화 후에만 활성화한다.

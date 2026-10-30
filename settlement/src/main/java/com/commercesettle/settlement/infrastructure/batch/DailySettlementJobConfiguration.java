@@ -5,8 +5,12 @@ import com.commercesettle.settlement.domain.exception.PayoutNotAllowedException;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -71,19 +75,26 @@ class DailySettlementJobConfiguration {
   @Bean
   @StepScope
   JdbcPagingItemReader<UUID> payableSellerReader(
-      DataSource dataSource, @Value("#{jobParameters['batchDate']}") LocalDate batchDate) {
+      DataSource dataSource,
+      @Value("#{jobParameters['batchDate']}") LocalDate batchDate,
+      @Value("#{jobParameters['fixtureItemIds']}") String fixtureItemIds) {
     PostgresPagingQueryProvider query = new PostgresPagingQueryProvider();
     query.setSelectClause("seller_id");
     query.setFromClause("settlement.settlement_items");
-    query.setWhereClause("status = 'PAYABLE' AND payout_id IS NULL AND ready_at < :cutoffAt");
+    Set<UUID> selected = selectedItems(fixtureItemIds);
+    query.setWhereClause(
+        "status = 'PAYABLE' AND payout_id IS NULL AND ready_at < :cutoffAt"
+            + (selected == null ? "" : " AND id IN (:fixtureItemIds)"));
+    Map<String, Object> parameters = new HashMap<>();
+    parameters.put("cutoffAt", SettlementBatch.cutoffOf(batchDate).atOffset(ZoneOffset.UTC));
+    if (selected != null) parameters.put("fixtureItemIds", selected);
     query.setGroupClause("seller_id");
     query.setSortKeys(Map.of("seller_id", Order.ASCENDING));
     return new JdbcPagingItemReaderBuilder<UUID>()
         .name("payableSellerReader")
         .dataSource(dataSource)
         .queryProvider(query)
-        .parameterValues(
-            Map.of("cutoffAt", SettlementBatch.cutoffOf(batchDate).atOffset(ZoneOffset.UTC)))
+        .parameterValues(parameters)
         .rowMapper((rs, row) -> rs.getObject("seller_id", UUID.class))
         .pageSize(100)
         // 저장한 읽은 건수로 건너뛰면 이미 빠진 판매자 수만큼 남은 판매자까지 건너뛴다.
@@ -95,8 +106,23 @@ class DailySettlementJobConfiguration {
   @StepScope
   ItemWriter<UUID> sellerSettlementWriter(
       SellerSettlementService sellers,
-      @Value("#{jobParameters['batchDate']}") LocalDate batchDate) {
-    return chunk -> chunk.forEach(sellerId -> sellers.settle(sellerId, batchDate));
+      @Value("#{jobParameters['batchDate']}") LocalDate batchDate,
+      @Value("#{jobParameters['fixtureItemIds']}") String fixtureItemIds) {
+    Set<UUID> selected = selectedItems(fixtureItemIds);
+    return chunk ->
+        chunk.forEach(
+            sellerId -> {
+              if (selected == null) sellers.settle(sellerId, batchDate);
+              else sellers.settleFixture(sellerId, batchDate, selected);
+            });
+  }
+
+  private static Set<UUID> selectedItems(String ids) {
+    return ids == null
+        ? null
+        : Arrays.stream(ids.split(","))
+            .map(UUID::fromString)
+            .collect(Collectors.toUnmodifiableSet());
   }
 
   private static SkipListener<UUID, UUID> skippedSellerLogger() {

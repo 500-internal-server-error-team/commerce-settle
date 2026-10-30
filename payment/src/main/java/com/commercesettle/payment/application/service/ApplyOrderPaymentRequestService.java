@@ -63,6 +63,17 @@ public class ApplyOrderPaymentRequestService {
   public boolean processNext() {
     Instant now = clock.instant();
     Optional<WaitingInboxEvent> claimed = inbox.claimNextWaiting(now);
+    return process(claimed, now);
+  }
+
+  /** 지정한 이벤트만 처리한다. 개발 시나리오 재개가 다른 WAITING 작업을 소비하지 않게 한다. */
+  @Transactional
+  public boolean processEvent(UUID eventId) {
+    Instant now = clock.instant();
+    return process(inbox.claimWaitingEvent(eventId, now), now);
+  }
+
+  private boolean process(Optional<WaitingInboxEvent> claimed, Instant now) {
     if (claimed.isEmpty()) {
       return false;
     }

@@ -112,13 +112,26 @@ public class JdbcInboxStore implements InboxStore {
 
   @Override
   public Optional<WaitingInboxEvent> claimNextWaiting(Instant now) {
-    var params = new MapSqlParameterSource("consumer", consumer).addValue("now", toTimestamp(now));
+    return claimWaiting(null, now);
+  }
+
+  @Override
+  public Optional<WaitingInboxEvent> claimWaitingEvent(UUID eventId, Instant now) {
+    return claimWaiting(java.util.Objects.requireNonNull(eventId), now);
+  }
+
+  private Optional<WaitingInboxEvent> claimWaiting(UUID eventId, Instant now) {
+    var params =
+        new MapSqlParameterSource("consumer", consumer)
+            .addValue("now", toTimestamp(now))
+            .addValue("eventId", eventId, Types.OTHER);
     applyTransactionLimits();
     List<Original> rows =
         jdbc.query(
             """
             SELECT id, raw_body FROM payment.inbox
             WHERE consumer = :consumer AND status = 'WAITING' AND next_run_at <= :now
+              AND (CAST(:eventId AS uuid) IS NULL OR event_id = :eventId)
             ORDER BY next_run_at, id
             LIMIT 1
             FOR UPDATE SKIP LOCKED

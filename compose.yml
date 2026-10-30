@@ -13,6 +13,8 @@ x-app: &app
     MANAGEMENT_TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0.1}
     SPRING_REACTOR_CONTEXT_PROPAGATION: auto
     TZ: Asia/Seoul
+    APP_DEV_FIXTURES_ENABLED: ${APP_DEV_FIXTURES_ENABLED:-false}
+    APP_DEV_FIXTURE_SCENARIOS_ENABLED: ${APP_DEV_FIXTURE_SCENARIOS_ENABLED:-false}
   depends_on: &app-deps
     redis:
       condition: service_healthy
@@ -244,6 +246,7 @@ services:
         MODULE: settlement
     environment:
       <<: *app-env
+      SETTLEMENT_DAILY_BATCH_ENABLED: ${SETTLEMENT_DAILY_BATCH_ENABLED:-true}
       DB_URL: jdbc:postgresql://postgres:5432/settlement
       DB_USERNAME: settlement
       DB_PASSWORD: ${SETTLEMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
