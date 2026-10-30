@@ -24,6 +24,10 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -362,6 +366,34 @@ class PayoutWorkerIntegrationTest {
     assertThat(itemStatuses()).containsOnly("PAID");
   }
 
+  @Test
+  @DisplayName("항목 잠금을 기다리는 동안 임대가 만료되면 결과 반영을 롤백한다")
+  void leaseExpiredWhileWaitingForLockDiscardsResult() throws Exception {
+    gateway.beforeResult = this::lockItems;
+    gateway.executeResults.add(new PayoutGateway.Result.Succeeded(EXTERNAL, SUCCEEDED_AT));
+
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<Boolean> run = executor.submit(worker::runOnce);
+      awaitLockWaiter(run);
+      // 결과 반영 트랜잭션이 시작된 뒤의 시각으로 만료시킨다. now()로 검사하면 통과해 버린다.
+      jdbc.update(
+          "UPDATE settlement.payout_jobs SET lease_until = clock_timestamp() WHERE payout_id = ?",
+          payoutId);
+      releaseItemLock();
+
+      assertThat(run.get(10, TimeUnit.SECONDS)).isTrue();
+    } finally {
+      executor.shutdownNow();
+    }
+
+    assertThat(payout()).containsEntry("status", "PROCESSING");
+    assertThat(itemStatuses()).containsOnly("PAYOUT_RESERVED");
+    assertThat(reservationStatuses()).containsOnly("ACTIVE");
+    assertThat(batchStatus()).isEqualTo("PROCESSING");
+    assertThat(job()).containsEntry("status", "RUNNING");
+  }
+
   /** 애플리케이션 풀 밖의 별도 연결로 이 지급의 항목을 잠근다. 이미 잠갔으면 그대로 둔다. */
   private void lockItems() {
     if (itemLock != null) {
@@ -390,6 +422,20 @@ class PayoutWorkerIntegrationTest {
     if (itemLock != null) {
       itemLock.close();
       itemLock = null;
+    }
+  }
+
+  // 결과 반영이 항목 잠금을 기다릴 때까지 기다린다. 잠금 대기 상한(1초)보다 짧은 간격으로 확인한다.
+  private void awaitLockWaiter(Future<?> run) throws InterruptedException {
+    long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+    while (jdbc.queryForObject(
+            "SELECT count(*) FROM pg_stat_activity"
+                + " WHERE datname = current_database() AND wait_event_type = 'Lock'",
+            Long.class)
+        == 0) {
+      assertThat(run).as("잠금 대기 전에 Worker가 끝났다").isNotDone();
+      assertThat(System.nanoTime()).as("잠금 대기를 확인하지 못했다").isLessThan(deadline);
+      Thread.sleep(10);
     }
   }
 
