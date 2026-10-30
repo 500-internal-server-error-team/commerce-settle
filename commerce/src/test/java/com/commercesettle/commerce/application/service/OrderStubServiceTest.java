@@ -49,12 +49,13 @@ class OrderStubServiceTest {
 
   @Test
   void samplesAreStableVariedAndFollowAmountAndTimelinePolicies() throws Exception {
+    OrderStubConfiguration restarted = new OrderStubConfiguration();
     List<OrderView> samples = orders.list(BUYER, 0, 100).items();
     assertThat(samples)
         .hasSize(10)
         .isEqualTo(
-            configuration
-                .orderStubService(CLOCK, "67", configuration.orderInventory())
+            restarted
+                .orderStubService(CLOCK, "67", restarted.orderInventory())
                 .list(BUYER, 0, 100)
                 .items());
     assertThat(samples).extracting(OrderView::deliveryBusinessDays).contains(2, 3);
