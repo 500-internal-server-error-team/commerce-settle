@@ -3,6 +3,92 @@ CREATE SCHEMA commerce;
 
 COMMENT ON SCHEMA commerce IS 'Commerce service owned schema';
 
+CREATE TABLE commerce.orders (
+    id uuid PRIMARY KEY,
+    buyer_id uuid NOT NULL,
+    seller_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    event_id uuid,
+    buyer_coupon_id uuid,
+    payment_id uuid,
+    product_name varchar(120) NOT NULL,
+    unit_price bigint NOT NULL CHECK (unit_price BETWEEN 1 AND 10000000),
+    quantity integer NOT NULL,
+    gross_amount bigint NOT NULL CHECK (gross_amount BETWEEN 1 AND 10000000),
+    coupon_amount bigint NOT NULL,
+    seller_coupon_amount bigint NOT NULL CHECK (seller_coupon_amount >= 0),
+    platform_coupon_amount bigint NOT NULL CHECK (platform_coupon_amount >= 0),
+    settlement_base_amount bigint NOT NULL,
+    total_amount bigint NOT NULL CHECK (total_amount BETWEEN 1 AND 10000000),
+    mileage_amount bigint NOT NULL,
+    external_amount bigint NOT NULL CHECK (external_amount >= 0),
+    payment_cycle_id uuid NOT NULL,
+    external_method varchar(24),
+    provider_id varchar(16),
+    method_account_ref varchar(100),
+    status varchar(32) NOT NULL CHECK (status IN ('PAYMENT_PENDING','PAID','DECLINED',
+        'CANCEL_PENDING','CANCELLED','REFUND_PENDING','REFUNDED','PURCHASE_CONFIRMED')),
+    fulfillment_status varchar(24) NOT NULL
+        CHECK (fulfillment_status IN ('UNSHIPPED','SHIPPED','DELIVERED','RETURN_RECEIVED')),
+    simulation_seed bigint NOT NULL,
+    delivery_business_days integer NOT NULL CHECK (delivery_business_days IN (2,3)),
+    delivery_calendar_version varchar(32) NOT NULL,
+    delivery_calendar jsonb NOT NULL CHECK (jsonb_typeof(delivery_calendar) = 'object'),
+    shipped_at timestamptz,
+    delivery_due_at timestamptz,
+    delivered_at timestamptz,
+    payment_confirmed_at timestamptz,
+    refund_deadline_at timestamptz,
+    purchase_confirmed_at timestamptz,
+    payment_wait_until timestamptz NOT NULL,
+    policy_version varchar(32) NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
+    CHECK ((event_id IS NULL AND quantity BETWEEN 1 AND 10)
+        OR (event_id IS NOT NULL AND quantity = 1)),
+    CHECK (gross_amount = unit_price * quantity),
+    CHECK (coupon_amount = seller_coupon_amount + platform_coupon_amount
+        AND coupon_amount >= 0 AND coupon_amount < gross_amount),
+    CHECK (seller_coupon_amount = 0 OR platform_coupon_amount = 0),
+    CHECK (settlement_base_amount = gross_amount - seller_coupon_amount),
+    CHECK (total_amount = settlement_base_amount - platform_coupon_amount
+        AND total_amount = external_amount + mileage_amount),
+    CHECK (mileage_amount BETWEEN 0 AND total_amount),
+    CHECK ((buyer_coupon_id IS NULL AND coupon_amount = 0)
+        OR (buyer_coupon_id IS NOT NULL AND mileage_amount = 0)),
+    CHECK ((external_amount = 0 AND external_method IS NULL
+            AND method_account_ref IS NULL AND provider_id IS NULL)
+        OR (external_amount > 0 AND external_method IS NOT NULL
+            AND external_method IN ('CREDIT_CARD','DEBIT_CARD','EASY_PAY')
+            AND method_account_ref IS NOT NULL AND length(trim(method_account_ref)) > 0)),
+    CHECK ((shipped_at IS NULL) = (delivery_due_at IS NULL)),
+    CHECK (delivered_at IS NULL OR (delivery_due_at IS NOT NULL AND delivered_at = delivery_due_at)),
+    CHECK ((delivered_at IS NULL AND refund_deadline_at IS NULL)
+        OR (delivered_at IS NOT NULL AND refund_deadline_at IS NOT NULL
+            AND refund_deadline_at = delivered_at + interval '168 hours')),
+    CHECK (payment_wait_until > created_at)
+);
+CREATE INDEX ix_orders_buyer_created ON commerce.orders (buyer_id, created_at, id);
+CREATE INDEX ix_orders_seller_created ON commerce.orders (seller_id, created_at, id);
+CREATE INDEX ix_orders_delivery_due ON commerce.orders (fulfillment_status, delivery_due_at, id);
+CREATE INDEX ix_orders_refund_deadline ON commerce.orders (status, refund_deadline_at, id);
+CREATE INDEX ix_orders_payment_wait ON commerce.orders (status, payment_wait_until, id);
+CREATE UNIQUE INDEX uq_orders_payment ON commerce.orders (payment_id) WHERE payment_id IS NOT NULL;
+
+CREATE TABLE commerce.order_addresses (
+    id uuid PRIMARY KEY,
+    order_id uuid NOT NULL UNIQUE,
+    recipient_ciphertext bytea NOT NULL CHECK (octet_length(recipient_ciphertext) > 0),
+    phone_ciphertext bytea NOT NULL CHECK (octet_length(phone_ciphertext) > 0),
+    address_ciphertext bytea NOT NULL CHECK (octet_length(address_ciphertext) > 0),
+    masked_at timestamptz,
+    hold_reason varchar(200),
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0 CHECK (version >= 0)
+);
+
 CREATE TABLE commerce.outbox (
     id uuid PRIMARY KEY,
     sequence_no bigint GENERATED ALWAYS AS IDENTITY UNIQUE,

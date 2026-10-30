@@ -37,7 +37,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "management.tracing.enabled=false",
       "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
       "app.auth.rate-limit.identifier-hmac-key=inventory-reservation-test-hmac-key-32b",
-      "app.auth.password-reset.delivery-key=inventory-reservation-test-delivery-key-32b"
+      "app.auth.password-reset.delivery-key=inventory-reservation-test-delivery-key-32b",
+      "app.address.encryption-key=inventory-reservation-test-address-key-32b"
     })
 @Testcontainers
 class InventoryReservationIntegrationTest {

@@ -4,6 +4,8 @@
 
 이 문서는 테이블·컬럼·제약·인덱스의 목표 스키마를 정의합니다. 실제 DDL과 환경별 생성·변경 절차는 [DB 정책](migrations.md)을 따르며, 명세의 존재를 테이블 구현 완료로 간주하지 않습니다. 현재 커머스의 `products`·`product_inventory`·`inventory_movements`·`inventory_reservations`·`idempotency_records`·`buyer_accounts`·`seller_accounts`·`password_reset_tokens`·`audit_logs`는 [commerce 초기 SQL](../infra/postgres/schema/commerce.sql)에, 정산의 `settlement_items`·`settlement_batches`·`payouts`·`payout_jobs`·`settlement_reservations`와 Spring Batch 메타데이터는 [settlement 초기 SQL](../infra/postgres/schema/settlement.sql)에, 금융 Mock의 `mock_accounts`·`mock_scenarios`·`mock_transactions`·`mock_funds_reservations`·`mock_cash_entries`·`idempotency_records`는 [finance_mock 초기 SQL](../infra/postgres/schema/finance_mock.sql)에 반영했습니다. 금융 Mock은 지급 대역 동작만 구현했으며 PG·간편결제 승인·환불·입금 컬럼은 아직 쓰지 않습니다.
 
+일반 주문의 `orders`·`order_addresses`도 commerce 초기 SQL과 도메인·저장소에 반영했습니다. 최초 주문 금액·결제 구성·배송 정책과 암호화 주소 사본을 저장하는 기반이며, 정식 주문 API·재고/쿠폰 예약·Outbox와 결제 결과 처리는 아직 연결하지 않았습니다. 저장·조회 범위와 검증은 [주문 영속 저장 기반](development.md#주문-영속-저장-기반)을 따릅니다.
+
 아래 컬럼·제약·인덱스가 기준이고 ERD는 주요 필드와 관계를 요약합니다. 각 뷰는 같은 DB 안의 관계를 보여주며 외부 서비스 ID는 값으로만 저장합니다. 주소·연락처는 별도 암호화 사본이고 금융 이벤트에 포함하지 않습니다.
 
 소유 표기의 `commerce`는 커머스 앱과 그 앱이 소유한 DB·계정·스키마 이름입니다. 판매자 계정·컬럼의 `seller`는 업무 식별자입니다.
