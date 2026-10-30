@@ -108,12 +108,12 @@ class AccountRepositoryIntegrationTest {
     TransactionTemplate tx = new TransactionTemplate(transactions);
 
     Boolean activeLocked =
-        tx.execute(status -> accounts.findBuyerForUpdate(buyer.getId()).isPresent());
+        tx.execute(status -> accounts.findLockedById(ActorKind.BUYER, buyer.getId()).isPresent());
     jdbc.update(
         "UPDATE commerce.buyer_accounts SET status = 'DELETED', deleted_at = now() WHERE id = ?",
         buyer.getId());
     Boolean deletedLocked =
-        tx.execute(status -> accounts.findBuyerForUpdate(buyer.getId()).isPresent());
+        tx.execute(status -> accounts.findLockedById(ActorKind.BUYER, buyer.getId()).isPresent());
 
     assertThat(activeLocked).isTrue();
     assertThat(deletedLocked).isFalse();

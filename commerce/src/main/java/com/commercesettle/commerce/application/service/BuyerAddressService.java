@@ -3,6 +3,7 @@ package com.commercesettle.commerce.application.service;
 import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
 import com.commercesettle.commerce.application.port.AddressCipher;
 import com.commercesettle.commerce.domain.exception.BuyerAddressNotFoundException;
+import com.commercesettle.commerce.domain.model.ActorKind;
 import com.commercesettle.commerce.domain.model.BuyerAddress;
 import com.commercesettle.commerce.domain.model.ShippingAddress;
 import com.commercesettle.commerce.domain.repository.AccountRepository;
@@ -124,7 +125,9 @@ public class BuyerAddressService {
 
   // 첫 주소 판단과 기본 주소 이동을 읽기 전에 구매자 행을 잠가 같은 구매자의 주소록 쓰기를 직렬화한다.
   private void lockBuyer(UUID buyerId) {
-    accounts.findBuyerForUpdate(buyerId).orElseThrow(AuthenticationFailedException::new);
+    accounts
+        .findLockedById(ActorKind.BUYER, buyerId)
+        .orElseThrow(AuthenticationFailedException::new);
   }
 
   // 새 기본 주소보다 먼저 flush해 기본 주소 부분 UNIQUE를 지나게 한다.

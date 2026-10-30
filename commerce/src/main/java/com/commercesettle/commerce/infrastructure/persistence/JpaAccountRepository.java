@@ -65,13 +65,6 @@ class JpaAccountRepository implements AccountRepository {
     };
   }
 
-  // 잠금 대기에도 DB 대기 상한을 적용한다.
-  @Override
-  public Optional<BuyerAccount> findBuyerForUpdate(UUID id) {
-    TransactionLimits.apply(jdbc);
-    return buyers.findLockedById(id);
-  }
-
   @Override
   public BuyerAccount save(BuyerAccount account) {
     return saveNew(() -> buyers.saveAndFlush(account), "uk_buyer_accounts_email");
