@@ -360,6 +360,8 @@ public final class KafkaCapacityExperiment {
       properties.put("app.kafka.order-payment-requested.enabled", "true");
       properties.put("app.kafka.quarantine.enabled", "true");
       properties.put("app.payment-request-processor.enabled", "false");
+      properties.put("app.dev-fixtures.enabled", "false");
+      properties.put("app.dev-fixtures.run-scenarios", "false");
       properties.put("management.tracing.sampling.probability", "0");
       properties.put("logging.level.root", "WARN");
       properties.put("spring.main.banner-mode", "off");
