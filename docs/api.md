@@ -243,6 +243,7 @@ PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반�
 | COUPON_EXPIRED / COUPON_NOT_APPLICABLE |409|만료·상품/소유/최소 금액·허용 수단 조건 위반|
 | COUPON_BUDGET_EXHAUSTED |409|판매자 캠페인의 명목 예산 또는 발급 수 소진; 플랫폼 자동 발급·가입에는 적용하지 않음|
 | INVENTORY_INSUFFICIENT / EVENT_ADMISSION_CLOSED |409|재고/기간/참여한도/매진|
+| PRODUCT_EVENT_IN_PROGRESS |409|공개 후 종료 전 이벤트가 있는 상품의 변경·논리삭제|
 | MILEAGE_INSUFFICIENT / PAYMENT_STATE_CONFLICT |409|잔액 부족·미확정 재시도 등|
 | ORDER_REFUND_WINDOW_CLOSED / ORDER_REFUND_IN_PROGRESS |409|배송완료+168시간 초과·기존 환불|
 | SETTLEMENT_NO_ELIGIBLE_ITEMS |409|새 일배치에 배정할 지급 가능 항목 없음|

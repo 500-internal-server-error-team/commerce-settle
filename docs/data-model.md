@@ -116,7 +116,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(product_id). 모든 수량>=0. 공개·일반 주문·이벤트 수량 배정은 동일 재고 행 잠금 순서를 사용. `sold_qty`는 환불·반품 복원을 뺀 순판매량이며 누적 판매량은 inventory_movements에서 계산. 수량별 증감은 [재고 예약과 복원](policies.md#재고-예약과-복원)을 따름.
+**제약:** UNIQUE(product_id). 모든 수량>=0. 이벤트 공개·일반 주문·상품 변경·재고 조정은 이 행을 products보다 먼저 잠금([트랜잭션과 관계](#트랜잭션과-관계)). `sold_qty`는 환불·반품 복원을 뺀 순판매량이며 누적 판매량은 inventory_movements에서 계산. 수량별 증감은 [재고 예약과 복원](policies.md#재고-예약과-복원)을 따름.
 
 **인덱스:** UNIQUE(product_id).
 
@@ -1256,7 +1256,7 @@ Payment는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니
 - `buyer_accounts/seller_accounts`는 독립 계정이다. Redis 세션과 password_reset_tokens의 계정 종류+ID가 해당 계정을 선택한다. 로그인 세션은 Redis, 복구 토큰과 인증 버전은 PostgreSQL에 두며 두 저장소의 변경을 단일 트랜잭션으로 취급하지 않는다.
 - 주문·주소 사본·재고/쿠폰/이벤트 예약·Outbox를 커머스 한 트랜잭션으로 저장한다. 멱등 기록도 같은 트랜잭션에 완료한다.
 - 이벤트 공개는 일반 가용 재고에서 Q를 배정하고, 참여는 R을 증가한다. 승인 시 R 감소·S 증가·배정 재고 감소·판매량 증가를 함께 반영한다. 종료 시 미사용분만 일반 재고로 반환하며 미확정 R은 유지한다.
-- 기존 주문의 재고 수량을 바꾸는 트랜잭션은 orders → product_inventory → sale_events → event_participations 순서로 행을 잠근다. 신규 주문은 products를 먼저 공유 잠금으로 읽어 판매 조건·버전을 확인한 뒤 product_inventory → sale_events → event_participations 순서로 잠근다. 상품 상태·가격 변경은 같은 products 행의 배타 잠금과 버전 증가로 직렬화한다. 선착순 예약은 재고 행을 잠그지 않고 sale_events의 조건부 갱신(`status=OPEN AND sold_count+reserved_count<quota`) 한 번으로 R을 늘린다. 잠금 경합 검증은 상품 상태 중단/가격 변경과 신규 주문의 잠금 획득 순서를 각각 확인한다. 주문이 먼저 잠그면 주문 저장 뒤 상품 변경이 진행되고, 상품 변경이 먼저 커밋되면 주문은 새 상태·버전을 반영해 거절되어야 한다.
+- 기존 주문의 재고 수량을 바꾸는 트랜잭션은 orders → product_inventory → sale_events → event_participations 순서로 행을 잠근다. products와 product_inventory를 함께 다루는 트랜잭션(신규 일반 주문, 상품 이름·가격·상태 변경과 논리삭제, 판매자 재고 조정, 이벤트 공개·종료)은 product_inventory를 먼저 배타 잠금한 뒤 products를 읽거나 갱신한다. products를 먼저 잠그거나 products에 공유 잠금을 걸지 않는다. 상품 변경은 이 잠금 아래 공개 후 종료 전 이벤트가 없는지 확인하고 버전을 증가시킨다. 선착순 예약은 products·재고 행을 잠그지 않고 sale_events의 조건부 갱신(`status=OPEN AND sold_count+reserved_count<quota`) 한 번으로 R을 늘린다. 잠금 경합 검증은 상품 상태 중단/가격 변경과 신규 주문의 잠금 획득 순서를 각각 확인한다. 주문이 먼저 잠그면 주문 저장 뒤 상품 변경이 진행되고, 상품 변경이 먼저 커밋되면 주문은 새 상태·버전을 반영해 거절되어야 한다.
 - 마일리지 잔액의 reserved_amount는 활성 예약 합계와 일치해야 한다. 사용 시 예약/잔액 차감·DEBIT·결제 확정·Outbox를 한 번에 기록하고, 환불 시 원외부 환불 확인 뒤 RESTORE·잔액·환불 상태·Outbox를 한 번에 기록한다.
 - 정산 항목은 결제당 하나, 지급은 배치당 하나이다. 활성 정산 예약은 항목당 하나여서 환불과 지급이 동시에 선점할 수 없다. partial UNIQUE로 보호하고 모든 상태/금액을 같은 DB에서 검사한다.
 - 정산 원장은 SOURCE(E/M/P)와 ALLOCATION(판매자/수수료)의 두 측을 분리한다. 각 측의 합계가 B이고 환불 뒤 0으로 상쇄된다. 두 측을 합쳐 매출을 두 배로 세지 않는다. reversal_of는 원원장 항목당 한 번이다.
@@ -1279,4 +1279,4 @@ Payment는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니
 
 ## 구현 시 검증
 
-테이블을 구현할 때 위 부분 유니크·체크·인덱스와 실제 enum을 DDL에 명시한다. 동시에 같은 쿠폰·마일리지·마지막 재고를 쓰는 경우와 환불/지급 예약 경합, 자동 구매확정/환불 마감 경합을 실제 DB로 검사한다. 상품 변경과 신규 주문의 양쪽 잠금 순서, 미결제 기한 취소와 결제 확정/재시도의 경합도 실제 DB에서 검사하고, Payment의 승인 차단 확정 전에는 예약이 유지되는지 확인한다. 현재 문서·그림의 구조 검사는 DB 동작 검증을 대신하지 않는다.
+테이블을 구현할 때 위 부분 유니크·체크·인덱스와 실제 enum을 DDL에 명시한다. 동시에 같은 쿠폰·마일리지·마지막 재고를 쓰는 경우와 환불/지급 예약 경합, 자동 구매확정/환불 마감 경합을 실제 DB로 검사한다. 상품 변경과 신규 일반 주문·이벤트 공개의 양쪽 잠금 순서, 이벤트 기간의 상품 변경 거절, 미결제 기한 취소와 결제 확정/재시도의 경합도 실제 DB에서 검사하고, Payment의 승인 차단 확정 전에는 예약이 유지되는지 확인한다. 현재 문서·그림의 구조 검사는 DB 동작 검증을 대신하지 않는다.
