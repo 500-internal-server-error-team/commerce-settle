@@ -2113,7 +2113,7 @@
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
         "x-implemented": false,
-        "description": "expectedVersion이 현재 버전과 다르면 409이다. 기존 주문의 가격 사본은 바꾸지 않는다. 타인·삭제 상품은 404이다.",
+        "description": "expectedVersion이 현재 버전과 다르면 409이다. 공개 후 종료 전 이벤트가 있으면 409 PRODUCT_EVENT_IN_PROGRESS이다. 기존 주문의 가격 사본은 바꾸지 않는다. 타인·삭제 상품은 404이다.",
         "security": [
           {
             "accountSession": []
