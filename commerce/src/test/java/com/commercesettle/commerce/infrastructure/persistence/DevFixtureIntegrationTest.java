@@ -9,6 +9,7 @@ import com.commercesettle.commerce.application.port.PasswordHasher;
 import com.commercesettle.commerce.application.service.BuyerAddressService;
 import com.commercesettle.commerce.application.service.InventoryReservationService;
 import com.commercesettle.commerce.domain.model.ShippingAddress;
+import com.commercesettle.commerce.domain.repository.OrderRepository;
 import com.commercesettle.commerce.infrastructure.config.DevFixtureConfiguration;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.charset.StandardCharsets;
@@ -80,6 +81,8 @@ class DevFixtureIntegrationTest {
   @Autowired BuyerAddressService addresses;
   @Autowired StringRedisTemplate redis;
   @Autowired TestRestTemplate http;
+  @Autowired OrderRepository orders;
+  @Autowired AddressCipher cipher;
 
   @BeforeAll
   void startupActuallyLoadsFixtures() {
@@ -87,12 +90,14 @@ class DevFixtureIntegrationTest {
     assertThat(count("seller_accounts")).isEqualTo(5);
     assertThat(count("products")).isEqualTo(28);
     assertThat(count("buyer_addresses")).isEqualTo(29);
+    assertThat(count("orders")).isEqualTo(4);
+    assertThat(count("order_addresses")).isEqualTo(4);
   }
 
   @BeforeEach
   void cleanIsolatedDatabase() {
     jdbc.execute(
-        "TRUNCATE commerce.buyer_addresses, commerce.buyer_accounts, commerce.seller_accounts, "
+        "TRUNCATE commerce.orders, commerce.order_addresses, commerce.buyer_addresses, commerce.buyer_accounts, commerce.seller_accounts, "
             + "commerce.products, commerce.product_inventory, commerce.inventory_movements, commerce.inventory_reservations, commerce.idempotency_records");
   }
 
@@ -169,7 +174,21 @@ class DevFixtureIntegrationTest {
             byte[].class,
             id(101));
 
+    UUID orderId = fixtureId("request-order-0");
+    jdbc.update(
+        "UPDATE commerce.orders SET product_name='보존할 주문 상품명',version=1 WHERE id=?", orderId);
+    var orderAddress = orders.findAddressByBuyerAndOrderId(id(11), orderId).orElseThrow();
+    byte[] orderCiphertext = orderAddress.getSealed().address();
     loader.load("another-fixture-password");
+    assertThat(orders.findByBuyerAndId(id(11), orderId).orElseThrow().getProductName())
+        .isEqualTo("보존할 주문 상품명");
+    assertThat(
+            orders
+                .findAddressByBuyerAndOrderId(id(11), orderId)
+                .orElseThrow()
+                .getSealed()
+                .address())
+        .isEqualTo(orderCiphertext);
 
     assertThat(
             jdbc.queryForObject(
@@ -361,6 +380,31 @@ class DevFixtureIntegrationTest {
         """,
                 Integer.class))
         .isZero();
+  }
+
+  @Test
+  @DisplayName("DB 주문 요청 사본의 소유권·페이지·금액·기한·암호화 주소를 확인한다")
+  void queriesPersistentOrderSnapshots() {
+    loader.load(PASSWORD);
+    assertThat(orders.findByBuyer(id(1), 0, 1).totalElements()).isEqualTo(2);
+    assertThat(orders.findByBuyer(id(1), 1, 1).items()).hasSize(1);
+    assertThat(orders.findByBuyer(id(51), 0, 20).items()).isEmpty();
+    UUID orderId = fixtureId("request-order-1");
+    var order = orders.findByBuyerAndId(id(1), orderId).orElseThrow();
+    assertThat(order.getAmounts().mileageAmount()).isEqualTo(1_000);
+    assertThat(order.getAmounts().externalAmount()).isEqualTo(22_000);
+    assertThat(order.getPaymentCycleId()).isEqualTo(fixtureId("request-cycle-1"));
+    assertThat(order.getPaymentWaitUntil())
+        .isEqualTo(java.time.Instant.parse("2026-09-01T00:10:00Z"));
+    assertThat(orders.findByBuyerAndId(id(11), orderId)).isEmpty();
+    var address = orders.findAddressByBuyerAndOrderId(id(1), orderId).orElseThrow();
+    assertThat(cipher.open(address.getId(), address.getSealed()).addressLine1())
+        .isEqualTo("가상시 테스트구 샘플로 1");
+    assertThat(orders.findAddressByBuyerAndOrderId(id(11), orderId)).isEmpty();
+  }
+
+  private static UUID fixtureId(String name) {
+    return UUID.nameUUIDFromBytes(("dev-fixture-v1:" + name).getBytes(StandardCharsets.UTF_8));
   }
 
   private JsonNode get(String path, UUID buyer) {
