@@ -297,6 +297,33 @@ class ProductCatalogIntegrationTest {
 
   @Test
   @Timeout(30)
+  @DisplayName("상품 변경·삭제도 재고 행을 먼저 잠그므로 재고 행이 잠겨 있으면 상품을 바꾸지 않고 거절한다")
+  void rejectsProductWritesWithinLockTimeoutWhileInventoryIsLocked() throws Exception {
+    UUID seller = UUID.randomUUID();
+    UUID productId = catalog.register(seller, key(), "키보드", 39_000, ProductStatus.ON_SALE).getId();
+
+    try (HeldTransaction held =
+        holdTransaction(
+            () ->
+                jdbc.queryForList(
+                    "select id from commerce.product_inventory where product_id = ? for update",
+                    productId))) {
+      assertThatThrownBy(
+              () ->
+                  catalog.change(
+                      seller, productId, key(), "무선 키보드", 45_000, ProductStatus.STOPPED, 0))
+          .isInstanceOf(PessimisticLockingFailureException.class);
+      assertThatThrownBy(() -> catalog.delete(seller, productId, key(), 0))
+          .isInstanceOf(PessimisticLockingFailureException.class);
+    }
+
+    Product unchanged = catalog.sellerProduct(seller, productId);
+    assertThat(unchanged.getVersion()).isZero();
+    assertThat(unchanged.getStatus()).isEqualTo(ProductStatus.ON_SALE);
+  }
+
+  @Test
+  @Timeout(30)
   @DisplayName("같은 키의 요청이 처리 중이면 대기 상한 안에 멱등 충돌로 거절한다")
   void rejectsSameKeyWithinLockTimeoutWhileFirstRequestIsInProgress() throws Exception {
     UUID seller = UUID.randomUUID();

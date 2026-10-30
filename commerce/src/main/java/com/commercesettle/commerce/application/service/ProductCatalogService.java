@@ -12,6 +12,7 @@ import com.commercesettle.commerce.domain.repository.ProductRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -86,6 +87,7 @@ public class ProductCatalogService {
         existingId -> ownedProduct(sellerId, existingId));
   }
 
+  /** 공개 후 종료 전 이벤트가 있으면 거절하는 확인은 선착순 이벤트를 구현할 때 재고 행 잠금 뒤에 추가한다. */
   @Transactional
   public Product change(
       UUID sellerId,
@@ -104,6 +106,7 @@ public class ProductCatalogService {
         productId,
         200,
         recordId -> {
+          lockInventory(sellerId, productId);
           Product product = ownedProduct(sellerId, productId);
           product.change(name, unitPrice, status, expectedVersion, clock.instant());
           return products.save(product);
@@ -111,7 +114,7 @@ public class ProductCatalogService {
         existingId -> ownedProduct(sellerId, existingId));
   }
 
-  /** 진행 중인 공개 이벤트 확인은 선착순 이벤트를 구현할 때 이 유즈케이스에 추가한다. */
+  /** 공개 후 종료 전 이벤트 확인은 {@link #change}와 같은 위치에 추가한다. */
   @Transactional
   public void delete(UUID sellerId, UUID productId, String idempotencyKey, long expectedVersion) {
     idempotency.execute(
@@ -120,6 +123,7 @@ public class ProductCatalogService {
         productId,
         204,
         recordId -> {
+          lockInventory(sellerId, productId);
           Product product = ownedProduct(sellerId, productId);
           product.delete(expectedVersion, clock.instant());
           return products.save(product);
@@ -151,11 +155,7 @@ public class ProductCatalogService {
         productId,
         200,
         recordId -> {
-          ownedProduct(sellerId, productId);
-          ProductInventory inventory =
-              inventories
-                  .findByProductIdForUpdate(productId)
-                  .orElseThrow(() -> missingInventory(productId));
+          ProductInventory inventory = lockInventory(sellerId, productId);
           InventoryMovement movement =
               inventory.adjustAvailable(
                   UUID.randomUUID(), recordId, delta, reason, expectedVersion, clock.instant());
@@ -163,6 +163,15 @@ public class ProductCatalogService {
           return inventories.save(inventory);
         },
         existingId -> inventory(sellerId, existingId));
+  }
+
+  /**
+   * 재고 행을 먼저 잠근 뒤 소유 상품을 확인한다. 상품과 재고 행을 함께 다루는 쓰기는 이 순서를 지켜 주문·판매자 변경을 같은 행에서 직렬화하고 잠금 순서 역전을 막는다.
+   */
+  private ProductInventory lockInventory(UUID sellerId, UUID productId) {
+    Optional<ProductInventory> inventory = inventories.findByProductIdForUpdate(productId);
+    ownedProduct(sellerId, productId);
+    return inventory.orElseThrow(() -> missingInventory(productId));
   }
 
   private Product ownedProduct(UUID sellerId, UUID productId) {
