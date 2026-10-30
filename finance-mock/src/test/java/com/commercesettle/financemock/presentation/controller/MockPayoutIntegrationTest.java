@@ -219,6 +219,39 @@ class MockPayoutIntegrationTest {
 
   @Test
   @Timeout(30)
+  @DisplayName("응답 지연은 결과를 확정한 뒤에 주입해, 응답을 기다리는 동안에도 거래는 이미 확정돼 있다")
+  void delaysResponseAfterStoringResult() throws Exception {
+    MockAccount account = account(OPENING_BALANCE);
+    String scenario = scenario(new MockScenario.Delay(3_000, 3_000), BigDecimal.ZERO);
+    UUID key = UUID.randomUUID();
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<Integer> response =
+          executor.submit(
+              () ->
+                  payout(key, account.getAccountRef(), 30_000, scenario)
+                      .andReturn()
+                      .getResponse()
+                      .getStatus());
+
+      String stored = null;
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+      while (!"SUCCEEDED".equals(stored) && System.nanoTime() < deadline) {
+        Thread.sleep(50);
+        stored = transactionStatus(key);
+      }
+
+      assertThat(stored).isEqualTo("SUCCEEDED");
+      assertThat(response.isDone()).isFalse();
+      assertThat(response.get(20, TimeUnit.SECONDS)).isEqualTo(202);
+    } finally {
+      executor.shutdownNow();
+    }
+    assertFunds(account, OPENING_BALANCE - 30_000, 0);
+  }
+
+  @Test
+  @Timeout(30)
   @DisplayName("같은 업무 키의 동시 요청도 거래 하나와 차감 한 번만 만든다")
   void concurrentSameBusinessKeyDebitsOnce() throws Exception {
     MockAccount account = account(OPENING_BALANCE);
@@ -293,11 +326,20 @@ class MockPayoutIntegrationTest {
   }
 
   private String scenario(BigDecimal rejection, BigDecimal loss, BigDecimal lookupFailure) {
+    return scenario(new MockScenario.Delay(0, 0), rejection, loss, lookupFailure);
+  }
+
+  private String scenario(MockScenario.Delay delay, BigDecimal rejection) {
+    return scenario(delay, rejection, BigDecimal.ZERO, BigDecimal.ZERO);
+  }
+
+  private String scenario(
+      MockScenario.Delay delay, BigDecimal rejection, BigDecimal loss, BigDecimal lookupFailure) {
     String version = "t-" + UUID.randomUUID().toString().substring(0, 18);
     scenarios.save(
         MockScenario.payout(
             version,
-            new MockScenario.Delay(0, 0),
+            delay,
             rejection,
             loss,
             lookupFailure,
@@ -327,6 +369,17 @@ class MockPayoutIntegrationTest {
         "SELECT status FROM finance_mock.mock_funds_reservations WHERE account_id = ?",
         String.class,
         account.getId());
+  }
+
+  private String transactionStatus(UUID key) {
+    return jdbc
+        .queryForList(
+            "SELECT status FROM finance_mock.mock_transactions WHERE business_key = ?",
+            String.class,
+            key)
+        .stream()
+        .findFirst()
+        .orElse(null);
   }
 
   private long transactionCount(UUID key) {

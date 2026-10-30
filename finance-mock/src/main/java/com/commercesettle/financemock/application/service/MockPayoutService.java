@@ -18,8 +18,8 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 /**
- * 모의 지급 실행. 같은 업무 키는 장애 확률을 다시 적용하기 전에 기존 거래를 돌려준다. 신규 지급은 접수(자금 선점) → 시나리오 지연 → 확정(차감 또는 해제) 순서로
- * 처리하고, 응답 유실이 뽑히면 결과를 저장한 뒤 응답만 잃는다.
+ * 모의 지급 실행. 같은 업무 키는 장애 확률을 다시 적용하기 전에 기존 거래를 돌려준다. 신규 지급은 접수(자금 선점) → 확정(차감 또는 해제) → 응답 지연 순서로
+ * 처리해, 지연·응답 유실 모두 결과를 저장한 뒤 응답에만 적용한다.
  */
 @Service
 public class MockPayoutService {
@@ -74,9 +74,9 @@ public class MockPayoutService {
           .orElseThrow(() -> e);
     }
 
-    pause(outcome.delayMs());
     MockTransactionView completed =
         transactions.complete(accepted.transaction().getId(), outcome.rejected());
+    pause(outcome.delayMs());
     return new PayoutResult(completed, outcome.responseLost());
   }
 
