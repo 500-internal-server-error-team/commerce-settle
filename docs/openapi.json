@@ -1131,8 +1131,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "구매자 본인의 배송지를 등록한다. 첫 주소는 요청값과 관계없이 기본 주소가 된다.",
         "security": [
           {
             "accountSession": []
@@ -1261,8 +1261,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "논리삭제를 제외한 본인 주소를 기본 주소 우선, 그다음 createdAt DESC, id DESC 순서로 조회한다.",
         "security": [
           {
             "accountSession": []
@@ -1382,8 +1382,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "본인 배송지를 수정한다. expectedVersion이 다르면 409이며 기존 주문의 배송지 사본은 바꾸지 않는다.",
         "security": [
           {
             "accountSession": []
@@ -1512,8 +1512,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "expectedVersion을 확인하고 본인 배송지를 논리삭제한다. 기본 주소를 삭제해도 다른 주소로 기본을 자동 이전하지 않는다.",
         "security": [
           {
             "accountSession": []
