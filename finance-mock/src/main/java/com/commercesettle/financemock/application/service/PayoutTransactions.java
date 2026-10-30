@@ -11,7 +11,6 @@ import com.commercesettle.financemock.domain.model.MockAccount;
 import com.commercesettle.financemock.domain.model.MockOperation;
 import com.commercesettle.financemock.domain.model.MockScenario;
 import com.commercesettle.financemock.domain.model.MockTransaction;
-import com.commercesettle.financemock.domain.model.MockTransactionStatus;
 import com.commercesettle.financemock.domain.repository.CashEntryRepository;
 import com.commercesettle.financemock.domain.repository.FundsReservationRepository;
 import com.commercesettle.financemock.domain.repository.MockAccountRepository;
@@ -23,7 +22,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 지급의 접수와 확정을 각각 한 트랜잭션으로 저장한다. 그 사이의 응답 지연 동안에는 DB 트랜잭션을 열어 두지 않는다. */
+/** 지급의 접수와 확정을 한 트랜잭션으로 저장한다. 응답 지연은 커밋 뒤에 적용해 지연 동안 DB 트랜잭션을 열어 두지 않는다. */
 @Component
 class PayoutTransactions {
   private final IdempotencyStore idempotency;
@@ -63,16 +62,20 @@ class PayoutTransactions {
             });
   }
 
-  /** 멱등 기록·거래(PROCESSING)·자금 선점을 함께 저장한다. 재원이 부족하면 아무것도 남기지 않는다. */
+  /**
+   * 멱등 기록·거래·자금 선점을 저장하고 같은 트랜잭션에서 확정한다. 성공이면 선점을 소비해 잔액을 차감하고 현금 기록을 남기며, 확정 거절이면 선점만 해제한다. 재원이
+   * 부족하거나 중간에 실패하면 아무것도 남기지 않는다.
+   */
   @Transactional
-  public MockTransactionView accept(
+  public MockTransactionView execute(
       IdempotencyStore.Scope scope,
       String requestHash,
       UUID businessKey,
       String accountRef,
       long amount,
       String scenarioVersion,
-      long resultSeed) {
+      long resultSeed,
+      boolean rejected) {
     Instant now = clock.instant();
     MockAccount account =
         accounts
@@ -83,34 +86,21 @@ class PayoutTransactions {
             businessKey, account.getId(), amount, scenarioVersion, resultSeed, now);
     idempotency.saveCompleted(UUID.randomUUID(), scope, requestHash, transaction.getId(), 202, now);
     account.reserve(amount, now);
-    transactions.save(transaction);
-    reservations.save(FundsReservation.reserve(account.getId(), transaction.getId(), amount, now));
-    return new MockTransactionView(transaction, account.getAccountRef());
-  }
-
-  /**
-   * 성공이면 선점을 소비해 잔액을 차감하고 현금 기록을 남긴다. 확정 거절이면 선점만 해제한다. 거래 행을 먼저 잠가, 원요청과 재개가 겹쳐도 한 번만 확정하고 이미 확정된
-   * 거래는 바꾸지 않고 돌려준다.
-   */
-  @Transactional
-  public MockTransactionView complete(UUID transactionId, boolean rejected) {
-    Instant now = clock.instant();
-    MockTransaction transaction = transactions.findByIdForUpdate(transactionId).orElseThrow();
-    if (transaction.getStatus() != MockTransactionStatus.PROCESSING) {
-      return view(transaction);
-    }
-    FundsReservation reservation = reservations.findByTransactionId(transactionId).orElseThrow();
-    MockAccount account = accounts.findByIdForUpdate(reservation.getAccountId()).orElseThrow();
+    FundsReservation reservation =
+        FundsReservation.reserve(account.getId(), transaction.getId(), amount, now);
     if (rejected) {
       transaction.decline(now);
       reservation.release(now);
-      account.release(reservation.getAmount(), now);
+      account.release(amount, now);
     } else {
       transaction.succeed(now);
       reservation.consume(now);
-      account.consume(reservation.getAmount(), now);
-      cashEntries.save(
-          CashEntry.payoutDebit(account.getId(), transactionId, reservation.getAmount(), now));
+      account.consume(amount, now);
+    }
+    transactions.save(transaction);
+    reservations.save(reservation);
+    if (!rejected) {
+      cashEntries.save(CashEntry.payoutDebit(account.getId(), transaction.getId(), amount, now));
     }
     return new MockTransactionView(transaction, account.getAccountRef());
   }
