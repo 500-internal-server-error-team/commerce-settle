@@ -25,6 +25,14 @@ spring:
   sql:
     init:
       mode: never
+  batch:
+    job:
+      # 기동 시 자동 실행하지 않고 스케줄러가 batchDate로 실행한다(ADR 0007 D7).
+      enabled: false
+    jdbc:
+      # 메타데이터 테이블은 settlement 초기 SQL이 만든다.
+      initialize-schema: never
+      table-prefix: settlement.BATCH_
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
     template:
@@ -50,6 +58,15 @@ spring:
       ack-mode: manual_immediate
       concurrency: 1
       missing-topics-fatal: true
+
+settlement:
+  daily-batch:
+    policy-version: delivery-daily-v1
+    schedule-enabled: ${SETTLEMENT_DAILY_BATCH_ENABLED:true}
+  payout:
+    # finance-mock 지급 대역의 재원 계정·금융 실행 시나리오. 지급 생성 때 지급에 고정한다.
+    funding-account-ref: ${PAYOUT_FUNDING_ACCOUNT_REF:payout-funding-default}
+    scenario-version: ${PAYOUT_SCENARIO_VERSION:payout-normal-v1}
 
 springdoc:
   paths-to-match: /api/**
