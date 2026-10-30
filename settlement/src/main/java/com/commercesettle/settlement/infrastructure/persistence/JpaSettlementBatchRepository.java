@@ -21,6 +21,11 @@ class JpaSettlementBatchRepository implements SettlementBatchRepository {
   }
 
   @Override
+  public Optional<SettlementBatch> findById(UUID id) {
+    return repository.findById(id);
+  }
+
+  @Override
   public Optional<SettlementBatch> find(UUID sellerId, LocalDate batchDate, String policyVersion) {
     return repository.findBySellerIdAndBatchDateAndPolicyVersion(
         sellerId, batchDate, policyVersion);

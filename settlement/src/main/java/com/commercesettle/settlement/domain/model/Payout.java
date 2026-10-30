@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.domain.model;
 
+import com.commercesettle.settlement.domain.exception.InvalidPayoutTransitionException;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -79,6 +80,50 @@ public class Payout extends AuditableEntity {
       Instant now) {
     return new Payout(
         id, batchId, sellerId, recipient, fundingAccountRef, scenarioVersion, amount, now);
+  }
+
+  /** 첫 대역 호출 전에 처리 중으로 바꾼다. 이후로는 결과를 모르면 실행이 아니라 원거래 조회부터 한다. */
+  public void startProcessing(Instant now) {
+    require(status == PayoutStatus.PENDING, PayoutStatus.PROCESSING);
+    this.status = PayoutStatus.PROCESSING;
+    touch(now);
+  }
+
+  /** 결과를 확인하지 못했다. 예약과 업무 키를 유지하고 같은 원거래를 다시 조회한다. */
+  public void markUnknown(Instant now) {
+    require(inFlight(), PayoutStatus.UNKNOWN);
+    this.status = PayoutStatus.UNKNOWN;
+    this.holdReason = PayoutHoldReason.UNKNOWN;
+    touch(now);
+  }
+
+  /** 대역이 확인한 성공을 반영한다. 성공 시각은 대역의 최초 성공 시각을 그대로 복사한다. */
+  public void succeed(Instant succeededAt, UUID externalRef, Instant now) {
+    require(inFlight(), PayoutStatus.SUCCEEDED);
+    this.status = PayoutStatus.SUCCEEDED;
+    this.succeededAt = truncate(Objects.requireNonNull(succeededAt, "succeededAt"));
+    this.externalRef = externalRef;
+    this.holdReason = null;
+    touch(now);
+  }
+
+  /** 대역의 확정 거절을 반영한다. 새 업무 키로 다시 지급하지 않고 운영 확인으로 넘긴다. */
+  public void decline(UUID externalRef, Instant now) {
+    require(inFlight(), PayoutStatus.DECLINED);
+    this.status = PayoutStatus.DECLINED;
+    this.externalRef = externalRef;
+    this.holdReason = PayoutHoldReason.CONFIRMED_REJECTION;
+    touch(now);
+  }
+
+  private boolean inFlight() {
+    return status == PayoutStatus.PROCESSING || status == PayoutStatus.UNKNOWN;
+  }
+
+  private void require(boolean allowed, PayoutStatus next) {
+    if (!allowed) {
+      throw new InvalidPayoutTransitionException("payout", status, next);
+    }
   }
 
   public UUID getId() {

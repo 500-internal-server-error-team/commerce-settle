@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.domain.model;
 
+import com.commercesettle.settlement.domain.exception.InvalidPayoutTransitionException;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -70,6 +71,32 @@ public class SettlementBatch extends AuditableEntity {
   /** batchDate의 마감 시각(10:00 Asia/Seoul). 이 시각에 준비된 항목은 다음 날 대상이다. */
   public static Instant cutoffOf(LocalDate batchDate) {
     return batchDate.atTime(CUTOFF_TIME).atZone(BUSINESS_ZONE).toInstant();
+  }
+
+  /** 지급을 처음 실행할 때 처리 중으로 바꾼다. */
+  public void startProcessing(Instant now) {
+    transition(status == SettlementBatchStatus.RESERVED, SettlementBatchStatus.PROCESSING, now);
+  }
+
+  /** 지급 성공이 확인되면 완료한다. */
+  public void complete(Instant now) {
+    transition(status == SettlementBatchStatus.PROCESSING, SettlementBatchStatus.COMPLETED, now);
+  }
+
+  /** 지급 확정 거절이나 재시도 소진은 운영 확인으로 넘긴다. 항목·예약은 그대로 둔다. */
+  public void requireReview(Instant now) {
+    transition(
+        status == SettlementBatchStatus.RESERVED || status == SettlementBatchStatus.PROCESSING,
+        SettlementBatchStatus.REVIEW_REQUIRED,
+        now);
+  }
+
+  private void transition(boolean allowed, SettlementBatchStatus next, Instant now) {
+    if (!allowed) {
+      throw new InvalidPayoutTransitionException("settlement batch", status, next);
+    }
+    this.status = next;
+    touch(now);
   }
 
   public UUID getId() {

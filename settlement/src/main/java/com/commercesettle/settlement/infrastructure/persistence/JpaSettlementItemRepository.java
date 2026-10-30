@@ -105,6 +105,24 @@ class JpaSettlementItemRepository implements SettlementItemRepository {
     return reserved;
   }
 
+  @Override
+  public int completePayout(UUID payoutId, Instant now) {
+    MapSqlParameterSource params =
+        new MapSqlParameterSource().addValue("payoutId", payoutId).addValue("now", time(now));
+    int paid =
+        jdbc.update(
+            "UPDATE settlement.settlement_items"
+                + " SET status = 'PAID', updated_at = :now, version = version + 1"
+                + " WHERE payout_id = :payoutId AND status = 'PAYOUT_RESERVED'",
+            params);
+    jdbc.update(
+        "UPDATE settlement.settlement_reservations"
+            + " SET status = 'CONSUMED', updated_at = :now, version = version + 1"
+            + " WHERE payout_id = :payoutId AND kind = 'PAYOUT' AND status = 'ACTIVE'",
+        params);
+    return paid;
+  }
+
   private static OffsetDateTime time(Instant instant) {
     return instant.truncatedTo(ChronoUnit.MICROS).atOffset(ZoneOffset.UTC);
   }
