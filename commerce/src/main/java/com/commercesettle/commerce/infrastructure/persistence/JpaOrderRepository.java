@@ -53,6 +53,14 @@ class JpaOrderRepository implements OrderRepository {
 
   @Override
   public PageResult<Order> findByBuyer(UUID buyerId, int page, int size) {
+    long offset = (long) page * size;
+    if (offset > Integer.MAX_VALUE) {
+      return new PageResult<>(
+          orders.findByBuyerWithOffset(buyerId, offset, size),
+          page,
+          size,
+          orders.countByBuyerId(buyerId));
+    }
     var found = orders.findByBuyerId(buyerId, PageRequest.of(page, size, NEWEST_FIRST));
     return new PageResult<>(
         found.getContent(), found.getNumber(), found.getSize(), found.getTotalElements());

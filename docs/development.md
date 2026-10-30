@@ -150,7 +150,7 @@ curl -i http://localhost:8080/api/orders \
 
 `BUYER_TOKEN`에는 로그인 응답의 token을 넣습니다. `201`과 `Location`은 `PAYMENT_PENDING` 주문 접수이며 결제 완료가 아닙니다. 주문·배송지 사본·재고 예약·멱등 기록·`OrderPaymentRequested` Outbox는 전부 커밋되거나 롤백됩니다. 재고 행을 먼저 잠근 뒤 상품의 판매 상태·가격·버전을 확인합니다. 주문 키는 만료시키지 않고 같은 키·본문의 재요청은 현재 본인 주문을 반환합니다. 상품·주소가 바뀌어도 다시 예약하지 않으며 다른 본문은 409입니다. 주소록 변경·삭제와 별개로 주문 배송지 사본을 보존합니다.
 
-목록은 `createdAt DESC, id DESC`, 기본 20개·최대 100개입니다. 타인·없는 주문은 404이며 정지·삭제 구매자는 접근할 수 없습니다. DB 재기동 뒤에도 주문과 키를 보존합니다. 배송 사본은 기존 `weekdays-v1`(Asia/Seoul, 공휴일 없는 달력), seed 기본 67과 `order-regular-v1` 정책 버전을 사용합니다. seed는 `app.orders.simulation-seed`로 지정할 수 있습니다.
+목록은 `createdAt DESC, id DESC`, 기본 20개·최대 100개입니다. 데이터 범위를 벗어난 유효한 페이지는 빈 `items`와 본인 주문의 `totalElements`를 반환합니다. 타인·없는 주문은 404이며 정지·삭제 구매자는 접근할 수 없습니다. DB 재기동 뒤에도 주문과 키를 보존합니다. 배송 사본은 기존 `weekdays-v1`(Asia/Seoul, 공휴일 없는 달력), seed 기본 67과 `order-regular-v1` 정책 버전을 사용합니다. seed는 `app.orders.simulation-seed`로 지정할 수 있습니다.
 
 Outbox relay는 기존 `app.outbox.enabled=false` 기본값을 유지합니다. 격리한 실험 인스턴스에서 켜면 `commerce-settle.commerce.v1`에 주문 ID를 key로 발행합니다. Payment의 접수 결과 Outbox·재시도 상한(#75·#76)과 Commerce의 결과 소비·주문 확정, 신규 접수 제한 gate는 아직 구현 전입니다. 따라서 이 API의 주문은 대기 상태를 유지하며 10분이 지났다는 이유로 예약을 해제하지 않습니다. 새 주문의 재고 예약이 누적되는 실험은 전용 DB에서 실행합니다.
 
