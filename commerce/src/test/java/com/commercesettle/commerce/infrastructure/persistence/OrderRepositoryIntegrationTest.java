@@ -56,6 +56,7 @@ class OrderRepositoryIntegrationTest {
       new ShippingAddress("시험 수령인", "010-1234-5678", "06236", "서울 강남구 시험로 1", "101호");
 
   @Autowired OrderRepository orders;
+  @Autowired SpringDataOrderRepository storedOrders;
   @Autowired AddressCipher cipher;
   @Autowired JdbcTemplate jdbc;
   @Autowired PlatformTransactionManager transactions;
@@ -126,6 +127,36 @@ class OrderRepositoryIntegrationTest {
         .containsExactly(older.getId());
     assertThat(orders.findByBuyerAndId(buyer, other.getId())).isEmpty();
     assertThat(orders.findAddressByBuyerAndOrderId(buyer, other.getId())).isEmpty();
+  }
+
+  @Test
+  @DisplayName("큰 offset용 SQL도 구매자·정렬·페이지와 금액·달력 사본을 보존한다")
+  void nativeOffsetQueryPreservesOwnedOrderSnapshots() {
+    UUID buyer = UUID.randomUUID();
+    Order older = order(buyer, 2_000, NOW.minusSeconds(1));
+    Order sameTimeA = order(buyer, 2_000, NOW);
+    Order sameTimeB = order(buyer, 2_000, NOW);
+    Order other = order(UUID.randomUUID(), 0, NOW.plusSeconds(1));
+    for (Order order : List.of(older, sameTimeA, sameTimeB, other)) {
+      save(order, address(order, UUID.randomUUID()));
+    }
+    List<UUID> newestIds =
+        List.of(sameTimeA.getId(), sameTimeB.getId()).stream()
+            .sorted(Comparator.comparing(UUID::toString).reversed())
+            .toList();
+
+    var newest = storedOrders.findByBuyerWithOffset(buyer, 0L, 2);
+    var next = storedOrders.findByBuyerWithOffset(buyer, 2L, 1);
+
+    assertThat(newest).extracting(Order::getId).containsExactlyElementsOf(newestIds);
+    assertThat(next).extracting(Order::getId).containsExactly(older.getId());
+    assertThat(storedOrders.countByBuyerId(buyer)).isEqualTo(3);
+    Order found = next.getFirst();
+    assertThat(found.getBuyerId()).isEqualTo(buyer);
+    assertThat(found.getAmounts()).isEqualTo(older.getAmounts());
+    assertThat(found.getExternalMethod()).isEqualTo(Order.ExternalMethod.CREDIT_CARD);
+    assertThat(found.getDelivery().getDeliveryCalendar())
+        .isEqualTo(older.getDelivery().getDeliveryCalendar());
   }
 
   @Test
