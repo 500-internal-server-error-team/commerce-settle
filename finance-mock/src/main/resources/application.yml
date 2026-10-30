@@ -28,6 +28,14 @@ spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
 
+finance-mock:
+  # 시험 시작 때 준비하는 지급 재원 계정과 정상 지급 시나리오. 기존 행은 바꾸지 않는다.
+  payout-fixture:
+    account-ref: ${PAYOUT_FUNDING_ACCOUNT_REF:payout-funding-default}
+    opening-balance: ${PAYOUT_FUNDING_OPENING_BALANCE:100000000}
+    scenario-version: ${PAYOUT_SCENARIO_VERSION:payout-normal-v1}
+    seed: ${PAYOUT_SCENARIO_SEED:20261030}
+
 springdoc:
   paths-to-match: /api/**
 
