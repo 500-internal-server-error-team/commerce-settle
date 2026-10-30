@@ -86,3 +86,10 @@ app:
     enabled: false
     interval-ms: 1000
     batch-size: 100
+  outbox:
+    # PAYMENT_ROLE=worker에서만 동작한다. 커밋된 결제 이벤트를 Kafka로 발행한다.
+    enabled: false
+    recovery-interval-ms: 1000
+    max-in-flight: 8
+    lease-ms: 240000
+    max-attempts: 10
