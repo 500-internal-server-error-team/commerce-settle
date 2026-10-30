@@ -52,13 +52,14 @@ export BUILDX_CONFIG="$PWD/work/buildx"
 
 ## 개발용 DB fixture
 
-`APP_DEV_FIXTURES_ENABLED=true`는 각 서비스 DB에 없는 실험 데이터를 추가합니다. 기본값은 false입니다. `APP_DEV_FIXTURE_SCENARIOS_ENABLED=true`도 지정하면 Payment 접수·정산 일배치·모의 지급을 실제 서비스 경로로 실행합니다. 기존 Worker/Relay 활성화 설정은 바꾸지 않습니다. 정산 스케줄러는 fixture 조회 상태를 바꾸지 않도록 반드시 끕니다. 개발 전용 DB에서 사용합니다.
+`APP_DEV_FIXTURES_ENABLED=true`는 각 서비스 DB에 없는 실험 데이터를 추가합니다. 기본값은 false입니다. `APP_DEV_FIXTURE_SCENARIOS_ENABLED=true`도 지정하면 Payment 접수·정산 일배치·모의 지급을 실제 서비스 경로로 실행합니다. 기존 Worker/Relay 활성화 설정은 바꾸지 않습니다. 정산 일배치 스케줄러와 지급 Worker는 fixture 조회 상태를 바꾸지 않도록 모두 끕니다. 둘 중 하나라도 켜져 있으면 fixture 기동을 거절합니다. 개발 전용 DB에서 사용합니다.
 
 ```bash
 python3 scripts/init_env.py
 ./gradlew bootJar
 APP_DEV_FIXTURES_ENABLED=true APP_DEV_FIXTURE_SCENARIOS_ENABLED=true \
-SETTLEMENT_DAILY_BATCH_ENABLED=false APP_ORDER_STUB_ENABLED=true \
+SETTLEMENT_DAILY_BATCH_ENABLED=false SETTLEMENT_PAYOUT_WORKER_ENABLED=false \
+APP_ORDER_STUB_ENABLED=true \
 docker compose up -d --build --wait --wait-timeout 300
 ```
 
@@ -99,7 +100,12 @@ Payment는 API 역할에서만 기동 시나리오를 실행합니다. Kafka의 
 
 정산 스냅샷의 주문·결제 이름은 `order-settlement-0`~`7`·`payment-settlement-0`~`7`이며 Payment와 ID·당사자·상품·금액을 맞춥니다. 실제 PG 승인이나 서비스 간 이벤트 전달 결과는 아닙니다. `order-settlement-*`는 Commerce DB 주문과 별개인 합성 금융 참조입니다. Settlement의 기존 기본 지급 재원·시나리오(`payout-funding-default`·`payout-normal-v1`)를 사용하며, 일배치가 실제 Batch 메타데이터를 기록합니다. fixture 항목 ID도 Job 식별 파라미터에 포함해 일반 일배치 실행과 구분합니다. 동일 파라미터의 완료된 실행은 다시 만들지 않으며, 다른 인스턴스가 이미 실행 중이면 그 실행에 맡깁니다. 동일 판매자·날짜의 일반 정산 항목이 함께 선점되면 그 판매자 트랜잭션을 롤백하고 실행을 실패시켜 기존 데이터를 보존합니다.
 
-모의 지급 업무 키 이름은 `mock-payout-0`~`3`입니다. 모의 지급은 내부 `/mock/payouts` API로도 실행·조회할 수 있으며 Gateway에 공개하지 않습니다. 응답 유실 설정에서 새 업무 키의 최초 POST는 504, 저장 결과 GET은 200입니다. 기동 시나리오가 이미 생성한 고정 키의 POST는 재요청이므로 202이며, 조회 장애 설정의 GET은 503입니다. 같은 업무 키 재요청은 기존 거래를 반환해 추가 차감하지 않습니다. 이 기록은 Settlement 지급 Worker와 연결된 결과가 아닙니다. #88 병합 후 지급 처리·재시도 연동을 추가할 수 있습니다.
+모의 지급 업무 키 이름은 `mock-payout-0`~`3`입니다. 모의 지급은 내부 `/mock/payouts` API로도 실행·조회할 수 있으며 Gateway에 공개하지 않습니다. 응답 유실 설정에서 새 업무 키의 최초 POST는 504, 저장 결과 GET은 200입니다. 기동 시나리오가 이미 생성한 고정 키의 POST는 재요청이므로 202이며, 조회 장애 설정의 GET은 503입니다. 같은 업무 키 재요청은 기존 거래를 반환해 추가 차감하지 않습니다. 이 기록은 별도 모의 지급 예제입니다. #88의 지급 Worker로 이미 생성한 정산 작업을 처리하려면 fixture 옵션을 끄고 Worker를 명시적으로 켭니다. 기존 비활성 상태의 조회 fixture와 금융 처리 실행을 구분합니다.
+
+```bash
+APP_DEV_FIXTURES_ENABLED=false SETTLEMENT_DAILY_BATCH_ENABLED=false \
+SETTLEMENT_PAYOUT_WORKER_ENABLED=true docker compose up -d --wait settlement
+```
 
 Payment·Settlement에는 업무 조회 HTTP API가 없어 서비스별 DB로 확인합니다. 서비스 간 DB를 조인하거나 loader가 타 서비스 DB를 읽지 않습니다.
 

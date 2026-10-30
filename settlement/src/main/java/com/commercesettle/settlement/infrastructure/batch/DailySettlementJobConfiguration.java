@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.infrastructure.batch;
 
+import com.commercesettle.settlement.application.exception.FixtureBatchConflictException;
 import com.commercesettle.settlement.application.service.SellerSettlementService;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import java.time.LocalDate;
@@ -72,6 +73,7 @@ class DailySettlementJobConfiguration {
         .writer(sellerSettlementWriter)
         .faultTolerant()
         .skip(Exception.class)
+        .noSkip(FixtureBatchConflictException.class)
         .skip(PessimisticLockingFailureException.class)
         .noSkip(TransientDataAccessException.class)
         .noSkip(NonTransientDataAccessResourceException.class)

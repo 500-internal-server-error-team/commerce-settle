@@ -26,7 +26,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "management.tracing.enabled=false",
       "spring.kafka.admin.auto-create=false",
       "app.dev-fixtures.enabled=true",
-      "settlement.daily-batch.schedule-enabled=false"
+      "settlement.daily-batch.schedule-enabled=false",
+      "settlement.payout-worker.enabled=false"
     })
 @Testcontainers
 class DevFixtureIntegrationTest {
@@ -37,11 +38,13 @@ class DevFixtureIntegrationTest {
   @Autowired DevFixtureLoader loader;
   @Autowired DailySettlementLauncher launcher;
   @Autowired JdbcTemplate jdbc;
+  @Autowired org.springframework.context.ApplicationContext application;
   @Autowired SettlementItemRepository items;
   @Autowired com.commercesettle.settlement.domain.repository.SettlementBatchRepository batches;
 
   @Test
   void runsActualBatchWithCutoffAndResumesWithoutDuplicates() throws Exception {
+    assertThat(application.containsBean("payoutWorkerScheduler")).isFalse();
     assertThat(count("settlement_items")).isEqualTo(8);
     assertThat(count("payouts")).isZero();
     // 일반 배치가 이미 있으면 미처리 fixture를 완료한 것으로 보고하지 않는다.
@@ -132,8 +135,15 @@ class DevFixtureIntegrationTest {
     context
         .withPropertyValues(
             "app.dev-fixtures.enabled=true",
+            "settlement.daily-batch.schedule-enabled=false",
+            "settlement.payout-worker.enabled=true")
+        .run(c -> assertThat(c).hasFailed());
+    context
+        .withPropertyValues(
+            "app.dev-fixtures.enabled=true",
             "app.dev-fixtures.run-scenarios=true",
-            "settlement.daily-batch.schedule-enabled=false")
+            "settlement.daily-batch.schedule-enabled=false",
+            "settlement.payout-worker.enabled=false")
         .run(
             c ->
                 org.assertj.core.api.Assertions.assertThatCode(

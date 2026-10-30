@@ -1,6 +1,7 @@
 package com.commercesettle.settlement.application.service;
 
 import com.commercesettle.settlement.application.dto.DailySettlementSettings;
+import com.commercesettle.settlement.application.exception.FixtureBatchConflictException;
 import com.commercesettle.settlement.application.port.ProductSettlementContextReader;
 import com.commercesettle.settlement.domain.exception.PayoutNotAllowedException;
 import com.commercesettle.settlement.domain.model.Payout;
@@ -86,7 +87,7 @@ public class SellerSettlementService {
                           && item.getStatus() == SettlementItemStatus.PAYABLE
                           && item.getPayoutId() == null
                           && item.getReadyAt().isBefore(SettlementBatch.cutoffOf(batchDate)))) {
-        throw new IllegalStateException(
+        throw new FixtureBatchConflictException(
             "Existing settlement batch conflicts with unprocessed fixture items");
       }
       return existing;
@@ -106,7 +107,7 @@ public class SellerSettlementService {
       return Optional.empty();
     }
     if (itemIds != null && reserved.stream().anyMatch(item -> !itemIds.contains(item.id()))) {
-      throw new IllegalStateException("Fixture batch would reserve a non-fixture item");
+      throw new FixtureBatchConflictException("Fixture batch would reserve a non-fixture item");
     }
     // 검증과 선점 사이에 새 상품의 항목이 준비됐으면 검증하지 않은 상품이라 이번 실행에서 지급하지 않는다.
     if (reserved.stream().anyMatch(item -> !productIds.contains(item.productId()))) {

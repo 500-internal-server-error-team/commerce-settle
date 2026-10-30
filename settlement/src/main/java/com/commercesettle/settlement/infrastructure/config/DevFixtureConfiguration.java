@@ -18,9 +18,11 @@ public class DevFixtureConfiguration {
       DevFixtureLoader loader,
       DailySettlementLauncher launcher,
       @Value("${app.dev-fixtures.run-scenarios:false}") boolean runScenarios,
-      @Value("${settlement.daily-batch.schedule-enabled:true}") boolean scheduled) {
-    if (scheduled)
-      throw new IllegalArgumentException("Disable SETTLEMENT_DAILY_BATCH_ENABLED for dev fixtures");
+      @Value("${settlement.daily-batch.schedule-enabled:true}") boolean scheduled,
+      @Value("${settlement.payout-worker.enabled:true}") boolean workerEnabled) {
+    if (scheduled || workerEnabled)
+      throw new IllegalArgumentException(
+          "Disable SETTLEMENT_DAILY_BATCH_ENABLED and SETTLEMENT_PAYOUT_WORKER_ENABLED for dev fixtures");
     return args -> {
       loader.load();
       if (runScenarios) {

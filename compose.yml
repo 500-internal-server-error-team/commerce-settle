@@ -247,6 +247,7 @@ services:
     environment:
       <<: *app-env
       SETTLEMENT_DAILY_BATCH_ENABLED: ${SETTLEMENT_DAILY_BATCH_ENABLED:-true}
+      SETTLEMENT_PAYOUT_WORKER_ENABLED: ${SETTLEMENT_PAYOUT_WORKER_ENABLED:-true}
       DB_URL: jdbc:postgresql://postgres:5432/settlement
       DB_USERNAME: settlement
       DB_PASSWORD: ${SETTLEMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
