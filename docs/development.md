@@ -248,11 +248,11 @@ Payment API와 Worker는 같은 `payment` 모듈로 빌드합니다. Gradle 모�
 
 ### Kafka 전달 기반
 
-Commerce·Payment·Settlement는 자기 원본 토픽 `commerce-settle.<서비스>.v1`을 생성합니다. 소비자별 DLT는 `commerce-settle.<소비자>.v1.dlt`이며 소비자는 `commerce`, `commerce-notifications`, `payment`, `settlement`입니다. 모두 파티션 3개·복제 1개이고 원본은 24시간, DLT는 7일 보존합니다. DLT는 토픽만 준비하며 자동 격리·재처리는 아직 연결하지 않습니다. 기존 토픽 설정이 다르면 smoke가 실패하므로 실제 값을 대조해야 합니다.
+Commerce·Payment·Settlement는 자기 원본 토픽 `commerce-settle.<서비스>.v1`을 생성합니다. 소비자별 DLT는 `commerce-settle.<소비자>.v1.dlt`이며 소비자는 `commerce`, `commerce-notifications`, `payment`, `settlement`입니다. 모두 파티션 3개·복제 1개이고 원본은 24시간, DLT는 7일 보존합니다. Payment의 명시적 원문 격리·DLT 발행 경로는 아래에 설명하며 다른 소비자는 토픽만 준비한 상태입니다. 기존 토픽 설정이 다르면 smoke가 실패하므로 실제 값을 대조해야 합니다.
 
 현재 구현한 전달 기반은 Commerce의 `OrderPaymentRequested` Outbox 저장·발행과 Payment의 Inbox 영속 인계입니다. 업무 유즈케이스는 자기 트랜잭션에서 `OrderEventOutbox.appendPaymentRequested`를 호출해야 하며, 트랜잭션 밖 단독 저장은 거절됩니다. 실제 전송은 `OutboxRelay`가 저장된 topic·key·원문 bytes로 수행하며 직접 발행 경로는 두지 않습니다. 발행 경로의 선택 이유와 CDC 대안은 [Kafka 결정](decisions/0005-kafka-event-delivery-and-capacity.md#발행-경로-통일)을 따릅니다. 최초 직렬화한 bytes를 보존해 재발행하고, Kafka ACK 뒤에만 발행 위치와 완료 상태를 저장합니다. 주문 API·예약과 실제 결제 접수 로직은 아직 연결하지 않았습니다.
 
-Payment의 `AcceptOrderPaymentRequestService`는 Inbox의 `WAITING`·`next_run_at`에 원본과 메시지 처리 대기 작업을 저장·커밋한 뒤 반환합니다. 같은 ID·동일 bytes는 원래 상태를 유지하고 다른 bytes는 `inbox_conflicts`에 격리합니다. 별도 `inbox_jobs`나 가짜 paymentId의 금융 Job을 만들지 않습니다. 결제·마일리지 예약·실제 `payment_jobs` 생성과 Inbox 완료를 처리할 후속 유즈케이스는 아직 없습니다. 수신 ACK는 이 대기 작업의 저장 완료만 뜻합니다.
+Payment의 `AcceptOrderPaymentRequestService`는 Inbox의 `WAITING`·`next_run_at`에 원본과 메시지 처리 대기 작업을 저장·커밋한 뒤 반환합니다. 같은 ID·동일 bytes는 원래 상태를 유지하고 다른 bytes는 `inbox_conflicts`에 격리합니다. 별도 `inbox_jobs`나 가짜 paymentId의 금융 Job을 만들지 않습니다. 후속 `ApplyOrderPaymentRequestService`는 결제·마일리지 예약·승인 작업·Inbox 완료를 함께 저장하며 전액 마일리지는 즉시 확정합니다. 이 처리기는 기본 비활성이고 PG 실행·결과 Outbox·재시도 상한은 미연결입니다. 수신 ACK는 대기 작업의 저장 완료만 뜻합니다.
 
 `app.outbox.enabled`와 `app.kafka.order-payment-requested.enabled`는 기본 `false`입니다. 빈 개발 DB에 서비스별 초기 SQL을 적용하고 아래 신규 그룹 초기화를 마친 뒤 각각 활성화합니다. 수신 구현 Bean이 없으면 활성화한 Listener는 시작에 실패합니다. 테스트 대역을 운영 구현으로 등록하지 않습니다. 기존 개발 컨테이너에 초기 SQL을 재실행하거나 볼륨을 임의로 초기화하지 않습니다.
 
@@ -278,7 +278,26 @@ docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap
 
 초기화 후 영속 인계 구현과 수신 경계를 활성화하고 생산자를 엽니다. 이미 메시지가 있거나 기존 offset이 있는 환경에는 위 초기화 명령을 적용하지 않습니다. 보존 이탈은 DB 원본과 대조해 복구하며 임의 offset 변경으로 정상 소비처럼 처리하지 않습니다. 다른 그룹·구독 토픽을 추가할 때도 같은 준비가 필요합니다.
 
-수신은 메시지 종류·버전·key·필수 필드·타입을 검증하고 영속 인계가 성공한 뒤에만 ack합니다. 현재 지원하지 않는 이벤트도 자동으로 버리지 않습니다. 처리 예외에는 해당 Listener 컨테이너를 비정상 중단하며, 자동 재시도 소진 후 건너뛰는 기본 동작을 사용하지 않습니다. 원인과 미확정 저장 결과를 확인한 뒤 소비자를 재기동하면 마지막 커밋 위치에서 재전달됩니다. 격리 DB·DLT 실행 경로가 연결되기 전까지는 실패를 중단 상태로 유지합니다.
+수신은 메시지 종류·버전·key·필수 필드·타입을 검증하고 영속 인계가 성공한 뒤에만 ack합니다. 기본 설정은 처리 예외에 해당 Listener를 중단하며 실패한 offset을 건너뛰지 않습니다. 원인과 저장 결과를 확인한 뒤 재기동하면 마지막 커밋 위치에서 재전달됩니다.
+
+Payment 원문 격리는 새 빈 DB의 초기 SQL을 검증한 뒤 `app.kafka.quarantine.enabled=true`로 켭니다. 기본값은 false입니다. 해석 불가·미지원 입력의 원문과 DLT 작업을 함께 커밋한 뒤 ACK하며, DB 저장 실패는 ACK 없이 Listener를 중단합니다. 같은 eventId의 본문 충돌은 기존 `inbox_conflicts`에서 확인합니다.
+
+`QuarantineRelay`는 한 번에 하나만 임대하고 DB 트랜잭션 밖에서 Kafka 응답을 기다립니다. 기본 주기는 1초, 주기당 최대 32개, 임대 240초, 결과 대기 125초입니다. `max.block.ms`와 결과 대기의 합은 임대보다 짧아야 합니다. 발행 실패는 1초부터 최대 60초 간격으로 10회까지 재시도하고, 소진하면 원문과 작업을 REVIEW_REQUIRED로 보존합니다.
+
+원인 수정 뒤 인증된 운영 호출자는 `QuarantineService.requestReplay(id,expectedVersion,operator,reasonCode)`로 원래 토픽·키·본문을 재발행합니다. 예상 버전과 활성 재처리 부재를 검사하고 요청자·사유를 기록합니다. REVIEW_REQUIRED 작업은 `resumeDelivery(deliveryId,expectedVersion,operator,reasonCode)`로 상태·버전을 확인하고 이전 시도 수와 재개 이력을 보존하며 재개합니다. DLT 가용성과 독립적으로 요청할 수 있고, 발행 완료가 업무 성공을 뜻하지는 않습니다. 공개 관리 UI·HTTP API는 제공하지 않습니다.
+
+수신 용량 실험은 [실행 계획](../tests/load/kafka-capacity-plan.json)에 따라 전용 Testcontainers Kafka·PostgreSQL에서 수행합니다. 금융 Worker는 끄고 Kafka→Inbox 커밋을 측정합니다. 성능 실험은 기본 `test`·CI에서 자동 실행하지 않습니다.
+
+```bash
+./gradlew --no-daemon --max-workers=1 :payment:kafkaCapacityExperiment \
+  -PcapacityMode=storage-probe -PcapacityOutput=/absolute/storage-probe.json
+./gradlew --no-daemon --max-workers=1 :payment:kafkaCapacityExperiment \
+  -PcapacityCalibration=/absolute/storage-probe.json -PcapacityOutput=/absolute/capacity-run.json
+```
+
+저장량 보정은 빈 토픽 재생성 1→3→3과 신규 그룹 offset을 확인한 뒤 35,000건의 DB·인덱스·WAL·Kafka 점유를 측정합니다. 같은 계획·실행 클래스의 성공한 보정 결과로 시작 용량을 산정합니다. 초기화 전과 보정 입력 전에는 최소 3GiB, 보정 중에는 증가분 최대 1GiB, 실행 중에는 잔여 2GiB와 WAL 예산을 검사합니다. WAL 누적 생성량을 동시 점유량으로 계산하지 않습니다.
+
+실행마다 새 출력 경로를 사용합니다. 실패·중단 시도를 포함한 [실험 결과](../tests/load/kafka-capacity-results.json)와 [판정](decisions/0005-kafka-event-delivery-and-capacity.md#kafka-수신격리-용량-실험)을 보존합니다. 실제 미반영 건수는 `producerAcked - uniqueDurableAfterDrain`입니다. 원본의 예정 건수 기준 `missingAfterDrain`과는 중단 경계의 추가 발행 때문에 1건 차이가 날 수 있습니다.
 
 `./gradlew :commerce:test :payment:test`는 Docker에서 전용 `apache/kafka:4.2.2` 컨테이너를 만들어 Outbox 원문 발행·위치 저장·ACK 후 저장 실패의 재발행과 실제 수신, 초기 offset 부재, 인계 실패 후 offset 보존과 소비자 재기동의 재전달을 검증합니다. Docker가 없으면 이 통합 시험은 실패하며 생략하지 않습니다. 시험 컨테이너와 데이터는 종료 때 제거하고 개발 Kafka·DB·볼륨을 사용하지 않습니다. 기본 `build`·CI에도 포함되며, smoke는 기동된 실제 7개 토픽의 설정을 추가로 검사합니다. Payment Kafka 수신 시험의 인계 구현은 메모리 대역입니다. Commerce Outbox의 실제 DB·Kafka 전달 시험도 주문·외부 결제 전체의 금융 정합성·업무 멱등성·처리량 검증을 대신하지 않습니다.
 

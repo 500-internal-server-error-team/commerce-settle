@@ -1,0 +1,139 @@
+{
+  "version": 3,
+  "question": "Kafka 검증·영속 Inbox 인계에서 파티션과 Consumer 수가 목표 유입 및 장애 후 배출에 미치는 영향",
+  "boundary": "Kafka producer send → 실제 OrderPaymentRequestedListener → 실제 PostgreSQL Inbox 커밋 → Kafka offset 커밋",
+  "excluded": [
+    "결제 확정 TPS",
+    "PG 승인 Worker",
+    "마일리지 차감 처리량",
+    "결과 Outbox",
+    "Settlement 소비·원장 반영"
+  ],
+  "adoption": "생산 기본값을 자동 변경하지 않는다. 짧은 비교는 탐색 결과, 한 장기 실행은 해당 조건의 관측으로만 보고한다.",
+  "seed": 20261030,
+  "configurations": [
+    {
+      "id": "A",
+      "partitions": 1,
+      "consumers": 1
+    },
+    {
+      "id": "B",
+      "partitions": 3,
+      "consumers": 1
+    },
+    {
+      "id": "C",
+      "partitions": 3,
+      "consumers": 3
+    }
+  ],
+  "blocks": [
+    [
+      "A",
+      "B",
+      "C"
+    ],
+    [
+      "B",
+      "C",
+      "A"
+    ],
+    [
+      "C",
+      "A",
+      "B"
+    ]
+  ],
+  "offeredRecordsPerSecond": 1000,
+  "warmupSeconds": 15,
+  "diagnosticSeconds": 60,
+  "confirmationSeconds": 900,
+  "recoveryPauseSeconds": 300,
+  "recoveryDrainSeconds": 300,
+  "maxDrainSeconds": 60,
+  "maxInFlight": 1024,
+  "maxBacklog": 30000,
+  "sampleSeconds": 5,
+  "producerAckTimeoutSeconds": 10,
+  "message": {
+    "type": "OrderPaymentRequested",
+    "version": 1,
+    "grossAmount": 10000,
+    "mileageAmount": 0,
+    "externalMethod": "CREDIT_CARD",
+    "accountRef": "synthetic-card",
+    "uniqueOrderAndEvent": true
+  },
+  "runtime": {
+    "brokerImage": "apache/kafka:4.2.2",
+    "databaseImage": "postgres:18.3",
+    "brokerMemoryBytes": 805306368,
+    "databaseMemoryBytes": 536870912,
+    "jvmHeapMb": 512,
+    "jdbcPoolSize": 10,
+    "maxPollRecords": 100,
+    "ackMode": "MANUAL_IMMEDIATE",
+    "producerAcks": "all",
+    "producerIdempotence": true,
+    "traceSampling": 0.0,
+    "brokerCpus": 1,
+    "databaseCpus": 1,
+    "producerLingerMs": 5,
+    "producerBufferBytes": 16777216,
+    "producerAndConsumerShareJvm": true,
+    "brokerLogDirectory": "/tmp/capacity-kafka-logs"
+  },
+  "metrics": [
+    "scheduled/actually-sent/producer-acked/unique-durable counts",
+    "per-cohort commit latency p50/p95/p99/max",
+    "per-partition committed-offset lag",
+    "Inbox count/oldest WAITING age",
+    "quarantine and DLT delivery reconciliation",
+    "JDBC active/idle/pending",
+    "발생기와 Consumer를 포함한 JVM CPU·heap, 실행 전체의 최대 RSS",
+    "late scheduling/producer failures",
+    "disk margin",
+    "브로커·PostgreSQL cgroup v2 CPU 누적 usec/스로틀링/현재 메모리",
+    "PostgreSQL 커밋·롤백·캐시·임시 바이트·active wait 표본; IO 시간 수집 비활성인 경우 0은 IO 부재의 증거가 아님"
+  ],
+  "rules": [
+    "각 trial은 새 토픽·그룹과 비어 있는 전용 DB로 시작한다. 공유 DB·개발 Kafka는 사용하지 않는다.",
+    "측정 전에 plan SHA·source SHA·runtime 버전과 실제 파티션·Consumer 할당을 기록한다.",
+    "반복 단위는 완주한 trial이며 메시지 수를 독립 표본 수로 취급하지 않는다.",
+    "발생기가 목표 유입을 만들지 못하면 목표 부하 비교는 무효다. 지연 송신과 실패를 분모에서 빼지 않는다.",
+    "정상 부하에서 backlog 30000건을 넘으면 조기 중단하고 유한한 배출 뒤 미완료 건수를 보고한다.",
+    "동일 설정의 짧은 trial 3회를 완주하고 유입 손실·중복·원문 불일치 0건, 측정 구간 영속 처리량이 목표의 99.9% 이상인 경우에만 장기 확인으로 진행한다.",
+    "장애 시험은 장기 확인을 통과한 설정만 수행한다. 300초 수신 중단 중에도 유입을 유지하고 재할당 완료부터 300초 안의 배출을 측정한다.",
+    "장애 중 예상 backlog 약300000건에는 정상 부하의30000건 상한을 적용하지 않고400000건 상한을 고정한다.",
+    "격리·DLT는 별도 정합성 입력으로 시험하며 장기 정상 부하에 오류 원문을 섞지 않는다.",
+    "금융 처리 완료나 최적의 파티션 수를 이 수신 경계 시험에서 주장하지 않는다.",
+    "예정 시각보다100ms 초과 지연된 발행이 cohort의0.1%를 넘으면 발생기 유효 조건 실패로 기록한다.",
+    "짧은 비교 3회를 모두 통과한 후보를 A→B→C 순서로 15분 확인·장애 배출한다. 앞 후보가 실패하면 다음 후보로 진행하며 두 단계 모두 통과하면 종료한다. 후보가 없으면 장애 시험은 미실행으로 명시한다.",
+    "샘플 수집·디스크 검사 실패 시 즉시 신규 입력을 닫고 발생기·장애 제어를 취소한다. 실행기 종료 예산은15초이며 부분 trial 표본과 입력 수를 보존한다.",
+    "예정 시각보다100ms를 넘겨 밀린 발생기는 즉시 중단한다. 마지막 예정 입력에도100ms 이내 꼬리만 허용하며 cutoff 직전 예정분은 ceil로 집계한다.",
+    "실행 전에 cutoff 경계값과 두 작업 취소 프로토콜을 자체 검사한다. 이 검사 실패는 부하 투입 전 실행 실패다.",
+    "용량 실행 전에 같은 plan·실행 class SHA의 성공한 저장량 보정 결과를 입력해야 한다. 원문848bytes만으로 DB/WAL/Kafka 합산 사용량을 대신하지 않는다.",
+    "저장량 보정 결과의전체cohort가ACK·고유행·원문대조·배출검사를통과해야예산을산정한다. 보정은A/B/C성능반복에포함하지않는다.",
+    "상대디스크비율을사용하지않는다. 최대동시cohort(현재915000건)에투영한byte예산을호스트와Docker에각각검사하고,중간2GiB여유하한을검사한다."
+  ],
+  "maxScheduleLatenessMs": 100,
+  "maxLateSchedulingFraction": 0.001,
+  "replacesPlanSha256": "a494d7436378c387f31b856da938d79a64a85b22a3741321e87afca5c55918a3",
+  "revisionReason": "용량trial0회, 저장량보정2회실패시점의재등록이다. v2의실제34931행·69건미송신·동일sent/ACK·100ms초과스케줄지연0과ACK최대324ms를보존한다. 1k/s의256건창(256ms)이짧은ACK정체에부족했을가능성을확인하기위해발생기만1024건(원문약0.9MB)으로늘린다. 입력rate·100ms한도·전체cohort·처리량·정합성·lag기준은바꾸지않는다.",
+  "storageBudget": {
+    "calibrationSeconds": 20,
+    "calibrationStartBytes": 3221225472,
+    "reserveFreeBytes": 2147483648,
+    "growthSafetyFactor": 2,
+    "fixedAndBuildAllowanceBytes": 536870912,
+    "brokerMetadataAllowanceBytes": 268435456,
+    "formula": "reserveFreeBytes + fixedAndBuildAllowanceBytes + walSpaceBudgetBytes + brokerMetadataAllowanceBytes + ceil(2 * peakRecords * (databaseGrowth + max(brokerAllocatedGrowth,records*serializedRecordBytes)) / records)",
+    "calibrationConfiguration": "C",
+    "interpretation": "저장량 보정은35,000건의 실제 DB·WAL·Kafka 증가량 관측이다. DB는trial마다 제거하고 Kafka 삭제 지연은2배계수와메타데이터여유로예산화한다.2배는보수적추정이며증명된상한은아니다. 보정은bootstrap후에도여유3GiB를재검사하고DB디렉터리+브로커증가를1GiB로제한한다. 모든실행중free2GiB미만이면입력을멈춘다.",
+    "walMaxSizeMultiplier": 2,
+    "calibrationMaxGrowthBytes": 1073741824,
+    "walSpaceBudget": "max(보정 시작 pg_wal 실제 할당량,2*max_wal_size 설정). WAL 생성량은 쓰기량 지표만 사용하고 점유 예산으로 확대하지 않는다. max_wal_size는 soft target이므로 실행중 실제 WAL 할당이 예산을 넘으면 입력을 중단한다."
+  },
+  "originalPlanSha256": "ba2b3ffa5a4b01deb5077958f6cc055b89537410378c3386fb14c93bada1b58c"
+}
