@@ -7,6 +7,7 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
+import com.commercesettle.commerce.application.exception.AuthChangeUnconfirmedException;
 import com.commercesettle.commerce.application.exception.AuthRateLimitedException;
 import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
 import com.commercesettle.commerce.application.exception.AuthenticationUnavailableException;
@@ -15,6 +16,8 @@ import com.commercesettle.commerce.domain.model.ActorKind;
 import com.commercesettle.commerce.domain.model.PasswordResetToken;
 import com.commercesettle.commerce.domain.model.SellerAccount;
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -25,6 +28,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -33,6 +37,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -73,6 +78,7 @@ class PasswordResetIntegrationTest {
   @Autowired AccountService accounts;
   @Autowired SessionService sessions;
   @Autowired JdbcTemplate jdbc;
+  @Autowired DataSource dataSource;
   @Autowired StringRedisTemplate redis;
   @MockitoSpyBean PasswordResetDelivery delivery;
 
@@ -266,6 +272,49 @@ class PasswordResetIntegrationTest {
   }
 
   @Test
+  @DisplayName("다른 트랜잭션이 계정 행을 오래 잡으면 대기 상한 안에 롤백하고 비밀번호를 바꾸지 않는다")
+  void rollsBackWhenAccountLockWaitExceedsLimit() throws Exception {
+    SellerAccount seller = register();
+    String token = requestToken(EMAIL);
+
+    try (Connection holder = lockAccount(seller)) {
+      long started = System.nanoTime();
+      assertThatThrownBy(() -> passwordResets.reset(ActorKind.SELLER, token, NEW_PASSWORD))
+          .isInstanceOf(AuthChangeUnconfirmedException.class)
+          .hasCauseInstanceOf(PessimisticLockingFailureException.class);
+      assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(4));
+      holder.rollback();
+    }
+
+    assertThat(authVersion(seller)).isZero();
+    assertThat(openTokens()).isOne();
+  }
+
+  @Test
+  @DisplayName("잠금 대기 중 만료된 토큰은 재설정에 성공하지 못하고 비밀번호를 바꾸지 않는다")
+  void rejectsTokenExpiredWhileWaitingForLock() throws Exception {
+    SellerAccount seller = register();
+    String token = requestToken(EMAIL);
+    jdbc.update(
+        "UPDATE commerce.password_reset_tokens SET expires_at = clock_timestamp() + interval '500 milliseconds'");
+
+    try (Connection holder = lockAccount(seller);
+        var executor = Executors.newSingleThreadExecutor()) {
+      Future<?> reset =
+          executor.submit(() -> passwordResets.reset(ActorKind.SELLER, token, NEW_PASSWORD));
+      Thread.sleep(900);
+      holder.rollback();
+      assertThatThrownBy(reset::get)
+          .hasCauseInstanceOf(AuthChangeUnconfirmedException.class)
+          .cause()
+          .hasCauseInstanceOf(AuthenticationFailedException.class);
+    }
+
+    assertThat(authVersion(seller)).isZero();
+    assertThat(openTokens()).isOne();
+  }
+
+  @Test
   @DisplayName("복구 요청 제한을 넘으면 기존 토큰을 폐기하지 않고 새 토큰도 만들지 않는다")
   void keepsExistingTokenWhenRateLimited() {
     register();
@@ -289,6 +338,19 @@ class PasswordResetIntegrationTest {
 
   private SellerAccount register() {
     return accounts.registerSeller(EMAIL, OLD_PASSWORD, "판매자", "payout-ref");
+  }
+
+  // 별도 연결에서 계정 행 잠금을 잡은 채 돌려준다. 호출자가 롤백해 해제한다.
+  private Connection lockAccount(SellerAccount seller) throws SQLException {
+    Connection connection = dataSource.getConnection();
+    connection.setAutoCommit(false);
+    try (var statement =
+        connection.prepareStatement(
+            "SELECT 1 FROM commerce.seller_accounts WHERE id = ? FOR UPDATE")) {
+      statement.setObject(1, seller.getId());
+      statement.execute();
+    }
+    return connection;
   }
 
   private String requestToken(String email) {

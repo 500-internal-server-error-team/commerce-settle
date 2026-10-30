@@ -500,6 +500,13 @@ class RedisAuthIntegrationTest {
             AuthenticationUnavailableException.class),
         refused("상태 누락", g -> g.remove("state"), AuthenticationUnavailableException.class),
         refused(
+            "필수 필드 없이 다른 필드만 남음",
+            g -> {
+              g.clear();
+              g.put("unexpected", "value");
+            },
+            AuthenticationUnavailableException.class),
+        refused(
             "알 수 없는 상태", g -> g.put("state", "OPEN"), AuthenticationUnavailableException.class));
   }
 

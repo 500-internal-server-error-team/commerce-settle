@@ -11,17 +11,22 @@ import java.util.UUID;
 import java.util.function.Supplier;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.JdbcOperations;
 import org.springframework.stereotype.Repository;
 
 @Repository
 class JpaAccountRepository implements AccountRepository {
   private final SpringDataBuyerAccountRepository buyers;
   private final SpringDataSellerAccountRepository sellers;
+  private final JdbcOperations jdbc;
 
   JpaAccountRepository(
-      SpringDataBuyerAccountRepository buyers, SpringDataSellerAccountRepository sellers) {
+      SpringDataBuyerAccountRepository buyers,
+      SpringDataSellerAccountRepository sellers,
+      JdbcOperations jdbc) {
     this.buyers = buyers;
     this.sellers = sellers;
+    this.jdbc = jdbc;
   }
 
   @Override
@@ -42,8 +47,10 @@ class JpaAccountRepository implements AccountRepository {
     };
   }
 
+  /** 다른 트랜잭션이 잡은 계정 행의 잠금 대기도 대기 상한 안에서 끝낸다. */
   @Override
   public Optional<Account> findLockedById(ActorKind kind, UUID id) {
+    TransactionLimits.apply(jdbc);
     return switch (kind) {
       case BUYER -> buyers.findLockedById(id).map(Account.class::cast);
       case SELLER -> sellers.findLockedById(id).map(Account.class::cast);
