@@ -32,8 +32,16 @@ public class InventoryMovement {
 
   protected InventoryMovement() {}
 
-  static InventoryMovement sellerAdjustment(
-      UUID id, UUID productId, UUID businessRef, long delta, String reason, Instant now) {
+  static InventoryMovement of(
+      UUID id,
+      UUID productId,
+      InventoryOperation operation,
+      UUID businessRef,
+      long availableDelta,
+      long reservedDelta,
+      long soldDelta,
+      String reason,
+      Instant now) {
     Objects.requireNonNull(reason, "reason");
     if (reason.isEmpty() || reason.length() > MAX_REASON_LENGTH) {
       throw new IllegalArgumentException("reason length must be 1.." + MAX_REASON_LENGTH);
@@ -41,9 +49,11 @@ public class InventoryMovement {
     InventoryMovement movement = new InventoryMovement();
     movement.id = Objects.requireNonNull(id, "id");
     movement.productId = Objects.requireNonNull(productId, "productId");
-    movement.operation = InventoryOperation.SELLER_ADJUSTMENT;
+    movement.operation = Objects.requireNonNull(operation, "operation");
     movement.businessRef = Objects.requireNonNull(businessRef, "businessRef");
-    movement.availableDelta = delta;
+    movement.availableDelta = availableDelta;
+    movement.reservedDelta = reservedDelta;
+    movement.soldDelta = soldDelta;
     movement.reason = reason;
     movement.createdAt = Objects.requireNonNull(now, "now").truncatedTo(ChronoUnit.MICROS);
     return movement;
