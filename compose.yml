@@ -183,6 +183,9 @@ services:
       AUTH_RATE_LIMIT_HMAC_KEY: ${AUTH_RATE_LIMIT_HMAC_KEY:?Run python3 scripts/init_env.py}
       AUTH_RESET_DELIVERY_KEY: ${AUTH_RESET_DELIVERY_KEY:?Run python3 scripts/init_env.py}
       ADDRESS_ENCRYPTION_KEY: ${ADDRESS_ENCRYPTION_KEY:?Run python3 scripts/init_env.py}
+      APP_DEV_FIXTURES_ENABLED: ${APP_DEV_FIXTURES_ENABLED:-false}
+      DEV_FIXTURE_PASSWORD: ${DEV_FIXTURE_PASSWORD:-}
+      APP_ORDER_STUB_ENABLED: ${APP_ORDER_STUB_ENABLED:-false}
     depends_on:
       <<: *app-deps
       postgres:
