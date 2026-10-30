@@ -18,5 +18,7 @@ tasks.register('kafkaCapacityExperiment', JavaExec) {
     workingDir rootProject.projectDir
     maxHeapSize = '512m'
     args rootProject.file('tests/load/kafka-capacity-plan.json').absolutePath,
-         providers.gradleProperty('capacityOutput').getOrElse(rootProject.file('tests/load/kafka-capacity-results.json').absolutePath)
+         providers.gradleProperty('capacityOutput').getOrElse(rootProject.file('tests/load/kafka-capacity-results.json').absolutePath),
+         providers.gradleProperty('capacityMode').getOrElse('capacity'),
+         providers.gradleProperty('capacityCalibration').getOrElse('')
 }

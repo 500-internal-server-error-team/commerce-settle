@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 3,
   "question": "Kafka 검증·영속 Inbox 인계에서 파티션과 Consumer 수가 목표 유입 및 장애 후 배출에 미치는 영향",
   "boundary": "Kafka producer send → 실제 OrderPaymentRequestedListener → 실제 PostgreSQL Inbox 커밋 → Kafka offset 커밋",
   "excluded": [
@@ -52,9 +52,8 @@
   "recoveryPauseSeconds": 300,
   "recoveryDrainSeconds": 300,
   "maxDrainSeconds": 60,
-  "maxInFlight": 256,
+  "maxInFlight": 1024,
   "maxBacklog": 30000,
-  "minFreeDiskFraction": 0.3,
   "sampleSeconds": 5,
   "producerAckTimeoutSeconds": 10,
   "message": {
@@ -82,7 +81,8 @@
     "databaseCpus": 1,
     "producerLingerMs": 5,
     "producerBufferBytes": 16777216,
-    "producerAndConsumerShareJvm": true
+    "producerAndConsumerShareJvm": true,
+    "brokerLogDirectory": "/tmp/capacity-kafka-logs"
   },
   "metrics": [
     "scheduled/actually-sent/producer-acked/unique-durable counts",
@@ -112,8 +112,28 @@
     "짧은 비교 3회를 모두 통과한 후보를 A→B→C 순서로 15분 확인·장애 배출한다. 앞 후보가 실패하면 다음 후보로 진행하며 두 단계 모두 통과하면 종료한다. 후보가 없으면 장애 시험은 미실행으로 명시한다.",
     "샘플 수집·디스크 검사 실패 시 즉시 신규 입력을 닫고 발생기·장애 제어를 취소한다. 실행기 종료 예산은15초이며 부분 trial 표본과 입력 수를 보존한다.",
     "예정 시각보다100ms를 넘겨 밀린 발생기는 즉시 중단한다. 마지막 예정 입력에도100ms 이내 꼬리만 허용하며 cutoff 직전 예정분은 ceil로 집계한다.",
-    "실행 전에 cutoff 경계값과 두 작업 취소 프로토콜을 자체 검사한다. 이 검사 실패는 부하 투입 전 실행 실패다."
+    "실행 전에 cutoff 경계값과 두 작업 취소 프로토콜을 자체 검사한다. 이 검사 실패는 부하 투입 전 실행 실패다.",
+    "용량 실행 전에 같은 plan·실행 class SHA의 성공한 저장량 보정 결과를 입력해야 한다. 원문848bytes만으로 DB/WAL/Kafka 합산 사용량을 대신하지 않는다.",
+    "저장량 보정 결과의전체cohort가ACK·고유행·원문대조·배출검사를통과해야예산을산정한다. 보정은A/B/C성능반복에포함하지않는다.",
+    "상대디스크비율을사용하지않는다. 최대동시cohort(현재915000건)에투영한byte예산을호스트와Docker에각각검사하고,중간2GiB여유하한을검사한다."
   ],
   "maxScheduleLatenessMs": 100,
-  "maxLateSchedulingFraction": 0.001
+  "maxLateSchedulingFraction": 0.001,
+  "replacesPlanSha256": "a494d7436378c387f31b856da938d79a64a85b22a3741321e87afca5c55918a3",
+  "revisionReason": "용량trial0회, 저장량보정2회실패시점의재등록이다. v2의실제34931행·69건미송신·동일sent/ACK·100ms초과스케줄지연0과ACK최대324ms를보존한다. 1k/s의256건창(256ms)이짧은ACK정체에부족했을가능성을확인하기위해발생기만1024건(원문약0.9MB)으로늘린다. 입력rate·100ms한도·전체cohort·처리량·정합성·lag기준은바꾸지않는다.",
+  "storageBudget": {
+    "calibrationSeconds": 20,
+    "calibrationStartBytes": 3221225472,
+    "reserveFreeBytes": 2147483648,
+    "growthSafetyFactor": 2,
+    "fixedAndBuildAllowanceBytes": 536870912,
+    "brokerMetadataAllowanceBytes": 268435456,
+    "formula": "reserveFreeBytes + fixedAndBuildAllowanceBytes + walSpaceBudgetBytes + brokerMetadataAllowanceBytes + ceil(2 * peakRecords * (databaseGrowth + max(brokerAllocatedGrowth,records*serializedRecordBytes)) / records)",
+    "calibrationConfiguration": "C",
+    "interpretation": "저장량 보정은35,000건의 실제 DB·WAL·Kafka 증가량 관측이다. DB는trial마다 제거하고 Kafka 삭제 지연은2배계수와메타데이터여유로예산화한다.2배는보수적추정이며증명된상한은아니다. 보정은bootstrap후에도여유3GiB를재검사하고DB디렉터리+브로커증가를1GiB로제한한다. 모든실행중free2GiB미만이면입력을멈춘다.",
+    "walMaxSizeMultiplier": 2,
+    "calibrationMaxGrowthBytes": 1073741824,
+    "walSpaceBudget": "max(보정 시작 pg_wal 실제 할당량,2*max_wal_size 설정). WAL 생성량은 쓰기량 지표만 사용하고 점유 예산으로 확대하지 않는다. max_wal_size는 soft target이므로 실행중 실제 WAL 할당이 예산을 넘으면 입력을 중단한다."
+  },
+  "originalPlanSha256": "ba2b3ffa5a4b01deb5077958f6cc055b89537410378c3386fb14c93bada1b58c"
 }

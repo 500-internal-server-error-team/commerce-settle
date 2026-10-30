@@ -289,10 +289,15 @@ Payment는 새 빈 DB의 초기 SQL 적용과 검증 후 `app.kafka.quarantine.e
 Kafka 수신 용량 실험은 [사전 등록 계획](../tests/load/kafka-capacity-plan.json)에 따라 전용 Testcontainers Kafka·PostgreSQL만 사용합니다. 실제 결제 처리기는 끄며 Kafka→Inbox 커밋을 측정합니다. 실행은 아래와 같고 기존 개발 토픽·DB·볼륨을 초기화하지 않습니다. 기본 `test`를 제외하거나 성능 실험을 기본 CI에서 자동 실행하지 않습니다.
 
 ```bash
-./gradlew --no-daemon --max-workers=1 :payment:kafkaCapacityExperiment
+./gradlew --no-daemon --max-workers=1 :payment:kafkaCapacityExperiment \
+  -PcapacityMode=storage-probe -PcapacityOutput=/absolute/storage-probe.json
+./gradlew --no-daemon --max-workers=1 :payment:kafkaCapacityExperiment \
+  -PcapacityCalibration=/absolute/storage-probe.json -PcapacityOutput=/absolute/capacity-run.json
 ```
 
-이 Mac의 로컬 실행은 workspace의 호스트 자원 가드로 위 명령을 감쌉니다. 실험 결과는 `tests/load/kafka-capacity-results.json`, 판정·미실행 범위는 [Kafka 실험 기록](decisions/0005-kafka-event-delivery-and-capacity.md#kafka-수신격리-용량-실험)에 남깁니다. 새 시도는 `-PcapacityOutput=/absolute/new-attempt.json`으로 구분하며 실패·중단 실행을 좋은 결과로 교체하지 않습니다.
+저장량 보정은 먼저 무입력 토픽 재생성 1→3→3의 준비·빈 토픽·신규 그룹 offset을 검사한 뒤, 같은 스키마·브로커에서 35,000건을 저장해 DB·인덱스·WAL 점유·Kafka 로그를 관측합니다. 성공한 같은 계획·실행 클래스의 보정 결과로 최대 동시 cohort의 절대byte 예산을 산정합니다. 전체 디스크의 고정 비율은 요구하지 않습니다. 보정은 bootstrap 전후 최소3GiB, 보정 증가 최대1GiB로 제한하고 실행 중 남은2GiB와 WAL 점유 예산을 검사합니다. WAL 생성량은 점유량과 구분합니다.
+
+이 Mac의 로컬 실행은 workspace의 호스트 자원 가드로 위 명령을 감쌉니다. 실험 결과는 `tests/load/kafka-capacity-results.json`, 판정·미실행 범위는 [Kafka 실험 기록](decisions/0005-kafka-event-delivery-and-capacity.md#kafka-수신격리-용량-실험)에 남깁니다. 새 시도는 `-PcapacityOutput=/absolute/new-attempt.json`으로 구분하며 실패·중단 실행을 좋은 결과로 교체하지 않습니다. 중단 결과의 실제 미반영 건수는 `producerAcked - uniqueDurableAfterDrain`으로 대조합니다. 원본 `missingAfterDrain`은 예정 건수 기준으로, 중단 경계의 추가 발행 때문에 1건 차이가 날 수 있습니다.
 
 `./gradlew :commerce:test :payment:test`는 Docker에서 전용 `apache/kafka:4.2.2` 컨테이너를 만들어 Outbox 원문 발행·위치 저장·ACK 후 저장 실패의 재발행과 실제 수신, 초기 offset 부재, 인계 실패 후 offset 보존과 소비자 재기동의 재전달을 검증합니다. Docker가 없으면 이 통합 시험은 실패하며 생략하지 않습니다. 시험 컨테이너와 데이터는 종료 때 제거하고 개발 Kafka·DB·볼륨을 사용하지 않습니다. 기본 `build`·CI에도 포함되며, smoke는 기동된 실제 7개 토픽의 설정을 추가로 검사합니다. Payment Kafka 수신 시험의 인계 구현은 메모리 대역입니다. Commerce Outbox의 실제 DB·Kafka 전달 시험도 주문·외부 결제 전체의 금융 정합성·업무 멱등성·처리량 검증을 대신하지 않습니다.
 

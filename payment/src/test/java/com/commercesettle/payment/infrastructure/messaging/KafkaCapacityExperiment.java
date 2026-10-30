@@ -78,8 +78,8 @@ public final class KafkaCapacityExperiment {
   private KafkaCapacityExperiment() {}
 
   public static void main(String[] args) throws Exception {
-    if (args.length != 2) {
-      throw new IllegalArgumentException("Expected preregistered plan and output paths");
+    if (args.length != 4 || !("capacity".equals(args[2]) || "storage-probe".equals(args[2]))) {
+      throw new IllegalArgumentException("Expected plan, output, mode and calibration paths");
     }
     Path planPath = Path.of(args[0]);
     Path output = Path.of(args[1]);
@@ -87,7 +87,9 @@ public final class KafkaCapacityExperiment {
       throw new IllegalArgumentException("A previous experiment output must not be overwritten");
     }
     JsonNode plan = JSON.readTree(Files.readAllBytes(planPath));
+    boolean storageProbe = "storage-probe".equals(args[2]);
     var result = new LinkedHashMap<String, Object>();
+    result.put("mode", args[2]);
     result.put("boundary", plan.path("boundary").asText());
     result.put("planSha256", hash(Files.readAllBytes(planPath)));
     result.put("startedAt", java.time.Instant.now().toString());
@@ -105,7 +107,30 @@ public final class KafkaCapacityExperiment {
     var runs = new ArrayList<Map<String, Object>>();
     result.put("runs", runs);
     write(output, result);
-    requireDisk(plan.path("minFreeDiskFraction").asDouble());
+    try {
+      long required = plan.path("storageBudget").path("calibrationStartBytes").asLong();
+      if (!storageProbe) {
+        JsonNode calibration = JSON.readTree(Files.readAllBytes(Path.of(args[3])));
+        if (!"storage-probe-complete".equals(calibration.path("status").asText())
+            || !result.get("planSha256").equals(calibration.path("planSha256").asText())
+            || !JSON.valueToTree(result.get("runningClasses"))
+                .equals(calibration.path("runningClasses"))) {
+          throw new IllegalStateException(
+              "Storage calibration must match this exact plan and classes");
+        }
+        var sizing = storageRequirement(plan, calibration.path("runs").get(0));
+        result.put("storageSizing", sizing);
+        result.put("storageCalibrationSha256", hash(Files.readAllBytes(Path.of(args[3]))));
+        required = sizing.get("requiredStartBytes");
+      }
+      result.put("requiredStartFreeBytes", required);
+      result.put("hostFreeBytesAtStart", requireDisk(required));
+    } catch (Exception failure) {
+      result.put("status", "preflight-failed");
+      result.put("failureClass", failure.getClass().getName());
+      write(output, result);
+      throw failure;
+    }
     var postgres =
         new PostgreSQLContainer<>(plan.path("runtime").path("databaseImage").asText())
             .withCreateContainerCmdModifier(
@@ -117,6 +142,7 @@ public final class KafkaCapacityExperiment {
         new KafkaContainer(plan.path("runtime").path("brokerImage").asText())
             .withEnv("KAFKA_HEAP_OPTS", "-Xms128m -Xmx256m")
             .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")
+            .withEnv("KAFKA_LOG_DIRS", "/tmp/capacity-kafka-logs")
             .withCreateContainerCmdModifier(
                 cmd ->
                     cmd.getHostConfig()
@@ -130,6 +156,41 @@ public final class KafkaCapacityExperiment {
       kafka.start();
       result.put("containerIds", List.of(postgres.getContainerId(), kafka.getContainerId()));
       write(output, result);
+      requireDisk(((Number) result.get("requiredStartFreeBytes")).longValue());
+      requireContainerDisk(postgres, ((Number) result.get("requiredStartFreeBytes")).longValue());
+      if (storageProbe) {
+        var readinessChecks = new ArrayList<Map<String, Object>>();
+        result.put("topicReadinessChecks", readinessChecks);
+        try (Admin admin = admin(kafka)) {
+          for (int partitions : List.of(1, 3, 3)) {
+            var check = new LinkedHashMap<String, Object>();
+            check.put("partitions", partitions);
+            readinessChecks.add(check);
+            String group = "capacity-readiness-" + UUID.randomUUID();
+            prepareTopic(admin, partitions, group, check);
+            admin.deleteConsumerGroups(List.of(group)).all().get(10, TimeUnit.SECONDS);
+            check.put("passed", true);
+            write(output, result);
+          }
+        }
+        var probe = newTrial(runs, "storage-calibration");
+        runTrial(
+            plan,
+            configuration(plan, "C"),
+            postgres,
+            kafka,
+            1,
+            -1,
+            plan.path("storageBudget").path("calibrationSeconds").asInt(),
+            false,
+            probe);
+        var sizing = storageRequirement(plan, JSON.valueToTree(probe));
+        result.put("storageSizing", sizing);
+        result.put("status", "storage-probe-complete");
+        result.put("finishedAt", java.time.Instant.now().toString());
+        write(output, result);
+        return;
+      }
       int number = 0;
       for (int block = 0; block < plan.path("blocks").size(); block++) {
         for (JsonNode name : plan.path("blocks").get(block)) {
@@ -263,10 +324,11 @@ public final class KafkaCapacityExperiment {
     run.put("configuration", config.path("id").asText());
     run.put("partitions", partitions);
     run.put("consumers", consumers);
-    requireDisk(plan.path("minFreeDiskFraction").asDouble());
+    requireDisk(plan.path("storageBudget").path("reserveFreeBytes").asLong());
     run.put(
-        "dockerDiskFreeFractionAtStart",
-        requireContainerDisk(postgres, plan.path("minFreeDiskFraction").asDouble()));
+        "dockerDiskFreeBytesAtStart",
+        requireContainerDisk(
+            postgres, plan.path("storageBudget").path("reserveFreeBytes").asLong()));
     var samples = new ArrayList<Map<String, Object>>();
     run.put("samples", samples);
     try (var connection =
@@ -285,19 +347,7 @@ public final class KafkaCapacityExperiment {
       statement.execute(new String(ddl.readAllBytes(), StandardCharsets.UTF_8));
     }
     try (Admin admin = admin(kafka)) {
-      if (admin.listTopics().names().get(10, TimeUnit.SECONDS).contains(TOPIC)) {
-        admin.deleteTopics(List.of(TOPIC)).all().get(10, TimeUnit.SECONDS);
-        waitUntil(() -> !admin.listTopics().names().get(5, TimeUnit.SECONDS).contains(TOPIC), 20);
-      }
-      admin
-          .createTopics(List.of(new NewTopic(TOPIC, partitions, (short) 1)))
-          .all()
-          .get(10, TimeUnit.SECONDS);
-      var initial = new HashMap<TopicPartition, OffsetAndMetadata>();
-      for (int p = 0; p < partitions; p++) {
-        initial.put(new TopicPartition(TOPIC, p), new OffsetAndMetadata(0));
-      }
-      admin.alterConsumerGroupOffsets(group, initial).all().get(10, TimeUnit.SECONDS);
+      prepareTopic(admin, partitions, group, run);
       CURRENT.set(metrics);
       var properties = new LinkedHashMap<String, String>();
       properties.put("spring.datasource.url", url);
@@ -328,21 +378,92 @@ public final class KafkaCapacityExperiment {
           throw new IllegalStateException(
               "Producer partition metadata differs from preregistration");
         }
+        long databaseBefore =
+            jdbc.queryForObject("SELECT pg_database_size(current_database())", Long.class);
+        String walStart = jdbc.queryForObject("SELECT pg_current_wal_lsn()::text", String.class);
+        long brokerBefore = brokerAllocatedBytes(kafka);
+        String dataDirectory = jdbc.queryForObject("SHOW data_directory", String.class);
+        if (dataDirectory == null || !dataDirectory.startsWith("/var/lib/postgresql/")) {
+          throw new IllegalStateException("Unexpected isolated PostgreSQL data directory");
+        }
+        long postgresBefore = allocatedBytes(postgres, dataDirectory);
+        var walPeak = new AtomicLong(allocatedBytes(postgres, dataDirectory + "/pg_wal"));
+        long walMaxSetting =
+            jdbc.queryForObject(
+                "SELECT pg_size_bytes(current_setting('max_wal_size'))", Long.class);
+        long walBudget =
+            Math.max(
+                walPeak.get(),
+                Math.multiplyExact(
+                    walMaxSetting,
+                    plan.path("storageBudget").path("walMaxSizeMultiplier").asLong()));
+        run.put(
+            "postgresWalSettings",
+            jdbc.queryForMap(
+                "SELECT current_setting('max_wal_size') AS max_wal_size,"
+                    + "current_setting('min_wal_size') AS min_wal_size,current_setting('checkpoint_timeout') AS checkpoint_timeout,"
+                    + "current_setting('full_page_writes') AS full_page_writes,current_setting('wal_compression') AS wal_compression"));
+        var guardSamples = new ArrayList<Map<String, Long>>();
+        run.put("storageGuards", guardSamples);
+        java.util.concurrent.Callable<Map<String, Long>> storageGuard =
+            () -> {
+              var values =
+                  checkStorage(
+                      plan,
+                      postgres,
+                      kafka,
+                      dataDirectory,
+                      postgresBefore,
+                      brokerBefore,
+                      walBudget,
+                      walPeak,
+                      "storage-calibration".equals(run.get("phase")),
+                      guardSamples);
+              return values;
+            };
+        if ("storage-calibration".equals(run.get("phase"))) {
+          requireDisk(plan.path("storageBudget").path("calibrationStartBytes").asLong());
+          requireContainerDisk(
+              postgres, plan.path("storageBudget").path("calibrationStartBytes").asLong());
+        }
         var warmup = new Measurements(prefix, warmupCount);
-        long warmupStart = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(100);
-        produce(
-            producer,
-            warmup,
-            rate,
-            metrics.capacity,
-            plan.path("maxInFlight").asInt(),
-            new AtomicLong(warmupStart + plan.path("warmupSeconds").asInt() * SECOND),
-            warmupStart,
-            new AtomicBoolean());
-        producer.flush();
-        waitUntil(
-            () -> lag(admin, group, partitions).values().stream().allMatch(value -> value == 0),
-            plan.path("maxDrainSeconds").asInt());
+        try {
+          runWarmup(
+              producer,
+              warmup,
+              rate,
+              metrics.capacity,
+              plan.path("maxInFlight").asInt(),
+              plan.path("warmupSeconds").asInt(),
+              storageGuard);
+          producer.flush();
+          if (!waitForDrain(
+              admin, group, partitions, plan.path("maxDrainSeconds").asInt(), storageGuard)) {
+            throw new IllegalStateException("Warmup did not drain within its fixed budget");
+          }
+        } finally {
+          run.put(
+              "warmup",
+              Map.of(
+                  "scheduled",
+                  warmupCount,
+                  "sent",
+                  warmup.sent.get(),
+                  "acked",
+                  warmup.acked.get(),
+                  "failures",
+                  warmup.failed.get(),
+                  "lateSchedules",
+                  warmup.lateSchedules.get(),
+                  "firstFailure",
+                  java.util.Objects.toString(warmup.firstFailure.get(), "none"),
+                  "scheduleLatenessMs",
+                  percentiles(warmup.scheduleLateness),
+                  "producerAckLatencyMs",
+                  percentiles(warmup.producerLatencies),
+                  "latencyPopulation",
+                  "recorded sends; aborted first-failure index is reported separately"));
+        }
         if (warmup.failed.get() != 0 || warmup.sent.get() != warmupCount) {
           throw new IllegalStateException("Warmup generator did not deliver its cohort");
         }
@@ -415,6 +536,7 @@ public final class KafkaCapacityExperiment {
             sample.put("jdbcPending", pool.getHikariPoolMXBean().getThreadsAwaitingConnection());
             sample.put("postgresResources", containerResources(postgres));
             sample.put("brokerResources", containerResources(kafka));
+            sample.put("storageGuard", storageGuard.call());
             sample.put(
                 "postgresStatistics",
                 jdbc.queryForMap(
@@ -448,8 +570,9 @@ public final class KafkaCapacityExperiment {
                     "SELECT count(*) FROM payment.inbox_quarantine_deliveries WHERE status<>'PUBLISHED'",
                     Long.class));
             sample.put(
-                "dockerDiskFreeFraction",
-                requireContainerDisk(postgres, plan.path("minFreeDiskFraction").asDouble()));
+                "dockerDiskFreeBytes",
+                requireContainerDisk(
+                    postgres, plan.path("storageBudget").path("reserveFreeBytes").asLong()));
             samples.add(sample);
             if (backlog > limit) {
               stopped.set(true);
@@ -465,7 +588,9 @@ public final class KafkaCapacityExperiment {
               control.put("firstCaughtUpElapsedMs", caughtUp / 1_000_000);
               control.put("firstCaughtUpElapsedNanos", caughtUp);
             }
-            requireDisk(plan.path("minFreeDiskFraction").asDouble());
+            sample.put(
+                "hostDiskFreeBytes",
+                requireDisk(plan.path("storageBudget").path("reserveFreeBytes").asLong()));
             nextSample += plan.path("sampleSeconds").asInt() * SECOND;
           }
           generator.get(10, TimeUnit.SECONDS);
@@ -494,10 +619,51 @@ public final class KafkaCapacityExperiment {
         long durableAtEnd = metrics.completedBefore(stopAt.get());
         producer.flush();
         boolean drained =
-            waitForDrain(admin, group, partitions, plan.path("maxDrainSeconds").asInt());
+            waitForDrain(
+                admin, group, partitions, plan.path("maxDrainSeconds").asInt(), storageGuard);
         listeners.stop();
         int expected = cohortSize(start, stopAt.get(), rate, metrics.capacity);
         long inbox = jdbc.queryForObject("SELECT count(*) FROM payment.inbox", Long.class);
+        run.put("inboxRowsAfterDrain", inbox);
+        storageGuard.call();
+        long brokerAfter = brokerAllocatedBytes(kafka);
+        run.put(
+            "storage",
+            Map.of(
+                "records",
+                inbox,
+                "serializedRecordBytes",
+                body(prefix, 0).length,
+                "databaseBeforeBytes",
+                databaseBefore,
+                "databaseAfterBytes",
+                jdbc.queryForObject("SELECT pg_database_size(current_database())", Long.class),
+                "inboxRelationAndIndexBytes",
+                jdbc.queryForObject("SELECT pg_total_relation_size('payment.inbox')", Long.class),
+                "walGeneratedBytes",
+                jdbc.queryForObject(
+                    "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(),?::pg_lsn)", Long.class, walStart),
+                "walAllocatedPeakBytes",
+                walPeak.get(),
+                "walSpaceBudgetBytes",
+                walBudget,
+                "brokerBeforeAllocatedBytes",
+                brokerBefore,
+                "brokerAfterAllocatedBytes",
+                brokerAfter));
+        long finalGrowth =
+            Math.max(0, allocatedBytes(postgres, dataDirectory) - postgresBefore)
+                + Math.max(0, brokerAfter - brokerBefore);
+        run.put("allocatedGrowthBytesAfterDrain", finalGrowth);
+        if (walPeak.get() > walBudget
+            || ("storage-calibration".equals(run.get("phase"))
+                && finalGrowth
+                    > plan.path("storageBudget").path("calibrationMaxGrowthBytes").asLong())) {
+          throw new IllegalStateException("Storage budget exceeded during final drain");
+        }
+        requireDisk(plan.path("storageBudget").path("reserveFreeBytes").asLong());
+        requireContainerDisk(
+            postgres, plan.path("storageBudget").path("reserveFreeBytes").asLong());
         long unique =
             jdbc.queryForObject("SELECT count(DISTINCT event_id) FROM payment.inbox", Long.class);
         long quarantined =
@@ -526,6 +692,8 @@ public final class KafkaCapacityExperiment {
         run.put("sent", metrics.sent.get());
         run.put("producerAcked", metrics.acked.get());
         run.put("producerFailures", metrics.failed.get());
+        run.put(
+            "firstProducerFailure", java.util.Objects.toString(metrics.firstFailure.get(), "none"));
         run.put("durableAtMeasurementEnd", durableAtEnd);
         run.put("uniqueDurableAfterDrain", metrics.durable.get());
         run.put("durablePerSecond", durableAtEnd * SECOND / (double) durationNanos);
@@ -571,6 +739,9 @@ public final class KafkaCapacityExperiment {
       run.put("sentAtExit", metrics.sent.get());
       run.put("producerAckedAtExit", metrics.acked.get());
       run.put("durableAtExit", metrics.durable.get());
+      run.put(
+          "firstProducerFailureAtExit",
+          java.util.Objects.toString(metrics.firstFailure.get(), "none"));
       CURRENT.set(null);
       try (var connection =
               DriverManager.getConnection(
@@ -587,6 +758,46 @@ public final class KafkaCapacityExperiment {
     run.put("verdict", "not-completed");
     runs.add(run);
     return run;
+  }
+
+  private static void runWarmup(
+      KafkaProducer<String, byte[]> producer,
+      Measurements metrics,
+      int rate,
+      int indexOffset,
+      int maxInFlight,
+      int seconds,
+      java.util.concurrent.Callable<?> storageGuard)
+      throws Exception {
+    storageGuard.call();
+    long start = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(100);
+    var inputClosed = new AtomicBoolean();
+    var executor = Executors.newSingleThreadExecutor();
+    var generator =
+        executor.submit(
+            () ->
+                produce(
+                    producer,
+                    metrics,
+                    rate,
+                    indexOffset,
+                    maxInFlight,
+                    new AtomicLong(start + seconds * SECOND),
+                    start,
+                    inputClosed));
+    try {
+      long nextGuard = start + 5 * SECOND;
+      while (!generator.isDone()) {
+        parkUntil(nextGuard);
+        storageGuard.call();
+        nextGuard += 5 * SECOND;
+      }
+      generator.get(10, TimeUnit.SECONDS);
+    } finally {
+      if (!stopWorkers(executor, generator, null, inputClosed)) {
+        throw new IllegalStateException("Warmup worker did not terminate within fixed budget");
+      }
+    }
   }
 
   private static void produce(
@@ -609,11 +820,13 @@ public final class KafkaCapacityExperiment {
         break;
       }
       if (System.nanoTime() - deadline > TimeUnit.MILLISECONDS.toNanos(100)) {
+        metrics.firstFailure.compareAndSet(null, "schedule-late:index=" + i);
         metrics.lateSchedules.incrementAndGet();
         metrics.failed.incrementAndGet();
         break;
       }
       if (!slots.tryAcquire()) {
+        metrics.firstFailure.compareAndSet(null, "in-flight-limit:index=" + i);
         metrics.failed.incrementAndGet();
         continue;
       }
@@ -638,12 +851,14 @@ public final class KafkaCapacityExperiment {
                 metrics.producerLatencies.set(index, System.nanoTime() - metrics.starts.get(index));
                 metrics.acked.incrementAndGet();
               } else {
+                metrics.firstFailure.compareAndSet(null, "producer-callback:index=" + index);
                 metrics.failed.incrementAndGet();
               }
               slots.release();
             });
         metrics.sent.incrementAndGet();
       } catch (RuntimeException failure) {
+        metrics.firstFailure.compareAndSet(null, "producer-send:index=" + index);
         metrics.failed.incrementAndGet();
         slots.release();
       }
@@ -690,7 +905,13 @@ public final class KafkaCapacityExperiment {
       executor.shutdownNow();
       executor.awaitTermination(2, TimeUnit.SECONDS);
     }
-    return Map.of("cohortCutoffs", true, "guardFailureStopsWorkers", true);
+    if (!hasDiskSpace(20L << 30, 8L << 30)
+        || hasDiskSpace(2L << 30, 3L << 30)
+        || !hasDiskSpace(8L << 30, 8L << 30)) {
+      throw new IllegalStateException("Absolute disk budget contract failed");
+    }
+    return Map.of(
+        "cohortCutoffs", true, "guardFailureStopsWorkers", true, "absoluteDiskBudget", true);
   }
 
   private static boolean stopWorkers(
@@ -837,10 +1058,156 @@ public final class KafkaCapacityExperiment {
         30);
   }
 
-  private static boolean waitForDrain(Admin admin, String group, int partitions, int seconds)
+  private static void prepareTopic(
+      Admin admin, int partitions, String group, Map<String, Object> run) throws Exception {
+    if (admin.listTopics().names().get(10, TimeUnit.SECONDS).contains(TOPIC)) {
+      admin.deleteTopics(List.of(TOPIC)).all().get(10, TimeUnit.SECONDS);
+      waitUntil(() -> !admin.listTopics().names().get(5, TimeUnit.SECONDS).contains(TOPIC), 20);
+    }
+    var created = admin.createTopics(List.of(new NewTopic(TOPIC, partitions, (short) 1)));
+    created.all().get(10, TimeUnit.SECONDS);
+    String expectedTopicId = created.topicId(TOPIC).get(10, TimeUnit.SECONDS).toString();
+    var initial = new HashMap<TopicPartition, OffsetAndMetadata>();
+    for (int p = 0; p < partitions; p++) {
+      initial.put(new TopicPartition(TOPIC, p), new OffsetAndMetadata(0));
+    }
+    initializeEmptyGroup(admin, group, expectedTopicId, initial, run);
+  }
+
+  private static void initializeEmptyGroup(
+      Admin admin,
+      String group,
+      String expectedTopicId,
+      Map<TopicPartition, OffsetAndMetadata> initial,
+      Map<String, Object> run)
+      throws Exception {
+    long deadline = System.nanoTime() + 30 * SECOND;
+    int attempts = 0;
+    boolean writeAttempted = false;
+    try {
+      while (System.nanoTime() < deadline) {
+        attempts++;
+        try {
+          var description =
+              setupAwait(() -> admin.describeTopics(List.of(TOPIC)).allTopicNames(), deadline)
+                  .get(TOPIC);
+          if (!expectedTopicId.equals(description.topicId().toString())
+              || description.partitions().size() != initial.size()
+              || description.partitions().stream()
+                  .anyMatch(p -> p.leader() == null || p.leader().id() < 0 || p.isr().isEmpty())) {
+            parkUntil(Math.min(deadline, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(100)));
+            continue;
+          }
+          var earliest = new HashMap<TopicPartition, OffsetSpec>();
+          var latest = new HashMap<TopicPartition, OffsetSpec>();
+          initial
+              .keySet()
+              .forEach(
+                  partition -> {
+                    earliest.put(partition, OffsetSpec.earliest());
+                    latest.put(partition, OffsetSpec.latest());
+                  });
+          var starts = setupAwait(() -> admin.listOffsets(earliest).all(), deadline);
+          var ends = setupAwait(() -> admin.listOffsets(latest).all(), deadline);
+          if (starts.values().stream().anyMatch(offset -> offset.offset() != 0)
+              || ends.values().stream().anyMatch(offset -> offset.offset() != 0)) {
+            throw new IllegalStateException(
+                "Fresh trial topic must have empty beginning and end offsets");
+          }
+          var before = setupOffsets(admin, group, deadline);
+          if ((!writeAttempted && !before.isEmpty())
+              || !initial.keySet().containsAll(before.keySet())
+              || before.values().stream().anyMatch(offset -> offset.offset() != 0)) {
+            throw new IllegalStateException("Fresh trial group contains unexpected offsets");
+          }
+          writeAttempted = true;
+          setupAwait(() -> admin.alterConsumerGroupOffsets(group, initial).all(), deadline);
+          var after = setupOffsets(admin, group, deadline);
+          if (after.keySet().equals(initial.keySet())
+              && after.values().stream().allMatch(offset -> offset.offset() == 0)) {
+            run.put("topicId", expectedTopicId);
+            return;
+          }
+          if (!initial.keySet().containsAll(after.keySet())
+              || after.values().stream().anyMatch(offset -> offset.offset() != 0)) {
+            throw new IllegalStateException(
+                "Trial offset initialization returned unexpected values");
+          }
+        } catch (java.util.concurrent.ExecutionException failure) {
+          Throwable cause = setupCause(failure);
+          if (!(cause instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException)
+              && !(cause instanceof org.apache.kafka.common.errors.LeaderNotAvailableException)
+              && !(cause instanceof org.apache.kafka.common.errors.NotLeaderOrFollowerException)) {
+            throw failure;
+          }
+        }
+        parkUntil(Math.min(deadline, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(100)));
+      }
+      throw new java.util.concurrent.TimeoutException(
+          "Fresh trial topic/group was not ready within30s");
+    } finally {
+      run.put("initialOffsetSetupAttempts", attempts);
+    }
+  }
+
+  private static Map<TopicPartition, OffsetAndMetadata> setupOffsets(
+      Admin admin, String group, long deadline) throws Exception {
+    try {
+      return setupAwait(
+          () -> admin.listConsumerGroupOffsets(group).partitionsToOffsetAndMetadata(), deadline);
+    } catch (java.util.concurrent.ExecutionException failure) {
+      if (setupCause(failure) instanceof org.apache.kafka.common.errors.GroupIdNotFoundException) {
+        return Map.of();
+      }
+      throw failure;
+    }
+  }
+
+  private static Throwable setupCause(Throwable failure) {
+    Throwable cause = failure;
+    while ((cause instanceof java.util.concurrent.ExecutionException
+            || cause instanceof java.util.concurrent.CompletionException)
+        && cause.getCause() != null) {
+      cause = cause.getCause();
+    }
+    return cause;
+  }
+
+  private static <T> T setupAwait(
+      java.util.function.Supplier<org.apache.kafka.common.KafkaFuture<T>> request, long deadline)
+      throws Exception {
+    if (System.nanoTime() >= deadline) {
+      throw new java.util.concurrent.TimeoutException(
+          "Topic/group setup deadline elapsed before RPC");
+    }
+    var future = request.get();
+    long remaining = deadline - System.nanoTime();
+    if (remaining <= 0) {
+      future.cancel(true);
+      throw new java.util.concurrent.TimeoutException("Topic/group setup deadline elapsed");
+    }
+    try {
+      return future.get(Math.min(5 * SECOND, remaining), TimeUnit.NANOSECONDS);
+    } catch (java.util.concurrent.TimeoutException failure) {
+      future.cancel(true);
+      throw failure;
+    }
+  }
+
+  private static boolean waitForDrain(
+      Admin admin,
+      String group,
+      int partitions,
+      int seconds,
+      java.util.concurrent.Callable<?> storageGuard)
       throws Exception {
     long deadline = System.nanoTime() + seconds * SECOND;
+    long nextGuard = 0;
     do {
+      if (System.nanoTime() >= nextGuard) {
+        storageGuard.call();
+        nextGuard = System.nanoTime() + 5 * SECOND;
+      }
       if (lag(admin, group, partitions).values().stream().allMatch(value -> value == 0)) {
         return true;
       }
@@ -892,26 +1259,164 @@ public final class KafkaCapacityExperiment {
         sorted[count - 1] / 1_000_000.0);
   }
 
-  private static void requireDisk(double margin) throws Exception {
-    var store = Files.getFileStore(Path.of("."));
-    if (store.getUsableSpace() / (double) store.getTotalSpace() < margin) {
-      throw new IllegalStateException("Preregistered disk margin not available");
-    }
+  private static boolean hasDiskSpace(long available, long required) {
+    return required > 0 && available >= required;
   }
 
-  private static double requireContainerDisk(PostgreSQLContainer<?> postgres, double margin)
+  private static long requireDisk(long required) throws Exception {
+    var store = Files.getFileStore(Path.of("."));
+    long available = store.getUsableSpace();
+    if (!hasDiskSpace(available, required)) {
+      throw new IllegalStateException("Preregistered absolute disk budget not available");
+    }
+    return available;
+  }
+
+  private static long requireContainerDisk(PostgreSQLContainer<?> postgres, long required)
       throws Exception {
+    long available = containerDiskFreeBytes(postgres);
+    if (!hasDiskSpace(available, required)) {
+      throw new IllegalStateException("Preregistered absolute Docker disk budget not available");
+    }
+    return available;
+  }
+
+  private static long containerDiskFreeBytes(PostgreSQLContainer<?> postgres) throws Exception {
     var result = postgres.execInContainer("df", "-Pk", "/var/lib/postgresql");
     if (result.getExitCode() != 0) {
       throw new IllegalStateException("Docker data disk margin could not be observed");
     }
     String[] lines = result.getStdout().strip().split("\\R");
     String[] columns = lines[lines.length - 1].strip().split("\\s+");
-    double fraction = Double.parseDouble(columns[3]) / Double.parseDouble(columns[1]);
-    if (fraction < margin) {
-      throw new IllegalStateException("Preregistered Docker disk margin not available");
+    return Math.multiplyExact(Long.parseLong(columns[3]), 1024);
+  }
+
+  private static Map<String, Long> checkStorage(
+      JsonNode plan,
+      PostgreSQLContainer<?> postgres,
+      KafkaContainer kafka,
+      String dataDirectory,
+      long postgresBefore,
+      long brokerBefore,
+      long walBudget,
+      AtomicLong walPeak,
+      boolean calibration,
+      List<Map<String, Long>> observations)
+      throws Exception {
+    var observation = new LinkedHashMap<String, Long>();
+    observations.add(observation);
+    observation.put("observedAtNanos", System.nanoTime());
+    observation.put("walSpaceBudgetBytes", walBudget);
+    long floor = plan.path("storageBudget").path("reserveFreeBytes").asLong();
+    observation.put("reserveFreeBytes", floor);
+    if (calibration) {
+      observation.put(
+          "calibrationMaxGrowthBytes",
+          plan.path("storageBudget").path("calibrationMaxGrowthBytes").asLong());
     }
-    return fraction;
+    long wal = allocatedBytes(postgres, dataDirectory + "/pg_wal");
+    observation.put("walAllocatedBytes", wal);
+    walPeak.accumulateAndGet(wal, Math::max);
+    long growth =
+        Math.max(0, allocatedBytes(postgres, dataDirectory) - postgresBefore)
+            + Math.max(0, brokerAllocatedBytes(kafka) - brokerBefore);
+    observation.put("dataAllocatedGrowthBytes", growth);
+    long hostFree = Files.getFileStore(Path.of(".")).getUsableSpace();
+    observation.put("hostFreeBytes", hostFree);
+    long dockerFree = containerDiskFreeBytes(postgres);
+    observation.put("dockerFreeBytes", dockerFree);
+    if (wal > walBudget
+        || (calibration
+            && growth > plan.path("storageBudget").path("calibrationMaxGrowthBytes").asLong())
+        || !hasDiskSpace(hostFree, floor)
+        || !hasDiskSpace(dockerFree, floor)) {
+      throw new IllegalStateException("Preregistered storage allocation budget exceeded");
+    }
+    return observation;
+  }
+
+  private static long brokerAllocatedBytes(KafkaContainer kafka) throws Exception {
+    return allocatedBytes(kafka, "/tmp/capacity-kafka-logs");
+  }
+
+  private static long allocatedBytes(
+      org.testcontainers.containers.GenericContainer<?> container, String directory)
+      throws Exception {
+    var observation = container.execInContainer("du", "-sk", directory);
+    if (observation.getExitCode() != 0) {
+      throw new IllegalStateException("Container allocated bytes unavailable");
+    }
+    return Math.multiplyExact(
+        Long.parseLong(observation.getStdout().strip().split("\\s+")[0]), 1024);
+  }
+
+  private static Map<String, Long> storageRequirement(JsonNode plan, JsonNode probe) {
+    JsonNode budget = plan.path("storageBudget");
+    long expected =
+        (plan.path("warmupSeconds").asLong() + budget.path("calibrationSeconds").asLong())
+            * plan.path("offeredRecordsPerSecond").asLong();
+    if (!probe.path("correctnessPassed").asBoolean()
+        || !probe.path("generatorValid").asBoolean()
+        || !probe.path("drained").asBoolean()
+        || probe.path("inboxRowsAfterDrain").asLong() != expected) {
+      throw new IllegalStateException("Storage probe must reconcile its entire planned cohort");
+    }
+    JsonNode storage = probe.path("storage");
+    long rows = storage.path("records").asLong();
+    long databaseGrowth =
+        storage.path("databaseAfterBytes").asLong() - storage.path("databaseBeforeBytes").asLong();
+    long walBudget = storage.path("walSpaceBudgetBytes").asLong();
+    long brokerGrowth =
+        Math.max(
+            storage.path("brokerAfterAllocatedBytes").asLong()
+                - storage.path("brokerBeforeAllocatedBytes").asLong(),
+            rows * storage.path("serializedRecordBytes").asLong());
+    if (rows != expected
+        || rows <= 0
+        || databaseGrowth <= 0
+        || walBudget <= 0
+        || storage.path("walAllocatedPeakBytes").asLong() > walBudget
+        || brokerGrowth <= 0) {
+      throw new IllegalStateException("Storage growth counters are incomplete");
+    }
+    long longestSeconds =
+        Math.max(
+            plan.path("confirmationSeconds").asLong(),
+            15
+                + plan.path("recoveryPauseSeconds").asLong()
+                + plan.path("recoveryDrainSeconds").asLong()
+                + 60);
+    long peakRows =
+        (longestSeconds + plan.path("warmupSeconds").asLong())
+            * plan.path("offeredRecordsPerSecond").asLong();
+    long variableBytes =
+        Math.ceilDiv(
+            Math.multiplyExact(
+                Math.addExact(databaseGrowth, brokerGrowth),
+                Math.multiplyExact(peakRows, budget.path("growthSafetyFactor").asLong())),
+            rows);
+    long required =
+        Math.addExact(
+            variableBytes,
+            budget.path("reserveFreeBytes").asLong()
+                + budget.path("fixedAndBuildAllowanceBytes").asLong()
+                + walBudget
+                + budget.path("brokerMetadataAllowanceBytes").asLong());
+    return Map.of(
+        "probeRecords",
+        rows,
+        "peakRecords",
+        peakRows,
+        "databaseGrowthBytes",
+        databaseGrowth,
+        "walSpaceBudgetBytes",
+        walBudget,
+        "brokerGrowthBytes",
+        brokerGrowth,
+        "projectedVariableBytes",
+        variableBytes,
+        "requiredStartBytes",
+        required);
   }
 
   private static Map<String, Long> containerResources(
@@ -992,6 +1497,7 @@ public final class KafkaCapacityExperiment {
     private final AtomicInteger durable = new AtomicInteger();
     private final AtomicInteger duplicates = new AtomicInteger();
     private final AtomicInteger lateSchedules = new AtomicInteger();
+    private final AtomicReference<String> firstFailure = new AtomicReference<>();
 
     private Measurements(long prefix, int capacity) {
       this.prefix = prefix;
