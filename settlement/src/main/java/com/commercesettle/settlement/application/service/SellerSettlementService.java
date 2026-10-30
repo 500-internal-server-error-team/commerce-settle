@@ -7,6 +7,7 @@ import com.commercesettle.settlement.domain.model.Payout;
 import com.commercesettle.settlement.domain.model.PayoutJob;
 import com.commercesettle.settlement.domain.model.PayoutRecipient;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
+import com.commercesettle.settlement.domain.model.SettlementItemStatus;
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository;
 import com.commercesettle.settlement.domain.repository.PayoutRepository;
 import com.commercesettle.settlement.domain.repository.SettlementBatchRepository;
@@ -60,9 +61,34 @@ public class SellerSettlementService {
    */
   @Transactional
   public Optional<SettlementBatch> settle(UUID sellerId, LocalDate batchDate) {
+    return settleSelected(sellerId, batchDate, null);
+  }
+
+  /** 개발 시나리오의 지정 항목만 허용한다. 동시 유입된 일반 항목을 선점했으면 해당 판매자를 롤백한다. */
+  @Transactional
+  public Optional<SettlementBatch> settleFixture(
+      UUID sellerId, LocalDate batchDate, Set<UUID> itemIds) {
+    return settleSelected(sellerId, batchDate, java.util.Objects.requireNonNull(itemIds));
+  }
+
+  private Optional<SettlementBatch> settleSelected(
+      UUID sellerId, LocalDate batchDate, Set<UUID> itemIds) {
     Optional<SettlementBatch> existing =
         batches.find(sellerId, batchDate, settings.policyVersion());
     if (existing.isPresent()) {
+      if (itemIds != null
+          && itemIds.stream()
+              .map(items::findById)
+              .flatMap(Optional::stream)
+              .anyMatch(
+                  item ->
+                      item.getSellerId().equals(sellerId)
+                          && item.getStatus() == SettlementItemStatus.PAYABLE
+                          && item.getPayoutId() == null
+                          && item.getReadyAt().isBefore(SettlementBatch.cutoffOf(batchDate)))) {
+        throw new IllegalStateException(
+            "Existing settlement batch conflicts with unprocessed fixture items");
+      }
       return existing;
     }
     Instant now = clock.instant();
@@ -78,6 +104,9 @@ public class SellerSettlementService {
     List<ReservedItem> reserved = items.reserveForPayout(sellerId, cutoffAt, payoutId, now);
     if (reserved.isEmpty()) {
       return Optional.empty();
+    }
+    if (itemIds != null && reserved.stream().anyMatch(item -> !itemIds.contains(item.id()))) {
+      throw new IllegalStateException("Fixture batch would reserve a non-fixture item");
     }
     // 검증과 선점 사이에 새 상품의 항목이 준비됐으면 검증하지 않은 상품이라 이번 실행에서 지급하지 않는다.
     if (reserved.stream().anyMatch(item -> !productIds.contains(item.productId()))) {

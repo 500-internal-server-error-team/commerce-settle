@@ -52,28 +52,69 @@ export BUILDX_CONFIG="$PWD/work/buildx"
 
 ## 개발용 DB fixture
 
-로그인·상품·재고·배송지 API를 실험할 때 `APP_DEV_FIXTURES_ENABLED=true`로 켭니다. 기본값은 false이며 실제 커머스 DB에 아래 합성 데이터를 넣습니다. `init_env.py`가 `.env`에 생성한 `DEV_FIXTURE_PASSWORD`를 네 계정의 최초 비밀번호로 사용하고, 기존 Argon2id 해시·주소 AES-GCM 암호화를 그대로 적용합니다. 운영·공유 환경에서는 켜지 않습니다.
+`APP_DEV_FIXTURES_ENABLED=true`는 각 서비스 DB에 없는 실험 데이터를 추가합니다. 기본값은 false입니다. `APP_DEV_FIXTURE_SCENARIOS_ENABLED=true`도 지정하면 Payment 접수·정산 일배치·모의 지급을 실제 서비스 경로로 실행합니다. 기존 Worker/Relay 활성화 설정은 바꾸지 않습니다. 정산 스케줄러는 fixture 조회 상태를 바꾸지 않도록 반드시 끕니다. 개발 전용 DB에서 사용합니다.
 
 ```bash
 python3 scripts/init_env.py
-./gradlew :commerce:bootJar
-APP_DEV_FIXTURES_ENABLED=true docker compose up -d --build --wait commerce gateway
+./gradlew bootJar
+APP_DEV_FIXTURES_ENABLED=true APP_DEV_FIXTURE_SCENARIOS_ENABLED=true \
+SETTLEMENT_DAILY_BATCH_ENABLED=false APP_ORDER_STUB_ENABLED=true \
+docker compose up -d --build --wait --wait-timeout 300
 ```
 
-| 계정 | 이메일 | UUID 접미사 |
+계속 사용할 옵션은 `.env`에 저장합니다. 비밀번호는 `init_env.py`가 생성한 `DEV_FIXTURE_PASSWORD`이며 최초 계정에만 적용합니다. 기존 Argon2id·주소 AES-GCM 암호화를 사용합니다. 비밀번호나 주소 암호화 키를 공유·커밋하지 않습니다.
+
+### Commerce 조회 데이터
+
+계정·상품·주소의 UUID 앞 구간은 `00000000-0000-4000-8000-`이며 아래 숫자를 12자리로 채운 접미사를 씁니다.
+
+| 계정 | 이메일 | 접미사·상태 |
 | --- | --- | --- |
-| 구매자 A | `fixture-buyer-a@example.test` | `000000000001` |
-| 구매자 B | `fixture-buyer-b@example.test` | `000000000011` |
-| 판매자 A | `fixture-seller-a@example.test` | `000000000002` |
-| 판매자 B | `fixture-seller-b@example.test` | `000000000022` |
+| 구매자 A/B | `fixture-buyer-a@example.test` / `fixture-buyer-b@example.test` | 1 / 11, ACTIVE |
+| 주소 없는 구매자 | `fixture-buyer-41@example.test` | 41, ACTIVE·마일리지 0 |
+| 복수·삭제 주소 구매자 | `fixture-buyer-51@example.test` | 51, ACTIVE |
+| 기본 주소 없는 구매자 | `fixture-buyer-61@example.test` | 61, ACTIVE·마일리지 500 |
+| 정지·삭제 구매자 | `fixture-buyer-71@example.test` / `fixture-buyer-81@example.test` | 71 SUSPENDED / 81 DELETED |
+| 판매자 A/B | `fixture-seller-a@example.test` / `fixture-seller-b@example.test` | 2 / 22, ACTIVE |
+| 정지·삭제 판매자 | `fixture-seller-72@example.test` / `fixture-seller-82@example.test` | 72 SUSPENDED / 82 DELETED |
+| 역할별 동일 이메일 | `fixture-shared@example.test` | 구매자 91 / 판매자 92, ACTIVE |
 
-UUID 앞 구간은 모두 `00000000-0000-4000-8000-`입니다. 수납 상자(상품 접미사 `000000000003`, 23,000원), 키보드(`000000000023`, 39,000원), 머그컵(`000000000033`, 10,000원)를 판매 중 상태로 만들고 각각 재고 100개와 초기 재고 이력을 기록합니다. 수납 상자·머그컵은 판매자 A, 키보드는 판매자 B의 상품입니다. 구매자별 기본 주소 한 개(주소 접미사 `000000000101`·`000000000111`)도 추가하며 연락처는 `000-`, 주소는 `가상시 테스트구`인 합성 데이터입니다.
+구매자 8명·판매자 5명, 상품·재고 각각 28행, 주소 29행(논리삭제 1행)을 만듭니다. 수납 상자(상품 3, 23,000원)·키보드(23, 39,000원)·머그컵(33, 10,000원)은 재고 100개입니다. 상품 400~420은 판매자 A의 페이지 실험용 판매 상품이며 각각 10,000원입니다. 상품 430은 품절, 431은 DRAFT, 432는 STOPPED, 433은 DELETED입니다. 공개 상품은 25개이며 판매자 A 목록도 기본 페이지 크기 20을 넘습니다.
 
-기동 후 [Swagger UI](http://localhost:8080/swagger-ui.html)에서 `/api/buyer-sessions` 또는 `/api/seller-sessions`에 위 이메일과 `.env`의 비밀번호로 로그인하고, 응답의 `token`을 Authorize에 입력합니다. `/api/products`, `/api/buyers/me/addresses`, 판매자 본인의 상품·재고 API를 바로 조회할 수 있습니다. 포트를 바꿨으면 `.env`의 `GATEWAY_PORT`를 사용합니다.
+구매자 A는 기본 주소 101과 일반 주소 120~141(총 23개), B는 기본 주소 111, 구매자 51은 주소 151~153(153 삭제), 구매자 61은 기본 지정 없이 161·162를 가집니다. 연락처 `000-`, 주소 `가상시 테스트구`는 합성 값입니다. 상품 400~404에는 실제 재고 예약 서비스로 RESERVED·CONSUMED·RELEASED·환불 복원·반품 복원을 각각 적용합니다. 초기 재고 이력 27행과 예약 처리 이력 11행, 예약 5행을 만들며 실제 주문·환불 실행과는 별개입니다.
 
-적재는 앱 기동마다 한 트랜잭션으로 수행하며 없는 fixture만 추가합니다. 재기동해도 가격·재고·비밀번호·주소와 버전·암호문을 갱신하지 않고 논리삭제한 데이터도 되살리지 않습니다. 이후 `.env`의 비밀번호를 바꿔도 기존 계정 비밀번호는 바뀌지 않습니다. 고정 계정 ID·이메일이나 상품 소유자가 기존 데이터와 충돌하면 기존 행을 덮어쓰지 않고 이번 적재를 롤백해 기동을 실패시킵니다. 설정을 꺼도 이미 적재한 데이터는 보존합니다.
+기동 후 [Swagger UI](http://localhost:8080/swagger-ui.html)에서 `/api/buyer-sessions` 또는 `/api/seller-sessions`로 로그인하고 응답의 `token`을 Authorize에 입력합니다. 공개 `/api/products?page=1`, 본인 `/api/sellers/me/products?page=1`, `/api/buyers/me/addresses?page=1`과 상품 단건·재고를 바로 조회합니다. 정지·삭제 계정 로그인은 거절되고 타인의 상품·주소 변경은 허용하지 않습니다. 포트를 바꿨으면 `.env`의 `GATEWAY_PORT`를 사용합니다.
 
-이 fixture는 주문·결제·마일리지·정산 이력을 만들지 않습니다. 샘플 주문도 보려면 같은 명령에 `APP_ORDER_STUB_ENABLED=true`를 함께 지정합니다. 구매자 ID가 아래 주문 샘플과 같아 구매자별 10개 주문을 조회할 수 있지만, 주문은 계속 별도의 메모리 stub이며 DB 상품·주소의 변경이 반영되지는 않습니다.
+### Payment·Settlement·Finance Mock
+
+금융 시나리오 seed는 `20261030`, 스냅샷 기준 시각은 `2026-09-01T09:00:00+09:00`입니다. 합성 금융 ID는 UTF-8 `dev-fixture-v1:<이름>`의 Java `UUID.nameUUIDFromBytes`로 정합니다. DB가 생성하는 업무 결과 ID는 임의 UUID이며 재실행 시 업무 키로 기존 결과를 찾습니다. 인증·Worker의 실제 Clock은 고정하지 않습니다.
+
+| 영역 | 기본 적재 | 시나리오 옵션을 켠 처리 결과 |
+| --- | --- | --- |
+| Payment | 구매자 1·11·41·61 지갑(100,000·0·0·500점)과 양수 지갑 SEED 2행. 결제 6개 상태 스냅샷과 정산 대응 CONFIRMED 스냅샷 8개 | 외부 39,000원·혼합 23,000원(M 1,000)·전액 마일리지 10,000원·0점 지갑 잔액 부족 요청. APPLIED 3·REVIEW_REQUIRED 1, 결제 3·승인 작업 2·예약 2·RESERVE 2·DEBIT 1. 구매자 A 잔액 90,000·예약 1,000점 |
+| Settlement | 항목 8개: 판매자 A의 마감 직전 2·정각 1·직후 1·환불 예약 1·환불 완료 1, 판매자 B의 직전 1·구매확정 대기 1 | `2026-09-01` 실제 일배치를 fixture 항목으로 제한해 배치·지급·작업 각 2행, 지급 예약 3행 생성. 판매자 A 39,100원·B 33,150원. 정각·직후는 다음 배치 대상으로 남음 |
+| Finance Mock | 기존 기본 지급 설정과 별개인 `fixture-payout-funding`(1,000,000원), `fixture-normal-v1`·`fixture-reject-v1`·`fixture-response-loss-v1`·`fixture-lookup-failure-v1` | 시나리오별 19,550원 실제 모의 지급. 성공 3·거절 1, 자금 예약 4·현금 차감 3·멱등 기록 4. 잔액 941,350원·예약액 0원 |
+
+Payment는 API 역할에서만 기동 시나리오를 실행합니다. Kafka의 별도 `commerce-settle.fixture.payment.v1`의 실제 발행 결과를 Inbox 출처로 저장하고, 지정 이벤트만 기존 접수 처리기로 처리합니다. 일반 WAITING 작업·정식 Commerce 토픽·Kafka consumer offset을 변경하지 않습니다. 이벤트 이름은 `request-event-0`~`3`, 주문은 `request-order-0`~`3`, 회차는 `request-cycle-0`~`3`입니다. 각각 외부·혼합·전액 마일리지·잔액 부족입니다. 승인 Worker·결과 Outbox·PG 실행은 구현되지 않아 PENDING 승인 작업을 임의 완료하지 않습니다.
+
+정산 스냅샷의 주문·결제 이름은 `order-settlement-0`~`7`·`payment-settlement-0`~`7`이며 Payment와 ID·당사자·상품·금액을 맞춥니다. 실제 PG 승인이나 서비스 간 이벤트 전달 결과는 아닙니다. Settlement의 기존 기본 지급 재원·시나리오(`payout-funding-default`·`payout-normal-v1`)를 사용하며, 일배치가 실제 Batch 메타데이터를 기록합니다. fixture 항목 ID도 Job 식별 파라미터에 포함해 일반 일배치 실행과 구분합니다. 동일 파라미터의 완료된 실행은 다시 만들지 않으며, 다른 인스턴스가 이미 실행 중이면 그 실행에 맡깁니다. 동일 판매자·날짜의 일반 정산 항목이 함께 선점되면 그 판매자 트랜잭션을 롤백하고 실행을 실패시켜 기존 데이터를 보존합니다.
+
+모의 지급 업무 키 이름은 `mock-payout-0`~`3`입니다. 모의 지급은 내부 `/mock/payouts` API로도 실행·조회할 수 있으며 Gateway에 공개하지 않습니다. 응답 유실 설정에서 새 업무 키의 최초 POST는 504, 저장 결과 GET은 200입니다. 기동 시나리오가 이미 생성한 고정 키의 POST는 재요청이므로 202이며, 조회 장애 설정의 GET은 503입니다. 같은 업무 키 재요청은 기존 거래를 반환해 추가 차감하지 않습니다. 이 기록은 Settlement 지급 Worker와 연결된 결과가 아닙니다. #88 병합 후 지급 처리·재시도 연동을 추가할 수 있습니다.
+
+Payment·Settlement에는 업무 조회 HTTP API가 없어 서비스별 DB로 확인합니다. 서비스 간 DB를 조인하거나 loader가 타 서비스 DB를 읽지 않습니다.
+
+```bash
+docker compose exec postgres psql -U postgres -d payment -c \
+  "SELECT status,count(*) FROM payment.payments GROUP BY status; SELECT kind,sum(amount) FROM payment.mileage_entries GROUP BY kind;"
+docker compose exec postgres psql -U postgres -d settlement -c \
+  "SELECT seller_id,amount,status FROM settlement.payouts; SELECT status,count(*) FROM settlement.settlement_items GROUP BY status;"
+docker compose exec postgres psql -U postgres -d finance_mock -c \
+  "SELECT account_ref,opening_balance,balance,reserved_amount FROM finance_mock.mock_accounts; SELECT status,count(*) FROM finance_mock.mock_transactions GROUP BY status;"
+```
+
+서비스별 초기 데이터·설정은 한 트랜잭션에서 적재하고 기존 수정·논리삭제·잔액·원장을 보존합니다. 고정 계정 ID/이메일·상품 소유자·금융 스냅샷 주문 ID 충돌은 적재를 롤백합니다. 업무 시나리오는 초기 적재 커밋 후 개별 업무 트랜잭션으로 실행합니다. 중간 실패 때 이미 커밋한 금융 효과를 되돌리지 않고 고정 이벤트·업무 키로 남은 처리를 이어갑니다. 옵션을 꺼도 기존 데이터는 남습니다. 전체 DB를 아우르는 원자적 초기화나 기존 실험 상태의 리셋은 제공하지 않습니다.
+
+주문은 `APP_ORDER_STUB_ENABLED=true`일 때 구매자 A/B별 메모리 샘플 10개를 별도로 조회합니다. 금융 DB의 합성 주문과 연결되지 않으며 DB 상품·주소 변경도 반영하지 않습니다. 정식 주문 저장·배송/구매확정, 환불/SAGA, 마일리지 해제/복원, 쿠폰·이벤트·알림, PG·간편결제·PG 입금 대역은 선행 업무 구현 후 fixture를 추가합니다. 부하 시험용 대량 데이터 생성도 이 기능 fixture와 별개입니다.
 
 ## 주문 영속 저장 기반
 

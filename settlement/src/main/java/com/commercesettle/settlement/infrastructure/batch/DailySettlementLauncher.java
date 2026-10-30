@@ -3,6 +3,9 @@ package com.commercesettle.settlement.infrastructure.batch;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.batch.core.BatchStatus;
@@ -35,13 +38,26 @@ public class DailySettlementLauncher {
   }
 
   public BatchStatus run(LocalDate batchDate) {
+    return run(batchDate, null);
+  }
+
+  public BatchStatus runFixture(LocalDate batchDate, Set<UUID> itemIds) {
+    if (itemIds.isEmpty()) throw new IllegalArgumentException("Fixture item IDs are required");
+    return run(batchDate, itemIds);
+  }
+
+  private BatchStatus run(LocalDate batchDate, Set<UUID> itemIds) {
     if (SettlementBatch.cutoffOf(batchDate).isAfter(clock.instant())) {
       throw new IllegalArgumentException("cutoff of batchDate has not passed yet");
     }
-    JobParameters parameters =
+    JobParametersBuilder builder =
         new JobParametersBuilder()
-            .addLocalDate(DailySettlementJobConfiguration.BATCH_DATE, batchDate)
-            .toJobParameters();
+            .addLocalDate(DailySettlementJobConfiguration.BATCH_DATE, batchDate);
+    if (itemIds != null)
+      builder.addString(
+          "fixtureItemIds",
+          itemIds.stream().map(UUID::toString).sorted().collect(Collectors.joining(",")));
+    JobParameters parameters = builder.toJobParameters();
     try {
       BatchStatus status = jobLauncher.run(dailySettlementJob, parameters).getStatus();
       LOGGER

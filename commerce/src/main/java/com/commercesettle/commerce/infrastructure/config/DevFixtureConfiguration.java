@@ -2,6 +2,7 @@ package com.commercesettle.commerce.infrastructure.config;
 
 import com.commercesettle.commerce.application.port.AddressCipher;
 import com.commercesettle.commerce.application.port.PasswordHasher;
+import com.commercesettle.commerce.application.service.InventoryReservationService;
 import com.commercesettle.commerce.infrastructure.persistence.DevFixtureLoader;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationRunner;
@@ -16,8 +17,11 @@ import org.springframework.jdbc.core.JdbcOperations;
 public class DevFixtureConfiguration {
   @Bean
   DevFixtureLoader devFixtureLoader(
-      JdbcOperations jdbc, PasswordHasher passwords, AddressCipher addresses) {
-    return new DevFixtureLoader(jdbc, passwords, addresses);
+      JdbcOperations jdbc,
+      PasswordHasher passwords,
+      AddressCipher addresses,
+      InventoryReservationService reservations) {
+    return new DevFixtureLoader(jdbc, passwords, addresses, reservations);
   }
 
   @Bean

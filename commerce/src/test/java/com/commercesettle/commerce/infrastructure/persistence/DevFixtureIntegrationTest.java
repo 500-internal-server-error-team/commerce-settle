@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import com.commercesettle.commerce.application.port.AddressCipher;
 import com.commercesettle.commerce.application.port.PasswordHasher;
 import com.commercesettle.commerce.application.service.BuyerAddressService;
+import com.commercesettle.commerce.application.service.InventoryReservationService;
 import com.commercesettle.commerce.domain.model.ShippingAddress;
 import com.commercesettle.commerce.infrastructure.config.DevFixtureConfiguration;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -82,17 +83,17 @@ class DevFixtureIntegrationTest {
 
   @BeforeAll
   void startupActuallyLoadsFixtures() {
-    assertThat(count("buyer_accounts")).isEqualTo(2);
-    assertThat(count("seller_accounts")).isEqualTo(2);
-    assertThat(count("products")).isEqualTo(3);
-    assertThat(count("buyer_addresses")).isEqualTo(2);
+    assertThat(count("buyer_accounts")).isEqualTo(8);
+    assertThat(count("seller_accounts")).isEqualTo(5);
+    assertThat(count("products")).isEqualTo(28);
+    assertThat(count("buyer_addresses")).isEqualTo(29);
   }
 
   @BeforeEach
   void cleanIsolatedDatabase() {
     jdbc.execute(
         "TRUNCATE commerce.buyer_addresses, commerce.buyer_accounts, commerce.seller_accounts, "
-            + "commerce.products, commerce.product_inventory, commerce.inventory_movements, commerce.idempotency_records");
+            + "commerce.products, commerce.product_inventory, commerce.inventory_movements, commerce.inventory_reservations, commerce.idempotency_records");
   }
 
   @Test
@@ -122,9 +123,9 @@ class DevFixtureIntegrationTest {
                   + ":"
                   + session.get("account").get("id").asText());
     }
-    assertThat(get("/api/products", null).get("totalElements").asInt()).isEqualTo(3);
+    assertThat(get("/api/products", null).get("totalElements").asInt()).isEqualTo(25);
     JsonNode page = get("/api/buyers/me/addresses", id(1));
-    assertThat(page.get("totalElements").asInt()).isEqualTo(1);
+    assertThat(page.get("totalElements").asInt()).isEqualTo(23);
     assertThat(page.get("items").get(0).get("addressLine1").asText()).isEqualTo("가상시 테스트구 샘플로 1");
     assertThat(get("/api/orders", id(1)).get("totalElements").asInt()).isEqualTo(10);
     assertThat(
@@ -133,7 +134,7 @@ class DevFixtureIntegrationTest {
                 Long.class,
                 id(3)))
         .isEqualTo(100);
-    assertThat(count("inventory_movements")).isEqualTo(3);
+    assertThat(count("inventory_movements")).isEqualTo(38);
     String storedHash =
         jdbc.queryForObject(
             "SELECT password_hash FROM commerce.buyer_accounts WHERE id=?", String.class, id(1));
@@ -186,15 +187,21 @@ class DevFixtureIntegrationTest {
                 Long.class,
                 id(3)))
         .isEqualTo(37);
-    assertThat(addresses.addresses(id(1), 0, 20).items().get(0).shipping()).isEqualTo(changed);
+    assertThat(
+            addresses.addresses(id(1), 0, 100).items().stream()
+                .filter(a -> a.id().equals(id(101)))
+                .findFirst()
+                .orElseThrow()
+                .shipping())
+        .isEqualTo(changed);
     assertThat(
             jdbc.queryForObject(
                 "SELECT address_ciphertext FROM commerce.buyer_addresses WHERE id=?",
                 byte[].class,
                 id(101)))
         .isEqualTo(ciphertext);
-    assertThat(count("buyer_accounts")).isEqualTo(2);
-    assertThat(count("inventory_movements")).isEqualTo(3);
+    assertThat(count("buyer_accounts")).isEqualTo(8);
+    assertThat(count("inventory_movements")).isEqualTo(38);
   }
 
   @Test
@@ -211,8 +218,10 @@ class DevFixtureIntegrationTest {
 
     loader.load(PASSWORD);
 
-    assertThat(get("/api/products", null).get("totalElements").asInt()).isEqualTo(2);
-    assertThat(addresses.addresses(id(1), 0, 20).items()).isEmpty();
+    assertThat(get("/api/products", null).get("totalElements").asInt()).isEqualTo(24);
+    assertThat(addresses.addresses(id(1), 0, 100).items())
+        .hasSize(22)
+        .noneMatch(a -> a.id().equals(id(101)));
     assertThat(
             jdbc.queryForObject(
                 "SELECT status FROM commerce.buyer_accounts WHERE id=?", String.class, id(11)))
@@ -221,7 +230,7 @@ class DevFixtureIntegrationTest {
             jdbc.queryForObject(
                 "SELECT status FROM commerce.seller_accounts WHERE id=?", String.class, id(22)))
         .isEqualTo("DELETED");
-    assertThat(count("buyer_addresses")).isEqualTo(2);
+    assertThat(count("buyer_addresses")).isEqualTo(29);
   }
 
   @Test
@@ -255,9 +264,9 @@ class DevFixtureIntegrationTest {
       first.get(10, TimeUnit.SECONDS);
       second.get(10, TimeUnit.SECONDS);
     }
-    assertThat(count("buyer_accounts")).isEqualTo(2);
-    assertThat(count("buyer_addresses")).isEqualTo(2);
-    assertThat(count("inventory_movements")).isEqualTo(3);
+    assertThat(count("buyer_accounts")).isEqualTo(8);
+    assertThat(count("buyer_addresses")).isEqualTo(29);
+    assertThat(count("inventory_movements")).isEqualTo(38);
   }
 
   @Test
@@ -268,9 +277,90 @@ class DevFixtureIntegrationTest {
             .withUserConfiguration(DevFixtureConfiguration.class)
             .withBean(JdbcOperations.class, () -> mock(JdbcOperations.class))
             .withBean(PasswordHasher.class, () -> mock(PasswordHasher.class))
-            .withBean(AddressCipher.class, () -> mock(AddressCipher.class));
+            .withBean(AddressCipher.class, () -> mock(AddressCipher.class))
+            .withBean(
+                InventoryReservationService.class, () -> mock(InventoryReservationService.class));
     context.run(c -> assertThat(c).doesNotHaveBean(DevFixtureLoader.class));
     context.withPropertyValues("app.dev-fixtures.enabled=true").run(c -> assertThat(c).hasFailed());
+  }
+
+  @Test
+  @DisplayName("공개·판매자·주소 페이지와 빈 결과·권한·상태 및 재고 원장을 실제 API와 DB로 확인한다")
+  void coversPagesOwnershipAndInventoryStates() {
+    loader.load(PASSWORD);
+    assertThat(get("/api/products?page=1", null).get("items").size()).isEqualTo(5);
+    HttpHeaders seller = new HttpHeaders();
+    seller.set("X-Authenticated-Actor-Kind", "SELLER");
+    seller.set("X-Authenticated-Actor-Id", id(2).toString());
+    var products =
+        http.exchange(
+            "/api/sellers/me/products?page=1",
+            HttpMethod.GET,
+            new HttpEntity<>(seller),
+            JsonNode.class);
+    assertThat(products.getStatusCode().value()).isEqualTo(200);
+    assertThat(products.getBody().get("items").size()).isPositive();
+    assertThat(get("/api/buyers/me/addresses?page=1", id(1)).get("items").size()).isEqualTo(3);
+    assertThat(addresses.addresses(id(41), 0, 20).items()).isEmpty();
+    assertThat(addresses.addresses(id(61), 0, 20).items()).hasSize(2).noneMatch(a -> a.isDefault());
+    assertThat(addresses.addresses(id(51), 0, 20).items()).hasSize(2);
+    HttpHeaders buyer = new HttpHeaders();
+    buyer.set("X-Authenticated-Actor-Kind", "BUYER");
+    buyer.set("X-Authenticated-Actor-Id", id(11).toString());
+    buyer.set("Idempotency-Key", "fixture-other-owner");
+    var change =
+        Map.of(
+            "recipient",
+            "실험",
+            "phone",
+            "000-0000-0000",
+            "postalCode",
+            "00001",
+            "addressLine1",
+            "가상시 테스트구",
+            "addressLine2",
+            "",
+            "isDefault",
+            false,
+            "expectedVersion",
+            0);
+    assertThat(
+            http.exchange(
+                    "/api/buyers/me/addresses/" + id(101),
+                    HttpMethod.PUT,
+                    new HttpEntity<>(change, buyer),
+                    JsonNode.class)
+                .getStatusCode()
+                .value())
+        .isEqualTo(404);
+    for (int account : new int[] {71, 81}) {
+      assertThat(
+              http.postForEntity(
+                      "/api/buyer-sessions",
+                      Map.of(
+                          "email",
+                          "fixture-buyer-" + account + "@example.test",
+                          "password",
+                          PASSWORD),
+                      JsonNode.class)
+                  .getStatusCode()
+                  .value())
+          .isEqualTo(401);
+    }
+    assertThat(
+            jdbc.queryForList(
+                "SELECT DISTINCT status FROM commerce.inventory_reservations", String.class))
+        .containsExactlyInAnyOrder("RESERVED", "CONSUMED", "RELEASED", "RESTORED");
+    assertThat(
+            jdbc.queryForObject(
+                """
+        SELECT count(*) FROM commerce.product_inventory i WHERE
+        (i.available_qty,i.reserved_qty,i.sold_qty) <> (
+          SELECT coalesce(sum(available_delta),0),coalesce(sum(reserved_delta),0),coalesce(sum(sold_delta),0)
+          FROM commerce.inventory_movements m WHERE m.product_id=i.product_id)
+        """,
+                Integer.class))
+        .isZero();
   }
 
   private JsonNode get(String path, UUID buyer) {

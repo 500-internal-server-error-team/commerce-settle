@@ -484,6 +484,11 @@ class ApplyOrderPaymentRequestServiceTest {
     }
 
     @Override
+    public Optional<WaitingInboxEvent> claimWaitingEvent(UUID eventId, Instant now) {
+      return claimNextWaiting(now).filter(e -> e.event().eventId().equals(eventId));
+    }
+
+    @Override
     public void markApplied(UUID inboxId, UUID resultRef, Instant now) {
       applied.put(inboxId, resultRef);
       originals.putIfAbsent(resultRef, payloads.get(inboxId));

@@ -50,6 +50,22 @@ public class MileageEntry {
     this.createdAt = Objects.requireNonNull(now, "now").truncatedTo(ChronoUnit.MICROS);
   }
 
+  /** 사전 지급으로 연 지갑의 최초 잔액. 0점 지갑에는 금액 원장을 만들지 않는다. */
+  public static MileageEntry seed(MileageWallet wallet, Instant now) {
+    if (wallet.getBalance() <= 0 || wallet.getReservedAmount() != 0) {
+      throw new IllegalArgumentException("초기 양수 잔액의 미예약 지갑만 기록할 수 있습니다.");
+    }
+    MileageEntry entry = new MileageEntry();
+    entry.id = UUID.randomUUID();
+    entry.walletId = wallet.getId();
+    entry.kind = MileageEntryKind.SEED;
+    entry.businessRef = wallet.getId();
+    entry.amount = wallet.getBalance();
+    entry.balanceAfter = wallet.getBalance();
+    entry.createdAt = Objects.requireNonNull(now).truncatedTo(ChronoUnit.MICROS);
+    return entry;
+  }
+
   /** 예약을 기록한다. 잔액은 바뀌지 않으므로 기록 시점의 잔액을 남긴다. 업무 키는 결제 회차 ID. */
   public static MileageEntry reserve(
       MileageWallet wallet, MileageReservation reservation, Instant now) {

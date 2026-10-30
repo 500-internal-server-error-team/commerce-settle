@@ -91,3 +91,8 @@ management:
 logging:
   pattern:
     dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Seoul"
+
+app:
+  dev-fixtures:
+    enabled: ${APP_DEV_FIXTURES_ENABLED:false}
+    run-scenarios: ${APP_DEV_FIXTURE_SCENARIOS_ENABLED:false}

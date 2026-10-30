@@ -14,6 +14,8 @@ public interface InboxStore {
   /** 처리 시각이 된 WAITING 하나를 현재 트랜잭션에서 잠그고 가져온다. 다른 처리기가 잠근 행은 건너뛴다. */
   Optional<WaitingInboxEvent> claimNextWaiting(Instant now);
 
+  Optional<WaitingInboxEvent> claimWaitingEvent(UUID eventId, Instant now);
+
   void markApplied(UUID inboxId, UUID resultRef, Instant now);
 
   void markReviewRequired(UUID inboxId, Instant now);
