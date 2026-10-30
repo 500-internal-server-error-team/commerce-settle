@@ -7,5 +7,7 @@ import java.util.UUID;
 public interface PayoutRepository {
   Payout save(Payout payout);
 
+  Optional<Payout> findById(UUID id);
+
   Optional<Payout> findByBatchId(UUID batchId);
 }

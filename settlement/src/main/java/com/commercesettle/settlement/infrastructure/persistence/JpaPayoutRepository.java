@@ -20,6 +20,11 @@ class JpaPayoutRepository implements PayoutRepository {
   }
 
   @Override
+  public Optional<Payout> findById(UUID id) {
+    return repository.findById(id);
+  }
+
+  @Override
   public Optional<Payout> findByBatchId(UUID batchId) {
     return repository.findByBatchId(batchId);
   }

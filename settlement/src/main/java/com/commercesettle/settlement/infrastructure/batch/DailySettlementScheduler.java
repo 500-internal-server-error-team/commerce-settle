@@ -6,7 +6,6 @@ import java.time.ZoneId;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.core.task.TaskExecutor;
-import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -15,7 +14,6 @@ import org.springframework.stereotype.Component;
  * 넘긴다(ADR 0008).
  */
 @Component
-@EnableScheduling
 @ConditionalOnProperty(
     prefix = "settlement.daily-batch",
     name = "schedule-enabled",

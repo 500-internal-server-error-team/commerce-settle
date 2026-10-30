@@ -67,6 +67,18 @@ settlement:
     # finance-mock 지급 대역의 재원 계정·금융 실행 시나리오. 지급 생성 때 지급에 고정한다.
     funding-account-ref: ${PAYOUT_FUNDING_ACCOUNT_REF:payout-funding-default}
     scenario-version: ${PAYOUT_SCENARIO_VERSION:payout-normal-v1}
+    # 원거래 조회에 쓰는 조회 통신 시나리오. 원거래의 금융 실행 버전과 별개다.
+    lookup-scenario-version: ${PAYOUT_LOOKUP_SCENARIO_VERSION:payout-normal-v1}
+    mock-base-url: ${FINANCE_MOCK_URL:http://finance-mock:8080}
+  payout-worker:
+    enabled: ${SETTLEMENT_PAYOUT_WORKER_ENABLED:true}
+    # 금융 Worker 임대 기준: 조회 1초, 임대 30초, HTTP 5초(policies.md). 미확정은 5분마다 원거래를 조회한다.
+    poll-interval-ms: 1000
+    lease-duration: 30s
+    http-timeout: 5s
+    unconfirmed-retry-delay: 5m
+    max-attempts: 10
+    max-jobs-per-poll: 8
 
 springdoc:
   paths-to-match: /api/**
