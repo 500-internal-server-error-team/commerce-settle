@@ -1,7 +1,10 @@
 package com.commercesettle.payment.application.service;
 
+import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
+import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
 import com.commercesettle.payment.application.port.InboxStore;
+import com.commercesettle.payment.application.port.PaymentEventOutbox;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.commercesettle.payment.domain.exception.InvalidPaymentAmountException;
 import com.commercesettle.payment.domain.model.MileageEntry;
@@ -15,8 +18,10 @@ import com.commercesettle.payment.domain.repository.MileageReservationRepository
 import com.commercesettle.payment.domain.repository.MileageWalletRepository;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -39,6 +44,7 @@ public class ApplyOrderPaymentRequestService {
   private final MileageWalletRepository wallets;
   private final MileageReservationRepository reservations;
   private final MileageEntryRepository entries;
+  private final PaymentEventOutbox outbox;
   private final Clock clock;
 
   public ApplyOrderPaymentRequestService(
@@ -48,6 +54,7 @@ public class ApplyOrderPaymentRequestService {
       MileageWalletRepository wallets,
       MileageReservationRepository reservations,
       MileageEntryRepository entries,
+      PaymentEventOutbox outbox,
       Clock clock) {
     this.inbox = inbox;
     this.payments = payments;
@@ -55,6 +62,7 @@ public class ApplyOrderPaymentRequestService {
     this.wallets = wallets;
     this.reservations = reservations;
     this.entries = entries;
+    this.outbox = outbox;
     this.clock = clock;
   }
 
@@ -114,6 +122,7 @@ public class ApplyOrderPaymentRequestService {
     if (mileage > 0) {
       reserveMileage(wallet.get(), payment, now);
     }
+    appendAccepted(payment, payload, now);
     inbox.markApplied(inboxId, payment.getId(), now);
     return true;
   }
@@ -135,6 +144,28 @@ public class ApplyOrderPaymentRequestService {
       payment.confirm(now);
     }
     wallets.save(wallet);
+  }
+
+  /** 새 결제를 만든 같은 트랜잭션에서 PaymentAccepted를 Outbox에 남긴다. 기존 결제를 돌려주는 재요청에서는 호출하지 않는다. */
+  private void appendAccepted(Payment payment, OrderPaymentRequestedPayload request, Instant now) {
+    PaymentAcceptedPayload payload =
+        new PaymentAcceptedPayload(
+            payment.getId(),
+            request.orderId(),
+            request.orderVersion(),
+            payment.getCurrentCycleId());
+    // 결제 ID에서 고정 eventId를 만들어 같은 결제의 중복 append를 Outbox가 한 건으로 합치게 한다.
+    EventEnvelope<PaymentAcceptedPayload> envelope =
+        new EventEnvelope<>(
+            UUID.nameUUIDFromBytes(
+                ("PaymentAccepted:" + payment.getId()).getBytes(StandardCharsets.UTF_8)),
+            "PaymentAccepted",
+            1,
+            now.atOffset(ZoneOffset.UTC),
+            payment.getId(),
+            0,
+            payload);
+    outbox.appendPaymentAccepted(envelope);
   }
 
   /**

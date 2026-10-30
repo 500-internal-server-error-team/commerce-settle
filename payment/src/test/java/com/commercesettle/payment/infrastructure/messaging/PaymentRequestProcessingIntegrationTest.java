@@ -79,6 +79,7 @@ class PaymentRequestProcessingIntegrationTest {
     jdbc.update("DELETE FROM payment.payment_jobs");
     jdbc.update("DELETE FROM payment.payments");
     jdbc.update("DELETE FROM payment.inbox");
+    jdbc.update("DELETE FROM payment.outbox");
   }
 
   @Test
@@ -102,6 +103,13 @@ class PaymentRequestProcessingIntegrationTest {
         .isEqualTo("APPLIED");
     assertThat(jdbc.queryForObject("SELECT result_ref FROM payment.inbox", UUID.class))
         .isEqualTo(paymentId);
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT event_type, aggregate_id, message_key, status FROM payment.outbox"))
+        .containsEntry("event_type", "PaymentAccepted")
+        .containsEntry("aggregate_id", paymentId)
+        .containsEntry("message_key", paymentId.toString())
+        .containsEntry("status", "PENDING");
     assertThat(service.processNext()).isFalse();
   }
 
@@ -115,6 +123,7 @@ class PaymentRequestProcessingIntegrationTest {
 
     JdbcTemplate jdbc = new JdbcTemplate(dataSource);
     assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.payments", Long.class)).isZero();
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.outbox", Long.class)).isZero();
     assertThat(jdbc.queryForObject("SELECT status FROM payment.inbox", String.class))
         .isEqualTo("WAITING");
     assertThat(jdbc.queryForObject("SELECT result_ref IS NULL FROM payment.inbox", Boolean.class))

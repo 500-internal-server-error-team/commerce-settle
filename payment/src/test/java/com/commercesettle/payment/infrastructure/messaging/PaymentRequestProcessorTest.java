@@ -68,7 +68,7 @@ class PaymentRequestProcessorTest {
     private int calls;
 
     StubService(Boolean... results) {
-      super(null, null, null, null, null, null, null);
+      super(null, null, null, null, null, null, null, null);
       this.results = new ArrayDeque<>(List.of(results));
     }
 
