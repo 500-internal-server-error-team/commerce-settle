@@ -4455,8 +4455,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "원자주문/주소/재고/쿠폰/이벤트예약·Outbox. 이벤트참여를별도HTTP명령으로중복생성하지않음. 결제는비동기. 쿠폰과 마일리지 병용·지원하지 않는 수단을 거절하고 할인 부담별 사본과 예산 예약을 보존한다. 신규 접수는 Kafka·Worker 적체/저장 공간/관측 유효성 gate를 검사하며 용량 부족이면 예약·새 업무 저장 전 503 COMMON_CAPACITY_EXCEEDED와 Retry-After: 30을 반환한다. 기존 동일 멱등키·본문 결과와 본문 충돌409 판정이 먼저이며 거절을 완료된 멱등 결과로 캐시하지 않는다. 같은 키·본문으로 재시도한다. 취소·환불·기존 지급·원업무 복구·조회에는 이 신규 접수 gate를 적용하지 않는다.",
+        "x-implemented": true,
+        "description": "현재는 일반 주문만 구현돼 eventId·buyerCouponId·expectedEventVersion은 null만 허용한다. 활성 구매자의 본인 주소를 새로 암호화하고 주문·주소 사본·재고 예약·영구 멱등 기록·OrderPaymentRequested Outbox를 원자 저장한다. 동일 키·본문은 현재 본인 주문을 반환하며 상품·주소를 다시 예약하지 않는다. 결제 결과 반영·쿠폰/이벤트·신규 접수 제한 gate는 구현 전이다. 이후 계약: 원자주문/주소/재고/쿠폰/이벤트예약·Outbox. 이벤트참여를별도HTTP명령으로중복생성하지않음. 결제는비동기. 쿠폰과 마일리지 병용·지원하지 않는 수단을 거절하고 할인 부담별 사본과 예산 예약을 보존한다. 신규 접수는 Kafka·Worker 적체/저장 공간/관측 유효성 gate를 검사하며 용량 부족이면 예약·새 업무 저장 전 503 COMMON_CAPACITY_EXCEEDED와 Retry-After: 30을 반환한다. 기존 동일 멱등키·본문 결과와 본문 충돌409 판정이 먼저이며 거절을 완료된 멱등 결과로 캐시하지 않는다. 같은 키·본문으로 재시도한다. 취소·환불·기존 지급·원업무 복구·조회에는 이 신규 접수 gate를 적용하지 않는다.",
         "security": [
           {
             "accountSession": []
@@ -4638,8 +4638,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "실제 DB에서 활성 구매자의 본인 주문만 조회한다. 타인·없는 주문은 404다. 목록은 createdAt DESC,id DESC 순서이며 page≥0,size=1..100(기본20)을 사용한다.",
         "security": [
           {
             "accountSession": []
@@ -4759,8 +4759,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "실제 DB에서 활성 구매자의 본인 주문만 조회한다. 타인·없는 주문은 404다. 목록은 createdAt DESC,id DESC 순서이며 page≥0,size=1..100(기본20)을 사용한다.",
         "security": [
           {
             "accountSession": []
@@ -12981,7 +12981,7 @@
           "externalMethod",
           "methodAccountRef"
         ],
-        "description": "E>0일 때 externalMethod/methodAccountRef 필수; E=0일 때 두 값은null. 이벤트 수량은1. providerId는 서버가 호환 가능한 대역 중 선택. 쿠폰 사용 시 mileageAmount=0이고 승인한 카드/간편결제만 허용한다. 서버는 종류·부담자·상품·시각·예산 예약·금액을 검증한다.",
+        "description": "현재 일반 주문 구현은 eventId·buyerCouponId·expectedEventVersion에 null만 허용한다. 11개 키는 모두 필수다. E>0일 때 externalMethod/methodAccountRef 필수; E=0일 때 두 값은null. 이벤트 수량은1. providerId는 서버가 호환 가능한 대역 중 선택. 쿠폰 사용 시 mileageAmount=0이고 승인한 카드/간편결제만 허용한다. 서버는 종류·부담자·상품·시각·예산 예약·금액을 검증한다.",
         "allOf": [
           {
             "if": {

@@ -67,7 +67,7 @@ class JpaIdempotencyStore implements IdempotencyStore {
               resourceId,
               responseStatus,
               now.truncatedTo(ChronoUnit.MICROS),
-              expiresAt.truncatedTo(ChronoUnit.MICROS)));
+              expiresAt == null ? null : expiresAt.truncatedTo(ChronoUnit.MICROS)));
     } catch (DataIntegrityViolationException | PessimisticLockingFailureException e) {
       throw new IdempotencyConflictException("same key is being processed");
     }
