@@ -25,6 +25,11 @@ spring:
   sql:
     init:
       mode: never
+  task:
+    scheduling:
+      pool:
+        # 지급 Worker 폴링이 스레드를 오래 잡아도 10:00 일배치 cron이 제시간에 돈다.
+        size: 2
   batch:
     job:
       # 기동 시 자동 실행하지 않고 스케줄러가 batchDate로 실행한다(ADR 0007 D7).

@@ -32,6 +32,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -87,6 +88,7 @@ class DailySettlementJobIntegrationTest {
     BatchStatus status = launcher.run(batchDate);
 
     assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(lastExitCode()).isEqualTo("COMPLETED");
     Map<String, Object> batch = single("settlement_batches WHERE seller_id = ?", seller);
     assertThat(batch)
         .containsEntry("status", "RESERVED")
@@ -151,6 +153,7 @@ class DailySettlementJobIntegrationTest {
     BatchStatus status = launcher.run(batchDate);
 
     assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(lastExitCode()).isEqualTo("COMPLETED_WITH_SKIPS");
     assertThat(count("settlement_batches WHERE seller_id = ?", accepted)).isEqualTo(1);
     assertThat(count("settlement_batches WHERE seller_id = ?", rejected)).isZero();
     assertThat(statusOf(rejectedItem)).isEqualTo("PAYABLE");
@@ -160,7 +163,7 @@ class DailySettlementJobIntegrationTest {
   @Test
   @DisplayName("항목 잠금 대기가 상한을 넘은 판매자는 롤백하고 건너뛰며 뒤의 판매자는 커밋한다")
   void skipsSellerWhoseItemsAreLocked() throws SQLException {
-    LocalDate batchDate = LocalDate.of(2026, 9, 6);
+    LocalDate batchDate = LocalDate.of(2026, 9, 7);
     Instant cutoff = SettlementBatch.cutoffOf(batchDate);
     // reader가 seller_id 순으로 읽으므로 잠긴 판매자를 먼저 처리한다.
     UUID locked = new UUID(0, 1);
@@ -211,7 +214,31 @@ class DailySettlementJobIntegrationTest {
   }
 
   @Test
-  @DisplayName("예상 밖 오류로 실패한 뒤 재시작하면 이미 커밋한 판매자는 다시 처리하지 않는다")
+  @DisplayName("한 판매자에서 매번 같은 오류가 나도 그 판매자만 건너뛰고 뒤 판매자는 같은 실행에서 처리한다")
+  void skipsSellerFailingEveryTime() {
+    LocalDate batchDate = LocalDate.of(2026, 9, 6);
+    Instant cutoff = SettlementBatch.cutoffOf(batchDate);
+    UUID first = new UUID(0, 1);
+    UUID failing = new UUID(0, 2);
+    UUID last = new UUID(0, 3);
+    payable(first, 10_000, cutoff.minusSeconds(60));
+    SettlementItem failingItem = payable(failing, 20_000, cutoff.minusSeconds(60));
+    payable(last, 30_000, cutoff.minusSeconds(60));
+    contexts.failAlways.add(failing);
+
+    BatchStatus status = launcher.run(batchDate);
+
+    assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(lastExitCode()).isEqualTo("COMPLETED_WITH_SKIPS");
+    assertThat(count("settlement_batches WHERE seller_id = ?", first)).isEqualTo(1);
+    assertThat(count("settlement_batches WHERE seller_id = ?", last)).isEqualTo(1);
+    assertThat(count("settlement_batches WHERE seller_id = ?", failing)).isZero();
+    assertThat(statusOf(failingItem)).isEqualTo("PAYABLE");
+    assertThat(count("settlement_reservations WHERE item_id = ?", failingItem.getId())).isZero();
+  }
+
+  @Test
+  @DisplayName("DB 자원 오류로 실패한 뒤 재시작하면 이미 커밋한 판매자는 다시 처리하지 않는다")
   void restartContinuesAfterCommittedSellers() {
     LocalDate batchDate = LocalDate.of(2026, 9, 4);
     Instant cutoff = SettlementBatch.cutoffOf(batchDate);
@@ -266,6 +293,13 @@ class DailySettlementJobIntegrationTest {
     return items.save(item);
   }
 
+  private String lastExitCode() {
+    return jdbc.queryForObject(
+        "SELECT exit_code FROM settlement.batch_job_execution"
+            + " ORDER BY job_execution_id DESC LIMIT 1",
+        String.class);
+  }
+
   private String statusOf(SettlementItem item) {
     return jdbc.queryForObject(
         "SELECT status FROM settlement.settlement_items WHERE id = ?", String.class, item.getId());
@@ -280,16 +314,20 @@ class DailySettlementJobIntegrationTest {
         "SELECT count(*) FROM settlement." + tableAndWhere, Long.class, args);
   }
 
-  /** 판매자별로 지급 불가·일회성 장애를 주입하고 호출 횟수를 센다. 계정은 판매자마다 하나다. */
+  /** 판매자별로 지급 불가·일회성 DB 자원 장애·매번 나는 오류를 주입하고 호출 횟수를 센다. 계정은 판매자마다 하나다. */
   static class FakeContextReader implements ProductSettlementContextReader {
     final Set<UUID> notAllowed = ConcurrentHashMap.newKeySet();
     final Set<UUID> failOnce = ConcurrentHashMap.newKeySet();
+    final Set<UUID> failAlways = ConcurrentHashMap.newKeySet();
     final Map<UUID, Integer> calls = new ConcurrentHashMap<>();
 
     @Override
     public List<ProductSettlementContext> read(UUID sellerId, Set<UUID> productIds) {
       calls.merge(sellerId, 1, Integer::sum);
       if (failOnce.remove(sellerId)) {
+        throw new DataAccessResourceFailureException("injected failure");
+      }
+      if (failAlways.contains(sellerId)) {
         throw new IllegalStateException("injected failure");
       }
       return new HashSet<>(productIds)
@@ -308,6 +346,7 @@ class DailySettlementJobIntegrationTest {
     void reset() {
       notAllowed.clear();
       failOnce.clear();
+      failAlways.clear();
       calls.clear();
     }
   }
