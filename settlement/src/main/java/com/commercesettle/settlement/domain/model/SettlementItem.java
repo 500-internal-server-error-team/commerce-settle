@@ -101,11 +101,16 @@ public class SettlementItem extends AuditableEntity {
   }
 
   /**
-   * 환불 예약을 보상해 예약 직전 상태로 되돌린다. 직전 상태와 최신 구매확정·환불 정보의 대조는 호출하는 쪽이 맡는다. 지급 준비 시각이 없으면 PAYABLE로 되돌리지
-   * 않는다.
+   * 환불 예약을 보상해 예약 직전 상태로 되돌린다. 환불 예약 중인 항목만 WAITING_CONFIRMATION이나 PAYABLE로 되돌린다. 직전 상태와 최신 구매확정·환불
+   * 정보의 대조는 호출하는 쪽이 맡는다. 지급 준비 시각이 없으면 PAYABLE로 되돌리지 않는다.
    */
   public void cancelRefundReservation(SettlementItemStatus previousStatus, Instant now) {
     Objects.requireNonNull(previousStatus, "previousStatus");
+    if (status != SettlementItemStatus.REFUND_RESERVED
+        || (previousStatus != SettlementItemStatus.WAITING_CONFIRMATION
+            && previousStatus != SettlementItemStatus.PAYABLE)) {
+      throw new InvalidSettlementTransitionException(status, previousStatus);
+    }
     if (previousStatus == SettlementItemStatus.PAYABLE && readyAt == null) {
       throw new InvalidSettlementTransitionException(status, previousStatus);
     }

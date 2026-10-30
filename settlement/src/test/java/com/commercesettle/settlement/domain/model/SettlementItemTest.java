@@ -8,6 +8,8 @@ import java.time.Instant;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 class SettlementItemTest {
 
@@ -141,11 +143,60 @@ class SettlementItemTest {
   @DisplayName("지급 준비 시각이 없으면 환불 예약 보상으로 PAYABLE이 되지 않는다")
   void rejectsRestoringPayableWithoutReadyAt() {
     SettlementItem item = item();
-    item.reserveRefund(CHANGED_AT);
+    item.reserveRefund(CREATED_AT);
 
     assertThatThrownBy(() -> item.cancelRefundReservation(SettlementItemStatus.PAYABLE, CHANGED_AT))
         .isInstanceOf(InvalidSettlementTransitionException.class);
     assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.REFUND_RESERVED);
+    assertThat(item.getUpdatedAt()).isEqualTo(CREATED_AT);
+  }
+
+  @Test
+  @DisplayName("환불 예약이 아닌 항목은 환불 예약 보상으로 지급 예약이 되지 않고 상태·필드·수정 시각을 유지한다")
+  void rejectsCancelingRefundOnPayableItem() {
+    SettlementItem item = payableItem();
+
+    assertThatThrownBy(
+            () -> item.cancelRefundReservation(SettlementItemStatus.PAYOUT_RESERVED, CHANGED_AT))
+        .isInstanceOf(InvalidSettlementTransitionException.class);
+    assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.PAYABLE);
+    assertThat(item.getPayoutId()).isNull();
+    assertThat(item.getReadyAt()).isEqualTo(EARLIER);
+    assertThat(item.getUpdatedAt()).isEqualTo(CREATED_AT);
+  }
+
+  @Test
+  @DisplayName("환불 예약이 아닌 항목은 환불 예약 보상으로 환불 예약이 되지 않는다")
+  void rejectsCancelingRefundWithoutReservation() {
+    SettlementItem payable = payableItem();
+    SettlementItem waiting = item();
+
+    assertThatThrownBy(
+            () -> payable.cancelRefundReservation(SettlementItemStatus.REFUND_RESERVED, CHANGED_AT))
+        .isInstanceOf(InvalidSettlementTransitionException.class);
+    assertThatThrownBy(
+            () -> waiting.cancelRefundReservation(SettlementItemStatus.REFUND_RESERVED, CHANGED_AT))
+        .isInstanceOf(InvalidSettlementTransitionException.class);
+    assertThat(payable.getStatus()).isEqualTo(SettlementItemStatus.PAYABLE);
+    assertThat(payable.getUpdatedAt()).isEqualTo(CREATED_AT);
+    assertThat(waiting.getStatus()).isEqualTo(SettlementItemStatus.WAITING_CONFIRMATION);
+    assertThat(waiting.getUpdatedAt()).isEqualTo(CREATED_AT);
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = SettlementItemStatus.class,
+      names = {"PAYOUT_RESERVED", "REFUNDED", "PAID"})
+  @DisplayName("환불 예약 보상은 WAITING_CONFIRMATION·PAYABLE로만 되돌린다")
+  void rejectsCancelingRefundToOtherStatus(SettlementItemStatus target) {
+    SettlementItem item = payableItem();
+    item.reserveRefund(CREATED_AT);
+
+    assertThatThrownBy(() -> item.cancelRefundReservation(target, CHANGED_AT))
+        .isInstanceOf(InvalidSettlementTransitionException.class);
+    assertThat(item.getStatus()).isEqualTo(SettlementItemStatus.REFUND_RESERVED);
+    assertThat(item.getPayoutId()).isNull();
+    assertThat(item.getUpdatedAt()).isEqualTo(CREATED_AT);
   }
 
   @Test
