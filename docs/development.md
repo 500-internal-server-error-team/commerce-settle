@@ -97,13 +97,15 @@ docker compose up -d --build --wait --wait-timeout 300
 
 Payment는 API 역할에서만 기동 시나리오를 실행합니다. Kafka의 별도 `commerce-settle.fixture.payment.v1`의 실제 발행 결과를 Inbox 출처로 저장하고, 지정 이벤트만 기존 접수 처리기로 처리합니다. 일반 WAITING 작업·정식 Commerce 토픽·Kafka consumer offset을 변경하지 않습니다. 이벤트 이름은 `request-event-0`~`3`, 주문은 `request-order-0`~`3`, 회차는 `request-cycle-0`~`3`입니다. 각각 외부·혼합·전액 마일리지·잔액 부족입니다. 승인 Worker·결과 Outbox·PG 실행은 구현되지 않아 PENDING 승인 작업을 임의 완료하지 않습니다.
 
-정산 스냅샷의 주문·결제 이름은 `order-settlement-0`~`7`·`payment-settlement-0`~`7`이며 Payment와 ID·당사자·상품·금액을 맞춥니다. 실제 PG 승인이나 서비스 간 이벤트 전달 결과는 아닙니다. Settlement의 기존 기본 지급 재원·시나리오(`payout-funding-default`·`payout-normal-v1`)를 사용하며, 일배치가 실제 Batch 메타데이터를 기록합니다. fixture 항목 ID도 Job 식별 파라미터에 포함해 일반 일배치 실행과 구분합니다. 동일 파라미터의 완료된 실행은 다시 만들지 않으며, 다른 인스턴스가 이미 실행 중이면 그 실행에 맡깁니다. 동일 판매자·날짜의 일반 정산 항목이 함께 선점되면 그 판매자 트랜잭션을 롤백하고 실행을 실패시켜 기존 데이터를 보존합니다.
+정산 스냅샷의 주문·결제 이름은 `order-settlement-0`~`7`·`payment-settlement-0`~`7`이며 Payment와 ID·당사자·상품·금액을 맞춥니다. 실제 PG 승인이나 서비스 간 이벤트 전달 결과는 아닙니다. `order-settlement-*`는 Commerce DB 주문과 별개인 합성 금융 참조입니다. Settlement의 기존 기본 지급 재원·시나리오(`payout-funding-default`·`payout-normal-v1`)를 사용하며, 일배치가 실제 Batch 메타데이터를 기록합니다. fixture 항목 ID도 Job 식별 파라미터에 포함해 일반 일배치 실행과 구분합니다. 동일 파라미터의 완료된 실행은 다시 만들지 않으며, 다른 인스턴스가 이미 실행 중이면 그 실행에 맡깁니다. 동일 판매자·날짜의 일반 정산 항목이 함께 선점되면 그 판매자 트랜잭션을 롤백하고 실행을 실패시켜 기존 데이터를 보존합니다.
 
 모의 지급 업무 키 이름은 `mock-payout-0`~`3`입니다. 모의 지급은 내부 `/mock/payouts` API로도 실행·조회할 수 있으며 Gateway에 공개하지 않습니다. 응답 유실 설정에서 새 업무 키의 최초 POST는 504, 저장 결과 GET은 200입니다. 기동 시나리오가 이미 생성한 고정 키의 POST는 재요청이므로 202이며, 조회 장애 설정의 GET은 503입니다. 같은 업무 키 재요청은 기존 거래를 반환해 추가 차감하지 않습니다. 이 기록은 Settlement 지급 Worker와 연결된 결과가 아닙니다. #88 병합 후 지급 처리·재시도 연동을 추가할 수 있습니다.
 
 Payment·Settlement에는 업무 조회 HTTP API가 없어 서비스별 DB로 확인합니다. 서비스 간 DB를 조인하거나 loader가 타 서비스 DB를 읽지 않습니다.
 
 ```bash
+docker compose exec postgres psql -U postgres -d commerce -c \
+  "SELECT buyer_id,id,status,total_amount,mileage_amount FROM commerce.orders ORDER BY buyer_id,id;"
 docker compose exec postgres psql -U postgres -d payment -c \
   "SELECT status,count(*) FROM payment.payments GROUP BY status; SELECT kind,sum(amount) FROM payment.mileage_entries GROUP BY kind;"
 docker compose exec postgres psql -U postgres -d settlement -c \
@@ -114,7 +116,9 @@ docker compose exec postgres psql -U postgres -d finance_mock -c \
 
 서비스별 초기 데이터·설정은 한 트랜잭션에서 적재하고 기존 수정·논리삭제·잔액·원장을 보존합니다. 고정 계정 ID/이메일·상품 소유자·금융 스냅샷 주문 ID 충돌은 적재를 롤백합니다. 업무 시나리오는 초기 적재 커밋 후 개별 업무 트랜잭션으로 실행합니다. 중간 실패 때 이미 커밋한 금융 효과를 되돌리지 않고 고정 이벤트·업무 키로 남은 처리를 이어갑니다. 옵션을 꺼도 기존 데이터는 남습니다. 전체 DB를 아우르는 원자적 초기화나 기존 실험 상태의 리셋은 제공하지 않습니다.
 
-주문은 `APP_ORDER_STUB_ENABLED=true`일 때 구매자 A/B별 메모리 샘플 10개를 별도로 조회합니다. 금융 DB의 합성 주문과 연결되지 않으며 DB 상품·주소 변경도 반영하지 않습니다. 정식 주문 저장·배송/구매확정, 환불/SAGA, 마일리지 해제/복원, 쿠폰·이벤트·알림, PG·간편결제·PG 입금 대역은 선행 업무 구현 후 fixture를 추가합니다. 부하 시험용 대량 데이터 생성도 이 기능 fixture와 별개입니다.
+#94에서 추가된 DB 저장 모델에도 PAYMENT_PENDING/UNSHIPPED 주문과 독립 암호화 배송지 사본을 각 4행 넣습니다. 이름은 `request-order-0`~`3`, 회차는 `request-cycle-0`~`3`, 주소는 `request-address-0`~`3`이며 Payment 요청과 ID·구매자·판매자·상품·금액·생성 후 10분 대기 기한을 맞춥니다. 배송 seed는 20261030, 달력은 `fixture-calendar-v1`/공휴일 없는 Asia/Seoul 사본입니다. 이 주문은 저장·조회 모델용 사본입니다. 주문 생성 유즈케이스·예약·Outbox·결과 이벤트 반영이 연결되지 않아 금융 시나리오를 실행해도 DB 주문 상태를 임의 전이시키지 않습니다. DB의 구매자별 조회·주소 복호화·페이지·보존으로 확인하며 공개 HTTP API와 구분합니다.
+
+주문은 `APP_ORDER_STUB_ENABLED=true`일 때 구매자 A/B별 메모리 샘플 10개를 별도로 조회합니다. DB 주문·금융 데이터와 연결되지 않으며 DB 상품·주소 변경도 반영하지 않습니다. 정식 주문 생성 유즈케이스·배송/구매확정, 환불/SAGA, 마일리지 해제/복원, 쿠폰·이벤트·알림, PG·간편결제·PG 입금 대역은 선행 업무 구현 후 fixture를 추가합니다. 부하 시험용 대량 데이터 생성도 이 기능 fixture와 별개입니다.
 
 ## 주문 영속 저장 기반
 

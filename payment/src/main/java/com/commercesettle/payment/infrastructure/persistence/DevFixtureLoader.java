@@ -180,7 +180,7 @@ public class DevFixtureLoader {
             0,
             Status.PAYMENT_PENDING,
             "fixture-v1",
-            at.plusMinutes(15),
+            at.plusMinutes(10),
             mileage == gross ? null : ExternalMethod.CREDIT_CARD,
             mileage == gross ? null : "fixture-card",
             gross,
