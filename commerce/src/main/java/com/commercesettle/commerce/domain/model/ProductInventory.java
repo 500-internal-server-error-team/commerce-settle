@@ -66,9 +66,95 @@ public class ProductInventory extends AuditableEntity {
     if (availableQuantity + delta < 0) {
       throw new InsufficientInventoryException(productId);
     }
+    return change(
+        movementId, InventoryOperation.SELLER_ADJUSTMENT, businessRef, delta, 0, 0, reason, now);
+  }
+
+  /** 주문 수량을 가용에서 예약으로 옮긴다. 예약 상태 전이와 함께 {@link InventoryReservation}이 호출한다. */
+  InventoryMovement reserve(UUID movementId, UUID cycleId, int quantity, Instant now) {
+    if (availableQuantity < quantity) {
+      throw new InsufficientInventoryException(productId);
+    }
+    return change(
+        movementId,
+        InventoryOperation.ORDER_RESERVE,
+        cycleId,
+        -quantity,
+        quantity,
+        0,
+        "주문 예약",
+        now);
+  }
+
+  InventoryMovement consume(UUID movementId, UUID cycleId, int quantity, Instant now) {
+    requireReserved(quantity);
+    return change(
+        movementId,
+        InventoryOperation.ORDER_CONSUME,
+        cycleId,
+        0,
+        -quantity,
+        quantity,
+        "결제 확정",
+        now);
+  }
+
+  InventoryMovement release(UUID movementId, UUID cycleId, int quantity, Instant now) {
+    requireReserved(quantity);
+    return change(
+        movementId,
+        InventoryOperation.ORDER_RELEASE,
+        cycleId,
+        quantity,
+        -quantity,
+        0,
+        "예약 해제",
+        now);
+  }
+
+  /** 순판매 수량을 가용으로 되돌린다. 환불 복구와 반품 입고는 업무 참조가 달라 서로 다른 이력 작업으로 남긴다. */
+  InventoryMovement restore(
+      UUID movementId, InventoryOperation operation, UUID businessRef, int quantity, Instant now) {
+    if (operation != InventoryOperation.REFUND_RESTORE
+        && operation != InventoryOperation.RETURN_RESTORE) {
+      throw new IllegalArgumentException("not a restore operation: " + operation);
+    }
+    if (soldQuantity < quantity) {
+      throw new IllegalStateException("sold quantity is less than restore: " + productId);
+    }
+    String reason = operation == InventoryOperation.REFUND_RESTORE ? "환불 복구" : "반품 입고";
+    return change(movementId, operation, businessRef, quantity, 0, -quantity, reason, now);
+  }
+
+  private void requireReserved(int quantity) {
+    if (reservedQuantity < quantity) {
+      throw new IllegalStateException("reserved quantity is less than requested: " + productId);
+    }
+  }
+
+  private InventoryMovement change(
+      UUID movementId,
+      InventoryOperation operation,
+      UUID businessRef,
+      long availableDelta,
+      long reservedDelta,
+      long soldDelta,
+      String reason,
+      Instant now) {
     InventoryMovement movement =
-        InventoryMovement.sellerAdjustment(movementId, productId, businessRef, delta, reason, now);
-    availableQuantity += delta;
+        InventoryMovement.of(
+            movementId,
+            productId,
+            operation,
+            businessRef,
+            availableDelta,
+            reservedDelta,
+            soldDelta,
+            reason,
+            now);
+    availableQuantity += availableDelta;
+    reservedQuantity += reservedDelta;
+    soldQuantity += soldDelta;
     touch(now);
     return movement;
   }

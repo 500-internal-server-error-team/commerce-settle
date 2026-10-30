@@ -96,6 +96,28 @@ CREATE TABLE commerce.inventory_movements (
 CREATE INDEX ix_inventory_movements_product_created
     ON commerce.inventory_movements (product_id, created_at, id);
 
+CREATE TABLE commerce.inventory_reservations (
+    id uuid PRIMARY KEY,
+    order_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    event_id uuid,
+    quantity integer NOT NULL,
+    cycle_id uuid NOT NULL,
+    status varchar(24) NOT NULL,
+    expires_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0,
+    CONSTRAINT uq_inventory_reservations_order UNIQUE (order_id),
+    CONSTRAINT ck_inventory_reservations_quantity CHECK (quantity > 0),
+    CONSTRAINT ck_inventory_reservations_status
+        CHECK (status IN ('RESERVED', 'CONSUMED', 'RELEASED', 'RESTORED'))
+);
+CREATE INDEX ix_inventory_reservations_status_expires
+    ON commerce.inventory_reservations (status, expires_at, id);
+CREATE INDEX ix_inventory_reservations_product_status
+    ON commerce.inventory_reservations (product_id, status);
+
 CREATE TABLE commerce.idempotency_records (
     id uuid PRIMARY KEY,
     actor_kind varchar(24) NOT NULL,
