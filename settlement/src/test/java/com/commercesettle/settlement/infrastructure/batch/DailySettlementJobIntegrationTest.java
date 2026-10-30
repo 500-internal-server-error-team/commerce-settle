@@ -9,6 +9,10 @@ import com.commercesettle.settlement.domain.model.SettlementAmounts;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.commercesettle.settlement.domain.model.SettlementItem;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.HashSet;
@@ -17,6 +21,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -49,6 +54,7 @@ class DailySettlementJobIntegrationTest {
   @Autowired SettlementItemRepository items;
   @Autowired JdbcTemplate jdbc;
   @Autowired FakeContextReader contexts;
+  @Autowired DataSource dataSource;
 
   @AfterEach
   void deleteBusinessRows() {
@@ -148,6 +154,59 @@ class DailySettlementJobIntegrationTest {
     assertThat(count("settlement_batches WHERE seller_id = ?", rejected)).isZero();
     assertThat(statusOf(rejectedItem)).isEqualTo("PAYABLE");
     assertThat(count("settlement_reservations WHERE item_id = ?", rejectedItem.getId())).isZero();
+  }
+
+  @Test
+  @DisplayName("항목 잠금 대기가 상한을 넘은 판매자는 롤백하고 건너뛰며 뒤의 판매자는 커밋한다")
+  void skipsSellerWhoseItemsAreLocked() throws SQLException {
+    LocalDate batchDate = LocalDate.of(2026, 9, 6);
+    Instant cutoff = SettlementBatch.cutoffOf(batchDate);
+    // reader가 seller_id 순으로 읽으므로 잠긴 판매자를 먼저 처리한다.
+    UUID locked = new UUID(0, 1);
+    UUID accepted = new UUID(0, 2);
+    SettlementItem lockedItem = payable(locked, 10_000, cutoff.minusSeconds(60));
+    SettlementItem acceptedItem = payable(accepted, 20_000, cutoff.minusSeconds(60));
+
+    BatchStatus status;
+    try (Connection holder = dataSource.getConnection()) {
+      holder.setAutoCommit(false);
+      try (Statement timeout = holder.createStatement();
+          PreparedStatement lock =
+              holder.prepareStatement(
+                  "SELECT id FROM settlement.settlement_items WHERE id = ? FOR UPDATE")) {
+        // lock_timeout이 빠지는 회귀에도 테스트가 멈추지 않고 잠금이 풀려 단언에서 실패하게 한다.
+        timeout.execute("SET idle_in_transaction_session_timeout = '10s'");
+        lock.setObject(1, lockedItem.getId());
+        lock.executeQuery().close();
+        status = launcher.run(batchDate);
+      } finally {
+        holder.rollback();
+      }
+    }
+
+    assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(statusOf(lockedItem)).isEqualTo("PAYABLE");
+    assertThat(count("settlement_items WHERE id = ? AND payout_id IS NULL", lockedItem.getId()))
+        .isEqualTo(1);
+    assertThat(count("settlement_batches WHERE seller_id = ?", locked)).isZero();
+    assertThat(count("payouts WHERE seller_id = ?", locked)).isZero();
+    assertThat(
+            count(
+                "payout_jobs j JOIN settlement.payouts p ON p.id = j.payout_id"
+                    + " WHERE p.seller_id = ?",
+                locked))
+        .isZero();
+    assertThat(count("settlement_reservations WHERE item_id = ?", lockedItem.getId())).isZero();
+    assertThat(count("settlement_batches WHERE seller_id = ?", accepted)).isEqualTo(1);
+    assertThat(count("payouts WHERE seller_id = ?", accepted)).isEqualTo(1);
+    assertThat(count("payout_jobs")).isEqualTo(1);
+    assertThat(statusOf(acceptedItem)).isEqualTo("PAYOUT_RESERVED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT s.write_skip_count FROM settlement.batch_step_execution s"
+                    + " ORDER BY s.step_execution_id DESC LIMIT 1",
+                Long.class))
+        .isEqualTo(1);
   }
 
   @Test
