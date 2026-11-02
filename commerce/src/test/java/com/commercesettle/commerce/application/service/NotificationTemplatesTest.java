@@ -38,9 +38,11 @@ class NotificationTemplatesTest {
     assertThat(rendered.body().length()).isLessThanOrEqualTo(200);
     assertThat(rendered.body())
         .startsWith(actor == ActorKind.BUYER ? "[구매자]" : "[판매자]")
-        .contains(ORDER.toString(), "시각 11-02 10:00 KST", rendered.title());
+        .contains("시각 11-02 10:00 KST", rendered.title())
+        .doesNotContain(ORDER.toString());
     if (kind != Notification.Kind.PAYMENT_COMPLETED)
-      assertThat(rendered.body()).contains(Long.toString(Long.MAX_VALUE));
+      assertThat(rendered.body())
+          .contains(String.format(java.util.Locale.KOREA, "%,d", Long.MAX_VALUE));
   }
 
   @Test
@@ -53,8 +55,8 @@ class NotificationTemplatesTest {
 
     assertThat(body)
         .startsWith("[판매자]")
-        .contains("환불", Long.toString(Long.MAX_VALUE))
-        .doesNotContain("마일리지", "잔액", Long.toString(BALANCE));
+        .contains("환불", String.format(java.util.Locale.KOREA, "%,d", Long.MAX_VALUE))
+        .doesNotContain("마일리지", "잔액", String.format(java.util.Locale.KOREA, "%,d", BALANCE));
   }
 
   private Draft draft(Notification.Kind kind, ActorKind actor) {

@@ -1016,18 +1016,23 @@ class OrderWorkflowIntegrationTest {
           .hasSize(5)
           .allSatisfy(
               body -> {
-                assertThat(body).contains(id.toString(), "흐름 시험 상품");
+                assertThat(body).contains("흐름 시험 상품").doesNotContain(id.toString());
                 assertThat(body.length()).isLessThanOrEqualTo(200);
               });
       assertThat(demo.messages())
-          .anySatisfy(body -> assertThat(body).startsWith("[구매자]").contains("결제 완료", "외부 10000원"));
+          .anySatisfy(
+              body ->
+                  assertThat(body).startsWith("[구매자]").contains("결제가 완료됐습니다", "카드·간편결제 10,000원"));
       assertThat(demo.messages())
           .anySatisfy(body -> assertThat(body).startsWith("[구매자]").contains("배송 완료"));
       assertThat(demo.messages())
           .filteredOn(body -> body.startsWith("[판매자]"))
           .singleElement()
           .satisfies(
-              body -> assertThat(body).contains("판매 1건", "합계 10000원").doesNotContain("잔액", "마일리지"));
+              body ->
+                  assertThat(body)
+                      .contains("결제 완료 주문 1건", "합계 10,000원")
+                      .doesNotContain("잔액", "마일리지"));
       assertThat(number("SELECT count(*) FROM commerce.notification_mock_receipts")).isZero();
       assertThat(
               number("SELECT count(*) FROM commerce.notification_deliveries WHERE status='SENT'"))
@@ -1113,10 +1118,14 @@ class OrderWorkflowIntegrationTest {
       deliverDue();
 
       assertThat(demo.messages())
-          .filteredOn(body -> body.contains("반품 입고 확인"))
+          .filteredOn(body -> body.contains("반품 입고를 확인했습니다"))
           .singleElement()
           .satisfies(
-              body -> assertThat(body).startsWith("[구매자]").contains(id.toString(), "흐름 시험 상품"));
+              body ->
+                  assertThat(body)
+                      .startsWith("[구매자]")
+                      .contains("흐름 시험 상품")
+                      .doesNotContain(id.toString()));
       assertThat(
               number(
                   "SELECT count(*) FROM commerce.notification_items WHERE kind='SHIPMENT_DELIVERED' AND business_ref=?",
