@@ -762,7 +762,7 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 
 **제약:** UNIQUE(seller_id,batch_date,policy_version); cutoff_at은 해당 batch_date의 10:00 Asia/Seoul. net_amount>=0, status=CREATED/RESERVED/PROCESSING/COMPLETED/REVIEW_REQUIRED.
 
-**인덱스:** (status,created_at,id).
+**인덱스:** (status,created_at,id); (seller_id,created_at,id).
 
 ### payouts
 
@@ -821,7 +821,7 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 
 **제약:** ready_at=max(purchase_confirmed_at,eligible_received_at). UNIQUE(payment_id). T=E+M, B=T+P=fee+net. fee=floor(B*15/100). 플랫폼 지원분을 포함한 선지급 재원은 항상 충분하게 준비. 상태 조건과 예약을 같은 트랜잭션으로 보호.
 
-**인덱스:** (seller_id,status,ready_at,id); (payout_id); UNIQUE(payment_id). 배치는 ready_at<cutoff_at인 미선점 항목을 조회하며 payout_id가 있으면 다른 배치에 배정하지 않습니다.
+**인덱스:** (seller_id,status,ready_at,id); (seller_id,created_at,id); (payout_id); UNIQUE(payment_id). 배치는 ready_at<cutoff_at인 미선점 항목을 조회하며 payout_id가 있으면 다른 배치에 배정하지 않습니다.
 
 ### settlement_entries
 
