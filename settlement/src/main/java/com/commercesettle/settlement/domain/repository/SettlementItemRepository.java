@@ -14,6 +14,11 @@ public interface SettlementItemRepository {
 
   Optional<SettlementItem> findByPaymentId(UUID paymentId);
 
+  /** 판매자의 항목을 생성 시각·ID 내림차순으로 한 페이지 읽는다. */
+  List<SettlementItem> findBySeller(UUID sellerId, int page, int size);
+
+  long countBySeller(UUID sellerId);
+
   /** 판매자의 마감 전 지급 대상(PAYABLE·미배정·readyAt &lt; cutoffAt) 항목이 속한 상품. 지급 전 검증에 쓴다. */
   Set<UUID> findPayableProductIds(UUID sellerId, Instant cutoffAt);
 

@@ -3,6 +3,8 @@ package com.commercesettle.settlement.domain.repository;
 import com.commercesettle.settlement.domain.model.PayoutJob;
 import com.commercesettle.settlement.domain.model.PayoutJobStatus;
 import java.time.Duration;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -11,6 +13,8 @@ public interface PayoutJobRepository {
   PayoutJob save(PayoutJob job);
 
   Optional<PayoutJob> findByPayoutId(UUID payoutId);
+
+  List<PayoutJob> findByPayoutIds(Collection<UUID> payoutIds);
 
   /**
    * 도래한 PENDING·RETRY 작업이나 임대가 만료된 RUNNING 작업 하나를 RUNNING으로 바꾸고 새 임대 token을 준다. 시도 횟수를 하나 늘리며, 만료

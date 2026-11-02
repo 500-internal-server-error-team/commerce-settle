@@ -4,6 +4,8 @@ import com.commercesettle.settlement.domain.model.PayoutJob;
 import com.commercesettle.settlement.domain.model.PayoutJobStatus;
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository;
 import java.time.Duration;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -35,6 +37,11 @@ class JpaPayoutJobRepository implements PayoutJobRepository {
   @Override
   public Optional<PayoutJob> findByPayoutId(UUID payoutId) {
     return repository.findByPayoutId(payoutId);
+  }
+
+  @Override
+  public List<PayoutJob> findByPayoutIds(Collection<UUID> payoutIds) {
+    return repository.findByPayoutIdIn(payoutIds);
   }
 
   @Override

@@ -52,6 +52,8 @@ CREATE TABLE settlement.settlement_items (
 CREATE INDEX ix_settlement_items_seller_status_ready
     ON settlement.settlement_items (seller_id, status, ready_at, id);
 CREATE INDEX ix_settlement_items_payout_id ON settlement.settlement_items (payout_id);
+CREATE INDEX ix_settlement_items_seller_created
+    ON settlement.settlement_items (seller_id, created_at, id);
 
 -- 판매자·마감 날짜·정책 버전별 정산 배치. 대상·합계를 고정한 뒤 항목을 추가하지 않는다.
 CREATE TABLE settlement.settlement_batches (
@@ -80,6 +82,8 @@ CREATE TABLE settlement.settlement_batches (
 
 CREATE INDEX ix_settlement_batches_status_created
     ON settlement.settlement_batches (status, created_at, id);
+CREATE INDEX ix_settlement_batches_seller_created
+    ON settlement.settlement_batches (seller_id, created_at, id);
 
 -- 배치마다 하나인 지급. 수취·출금 계정과 금융 시나리오 버전은 생성 때 고정한다.
 CREATE TABLE settlement.payouts (
