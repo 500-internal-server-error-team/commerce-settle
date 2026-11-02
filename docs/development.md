@@ -393,7 +393,7 @@ python3 scripts/smoke.py
 
 운영·테스트 Java 코드의 포맷·Checkstyle, 단위·통합·ArchUnit 테스트와 패키징을 검사합니다. `spotlessApply`는 로컬 수정용이며 CI는 `spotlessCheck`로 위반을 차단합니다. 테스트 추가 기준은 [테스트 작성](../CONTRIBUTING.md#테스트-작성)을 따릅니다.
 
-Python 테스트는 환경 초기화가 기존 설정을 보존하는지 확인합니다. smoke는 각 실행의 DB·Redis 연결·메트릭, Gateway 문서 라우팅·관리 경로 차단, 자격 없는 커머스·Payment·Settlement·Finance Mock 직접 호출과 Gateway 자격의 Finance Mock 호출의 `401`, Settlement 자격의 Finance Mock 원지급 조회, Payment 자격의 PG 조회와 두 자격의 교차 호출 `403`, DB 간 접근 거부, 앱별 Redis ACL(커머스의 인증 키 쓰기·스크립트 실행과 `SCRIPT`·`FUNCTION`·키 목록·DB 전환 거절, Gateway의 `EVALSHA_RO` 검증과 쓰기·`EVAL`·`SCRIPT` 거절, 나머지 앱의 인증 키 거절), Kafka·Redis 왕복과 Zipkin의 Gateway→Commerce 추적 전파를 검사합니다. 임시 Kafka 토픽·Redis 키는 삭제합니다. CI는 낮은 부하의 k6 실행도 확인합니다. 결제·SAGA의 정합성과 성능은 업무 시나리오로 검증합니다.
+Python 테스트는 환경 초기화가 기존 설정을 보존하는지 확인합니다. smoke는 각 실행의 DB·Redis 연결·메트릭, Gateway 문서 라우팅·관리 경로 차단, 자격 없는 커머스·Payment·Settlement·Finance Mock 직접 호출과 Gateway 자격의 Finance Mock 호출의 `401`, Settlement 자격의 Finance Mock 원지급 조회, Payment 자격의 PG 조회와 두 자격의 교차 호출 `403`, Settlement 자격의 커머스 지급 컨텍스트 조회와 Gateway 자격의 같은 조회 `403`, DB 간 접근 거부, 앱별 Redis ACL(커머스의 인증 키 쓰기·스크립트 실행과 `SCRIPT`·`FUNCTION`·키 목록·DB 전환 거절, Gateway의 `EVALSHA_RO` 검증과 쓰기·`EVAL`·`SCRIPT` 거절, 나머지 앱의 인증 키 거절), Kafka·Redis 왕복과 Zipkin의 Gateway→Commerce 추적 전파를 검사합니다. 임시 Kafka 토픽·Redis 키는 삭제합니다. CI는 낮은 부하의 k6 실행도 확인합니다. 결제·SAGA의 정합성과 성능은 업무 시나리오로 검증합니다.
 
 정적 검사만 실행할 때는 `./gradlew spotlessCheck checkstyleMain checkstyleTest`, 테스트만 실행할 때는 `./gradlew test`를 사용합니다. `build`는 이 검사들을 포함하므로 별도 실행이 필수는 아닙니다.
 
@@ -482,11 +482,12 @@ Gateway 자체 오류는 `application/problem+json`과 실제 추적의 `traceId
 | --- | --- | --- |
 | `gateway` → 커머스·Payment·Settlement | `<대상>_GATEWAY_CREDENTIAL`(`_PREVIOUS`) | Gateway가 대상별 값을 붙임 |
 | `service:settlement` → Finance Mock | `FINANCE_MOCK_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 지급 Worker의 `HttpPayoutGateway` |
+| `service:settlement` → 커머스 | `COMMERCE_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 일배치의 `HttpProductSettlementContextReader`(상품 지급 컨텍스트) |
 | `service:payment` → Finance Mock | `FINANCE_MOCK_PAYMENT_CREDENTIAL`(`_PREVIOUS`) | PG 수신 경계·로컬 시험 연결. Compose는 Payment Worker에 현재 값을 전달하며 실제 승인·환불 Worker 클라이언트는 구현 전 |
 
 변수 이름은 `<대상>_<발신자>_CREDENTIAL`이며 `init_env.py`가 `.env.example`의 빈 값을 256비트 URL-safe 값으로 채웁니다. `_PREVIOUS`는 교체 중에만 받는 쪽에 둡니다. 값이 없거나 43자 미만이면 받는 쪽과 보내는 쪽 모두 기동하지 않습니다. 거절은 `internal_auth_rejections_total{sender,status}` 지표와 `<서비스>.internal-auth` 경고 로그로 확인하며, 자격 원문은 남기지 않습니다.
 
-남은 서비스·운영자 쌍(Payment→커머스, Settlement→커머스·Payment, 운영자→전체)과 Payment→Finance Mock의 실제 Worker 클라이언트는 호출을 구현하는 PR에서 아래 미연결 항목을 추가합니다.
+남은 서비스·운영자 쌍(Payment→커머스, Settlement→Payment, 운영자→전체)과 Payment→Finance Mock의 실제 Worker 클라이언트는 호출을 구현하는 PR에서 아래 미연결 항목을 추가합니다.
 
 1. 받는 쪽: `application.yml`의 `app.internal-auth.senders`에 발신자를 추가합니다. `:`가 있는 키는 `"[service:payment]"`처럼 대괄호로 감쌉니다.
 2. 보내는 쪽: 해당 클라이언트의 모든 요청에 `Authorization: Bearer <자격>`을 붙이고 `InternalCredentials.requireFormat`으로 기동 때 형식을 확인합니다. 자격 거절 `401`·`403`은 업무 결과로 확정하지 않습니다.

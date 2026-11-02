@@ -909,7 +909,7 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
-        "x-implemented": false,
+        "x-implemented": true,
         "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
         "security": [
           {
@@ -1008,7 +1008,7 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
-        "x-implemented": false,
+        "x-implemented": true,
         "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
         "security": [
           {
@@ -7598,7 +7598,7 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "SERVICE:settlement",
-        "x-implemented": false,
+        "x-implemented": true,
         "description": "각 상품의 sellerId·현재 판매자 상태·수취 시험계정·버전을 서비스 자격으로 검증한다. 판매자 합산 전 모든 상품 소유와 수취 계정 사본의 일치를 확인한다. 상품 등록 기준일은 반환하지 않는다.",
         "security": [
           {
