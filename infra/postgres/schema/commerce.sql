@@ -230,6 +230,40 @@ CREATE INDEX ix_inventory_reservations_status_expires
 CREATE INDEX ix_inventory_reservations_product_status
     ON commerce.inventory_reservations (product_id, status);
 
+CREATE TABLE commerce.sale_events (
+    id uuid PRIMARY KEY,
+    seller_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    name varchar(80) NOT NULL,
+    event_price bigint NOT NULL,
+    quota bigint NOT NULL,
+    sold_count bigint NOT NULL,
+    reserved_count bigint NOT NULL,
+    starts_at timestamptz NOT NULL,
+    ends_at timestamptz NOT NULL,
+    status varchar(24) NOT NULL,
+    published_at timestamptz,
+    closed_at timestamptz,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0,
+    CONSTRAINT ck_sale_events_name CHECK (char_length(name) BETWEEN 1 AND 80),
+    CONSTRAINT ck_sale_events_event_price CHECK (event_price BETWEEN 1 AND 10000000),
+    CONSTRAINT ck_sale_events_quota CHECK (quota > 0),
+    CONSTRAINT ck_sale_events_counts CHECK (
+        sold_count >= 0 AND reserved_count >= 0 AND sold_count + reserved_count <= quota
+    ),
+    CONSTRAINT ck_sale_events_period CHECK (starts_at < ends_at),
+    CONSTRAINT ck_sale_events_status
+        CHECK (status IN ('DRAFT', 'SCHEDULED', 'OPEN', 'SOLD_OUT', 'CLOSED')),
+    CONSTRAINT ck_sale_events_published CHECK ((status = 'DRAFT') = (published_at IS NULL)),
+    CONSTRAINT ck_sale_events_closed
+        CHECK ((status IN ('SOLD_OUT', 'CLOSED')) = (closed_at IS NOT NULL))
+);
+CREATE INDEX ix_sale_events_product_period ON commerce.sale_events (product_id, starts_at, ends_at);
+CREATE INDEX ix_sale_events_status_period ON commerce.sale_events (status, starts_at, ends_at);
+CREATE INDEX ix_sale_events_seller_created ON commerce.sale_events (seller_id, created_at, id);
+
 CREATE TABLE commerce.idempotency_records (
     id uuid PRIMARY KEY,
     actor_kind varchar(24) NOT NULL,

@@ -67,7 +67,7 @@ public class ProductInventory extends AuditableEntity {
       throw new InsufficientInventoryException(productId);
     }
     return change(
-        movementId, InventoryOperation.SELLER_ADJUSTMENT, businessRef, delta, 0, 0, reason, now);
+        movementId, InventoryOperation.SELLER_ADJUSTMENT, businessRef, delta, 0, 0, 0, reason, now);
   }
 
   /** 주문 수량을 가용에서 예약으로 옮긴다. 예약 상태 전이와 함께 {@link InventoryReservation}이 호출한다. */
@@ -82,6 +82,7 @@ public class ProductInventory extends AuditableEntity {
         -quantity,
         quantity,
         0,
+        0,
         "주문 예약",
         now);
   }
@@ -94,6 +95,7 @@ public class ProductInventory extends AuditableEntity {
         cycleId,
         0,
         -quantity,
+        0,
         quantity,
         "결제 확정",
         now);
@@ -107,6 +109,7 @@ public class ProductInventory extends AuditableEntity {
         cycleId,
         quantity,
         -quantity,
+        0,
         0,
         "예약 해제",
         now);
@@ -123,7 +126,42 @@ public class ProductInventory extends AuditableEntity {
       throw new IllegalStateException("sold quantity is less than restore: " + productId);
     }
     String reason = operation == InventoryOperation.REFUND_RESTORE ? "환불 복구" : "반품 입고";
-    return change(movementId, operation, businessRef, quantity, 0, -quantity, reason, now);
+    return change(movementId, operation, businessRef, quantity, 0, 0, -quantity, reason, now);
+  }
+
+  /** 이벤트 공개 때 한정 수량을 가용에서 이벤트 배정으로 옮긴다. 가용 수량이 부족하면 공개하지 않는다. */
+  InventoryMovement allocateToEvent(UUID movementId, UUID eventId, long quantity, Instant now) {
+    if (availableQuantity < quantity) {
+      throw new InsufficientInventoryException(productId);
+    }
+    return change(
+        movementId,
+        InventoryOperation.EVENT_ALLOCATE,
+        eventId,
+        -quantity,
+        0,
+        quantity,
+        0,
+        "이벤트 배정",
+        now);
+  }
+
+  /** 이벤트 종료 때 판매·예약되지 않은 배정분을 가용으로 돌린다. 반환할 수량이 없어도 종료 사유를 이력에 남긴다. */
+  InventoryMovement returnFromEvent(
+      UUID movementId, UUID eventId, long quantity, String reason, Instant now) {
+    if (quantity < 0 || eventAllocatedQuantity < quantity) {
+      throw new IllegalStateException("event allocation is less than return: " + productId);
+    }
+    return change(
+        movementId,
+        InventoryOperation.EVENT_RETURN,
+        eventId,
+        quantity,
+        0,
+        -quantity,
+        0,
+        reason,
+        now);
   }
 
   private void requireReserved(int quantity) {
@@ -138,6 +176,7 @@ public class ProductInventory extends AuditableEntity {
       UUID businessRef,
       long availableDelta,
       long reservedDelta,
+      long allocatedDelta,
       long soldDelta,
       String reason,
       Instant now) {
@@ -149,11 +188,13 @@ public class ProductInventory extends AuditableEntity {
             businessRef,
             availableDelta,
             reservedDelta,
+            allocatedDelta,
             soldDelta,
             reason,
             now);
     availableQuantity += availableDelta;
     reservedQuantity += reservedDelta;
+    eventAllocatedQuantity += allocatedDelta;
     soldQuantity += soldDelta;
     touch(now);
     return movement;
