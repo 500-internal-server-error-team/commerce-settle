@@ -196,6 +196,52 @@ class PaymentRequestProcessingIntegrationTest {
   }
 
   @Test
+  @DisplayName("확인 대상 전환도 처리 건수에 포함해 한 주기에 배치 크기만큼만 바꾸고 커밋한다")
+  void countsReviewTransitionsTowardBatchSize() {
+    List<UUID> exhausted = new ArrayList<>();
+    for (int i = 0; i < 3; i++) {
+      UUID eventId = UUID.randomUUID();
+      saveWaiting(event(eventId, UUID.randomUUID(), UUID.randomUUID(), 10_000, 0));
+      exhausted.add(eventId);
+    }
+    UUID normalOrderId = UUID.randomUUID();
+    saveWaiting(event(UUID.randomUUID(), normalOrderId, UUID.randomUUID(), 10_000, 0));
+    JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+    for (UUID eventId : exhausted) {
+      // 10번 시도한 뒤 결과를 남기지 못한 행. 정상 요청보다 먼저 선점되게 처리 시각을 앞당긴다.
+      jdbc.update(
+          "UPDATE payment.inbox SET attempts = 10, next_run_at = '2000-01-01T00:00:00Z'"
+              + " WHERE event_id = ?",
+          eventId);
+    }
+    PaymentRequestProcessor processor = new PaymentRequestProcessor(service, 2);
+
+    processor.run();
+
+    assertThat(
+            jdbc.queryForList(
+                "SELECT status || ':' || attempts FROM payment.inbox ORDER BY next_run_at NULLS FIRST",
+                String.class))
+        .containsExactly("REVIEW_REQUIRED:10", "REVIEW_REQUIRED:10", "WAITING:10", "WAITING:0");
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.payments", Long.class)).isZero();
+
+    processor.run();
+
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM payment.inbox WHERE status = 'REVIEW_REQUIRED'"
+                    + " AND last_error_code = 'PAYMENT_REQUEST_ATTEMPTS_EXHAUSTED'",
+                Long.class))
+        .isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM payment.payments WHERE order_id = ?",
+                Long.class,
+                normalOrderId))
+        .isEqualTo(1);
+  }
+
+  @Test
   @DisplayName("처리가 롤백된 직후 실패 기록 전에 다른 처리기가 돌아도 같은 요청을 다시 잡지 않고 실패가 1회로 기록된다")
   void otherProcessorCannotClaimBetweenRollbackAndFailureRecord() {
     saveWaiting();

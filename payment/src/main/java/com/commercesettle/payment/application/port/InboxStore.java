@@ -13,13 +13,13 @@ public interface InboxStore {
 
   /**
    * 처리 시각이 된 WAITING 하나를 선점한다. 시도 횟수를 늘리고 다음 처리 시각을 leaseUntil로 미루므로, 호출 트랜잭션이 커밋된 뒤에는 처리 결과나 실패를
-   * 기록하기 전까지 다른 처리기가 다시 선점하지 않는다. 이미 maxAttempts번 시도한 행과 원문을 읽을 수 없는 행은 사유와 함께 REVIEW_REQUIRED로 남기고
-   * 다음 행을 찾는다. 다른 처리기가 잠근 행은 건너뛴다.
+   * 기록하기 전까지 다른 처리기가 다시 선점하지 않는다. 한 번에 한 행만 다룬다. 이미 maxAttempts번 시도한 행과 원문을 읽을 수 없는 행은 사유와 함께
+   * REVIEW_REQUIRED로 남기고 {@link InboxClaim.Reviewed}를 돌려준다. 다른 처리기가 잠근 행은 건너뛴다.
    */
-  Optional<WaitingInboxEvent> claimNextWaiting(Instant now, Instant leaseUntil, int maxAttempts);
+  Optional<InboxClaim> claimNextWaiting(Instant now, Instant leaseUntil, int maxAttempts);
 
   /** {@link #claimNextWaiting}과 같지만 지정한 이벤트만 선점한다. */
-  Optional<WaitingInboxEvent> claimWaitingEvent(
+  Optional<InboxClaim> claimWaitingEvent(
       UUID eventId, Instant now, Instant leaseUntil, int maxAttempts);
 
   /** 선점한 버전 그대로인 WAITING 행을 현재 트랜잭션에서 잠근다. 그 사이 다른 처리기가 선점했거나 처리했으면 false를 돌려준다. */
