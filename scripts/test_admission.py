@@ -86,10 +86,10 @@ def stack():
             if attempted:
                 compose("down", "-v", "--rmi", "local", "--remove-orphans", timeout=180)
                 for kind in ["container", "volume"]:
-                    remaining = subprocess.check_output(["docker", kind, "ls", "-q", "--filter", "label=com.docker.compose.project=" + project], text=True).strip()
+                    remaining = subprocess.check_output(["docker", kind, "ls", "-q", "--filter", "label=com.docker.compose.project=" + project], text=True, timeout=15).strip()
                     if remaining:
                         raise AssertionError("Owned " + kind + " remains")
-                images = subprocess.check_output(["docker", "image", "ls", "-q", "--filter", "reference=" + project + "-*"], text=True).strip()
+                images = subprocess.check_output(["docker", "image", "ls", "-q", "--filter", "reference=" + project + "-*"], text=True, timeout=15).strip()
                 if images:
                     raise AssertionError("Owned build image tags remain")
             shutil.rmtree(directory)

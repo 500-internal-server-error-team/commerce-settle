@@ -88,7 +88,7 @@ public class DevFixtureLoader {
         INSERT INTO commerce.buyer_accounts
             (id,email_normalized,password_hash,display_name,status,auth_version,
              created_at,updated_at,version,deleted_at)
-        VALUES (?,?,?,?,?,0,now(),now(),0,?) ON CONFLICT (id) DO NOTHING
+        VALUES (?,?,?,?,?,0,now(),now(),0,?) ON CONFLICT DO NOTHING
         """,
         id(suffix),
         email,
@@ -105,7 +105,7 @@ public class DevFixtureLoader {
         INSERT INTO commerce.seller_accounts
             (id,email_normalized,password_hash,display_name,status,auth_version,
              payout_account_ref,created_at,updated_at,version,deleted_at)
-        VALUES (?,?,?,?,?,0,?,now(),now(),0,?) ON CONFLICT (id) DO NOTHING
+        VALUES (?,?,?,?,?,0,?,now(),now(),0,?) ON CONFLICT DO NOTHING
         """,
         id(suffix),
         email,
@@ -119,10 +119,14 @@ public class DevFixtureLoader {
 
   // 테이블 이름은 위 두 고정 호출만 사용한다. 기존 ID가 다른 계정이면 그 계정을 fixture로 취급하지 않는다.
   private void verifyEmail(String table, int suffix, String email) {
-    String existing =
-        jdbc.queryForObject(
+    var matches =
+        jdbc.queryForList(
             "SELECT email_normalized FROM " + table + " WHERE id=?", String.class, id(suffix));
-    if (!email.equals(existing)) {
+    if (matches.isEmpty()) {
+      throw new org.springframework.dao.DataIntegrityViolationException(
+          "Dev fixture email conflicts with an existing account");
+    }
+    if (!email.equals(matches.getFirst())) {
       throw new IllegalStateException("Dev fixture account ID conflicts with existing data");
     }
   }
