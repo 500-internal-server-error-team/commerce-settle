@@ -728,6 +728,21 @@ class ApplyOrderPaymentRequestServiceTest {
     public Optional<Payment> findByOrderId(UUID orderId) {
       return byId.values().stream().filter(p -> p.getOrderId().equals(orderId)).findFirst();
     }
+
+    @Override
+    public Optional<Payment> findByIdAndBuyerId(UUID id, UUID buyerId) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public List<Payment> findByBuyer(UUID buyerId, UUID orderId, int page, int size) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public long countByBuyer(UUID buyerId, UUID orderId) {
+      throw new UnsupportedOperationException();
+    }
   }
 
   private static final class FakeJobs implements PaymentJobRepository {

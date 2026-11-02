@@ -1,0 +1,57 @@
+package com.commercesettle.payment.presentation.controller;
+
+import java.util.List;
+import java.util.UUID;
+import org.springframework.core.MethodParameter;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+import org.springframework.web.ErrorResponseException;
+import org.springframework.web.bind.support.WebDataBinderFactory;
+import org.springframework.web.context.request.NativeWebRequest;
+import org.springframework.web.method.support.HandlerMethodArgumentResolver;
+import org.springframework.web.method.support.ModelAndViewContainer;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+/**
+ * Gateway의 신원 헤더에서 구매자를 읽는다. 헤더가 없거나 형식이 틀리면 401, 구매자가 아니면 403이다.
+ *
+ * <p>Payment는 아직 Gateway 내부 호출 자격을 판정하지 않으므로, 신원 헤더를 위조한 직접 호출은 막지 못한다(로컬 개발 전용).
+ */
+@Component
+class AuthenticatedBuyerResolver implements HandlerMethodArgumentResolver, WebMvcConfigurer {
+  static final String ACTOR_KIND = "X-Authenticated-Actor-Kind";
+  static final String ACTOR_ID = "X-Authenticated-Actor-Id";
+
+  @Override
+  public void addArgumentResolvers(List<HandlerMethodArgumentResolver> resolvers) {
+    resolvers.add(this);
+  }
+
+  @Override
+  public boolean supportsParameter(MethodParameter parameter) {
+    return parameter.getParameterType() == AuthenticatedBuyer.class;
+  }
+
+  @Override
+  public Object resolveArgument(
+      MethodParameter parameter,
+      ModelAndViewContainer mavContainer,
+      NativeWebRequest webRequest,
+      WebDataBinderFactory binderFactory) {
+    String kind = webRequest.getHeader(ACTOR_KIND);
+    String id = webRequest.getHeader(ACTOR_ID);
+    if (kind == null || id == null || !("BUYER".equals(kind) || "SELLER".equals(kind))) {
+      throw new ErrorResponseException(HttpStatus.UNAUTHORIZED);
+    }
+    UUID actorId;
+    try {
+      actorId = UUID.fromString(id);
+    } catch (IllegalArgumentException e) {
+      throw new ErrorResponseException(HttpStatus.UNAUTHORIZED);
+    }
+    if (!"BUYER".equals(kind)) {
+      throw new ErrorResponseException(HttpStatus.FORBIDDEN);
+    }
+    return new AuthenticatedBuyer(actorId);
+  }
+}
