@@ -13,4 +13,6 @@ interface SpringDataMileageWalletRepository extends JpaRepository<MileageWallet,
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select w from MileageWallet w where w.buyerId = :buyerId")
   Optional<MileageWallet> findByBuyerIdForUpdate(@Param("buyerId") UUID buyerId);
+
+  Optional<MileageWallet> findByBuyerId(UUID buyerId);
 }

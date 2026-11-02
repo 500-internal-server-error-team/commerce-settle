@@ -4,6 +4,7 @@ import com.commercesettle.payment.domain.model.PaymentJob;
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
 import com.commercesettle.payment.domain.model.PaymentJobStatus;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -30,6 +31,30 @@ public interface PaymentJobRepository {
    */
   boolean releaseLease(
       UUID jobId, UUID leaseToken, PaymentJobStatus status, Duration runAfter, String errorCode);
+
+  Optional<PaymentJob> findById(UUID jobId);
+
+  /** 작업을 생성 시각·ID 내림차순으로 한 페이지 읽는다. */
+  List<PaymentJob> findPage(int page, int size);
+
+  long count();
+
+  /**
+   * 운영 재처리로 원업무 키를 유지한 채 작업을 즉시 다시 대기시키고 자동 시도 횟수를 새로 센다. 완료한 작업과 유효한 임대 중인 작업은 바꾸지 않는다. 판정과 변경은 작업
+   * 행 잠금 안에서 DB 시각으로 한다.
+   */
+  ReplayResult replay(UUID jobId, long expectedVersion);
+
+  sealed interface ReplayResult {
+    record Replayed(PaymentJobStatus before) implements ReplayResult {}
+
+    record NotFound() implements ReplayResult {}
+
+    record VersionConflict() implements ReplayResult {}
+
+    /** 완료했거나 다른 실행자가 유효한 임대를 가진 작업. */
+    record StateConflict(PaymentJobStatus current) implements ReplayResult {}
+  }
 
   record LeasedJob(UUID jobId, UUID paymentId, UUID businessKey, UUID leaseToken, int attempts) {}
 }

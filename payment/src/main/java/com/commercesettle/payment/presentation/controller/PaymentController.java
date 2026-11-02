@@ -1,6 +1,8 @@
 package com.commercesettle.payment.presentation.controller;
 
+import com.commercesettle.payment.application.service.PaymentAttemptQueryService;
 import com.commercesettle.payment.application.service.PaymentQueryService;
+import com.commercesettle.payment.presentation.dto.PaymentAttemptPageResponse;
 import com.commercesettle.payment.presentation.dto.PaymentPageResponse;
 import com.commercesettle.payment.presentation.dto.PaymentResponse;
 import com.commercesettle.payment.presentation.dto.ProblemResponse;
@@ -55,9 +57,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/payments")
 public class PaymentController {
   private final PaymentQueryService payments;
+  private final PaymentAttemptQueryService attempts;
 
-  public PaymentController(PaymentQueryService payments) {
+  public PaymentController(PaymentQueryService payments, PaymentAttemptQueryService attempts) {
     this.payments = payments;
+    this.attempts = attempts;
   }
 
   @Operation(operationId = "get_api_payments", summary = "본인 결제 목록")
@@ -80,5 +84,19 @@ public class PaymentController {
   public PaymentResponse get(
       @Parameter(hidden = true) AuthenticatedBuyer buyer, @PathVariable UUID paymentId) {
     return PaymentResponse.from(payments.get(buyer.id(), paymentId));
+  }
+
+  @Operation(operationId = "get_api_payments_paymentId_attempts", summary = "본인 외부 승인 시도")
+  @ApiResponse(responseCode = "200", description = "조회·처리 완료")
+  @GetMapping("/{paymentId}/attempts")
+  public PaymentAttemptPageResponse attempts(
+      @Parameter(hidden = true) AuthenticatedBuyer buyer,
+      @PathVariable UUID paymentId,
+      @RequestParam(defaultValue = "0") @Min(value = 0, message = "0 이상이어야 합니다.") int page,
+      @RequestParam(defaultValue = "20")
+          @Min(value = 1, message = "1 이상이어야 합니다.")
+          @Max(value = 100, message = "100 이하여야 합니다.")
+          int size) {
+    return PaymentAttemptPageResponse.from(attempts.list(buyer.id(), paymentId, page, size));
   }
 }

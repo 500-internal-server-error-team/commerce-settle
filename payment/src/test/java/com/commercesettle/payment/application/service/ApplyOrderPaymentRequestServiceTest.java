@@ -1200,6 +1200,26 @@ class ApplyOrderPaymentRequestServiceTest {
         UUID jobId, UUID leaseToken, PaymentJobStatus status, Duration runAfter, String errorCode) {
       throw new UnsupportedOperationException();
     }
+
+    @Override
+    public Optional<PaymentJob> findById(UUID jobId) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public List<PaymentJob> findPage(int page, int size) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public long count() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public ReplayResult replay(UUID jobId, long expectedVersion) {
+      throw new UnsupportedOperationException();
+    }
   }
 
   private static final class FakeWallets implements MileageWalletRepository {
@@ -1216,6 +1236,11 @@ class ApplyOrderPaymentRequestServiceTest {
     public Optional<MileageWallet> findByBuyerIdForUpdate(UUID buyerId) {
       lookups++;
       return Optional.ofNullable(byBuyer.get(buyerId));
+    }
+
+    @Override
+    public Optional<MileageWallet> findByBuyerId(UUID buyerId) {
+      throw new UnsupportedOperationException();
     }
 
     @Override
@@ -1249,6 +1274,16 @@ class ApplyOrderPaymentRequestServiceTest {
     public MileageEntry save(MileageEntry entry) {
       saved.add(entry);
       return entry;
+    }
+
+    @Override
+    public List<MileageEntry> findByWalletId(UUID walletId, int page, int size) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public long countByWalletId(UUID walletId) {
+      throw new UnsupportedOperationException();
     }
   }
 

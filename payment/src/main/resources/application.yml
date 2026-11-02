@@ -150,6 +150,9 @@ app:
       # Settlement 수신기를 연결하면 false로 끈다.
       enabled: true
       batch-size: 20
+  payment-reconciliation:
+    # 마감 뒤 이 시간이 지나야 대조 기준선을 고정한다. 결제 업무 트랜잭션의 최대 시간보다 길어야 한다.
+    safety-margin: PT10M
   outbox:
     # PAYMENT_ROLE=worker에서만 동작한다. 커밋된 결제 이벤트를 Kafka로 발행한다.
     enabled: false

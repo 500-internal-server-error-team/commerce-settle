@@ -149,6 +149,7 @@ CREATE TABLE payment.payment_jobs (
     CONSTRAINT ck_payment_jobs_counts CHECK (attempts >= 0 AND version >= 0)
 );
 CREATE INDEX ix_payment_jobs_status_next_run ON payment.payment_jobs (status, next_run_at, lease_until, id);
+CREATE INDEX ix_payment_jobs_created ON payment.payment_jobs (created_at, id);
 
 -- 외부 승인 시도. 외부 호출 전에 provider·결제수단·계정·재원·금액·시나리오를 고정해 재전송·조회에 같은 값을 쓴다.
 CREATE TABLE payment.payment_attempts (
@@ -394,3 +395,48 @@ CREATE TABLE payment.inbox_quarantine_resumes (
     created_at timestamptz NOT NULL,
     UNIQUE (delivery_id, expected_version)
 );
+
+-- 운영 요청의 멱등 기록. 키와 본문 원문 대신 SHA-256만 저장하고, 금융 작업 재처리 키는 만료시키지 않는다.
+CREATE TABLE payment.idempotency_records (
+    id uuid PRIMARY KEY,
+    actor_kind varchar(24) NOT NULL,
+    actor_id varchar(100) NOT NULL,
+    operation varchar(100) NOT NULL,
+    key_hash char(64) NOT NULL,
+    request_hash char(64) NOT NULL,
+    resource_id uuid,
+    response_status integer,
+    response_snapshot jsonb,
+    status varchar(16) NOT NULL,
+    expires_at timestamptz,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0,
+    CONSTRAINT uq_idempotency_records_key UNIQUE (actor_kind, actor_id, operation, key_hash),
+    CONSTRAINT ck_idempotency_records_status CHECK (status IN ('PENDING', 'COMPLETED'))
+);
+CREATE INDEX ix_idempotency_records_expires ON payment.idempotency_records (expires_at);
+CREATE INDEX ix_idempotency_records_resource ON payment.idempotency_records (resource_id);
+
+-- 주요 변경의 실행 주체·행위 기록. 추가만 하며 금융 원장을 대신하지 않는다.
+CREATE TABLE payment.audit_logs (
+    id             uuid         PRIMARY KEY,
+    actor_kind     varchar(16)  NOT NULL,
+    actor_ref      varchar(100) NOT NULL,
+    action         varchar(80)  NOT NULL,
+    aggregate_type varchar(50)  NOT NULL,
+    aggregate_id   uuid         NOT NULL,
+    before_status  varchar(32),
+    after_status   varchar(32),
+    reason_code    varchar(80),
+    event_id       uuid,
+    correlation_id varchar(100) NOT NULL,
+    occurred_at    timestamptz  NOT NULL,
+
+    CONSTRAINT ck_audit_logs_actor_kind
+        CHECK (actor_kind IN ('BUYER', 'SELLER', 'SERVICE', 'OPERATOR', 'SYSTEM'))
+);
+CREATE INDEX ix_audit_logs_aggregate
+    ON payment.audit_logs (aggregate_type, aggregate_id, occurred_at, id);
+CREATE INDEX ix_audit_logs_actor ON payment.audit_logs (actor_kind, actor_ref, occurred_at, id);
+CREATE INDEX ix_audit_logs_correlation ON payment.audit_logs (correlation_id);
