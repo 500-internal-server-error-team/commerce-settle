@@ -736,6 +736,8 @@ Job 식별자는 targetMonth+runId다. 정상 재시작은 같은 값을 사용�
 
 provider·method·account_ref·funding_account_ref·amount·scenario_version은 외부 호출 전 원본문의 사본으로 고정합니다. 호출 전 중단 뒤에도 이 값으로 승인 요청을 재구성하며 현재 서버 설정으로 재원·시나리오를 덮어쓰지 않습니다.
 
+현재 Payment Worker의 승인 처리기가 이 테이블을 사용합니다. 승인 작업을 임대한 뒤 PENDING 결제면 결제 요청 원문의 결제수단·계정과 서버 설정(카드 PG, 재원 계정, 시나리오 버전)으로 시도를 만들고 결제를 PROCESSING으로 바꿔 승인을 요청합니다. 결제 회차 ID를 대역 업무 키로 씁니다. 승인되면 마일리지 예약 차감·결제 확정·`PaymentConfirmed`, 확정 거절되면 예약 해제·`PaymentDeclined`를 작업 종료와 같은 트랜잭션에 저장합니다. 결과를 모르면 미확정으로 두고 다음 실행에서 원거래를 조회하며, 신뢰한 404만 같은 키·본문으로 재전송합니다. PG 호출은 `app.payment-approval.gateway`로 finance-mock 대역(`http`)과 즉시 승인하는 개발용 대역(`stub`, 기본값)을 고르며, 처리기는 기본 비활성입니다.
+
 **인덱스:** (status,updated_at,id); UNIQUE(payment_id) WHERE status IN (PENDING,PROCESSING,UNKNOWN,APPROVED).
 
 ## 정산·지급
