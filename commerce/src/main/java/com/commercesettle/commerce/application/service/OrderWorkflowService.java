@@ -43,6 +43,7 @@ public class OrderWorkflowService {
   private final OrderEventOutbox outbox;
   private final AuditLog audit;
   private final Clock clock;
+  private final OrderAdmissionService admission;
 
   public OrderWorkflowService(
       OrderRepository orders,
@@ -54,7 +55,8 @@ public class OrderWorkflowService {
       IdempotentRequests keys,
       OrderEventOutbox outbox,
       AuditLog audit,
-      Clock clock) {
+      Clock clock,
+      OrderAdmissionService admission) {
     this.orders = orders;
     this.accounts = accounts;
     this.products = products;
@@ -65,6 +67,7 @@ public class OrderWorkflowService {
     this.outbox = outbox;
     this.audit = audit;
     this.clock = clock;
+    this.admission = admission;
   }
 
   @Transactional(readOnly = true)
@@ -191,6 +194,8 @@ public class OrderWorkflowService {
           var o = ownedLocked(ActorKind.BUYER, buyer, id);
           o.requireVersion(expected);
           var before = o.getStatus();
+          o.requirePaymentRetry(clock.instant());
+          admission.requireAdmission();
           o.retryPayment(UUID.randomUUID(), clock.instant());
           if (o.getEventId() == null)
             inventory.reserveAgain(id, o.getPaymentCycleId(), o.getPaymentWaitUntil());

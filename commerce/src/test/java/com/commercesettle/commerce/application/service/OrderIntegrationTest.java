@@ -36,6 +36,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -55,6 +56,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     })
 @Testcontainers
 class OrderIntegrationTest {
+  @MockitoBean OrderAdmissionService admission;
   static final String GATEWAY_CREDENTIAL = "test-gateway-credential-0123456789abcdef0123";
   private static final ShippingAddress SHIPPING =
       new ShippingAddress("시험 수령인", "000-0000-0000", "00001", "가상시 시험로 1", "101호");
@@ -71,6 +73,39 @@ class OrderIntegrationTest {
   @Autowired OrderRepository orders;
   @Autowired AddressCipher cipher;
   @Autowired PlatformTransactionManager transactions;
+
+  @Test
+  @DisplayName("접수 중단 중에도 기존 멱등 결과와 본문 충돌을 우선하고 거절 키는 재사용한다")
+  void preservesIdempotencyWhileAdmissionIsClosed() {
+    var f = fixture(2);
+    String accepted = key();
+    var first = post(f.buyer(), accepted, body(f));
+    assertThat(first.getStatusCode().value()).isEqualTo(201);
+    UUID order = UUID.fromString(first.getBody().path("id").asText());
+    org.mockito.Mockito.doThrow(
+            new com.commercesettle.commerce.application.exception.OrderCapacityExceededException())
+        .when(admission)
+        .requireAdmission();
+    org.mockito.Mockito.clearInvocations(admission);
+
+    var replay = post(f.buyer(), accepted, body(f));
+    assertThat(replay.getStatusCode().value()).isEqualTo(201);
+    assertThat(replay.getBody().path("id").asText()).isEqualTo(order.toString());
+    problem(
+        post(f.buyer(), accepted, body(f).put("quantity", 2)), 409, "COMMON_IDEMPOTENCY_CONFLICT");
+    org.mockito.Mockito.verifyNoInteractions(admission);
+    String rejected = key();
+    var unavailable = post(f.buyer(), rejected, body(f));
+    problem(unavailable, 503, "COMMON_CAPACITY_EXCEEDED");
+    assertThat(unavailable.getHeaders().getFirst("Retry-After")).isEqualTo("30");
+    assertInventory(f.product(), 1, 1);
+    assertThat(count("orders", "buyer_id", f.buyer())).isEqualTo(1);
+    assertThat(count("outbox", "aggregate_id", order)).isEqualTo(1);
+
+    org.mockito.Mockito.doNothing().when(admission).requireAdmission();
+    assertThat(post(f.buyer(), rejected, body(f)).getStatusCode().value()).isEqualTo(201);
+    assertInventory(f.product(), 0, 2);
+  }
 
   @Test
   @DisplayName("재고 행 잠금 대기 상한은 주문 멱등 기록까지 롤백하고 잠금 해제 뒤 같은 키로 접수한다")

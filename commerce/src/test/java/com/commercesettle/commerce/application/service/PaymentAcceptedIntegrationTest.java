@@ -51,6 +51,7 @@ import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -76,6 +77,7 @@ import org.testcontainers.kafka.KafkaContainer;
 @Timeout(90)
 @Import(PaymentAcceptedIntegrationTest.TestBeans.class)
 class PaymentAcceptedIntegrationTest {
+  @MockitoBean OrderAdmissionService admission;
   static final String GATEWAY_CREDENTIAL = "test-gateway-credential-0123456789abcdef0123";
   private static final String TOPIC = "commerce-settle.payment.v1";
   private static final Instant NOW = Instant.parse("2026-11-02T01:00:00.123456Z");

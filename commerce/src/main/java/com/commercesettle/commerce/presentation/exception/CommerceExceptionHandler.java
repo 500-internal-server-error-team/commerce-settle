@@ -190,6 +190,15 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
         .body(problem(code.status(), code, code.detail(), request));
   }
 
+  @ExceptionHandler(
+      com.commercesettle.commerce.application.exception.OrderCapacityExceededException.class)
+  ResponseEntity<Object> capacity(WebRequest request) {
+    ErrorCode code = ErrorCode.COMMON_CAPACITY_EXCEEDED;
+    return ResponseEntity.status(code.status())
+        .header(HttpHeaders.RETRY_AFTER, "30")
+        .body(problem(code.status(), code, code.detail(), request));
+  }
+
   /** 인증 저장소를 확인할 수 없으면 인증 실패로 바꾸지 않는다. 세션은 발급되지 않았거나 삭제를 확인하지 못한 상태다. */
   @ExceptionHandler(AuthenticationUnavailableException.class)
   ResponseEntity<Object> authenticationUnavailable(

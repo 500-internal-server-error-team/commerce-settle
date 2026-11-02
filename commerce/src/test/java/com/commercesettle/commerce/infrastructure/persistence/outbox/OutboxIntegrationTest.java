@@ -70,6 +70,116 @@ class OutboxIntegrationTest {
   @Autowired private DataSource dataSource;
   private TransactionTemplate tx;
 
+  @Test
+  @DisplayName("금융 대기열 관측은 미래 대기·유효 임대·수동 확인을 지연에서 제외하고 수집 실패를 무효화한다")
+  void exportsUnfinishedQueuesWithoutCountingScheduledWaitAsDelay() throws Exception {
+    var future = event(UUID.randomUUID(), 0);
+    var review = event(UUID.randomUUID(), 0);
+    var running = event(UUID.randomUUID(), 0);
+    tx.executeWithoutResult(
+        status -> {
+          writer.appendPaymentRequested(future);
+          writer.appendPaymentRequested(review);
+          writer.appendPaymentRequested(running);
+        });
+    jdbc.update(
+        "update commerce.outbox set status='RETRY',next_run_at=clock_timestamp()+interval '5 minutes' where id=?",
+        future.eventId());
+    jdbc.update(
+        "update commerce.outbox set status='REVIEW_REQUIRED',next_run_at=clock_timestamp()-interval '1 hour' where id=?",
+        review.eventId());
+    jdbc.update(
+        "update commerce.outbox set status='RUNNING',lease_until=clock_timestamp()+interval '1 minute' where id=?",
+        running.eventId());
+    var registry = new io.prometheus.metrics.model.registry.PrometheusRegistry();
+    try (var metrics =
+        new com.commercesettle.commerce.infrastructure.observability.CommerceQueueMetrics(
+            dataSource, registry)) {
+      metrics.refresh();
+      java.util.function.DoubleSupplier records =
+          () -> queueMetric(registry.scrape(), "commerce_settle_financial_queue_records");
+      java.util.function.DoubleSupplier age =
+          () -> queueMetric(registry.scrape(), "commerce_settle_financial_queue_due_delay_seconds");
+      java.util.function.DoubleSupplier observed =
+          () ->
+              queueMetric(
+                  registry.scrape(), "commerce_settle_admission_observed_timestamp_seconds");
+      assertThat(records.getAsDouble()).isEqualTo(3);
+      assertThat(age.getAsDouble()).isZero();
+      assertThat(observed.getAsDouble()).isPositive();
+      jdbc.update(
+          "update commerce.outbox set next_run_at=clock_timestamp()-interval '65 seconds' where id=?",
+          future.eventId());
+      metrics.refresh();
+      assertThat(records.getAsDouble()).isEqualTo(3);
+      assertThat(age.getAsDouble()).isBetween(65.0, 75.0);
+
+      try (var holder = dataSource.getConnection()) {
+        holder.setAutoCommit(false);
+        try (var lock = holder.createStatement()) {
+          lock.execute("LOCK TABLE commerce.outbox IN ACCESS EXCLUSIVE MODE");
+          metrics.refresh();
+          assertThat(observed.getAsDouble()).isZero();
+          holder.rollback();
+        }
+      }
+      metrics.refresh();
+      assertThat(records.getAsDouble()).isEqualTo(3);
+      assertThat(observed.getAsDouble()).isPositive();
+    }
+  }
+
+  @Test
+  @DisplayName("수집 중 갱신돼도 이미 캡처한 scrape의 값과 원본 시각은 함께 보존한다")
+  void keepsValueAndOriginalTimestampInSameScrapeSnapshot() throws Exception {
+    var first = event(UUID.randomUUID(), 0);
+    tx.executeWithoutResult(status -> writer.appendPaymentRequested(first));
+    var registry = new io.prometheus.metrics.model.registry.PrometheusRegistry();
+    try (var metrics =
+        new com.commercesettle.commerce.infrastructure.observability.CommerceQueueMetrics(
+            dataSource, registry)) {
+      metrics.refresh();
+      var inFlight = registry.scrape();
+      double originalCount = queueMetric(inFlight, "commerce_settle_financial_queue_records");
+      double originalTime =
+          queueMetric(inFlight, "commerce_settle_admission_observed_timestamp_seconds");
+      var second = event(UUID.randomUUID(), 0);
+      tx.executeWithoutResult(status -> writer.appendPaymentRequested(second));
+      metrics.refresh();
+      var newer = registry.scrape();
+
+      assertThat(queueMetric(inFlight, "commerce_settle_financial_queue_records"))
+          .isEqualTo(originalCount)
+          .isEqualTo(1);
+      assertThat(queueMetric(inFlight, "commerce_settle_admission_observed_timestamp_seconds"))
+          .isEqualTo(originalTime);
+      assertThat(queueMetric(newer, "commerce_settle_financial_queue_records")).isEqualTo(2);
+      assertThat(queueMetric(newer, "commerce_settle_admission_observed_timestamp_seconds"))
+          .isGreaterThan(originalTime);
+    }
+  }
+
+  private static double queueMetric(
+      io.prometheus.metrics.model.snapshots.MetricSnapshots snapshot, String name) {
+    var gauge =
+        (io.prometheus.metrics.model.snapshots.GaugeSnapshot)
+            snapshot.stream()
+                .filter(metric -> metric.getMetadata().getPrometheusName().equals(name))
+                .findFirst()
+                .orElseThrow();
+    return gauge.getDataPoints().stream()
+        .filter(
+            point ->
+                "commerce.outbox"
+                    .equals(
+                        point
+                            .getLabels()
+                            .get(name.endsWith("timestamp_seconds") ? "resource" : "queue")))
+        .findFirst()
+        .orElseThrow()
+        .getValue();
+  }
+
   @BeforeEach
   void reset() {
     tx = new TransactionTemplate(manager);

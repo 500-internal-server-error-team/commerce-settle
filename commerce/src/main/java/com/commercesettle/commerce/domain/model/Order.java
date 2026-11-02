@@ -271,10 +271,14 @@ public class Order extends AuditableEntity {
   }
 
   public void retryPayment(UUID cycle, Instant now) {
-    if (status != Status.DECLINED || !now.isBefore(paymentWaitUntil)) throw conflict();
+    requirePaymentRetry(now);
     paymentCycleId = Objects.requireNonNull(cycle);
     status = Status.PAYMENT_PENDING;
     touch(now);
+  }
+
+  public void requirePaymentRetry(Instant now) {
+    if (status != Status.DECLINED || !now.isBefore(paymentWaitUntil)) throw conflict();
   }
 
   public boolean requestCancellation(Instant now) {

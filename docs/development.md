@@ -156,6 +156,14 @@ Outbox relay는 기존 `app.outbox.enabled=false` 기본값을 유지합니다. 
 
 `OrderIntegrationTest`는 실제 HTTP·PostgreSQL에서 11필드 입력·본인 조회·금액/이벤트 계약·영구 멱등·동시 요청·마지막 재고 경쟁·DB 저장 실패의 전체 롤백을 검증합니다.
 
+## 신규 주문 접수 제한
+
+DB 주문의 신규 접수와 새 결제 회차에는 기본으로 gate를 적용합니다. 기동 시 닫히며 `APP_ORDER_ADMISSION_PROMETHEUS_URL`(기본 `http://prometheus:9090`)에서 필수 관측을 읽고 모든 재개 기준을 60초 연속 충족해야 엽니다. `APP_ORDER_ADMISSION_PAUSED=true`로 설정해 앱을 재기동하면 운영자가 접수를 중단할 수 있습니다. 해제 후에도 재개 검사를 다시 거칩니다. 조회·취소·환불·기존 업무 배출은 계속됩니다. 메모리 주문 stub은 금융 접수 경로가 아닙니다.
+
+전용 단일 실행기가 Commerce DB 관측과 Prometheus instant query를 15초 간격으로 수행합니다. DB 쿼리는 2초, HTTP는 전체 5초·응답 2 MiB 상한이며 요청 트랜잭션에서 원격 조회하지 않습니다. 수집 실패·지표 누락·오래된 원본 시각이면 닫습니다. `commerce_order_admission_open`은 열림 1/닫힘 0이며, Commerce의 두 금융 대기열 값과 원본 수집 시각을 `/actuator/prometheus`로 제공합니다. 상세 metric·필수 대상·임계값은 [접수 정책](policies.md#신규-접수-제한과-재개)을 따릅니다.
+
+현재 외부 소유 수집기는 연결 전이므로 기본 Compose에서 신규 주문을 보내면 `503 COMMON_CAPACITY_EXCEEDED`, `Retry-After: 30`입니다. 누락을 0으로 채우거나 gate를 우회해 정상 동작으로 표시하지 않습니다. Payment·Settlement·lag·데이터 파일시스템 관측 연결과 실제 환경 회복 검증은 [#120](https://github.com/500-internal-server-error-team/commerce-settle/issues/120)에 남아 있습니다. 주문 측 HTTP·DB 회귀는 실제 gate의 관측 누락 거절, 기존 결과/본문 충돌 우선, 거절 키 재사용, 결제 재시도 롤백·취소 비제한을 검사합니다. 임계값·복제 관측·원본 시각·히스테리시스와 실제 HTTP 관측 어댑터는 별도 좁은 테스트로 확인합니다.
+
 ## 결제 접수 결과 수신
 
 Commerce의 `PaymentAccepted` Listener와 처리기는 기본 비활성입니다. 격리한 시험 인스턴스에서 `APP_KAFKA_PAYMENT_ACCEPTED_ENABLED=true`, `APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED=true`로 각각 활성화합니다. Payment는 기존 주문 요청 Listener·Worker 처리기·Outbox Relay, Commerce는 주문 Outbox Relay를 함께 켜야 전체 왕복이 진행됩니다. 기본 `auto-offset-reset=none`은 유지하며 새 소비 그룹의 시작 offset은 시험 전에 명시적으로 준비합니다. 새 DB에는 갱신한 Commerce 초기 SQL을 적용하고, 기존 DB·볼륨에 전체 SQL을 재실행하거나 데이터를 초기화하지 않습니다.
@@ -251,7 +259,7 @@ seed 기본값은 67입니다. 같은 seed·Clock이면 초기 주문과 주소 
 
 주문 stub을 꺼도 판매자 상품 API의 공통 `AuthenticatedActorResolver`, HTTP Jackson의 enum·문자열·정수 변환 제한과 생성 OpenAPI의 nullable enum 보정은 기존 API에 적용됩니다. 판매자 신원·역할 오류의 401·403 계약과 이벤트용 공용 `ObjectMapper`는 유지합니다.
 
-전용 HTTP 통합 테스트는 실제 HTTP 서버·Controller·서비스·JSON 검증·오류 응답을 연결하며 DB·Kafka·Redis를 사용하지 않습니다. 숫자·숫자 문자열의 결제수단 변환과 boolean의 문자열 변환을 거절하고, 실제 요청·응답을 정식 `docs/openapi.json`과 생성된 OpenAPI 3.1 스키마 양쪽으로 검증합니다. stub 입력은 정식 `OrderCreate`에서 미지원 4필드만 제외해 비교하며 원래 계약은 유지합니다. 생성 명세의 필드·필수 키·타입·null·허용값·범위·형식·페이지 항목 참조를 정식 계약과 대조하고, 필수 키 누락·잘못된 상태·배송일·금액과 페이지 내부 주문 변조가 거절되는지 검사합니다. 주문 3개 operation의 성공·공통 오류 코드, 미디어 타입·본문 참조, 생성 `201`·필수 `Location`, POST `503`의 조건부 `Retry-After`와 멱등·페이지·경로 인자를 정식 계약과 대조합니다. 모든 실제 HTTP 응답도 해당 operation의 코드·본문·헤더에 연결해 검증하며, 재요청의 `Location`, 오류의 실제 상태·요청 경로·추적 ID·필드 오류를 확인합니다. 테스트에서는 실제 추적을 켜고 Zipkin 내보내기를 끕니다. 정식 명세에 나열하지 않은 프레임워크·서버 오류는 생성 명세의 `default` 공통 오류로 설명합니다. 429 요청 제한과 503 수용량 제어는 구현 예정이며 응답 명세 검사가 실제 제어 동작을 증명하지는 않습니다. 이 테스트가 Compose 전체 실행이나 금융 처리 완료를 증명하지는 않습니다.
+전용 HTTP 통합 테스트는 실제 HTTP 서버·Controller·서비스·JSON 검증·오류 응답을 연결하며 DB·Kafka·Redis를 사용하지 않습니다. 숫자·숫자 문자열의 결제수단 변환과 boolean의 문자열 변환을 거절하고, 실제 요청·응답을 정식 `docs/openapi.json`과 생성된 OpenAPI 3.1 스키마 양쪽으로 검증합니다. stub 입력은 정식 `OrderCreate`에서 미지원 4필드만 제외해 비교하며 원래 계약은 유지합니다. 생성 명세의 필드·필수 키·타입·null·허용값·범위·형식·페이지 항목 참조를 정식 계약과 대조하고, 필수 키 누락·잘못된 상태·배송일·금액과 페이지 내부 주문 변조가 거절되는지 검사합니다. 주문 3개 operation의 성공·공통 오류 코드, 미디어 타입·본문 참조, 생성 `201`·필수 `Location`, POST `503`의 조건부 `Retry-After`와 멱등·페이지·경로 인자를 정식 계약과 대조합니다. 모든 실제 HTTP 응답도 해당 operation의 코드·본문·헤더에 연결해 검증하며, 재요청의 `Location`, 오류의 실제 상태·요청 경로·추적 ID·필드 오류를 확인합니다. 테스트에서는 실제 추적을 켜고 Zipkin 내보내기를 끕니다. 정식 명세에 나열하지 않은 프레임워크·서버 오류는 생성 명세의 `default` 공통 오류로 설명합니다. 주문별 429 요청 제한은 구현 전이며, 503 접수 제한의 동작은 [별도 gate 검증](#신규-주문-접수-제한)으로 확인합니다. 응답 명세 검사만으로 제어 동작을 증명하지는 않습니다. 이 테스트가 Compose 전체 실행이나 금융 처리 완료를 증명하지는 않습니다.
 
 ```bash
 ./gradlew :commerce:test --tests '*OrderStubServiceTest' --tests '*OrderStubHttpIntegrationTest'
