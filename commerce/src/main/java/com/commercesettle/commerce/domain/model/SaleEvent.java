@@ -20,8 +20,9 @@ import org.hibernate.annotations.OptimisticLock;
  * 판매자 상품 하나의 선착순 이벤트. 미공개(DRAFT)일 때만 내용을 바꾸고, 공개 때 한정 수량 Q를 상품 재고에서 배정한다. 공개 후 이름·가격·수량·기간은 고정하며 조기
  * 종료만 허용한다. 종료는 판매(S)·결제 대기 예약(R)이 아닌 배정분 {@code Q−S−R}만 가용 재고로 돌리고 기존 예약은 해제하지 않는다.
  *
- * <p>버전과 updatedAt은 이벤트 정의와 상태의 변경만 나타낸다. S·R은 이벤트 행 잠금이나 조건부 갱신으로 직렬화하므로 둘을 바꾸지 않으며, 그래서 참여가 이어져도
- * 주문의 expectedEventVersion과 판매자의 조기 종료가 충돌하지 않는다.
+ * <p>버전과 updatedAt은 판매자의 변경·공개·종료와 기간 종료·매진처럼 이벤트 정의나 종료를 바꾸는 변경만 나타낸다. S·R과 시각에 따른 SCHEDULED→OPEN
+ * 전이는 이벤트 행 잠금이나 조건부 갱신으로 직렬화하므로 둘을 바꾸지 않는다. 그래서 시작 전에 조회한 구매자의 expectedEventVersion이 시작 뒤에도 맞고,
+ * 참여가 이어져도 판매자의 조기 종료가 충돌하지 않는다. 다른 상태 전이는 공개·종료 시각을 함께 바꾸므로 버전이 오른다.
  */
 @Entity
 @Table(name = "sale_events")
@@ -57,6 +58,7 @@ public class SaleEvent extends AuditableEntity {
   private Instant startsAt;
   private Instant endsAt;
 
+  @OptimisticLock(excluded = true)
   @Enumerated(EnumType.STRING)
   private SaleEventStatus status;
 
@@ -123,13 +125,12 @@ public class SaleEvent extends AuditableEntity {
     return movement; // ⑦ 이동 기록 반환
   }
 
-  /** 시작 시각이 된 예정 이벤트를 연다. 바꾸지 않았으면 false다. */
+  /** 시작 시각이 된 예정 이벤트를 연다. 정의는 그대로라 버전과 updatedAt을 바꾸지 않는다. 바꾸지 않았으면 false다. */
   public boolean openIfStarted(Instant now) {
     if (status != SaleEventStatus.SCHEDULED || now.isBefore(startsAt) || !now.isBefore(endsAt)) {
       return false;
     }
     status = SaleEventStatus.OPEN;
-    touch(now);
     return true;
   }
 

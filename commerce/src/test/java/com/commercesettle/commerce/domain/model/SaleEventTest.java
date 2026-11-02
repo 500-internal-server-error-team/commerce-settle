@@ -164,14 +164,16 @@ class SaleEventTest {
   }
 
   @Test
-  @DisplayName("시작 시각이 되면 예정 이벤트를 열고, 시작 전이나 다른 상태는 바꾸지 않는다")
+  @DisplayName("시작 시각이 되면 예정 이벤트를 열되 updatedAt은 그대로 두고, 시작 전이나 다른 상태는 바꾸지 않는다")
   void opensWhenStarted() {
     SaleEvent event = published(10);
+    Instant updatedAt = event.getUpdatedAt();
 
     assertThat(event.openIfStarted(STARTS.minusNanos(1000))).isFalse();
     assertThat(event.getStatus()).isEqualTo(SaleEventStatus.SCHEDULED);
     assertThat(event.openIfStarted(STARTS)).isTrue();
     assertThat(event.getStatus()).isEqualTo(SaleEventStatus.OPEN);
+    assertThat(event.getUpdatedAt()).isEqualTo(updatedAt);
     assertThat(event.openIfStarted(STARTS)).isFalse();
     assertThat(draft(1).openIfStarted(STARTS)).isFalse();
   }

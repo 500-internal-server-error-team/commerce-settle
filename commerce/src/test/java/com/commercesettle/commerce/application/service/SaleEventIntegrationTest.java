@@ -208,8 +208,9 @@ class SaleEventIntegrationTest {
     Instant ended = ending.getEndsAt();
 
     events.openStarted(started, 100);
-    assertThat(events.sellerEvent(seller, ending.getId()).getStatus())
-        .isEqualTo(SaleEventStatus.OPEN);
+    SaleEvent opened = events.sellerEvent(seller, ending.getId());
+    assertThat(opened.getStatus()).isEqualTo(SaleEventStatus.OPEN);
+    assertThat(opened.getVersion()).isEqualTo(ending.getVersion());
     assertThat(events.sellerEvent(seller, later.getId()).getStatus())
         .isEqualTo(SaleEventStatus.SCHEDULED);
 
