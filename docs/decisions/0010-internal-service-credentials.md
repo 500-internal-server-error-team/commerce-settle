@@ -1,10 +1,10 @@
 # 내부 호출 자격으로 대상별 정적 Bearer 사용
 
-- 상태: 채택·구현 예정
+- 상태: 채택·부분 구현(Gateway→커머스·Payment·Settlement, Settlement→Finance Mock)
 - 결정일: 2026-10-28
 - 범위: Gateway→커머스·Payment·Settlement 전달, 서비스 간 `/internal`·`/mock` 호출, 운영자 호출의 자격 형식과 백엔드 판정. 사용자 세션은 [Redis 세션 결정](0003-redis-sessions.md)이 소유
 
-Gateway·서비스·운영자가 백엔드를 호출할 때 **발신자·대상 서비스 쌍마다 발급한 256비트 이상 임의값을 `Authorization: Bearer`로 보냅니다.** 백엔드는 이 자격으로 발신자를 확정하고, 빌드에 포함한 OpenAPI의 `x-actor`·`x-owner-service`로 호출할 수 있는 작업인지 판정한 뒤에만 사용자 신원 헤더를 읽습니다. 형식은 [OpenAPI](../openapi.json)의 `serviceCredential` 스킴과 같고 Gateway 자격도 이 형식을 따릅니다. 자격 생성·검증 코드와 설정은 아직 없습니다.
+Gateway·서비스·운영자가 백엔드를 호출할 때 **발신자·대상 서비스 쌍마다 발급한 256비트 이상 임의값을 `Authorization: Bearer`로 보냅니다.** 백엔드는 이 자격으로 발신자를 확정하고, 빌드에 포함한 OpenAPI의 `x-actor`·`x-owner-service`로 호출할 수 있는 작업인지 판정한 뒤에만 사용자 신원 헤더를 읽습니다. 형식은 [OpenAPI](../openapi.json)의 `serviceCredential` 스킴과 같고 Gateway 자격도 이 형식을 따릅니다. 판정은 `internal-auth` 라이브러리가 맡으며 연결한 쌍과 남은 쌍의 연결 방법은 [개발 환경](../development.md#내부-호출-자격)에 둡니다.
 
 ## 결정
 
@@ -37,7 +37,7 @@ Gateway·서비스·운영자가 백엔드를 호출할 때 **발신자·대상 
 
 ### 교체
 
-대상 서비스에 새 값을 추가해 두 값을 허용 → 발신자를 새 값으로 전환 → 대상에서 이전 값을 제거하는 순서입니다. 환경 변수 설정이므로 각 단계에서 해당 앱을 재기동합니다. 설정 변수 이름과 생성은 구현 PR에서 [환경 생성기](../../scripts/init_env.py)·`.env.example`과 함께 정합니다.
+대상 서비스에 새 값을 추가해 두 값을 허용 → 발신자를 새 값으로 전환 → 대상에서 이전 값을 제거하는 순서입니다. 환경 변수 설정이므로 각 단계에서 해당 앱을 재기동합니다. 변수는 `<대상>_<발신자>_CREDENTIAL`과 이전 값의 `_PREVIOUS`이며 [환경 생성기](../../scripts/init_env.py)가 `.env.example`의 빈 현재 값을 생성합니다.
 
 ## 대안과 선택 이유
 
