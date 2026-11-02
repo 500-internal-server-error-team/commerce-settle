@@ -18,6 +18,8 @@ public interface BuyerCouponRepository {
 
   Optional<BuyerCoupon> findWelcome(UUID buyerId);
 
+  boolean existsByTemplateAndBuyer(UUID templateId, UUID buyerId);
+
   PageResult<BuyerCoupon> findByBuyer(UUID buyerId, int page, int size);
 
   /** 기한이 지난 미사용(ISSUED) 쿠폰 ID. 기한이 이른 순서다. */

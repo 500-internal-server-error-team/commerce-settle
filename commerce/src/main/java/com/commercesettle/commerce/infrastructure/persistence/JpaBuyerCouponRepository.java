@@ -57,6 +57,11 @@ class JpaBuyerCouponRepository implements BuyerCouponRepository {
   }
 
   @Override
+  public boolean existsByTemplateAndBuyer(UUID templateId, UUID buyerId) {
+    return coupons.existsByTemplateIdAndBuyerId(templateId, buyerId);
+  }
+
+  @Override
   public PageResult<BuyerCoupon> findByBuyer(UUID buyerId, int page, int size) {
     Page<BuyerCoupon> result =
         coupons.findByBuyerId(buyerId, PageRequest.of(page, size, NEWEST_FIRST));
