@@ -2,6 +2,7 @@ package com.commercesettle.commerce.application.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
@@ -11,10 +12,12 @@ import com.commercesettle.commerce.application.exception.AuthChangeUnconfirmedEx
 import com.commercesettle.commerce.application.exception.AuthRateLimitedException;
 import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
 import com.commercesettle.commerce.application.exception.AuthenticationUnavailableException;
+import com.commercesettle.commerce.application.port.AuthGate;
 import com.commercesettle.commerce.application.port.PasswordResetDelivery;
 import com.commercesettle.commerce.domain.model.ActorKind;
 import com.commercesettle.commerce.domain.model.PasswordResetToken;
 import com.commercesettle.commerce.domain.model.SellerAccount;
+import com.commercesettle.commerce.infrastructure.cache.TestRedisRunId;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -34,6 +37,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -46,6 +50,8 @@ import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.convention.TestBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.GenericContainer;
@@ -88,11 +94,22 @@ class PasswordResetIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired DataSource dataSource;
   @Autowired StringRedisTemplate redis;
+  @Autowired AuthGate gate;
   @MockitoSpyBean PasswordResetDelivery delivery;
   @TestBean Clock clock;
 
   static Clock clock() {
     return CLOCK;
+  }
+
+  @DynamicPropertySource
+  static void approveRedisRunId(DynamicPropertyRegistry registry) {
+    registry.add("app.auth.redis-run-id", () -> TestRedisRunId.of(REDIS));
+  }
+
+  @BeforeEach
+  void awaitAuthGate() {
+    await().atMost(Duration.ofSeconds(10)).ignoreExceptions().untilAsserted(gate::requireOpen);
   }
 
   @AfterEach

@@ -2,6 +2,7 @@ package com.commercesettle.commerce.application.service;
 
 import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
 import com.commercesettle.commerce.application.port.AuditLog;
+import com.commercesettle.commerce.application.port.AuthGate;
 import com.commercesettle.commerce.application.port.AuthRateLimiter;
 import com.commercesettle.commerce.application.port.PasswordHasher;
 import com.commercesettle.commerce.application.port.PasswordResetDelivery;
@@ -27,6 +28,7 @@ public class PasswordResetService {
   private static final int TOKEN_BYTES = 32;
   private static final String REASON = "PASSWORD_RESET";
 
+  private final AuthGate gate;
   private final AccountRepository accounts;
   private final PasswordResetTokenRepository tokens;
   private final PasswordHasher passwords;
@@ -39,6 +41,7 @@ public class PasswordResetService {
   private final SecureRandom random = new SecureRandom();
 
   public PasswordResetService(
+      AuthGate gate,
       AccountRepository accounts,
       PasswordResetTokenRepository tokens,
       PasswordHasher passwords,
@@ -48,6 +51,7 @@ public class PasswordResetService {
       AuditLog audit,
       TransactionTemplate transactions,
       Clock clock) {
+    this.gate = gate;
     this.accounts = accounts;
     this.tokens = tokens;
     this.passwords = passwords;
@@ -64,6 +68,7 @@ public class PasswordResetService {
    * 존재 여부를 드러내지 않는다.
    */
   public void request(ActorKind kind, String email) {
+    gate.requireOpen();
     String emailNormalized = Account.normalizeEmail(email);
     rateLimiter.acquire(AuthRateLimiter.Operation.PASSWORD_RESET_REQUEST, kind, emailNormalized);
     // 잠금 조회가 앞선 조회의 영속성 컨텍스트 값을 재사용하지 않도록 이메일 조회는 트랜잭션 밖에서 한다.
@@ -84,6 +89,7 @@ public class PasswordResetService {
    * 토큰은 AuthenticationFailedException이다.
    */
   public void reset(ActorKind kind, String token, String newPassword) {
+    gate.requireOpen();
     String tokenHash = PasswordResetToken.hash(token);
     PasswordResetToken found =
         tokens

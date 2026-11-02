@@ -2,6 +2,7 @@ package com.commercesettle.commerce.infrastructure.config;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import java.util.UUID;
@@ -12,11 +13,13 @@ import org.springframework.validation.annotation.Validated;
  * 커머스 인증 설정. 값이 없거나 잘못되면 기동하지 않는다.
  *
  * @param sessionEpoch Gateway와 같은 인증 세대 UUID. 바꾸면 기존 세션이 모두 무효다.
+ * @param redisRunId Gateway와 같은 승인한 Redis 실행 식별자(INFO server의 run_id). 실제 Redis와 다르면 인증을 503으로 막는다.
  */
 @Validated
 @ConfigurationProperties("app.auth")
 public record AuthProperties(
     @NotNull UUID sessionEpoch,
+    @NotNull @Pattern(regexp = "[0-9a-f]{40}") String redisRunId,
     @NotNull @Valid RateLimit rateLimit,
     @NotNull @Valid PasswordReset passwordReset) {
   /**
