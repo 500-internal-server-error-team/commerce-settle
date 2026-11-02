@@ -19,7 +19,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.http.MediaType;
@@ -116,13 +116,20 @@ class PaymentControllerTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"page=-1", "size=0", "size=101", "orderId=not-a-uuid", "page=abc"})
-  @DisplayName("잘못된 page·size·orderId는 400 공통 오류로 응답한다")
-  void rejectsInvalidListParameters(String query) throws Exception {
+  @CsvSource({
+    "page=-1, 0 이상이어야 합니다.",
+    "size=0, 1 이상이어야 합니다.",
+    "size=101, 100 이하여야 합니다.",
+    "orderId=not-a-uuid, 형식이 올바르지 않습니다.",
+    "page=abc, 형식이 올바르지 않습니다."
+  })
+  @DisplayName("잘못된 page·size·orderId는 한글 사유와 함께 400 공통 오류로 응답한다")
+  void rejectsInvalidListParameters(String query, String reason) throws Exception {
     mvc.perform(asBuyer(get("/api/payments?" + query)))
         .andExpect(status().isBadRequest())
         .andExpect(jsonPath("$.code").value("COMMON_VALIDATION_FAILED"))
-        .andExpect(jsonPath("$.errors[0].field").value(query.substring(0, query.indexOf('='))));
+        .andExpect(jsonPath("$.errors[0].field").value(query.substring(0, query.indexOf('='))))
+        .andExpect(jsonPath("$.errors[0].reason").value(reason));
     verifyNoInteractions(payments);
   }
 
