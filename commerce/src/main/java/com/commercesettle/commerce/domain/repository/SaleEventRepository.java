@@ -21,7 +21,7 @@ public interface SaleEventRepository {
 
   /**
    * 선착순 참여의 수량 확보. 상품·재고 행을 잠그지 않고 열린 기간에 남은 수량이 있을 때만 R을 1 늘리는 조건부 갱신 한 번으로 처리한다. 갱신하지 못하면 false다.
-   * 이 트랜잭션에서 이미 읽은 이벤트 엔티티에는 반영되지 않는다.
+   * 버전은 올리지 않는다. 이 트랜잭션에서 이미 읽은 이벤트 엔티티에는 반영되지 않는다.
    */
   boolean reserveSlot(UUID eventId, Instant now);
 
