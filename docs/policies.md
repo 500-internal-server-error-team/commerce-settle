@@ -381,7 +381,7 @@ Commerce의 각 인스턴스가 기존 내부 Prometheus에서 필요한 관측�
 
 ## 운영 알람
 
-조치가 필요한 장애는 `Prometheus → Alertmanager`로 전달하며 Grafana는 원인 확인에 사용합니다. 현재 Payment 격리·DLT/REPLAY 작업의 지표·규칙·대시보드와 Alertmanager를 연결했습니다. 기본은 화면 확인이고 Slack은 비밀 파일 overlay를 명시적으로 적용해야 합니다. 아래 기준 중 격리 관련 항목만 구현했으며 금융 업무·자원 수집기와 다른 소비자 관측은 구현 전입니다.
+조치가 필요한 장애는 `Prometheus → Alertmanager`로 전달하며 Grafana는 원인 확인에 사용합니다. 현재 Payment·Settlement 격리·DLT/REPLAY 작업의 지표·규칙·대시보드와 Alertmanager를 연결했습니다. 기본은 화면 확인이고 Slack은 비밀 파일 overlay를 명시적으로 적용해야 합니다. 아래 기준 중 격리 관련 항목만 구현했으며 금융 업무·자원 수집기와 다른 소비자 관측은 구현 전입니다.
 
 | 조건 | 초기 기준 | 등급·조치 |
 | --- | --- | --- |

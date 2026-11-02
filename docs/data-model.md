@@ -1112,7 +1112,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 ![메시지·멱등성·감사 ERD](diagrams/erd-integration.svg)
 
-Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보존·삭제 초기값](decisions/0005-kafka-event-delivery-and-capacity.md#보존과-삭제-초기값)을 따릅니다. 첫 구현은 이 DB 기록의 자동 삭제를 비활성화하며 일반 관리·가입의 기존 만료 정책은 유지합니다. 해석 불가 메시지는 원본 bytes·topic·partition·offset·실패 사유를 같은 소비자 DB에 보존해야 합니다. Payment는 아래 `inbox_quarantines`·`inbox_quarantine_deliveries`·`inbox_quarantine_resumes`로 원문·발행 작업·재개 이력을 분리합니다. 정상 Inbox나 업무 eventId를 참조하지 않으며, 활성화와 ACK·재처리 경계는 [Kafka 전달 기반](development.md#kafka-전달-기반)을 따릅니다.
+Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보존·삭제 초기값](decisions/0005-kafka-event-delivery-and-capacity.md#보존과-삭제-초기값)을 따릅니다. 첫 구현은 이 DB 기록의 자동 삭제를 비활성화하며 일반 관리·가입의 기존 만료 정책은 유지합니다. 해석 불가 메시지는 원본 bytes·topic·partition·offset·실패 사유를 같은 소비자 DB에 보존해야 합니다. Payment·Settlement는 아래 `inbox_quarantines`·`inbox_quarantine_deliveries`·`inbox_quarantine_resumes`로 원문·발행 작업·재개 이력을 분리합니다. 정상 Inbox나 업무 eventId를 참조하지 않으며, 활성화와 ACK·재처리 경계는 [Kafka 전달 기반](development.md#kafka-전달-기반)을 따릅니다.
 
 ### outbox
 
@@ -1226,7 +1226,7 @@ Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원
 
 ### inbox_quarantine_deliveries
 
-소유: `payment`·`settlement`. 격리 원문의 DLT 발행과 운영 재처리 작업입니다. Settlement는 DLT 작업만 만들며 REPLAY 요청과 재개 이력(`inbox_quarantine_resumes`)은 아직 없습니다. 원문은 위 행을 참조하며 별도로 복제하지 않습니다.
+소유: `payment`·`settlement`. 격리 원문의 DLT 발행과 운영 재처리 작업입니다. 원문은 위 행을 참조하며 별도로 복제하지 않습니다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -1243,7 +1243,7 @@ Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원
 
 ### inbox_quarantine_resumes
 
-소유: `payment`. 소진된 DLT/REPLAY 작업의 운영 재개 이력입니다.
+소유: `payment`·`settlement`. 소진된 DLT/REPLAY 작업의 운영 재개 이력입니다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
