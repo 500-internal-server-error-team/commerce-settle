@@ -1,7 +1,6 @@
 package com.commercesettle.payment.infrastructure.messaging;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
@@ -14,8 +13,11 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
@@ -69,9 +71,11 @@ class PaymentRequestProcessingIntegrationTest {
   @Autowired private ObjectMapper mapper;
   @Autowired private DataSource dataSource;
   @Autowired private PlatformTransactionManager manager;
+  @Autowired private MovableClock clock;
 
   @AfterEach
   void deleteRows() {
+    clock.set(NOW);
     JdbcTemplate jdbc = new JdbcTemplate(dataSource);
     jdbc.update("DELETE FROM payment.mileage_entries");
     jdbc.update("DELETE FROM payment.mileage_reservations");
@@ -114,20 +118,76 @@ class PaymentRequestProcessingIntegrationTest {
   }
 
   @Test
-  @DisplayName("저장 중 실패하면 결제·작업·Inbox 변경이 모두 롤백되어 WAITING으로 남는다")
+  @DisplayName("저장 중 실패하면 결제·작업 변경은 롤백되고 실패 1회와 1초 뒤 재시도만 커밋된다")
   void rollsBackEverythingWhenSavingFails() {
     saveWaiting();
     insertConflictingApprovalJob();
 
-    assertThatThrownBy(service::processNext).isInstanceOf(RuntimeException.class);
+    assertThat(service.processNext()).isTrue();
 
     JdbcTemplate jdbc = new JdbcTemplate(dataSource);
     assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.payments", Long.class)).isZero();
     assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.outbox", Long.class)).isZero();
-    assertThat(jdbc.queryForObject("SELECT status FROM payment.inbox", String.class))
-        .isEqualTo("WAITING");
-    assertThat(jdbc.queryForObject("SELECT result_ref IS NULL FROM payment.inbox", Boolean.class))
-        .isTrue();
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT status, attempts, last_error_code, result_ref,"
+                    + " next_run_at = ? AS retry_due FROM payment.inbox",
+                Timestamp.from(NOW.plusSeconds(1))))
+        .containsEntry("status", "WAITING")
+        .containsEntry("attempts", 1)
+        .containsEntry("last_error_code", "PAYMENT_REQUEST_PROCESSING_FAILED")
+        .containsEntry("result_ref", null)
+        .containsEntry("retry_due", true);
+  }
+
+  @Test
+  @DisplayName("계속 실패하는 요청은 1·2·4…60초 간격으로 재시도하다 10번째 실패에 REVIEW_REQUIRED가 된다")
+  void marksReviewAfterTenFailuresWithGrowingDelay() {
+    saveWaiting();
+    insertConflictingApprovalJob();
+    JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+    List<Long> delays = new ArrayList<>();
+
+    for (int attempt = 1; attempt <= 10; attempt++) {
+      assertThat(service.processNext()).isTrue();
+      Timestamp next =
+          jdbc.queryForObject("SELECT next_run_at FROM payment.inbox", Timestamp.class);
+      if (next != null) {
+        delays.add(Duration.between(clock.instant(), next.toInstant()).toSeconds());
+        clock.set(next.toInstant());
+      }
+    }
+
+    assertThat(delays).containsExactly(1L, 2L, 4L, 8L, 16L, 32L, 60L, 60L, 60L);
+    assertThat(jdbc.queryForMap("SELECT status, attempts, last_error_code FROM payment.inbox"))
+        .containsEntry("status", "REVIEW_REQUIRED")
+        .containsEntry("attempts", 10)
+        .containsEntry("last_error_code", "PAYMENT_REQUEST_PROCESSING_FAILED");
+    assertThat(service.processNext()).isFalse();
+  }
+
+  @Test
+  @DisplayName("실패한 요청이 앞에 있어도 같은 주기에 뒤의 요청을 처리한다")
+  void processesLaterRequestAfterFailedOne() {
+    saveWaiting();
+    insertConflictingApprovalJob();
+    UUID laterOrderId = UUID.randomUUID();
+    saveWaiting(event(UUID.randomUUID(), laterOrderId, UUID.randomUUID(), 10_000, 0));
+
+    new PaymentRequestProcessor(service, 10).run();
+
+    JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM payment.payments WHERE order_id = ?",
+                Long.class,
+                laterOrderId))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForList(
+                "SELECT status || ':' || attempts FROM payment.inbox ORDER BY status",
+                String.class))
+        .containsExactly("APPLIED:0", "WAITING:1");
   }
 
   @Test
@@ -211,7 +271,7 @@ class PaymentRequestProcessingIntegrationTest {
     saveWaiting(event(UUID.randomUUID(), ORDER_ID, CYCLE_ID, 10_000, 2_000));
     insertConflictingApprovalJob();
 
-    assertThatThrownBy(service::processNext).isInstanceOf(RuntimeException.class);
+    assertThat(service.processNext()).isTrue();
 
     JdbcTemplate jdbc = new JdbcTemplate(dataSource);
     assertThat(
@@ -366,8 +426,32 @@ class PaymentRequestProcessingIntegrationTest {
     }
 
     @Bean
-    Clock clock() {
-      return Clock.fixed(NOW, ZoneOffset.UTC);
+    MovableClock clock() {
+      return new MovableClock();
+    }
+  }
+
+  /** 재시도 대기를 기다리지 않고 다음 처리 시각으로 옮기기 위한 시계. */
+  static final class MovableClock extends Clock {
+    private volatile Instant instant = NOW;
+
+    void set(Instant instant) {
+      this.instant = instant;
+    }
+
+    @Override
+    public ZoneId getZone() {
+      return ZoneOffset.UTC;
+    }
+
+    @Override
+    public Clock withZone(ZoneId zone) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Instant instant() {
+      return instant;
     }
   }
 }

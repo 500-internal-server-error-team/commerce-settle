@@ -5,6 +5,7 @@ import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
+import com.commercesettle.payment.application.port.UnreadableInboxEventException;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.commercesettle.payment.domain.exception.InvalidPaymentAmountException;
 import com.commercesettle.payment.domain.model.MileageEntry;
@@ -20,22 +21,30 @@ import com.commercesettle.payment.domain.repository.PaymentJobRepository;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 
 /**
  * WAITING Inbox의 결제 요청을 검사해 결제·마일리지 예약·승인 작업을 만들고 처리 결과를 기록한다. 마일리지 전액 결제는 같은 트랜잭션에서 차감·확정한다. 재시도해도
- * 결과가 같은 업무상 거절은 예외 없이 REVIEW_REQUIRED로 남기고, 그 밖의 예외는 롤백되어 WAITING으로 다시 처리된다.
+ * 결과가 같은 업무상 거절은 예외 없이 사유와 함께 REVIEW_REQUIRED로 남긴다. 그 밖의 예외는 처리 트랜잭션을 롤백한 뒤 별도 트랜잭션에서 시도 횟수와 사유를
+ * 기록하고, 1초부터 두 배씩 최대 60초 뒤에 다시 처리한다. 10번째 실패는 REVIEW_REQUIRED로 남긴다.
  */
 @Service
 public class ApplyOrderPaymentRequestService {
+  static final int MAX_ATTEMPTS = 10;
+  static final String PROCESSING_FAILED = "PAYMENT_REQUEST_PROCESSING_FAILED";
+  static final String BODY_UNREADABLE = "PAYMENT_REQUEST_BODY_UNREADABLE";
+
   private static final Logger LOG = LoggerFactory.getLogger(ApplyOrderPaymentRequestService.class);
 
   private final InboxStore inbox;
@@ -45,6 +54,7 @@ public class ApplyOrderPaymentRequestService {
   private final MileageReservationRepository reservations;
   private final MileageEntryRepository entries;
   private final PaymentEventOutbox outbox;
+  private final TransactionOperations transactions;
   private final Clock clock;
 
   public ApplyOrderPaymentRequestService(
@@ -55,6 +65,7 @@ public class ApplyOrderPaymentRequestService {
       MileageReservationRepository reservations,
       MileageEntryRepository entries,
       PaymentEventOutbox outbox,
+      TransactionOperations transactions,
       Clock clock) {
     this.inbox = inbox;
     this.payments = payments;
@@ -63,22 +74,95 @@ public class ApplyOrderPaymentRequestService {
     this.reservations = reservations;
     this.entries = entries;
     this.outbox = outbox;
+    this.transactions = transactions;
     this.clock = clock;
   }
 
-  /** 처리할 WAITING 하나를 처리하고, 처리한 이벤트가 있었는지 반환한다. */
-  @Transactional
+  /** 처리할 WAITING 하나를 처리하고, 처리하거나 실패를 기록한 이벤트가 있었는지 반환한다. 선점이나 실패 기록 자체가 실패하면 예외를 그대로 던진다. */
   public boolean processNext() {
-    Instant now = clock.instant();
-    Optional<WaitingInboxEvent> claimed = inbox.claimNextWaiting(now);
-    return process(claimed, now);
+    return processClaimed(inbox::claimNextWaiting);
   }
 
   /** 지정한 이벤트만 처리한다. 개발 시나리오 재개가 다른 WAITING 작업을 소비하지 않게 한다. */
-  @Transactional
   public boolean processEvent(UUID eventId) {
+    return processClaimed(now -> inbox.claimWaitingEvent(eventId, now));
+  }
+
+  private boolean processClaimed(Function<Instant, Optional<WaitingInboxEvent>> claim) {
+    AtomicReference<WaitingInboxEvent> claimed = new AtomicReference<>();
+    try {
+      return Boolean.TRUE.equals(
+          transactions.execute(
+              status -> {
+                Instant now = clock.instant();
+                Optional<WaitingInboxEvent> next = claim.apply(now);
+                next.ifPresent(claimed::set);
+                return process(next, now);
+              }));
+    } catch (UnreadableInboxEventException exception) {
+      // 다시 읽어도 같은 결과이므로 재시도하지 않는다.
+      recordFailure(
+          exception.inboxId(),
+          null,
+          exception.version(),
+          exception.attempts(),
+          BODY_UNREADABLE,
+          false,
+          exception);
+      return true;
+    } catch (RuntimeException exception) {
+      WaitingInboxEvent failed = claimed.get();
+      if (failed == null) {
+        throw exception;
+      }
+      recordFailure(
+          failed.inboxId(),
+          failed.event().eventId(),
+          failed.version(),
+          failed.attempts(),
+          PROCESSING_FAILED,
+          true,
+          exception);
+      return true;
+    }
+  }
+
+  /**
+   * 롤백된 처리의 실패를 새 트랜잭션에서 기록한다. 선점 때 본 횟수에 이번 실패를 더해 상한에 닿았거나 재시도할 수 없는 실패면 REVIEW_REQUIRED, 아니면 대기
+   * 뒤 다시 처리할 WAITING으로 남긴다.
+   */
+  private void recordFailure(
+      UUID inboxId,
+      UUID eventId,
+      long version,
+      int previousAttempts,
+      String errorCode,
+      boolean retryable,
+      RuntimeException cause) {
+    int attempts = previousAttempts + 1;
     Instant now = clock.instant();
-    return process(inbox.claimWaitingEvent(eventId, now), now);
+    Instant retryAt = retryable && attempts < MAX_ATTEMPTS ? now.plus(retryDelay(attempts)) : null;
+    Boolean recorded =
+        transactions.execute(
+            status -> inbox.recordFailure(inboxId, version, errorCode, retryAt, now));
+    String result =
+        !Boolean.TRUE.equals(recorded)
+            ? "SKIPPED"
+            : retryAt == null ? "REVIEW_REQUIRED" : "WAITING";
+    LOG.atWarn()
+        .setCause(cause)
+        .addKeyValue("event", "payment.accept")
+        .addKeyValue("inboxId", inboxId)
+        .addKeyValue("eventId", eventId)
+        .addKeyValue("attempts", attempts)
+        .addKeyValue("result", result)
+        .addKeyValue("errorCode", errorCode)
+        .log("Payment request processing failed");
+  }
+
+  /** n번째 실패 뒤 대기 시간. 1초부터 두 배씩 늘리고 60초를 넘지 않는다. */
+  static Duration retryDelay(int attempts) {
+    return Duration.ofSeconds(Math.min(60, 1L << Math.min(attempts - 1, 6)));
   }
 
   private boolean process(Optional<WaitingInboxEvent> claimed, Instant now) {
