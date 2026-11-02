@@ -26,7 +26,12 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 
-@SpringBootTest(properties = {"management.tracing.enabled=false", "app.dev-fixtures.enabled=true"})
+@SpringBootTest(
+    properties = {
+      "management.tracing.enabled=false",
+      "app.dev-fixtures.enabled=true",
+      "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123"
+    })
 @Testcontainers
 class DevFixtureIntegrationTest {
   @Container @ServiceConnection
