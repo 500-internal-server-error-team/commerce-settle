@@ -54,3 +54,58 @@ groups:
         annotations:
           summary: 결제 관측 대상에 연결할 수 없습니다.
           runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치
+  - name: settlement-quarantine
+    interval: 15s
+    rules:
+      - record: settlement:quarantine_originals:max
+        expr: max by (application, consumer) (settlement_quarantine_originals and on (job, instance, consumer) (time() - settlement_quarantine_observed_timestamp_seconds < 45) and on (job, instance, consumer) (settlement_quarantine_collection_success == 1))
+      - record: settlement:quarantine_captured_recent:max
+        expr: max by (application, consumer) (settlement_quarantine_captured_recent and on (job, instance, consumer) (time() - settlement_quarantine_observed_timestamp_seconds < 45) and on (job, instance, consumer) (settlement_quarantine_collection_success == 1))
+      - record: settlement:quarantine_delivery_records:max
+        expr: max by (application, consumer, kind, status) (settlement_quarantine_delivery_records and on (job, instance, consumer) (time() - settlement_quarantine_observed_timestamp_seconds < 45) and on (job, instance, consumer) (settlement_quarantine_collection_success == 1))
+      - record: settlement:quarantine_delivery_overdue_seconds:max
+        expr: max by (application, consumer, kind) (settlement_quarantine_delivery_overdue_seconds and on (job, instance, consumer) (time() - settlement_quarantine_observed_timestamp_seconds < 45) and on (job, instance, consumer) (settlement_quarantine_collection_success == 1))
+      - alert: SettlementQuarantineCaptured
+        expr: settlement:quarantine_captured_recent:max > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: 최근 5분 안에 새 원문 격리가 발생했습니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치
+      - alert: SettlementQuarantineReviewRequired
+        expr: settlement:quarantine_delivery_records:max{status="REVIEW_REQUIRED"} > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: 격리 발행 작업의 재시도를 소진했습니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치
+      - alert: SettlementQuarantineDeliveryOverdue
+        expr: settlement:quarantine_delivery_overdue_seconds:max > 300
+        labels:
+          severity: warning
+        annotations:
+          summary: 격리 발행 작업이 도래 후 5분 넘게 대기합니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치
+      - alert: SettlementQuarantineDeliveryOverdue
+        expr: settlement:quarantine_delivery_overdue_seconds:max > 900
+        labels:
+          severity: critical
+        annotations:
+          summary: 격리 발행 작업이 도래 후 15분 넘게 대기합니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치
+      - alert: SettlementQuarantineObservationFailed
+        expr: (time() - max by (application, consumer) (settlement_quarantine_observed_timestamp_seconds) > 45) or (max by (application, consumer) (settlement_quarantine_collection_success) == 0)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 격리 DB 관측에 실패했거나 표본이 오래됐습니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치
+      - alert: SettlementMetricsTargetDown
+        expr: up{job="commerce-settle",instance="settlement:9091"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 정산 관측 대상에 연결할 수 없습니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치

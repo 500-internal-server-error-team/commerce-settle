@@ -8,6 +8,7 @@ import com.commercesettle.settlement.application.event.PaymentConfirmedPayload;
 import com.commercesettle.settlement.application.port.QuarantineStore;
 import com.commercesettle.settlement.application.service.QuarantineService;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -93,6 +94,7 @@ class SettlementQuarantineIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper mapper;
   @Autowired QuarantineService quarantines;
+  @Autowired MeterRegistry meters;
 
   @Test
   @Order(1)
@@ -191,6 +193,30 @@ class SettlementQuarantineIntegrationTest {
                             String.class,
                             replay))
                     .isEqualTo("PUBLISHED"));
+  }
+
+  @Test
+  @Order(3)
+  @DisplayName("격리를 켜면 격리 원문·발행 작업 지표를 등록하고 DB 관측에 성공한다")
+  void exposesQuarantineMetrics() {
+    await()
+        .atMost(Duration.ofSeconds(10))
+        .untilAsserted(
+            () ->
+                assertThat(
+                        meters
+                            .get("settlement.quarantine.collection.success")
+                            .tag("consumer", GROUP)
+                            .gauge()
+                            .value())
+                    .isEqualTo(1));
+    assertThat(meters.get("settlement.quarantine.originals").gauge()).isNotNull();
+    assertThat(
+            meters
+                .get("settlement.quarantine.delivery.records")
+                .tags("kind", "REPLAY", "status", "PUBLISHED")
+                .gauge())
+        .isNotNull();
   }
 
   private void send(String topic, String key, byte[] body) throws Exception {
