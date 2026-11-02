@@ -30,6 +30,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -67,6 +68,7 @@ class EventOrderIntegrationTest {
   @Autowired SaleEventService events;
   @Autowired OrderResultService results;
   @Autowired PaymentAcceptedService accepted;
+  @MockitoBean OrderAdmissionService admission;
 
   @Test
   @DisplayName("선착순 주문은 이벤트 가격으로 R을 잡고, 참여·확정이 이벤트 버전을 바꾸지 않아 같은 버전으로 계속 주문하며 남은 수량이 없으면 거절한다")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check that a Redis restart blocks user auth until the run_id and epoch are re-approved.
+"""Check auth blocking and recovery after Redis restarts and same-run_id reconnects.
 
 This restarts Redis and recreates Gateway and Commerce, so run it after smoke.py on a stack
 that nobody else is using. It updates AUTH_REDIS_RUN_ID and AUTH_SESSION_EPOCH in .env.
@@ -7,9 +7,10 @@ that nobody else is using. It updates AUTH_REDIS_RUN_ID and AUTH_SESSION_EPOCH i
 
 import json
 import subprocess
+import time
 import uuid
 
-from smoke import ROOT, compose, gateway_json
+from smoke import ROOT, compose, gateway_json, redis_as
 import sync_redis_run_id
 
 
@@ -17,6 +18,18 @@ def login(base, email, password):
     status, session = gateway_json(base, "POST", "/api/seller-sessions",
                                    {"email": email, "password": password})
     return status, session.get("token")
+
+
+def require_blocked(base, email, password, token):
+    deadline = time.monotonic() + 10
+    while True:
+        status, problem = gateway_json(base, "GET", "/api/accounts/me", token=token)
+        login_status, _ = login(base, email, password)
+        if (status, problem.get("code"), login_status) == (
+                503, "COMMON_TEMPORARILY_UNAVAILABLE", 503):
+            return
+        assert time.monotonic() < deadline, (status, problem, login_status)
+        time.sleep(0.1)
 
 
 def main():
@@ -33,25 +46,31 @@ def main():
     status, _ = gateway_json(base, "GET", "/api/accounts/me", token=token)
     assert status == 200, status
 
-    # The same container keeps its AOF, so the session is restored under a new run_id.
-    compose("restart", "redis")
-    compose("up", "-d", "--wait", "redis")
-    status, problem = gateway_json(base, "GET", "/api/accounts/me", token=token)
-    assert (status, problem.get("code")) == (503, "COMMON_TEMPORARILY_UNAVAILABLE"), status
-    status, _ = login(base, email, password)
-    assert status == 503, status
-    print("PASS Redis restart: restored session and new login are refused with 503")
+    for failure in ("restart", "reconnect"):
+        before_run_id = sync_redis_run_id.running_run_id()
+        if failure == "restart":
+            # Keep the AOF and restore the session under a new run_id.
+            compose("restart", "redis")
+            compose("up", "-d", "--wait", "redis")
+        else:
+            # Disconnect both app users without restarting the Redis process.
+            for user in ("gateway", "commerce"):
+                assert int(redis_as("default", "REDIS_PASSWORD", "CLIENT", "KILL", "USER", user)) > 0
+        after_run_id = sync_redis_run_id.running_run_id()
+        assert (after_run_id == before_run_id) == (failure == "reconnect"), failure
+        require_blocked(base, email, password, token)
+        print(f"PASS Redis {failure}: existing session and new login are refused with 503")
 
-    sync_redis_run_id.main()
-    subprocess.run(["docker", "compose", "up", "-d", "--wait", "--wait-timeout", "300",
-                    "gateway", "commerce"], cwd=ROOT, check=True, timeout=360)
-    status, problem = gateway_json(base, "GET", "/api/accounts/me", token=token)
-    assert (status, problem.get("code")) == (401, "COMMON_AUTHENTICATION_REQUIRED"), status
-    status, token = login(base, email, password)
-    assert status == 200, status
-    status, _ = gateway_json(base, "GET", "/api/accounts/me", token=token)
-    assert status == 200, status
-    print("PASS Redis recovery: new epoch and run_id reject the old session and allow new logins")
+        sync_redis_run_id.main(["--recover"] if failure == "reconnect" else [])
+        subprocess.run(["docker", "compose", "up", "-d", "--wait", "--wait-timeout", "300",
+                        "gateway", "commerce"], cwd=ROOT, check=True, timeout=360)
+        status, problem = gateway_json(base, "GET", "/api/accounts/me", token=token)
+        assert (status, problem.get("code")) == (401, "COMMON_AUTHENTICATION_REQUIRED"), status
+        status, token = login(base, email, password)
+        assert status == 200, status
+        status, _ = gateway_json(base, "GET", "/api/accounts/me", token=token)
+        assert status == 200, status
+        print(f"PASS Redis {failure} recovery: old session rejected and new login allowed")
 
 
 if __name__ == "__main__":

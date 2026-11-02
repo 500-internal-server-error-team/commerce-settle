@@ -1,7 +1,9 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
+import sync_redis_run_id
 from sync_redis_run_id import approve
 
 RUN_ID = "0123456789abcdef0123456789abcdef01234567"
@@ -29,6 +31,24 @@ class ApproveTest(unittest.TestCase):
         self.target.write_text(original)
         self.assertFalse(approve(self.directory, RUN_ID))
         self.assertEqual(self.target.read_text(), original)
+
+    def test_rotates_epoch_after_reconnect_with_unchanged_run_id(self):
+        self.target.write_text(f"AUTH_SESSION_EPOCH={EPOCH}\nAUTH_REDIS_RUN_ID={RUN_ID}\nOTHER=x\n")
+
+        self.assertTrue(approve(self.directory, RUN_ID, recover=True))
+
+        content = self.target.read_text()
+        self.assertNotIn(EPOCH, content)
+        self.assertIn(f"AUTH_REDIS_RUN_ID={RUN_ID}\nOTHER=x\n", content)
+
+    def test_recovery_option_rotates_epoch_through_cli_entrypoint(self):
+        self.target.write_text(f"AUTH_SESSION_EPOCH={EPOCH}\nAUTH_REDIS_RUN_ID={RUN_ID}\n")
+
+        with patch.object(sync_redis_run_id, "ROOT", self.directory), \
+                patch.object(sync_redis_run_id, "running_run_id", return_value=RUN_ID):
+            sync_redis_run_id.main(["--recover"])
+
+        self.assertNotIn(EPOCH, self.target.read_text())
 
     def test_rejects_invalid_run_id_and_uninitialized_settings(self):
         self.target.write_text(f"AUTH_SESSION_EPOCH={EPOCH}\n")
