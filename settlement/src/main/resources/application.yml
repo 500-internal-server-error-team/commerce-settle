@@ -14,7 +14,8 @@ spring:
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
     hikari:
-      maximum-pool-size: 5
+      # JDBC를 쓰는 JVM당 10(ADR 0005). 지급 Worker 8건은 외부 호출 중에는 연결을 쥐지 않는다.
+      maximum-pool-size: 10
       minimum-idle: 1
   jpa:
     open-in-view: false
@@ -85,7 +86,6 @@ settlement:
     http-timeout: 5s
     unconfirmed-retry-delay: 5m
     max-attempts: 10
-    max-jobs-per-poll: 8
     # 인스턴스당 동시 실행 상한과 그중 결과 조회·중단 복구 전용 슬롯(ADR 0005). 새 지급은 나머지만 쓴다.
     max-concurrency: 8
     recovery-slots: 2

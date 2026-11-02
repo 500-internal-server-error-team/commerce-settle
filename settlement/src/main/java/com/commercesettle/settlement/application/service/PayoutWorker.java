@@ -5,6 +5,7 @@ import com.commercesettle.settlement.application.exception.LeaseLostException;
 import com.commercesettle.settlement.application.port.PayoutGateway;
 import com.commercesettle.settlement.application.port.PayoutGateway.Result;
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository;
+import com.commercesettle.settlement.domain.repository.PayoutJobRepository.LeaseKind;
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository.LeasedJob;
 import java.util.Optional;
 import java.util.UUID;
@@ -37,16 +38,23 @@ public class PayoutWorker {
     this.settings = settings;
   }
 
-  /** 도래한 작업이 없으면 false를 돌려준다. */
+  /** 종류와 관계없이 도래한 작업 하나를 임대해 실행한다. 도래한 작업이 없으면 false를 돌려준다. */
   public boolean runOnce() {
     Optional<LeasedJob> leased = jobs.leaseNext(owner, settings.leaseDuration());
-    if (leased.isEmpty()) {
-      return false;
-    }
-    LeasedJob job = leased.get();
+    leased.ifPresent(this::run);
+    return leased.isPresent();
+  }
+
+  /** 슬롯 종류에 맞는 도래한 작업 하나를 임대한다. 실행은 {@link #run(LeasedJob)}이 한다. */
+  public Optional<LeasedJob> lease(LeaseKind kind) {
+    return jobs.leaseNext(owner, settings.leaseDuration(), kind);
+  }
+
+  /** 임대한 작업을 실행하고 결과를 반영한다. 임대를 잃었으면 결과를 버린다. */
+  public void run(LeasedJob job) {
     Optional<PayoutResultRecorder.Prepared> prepared = recorder.prepare(job);
     if (prepared.isEmpty()) {
-      return true;
+      return;
     }
     Result result = call(job, prepared.get());
     try {
@@ -68,7 +76,6 @@ public class PayoutWorker {
           .addKeyValue("result", "LEASE_LOST")
           .log("Payout result was not recorded because the lease was lost");
     }
-    return true;
   }
 
   private Result call(LeasedJob job, PayoutResultRecorder.Prepared prepared) {
