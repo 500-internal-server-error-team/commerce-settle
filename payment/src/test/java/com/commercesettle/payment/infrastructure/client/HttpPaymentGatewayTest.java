@@ -1,6 +1,7 @@
 package com.commercesettle.payment.infrastructure.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
@@ -21,6 +22,7 @@ import org.springframework.web.client.RestClient;
 
 class HttpPaymentGatewayTest {
   private static final UUID KEY = UUID.fromString("00000000-0000-0000-0000-0000000000c1");
+  private static final String CREDENTIAL = "payment-finance-mock-credential-0123456789ab";
   private static final UUID EXTERNAL = UUID.fromString("00000000-0000-0000-0000-0000000000e1");
   private static final ApprovalRequest REQUEST =
       new ApprovalRequest(
@@ -33,7 +35,7 @@ class HttpPaymentGatewayTest {
   void setUp() {
     RestClient.Builder builder = RestClient.builder().baseUrl("http://mock");
     server = MockRestServiceServer.bindTo(builder).build();
-    gateway = new HttpPaymentGateway(builder.build());
+    gateway = new HttpPaymentGateway(builder.build(), CREDENTIAL);
   }
 
   @Test
@@ -42,6 +44,7 @@ class HttpPaymentGatewayTest {
     server
         .expect(requestTo("http://mock/mock/providers/PG_A/payments"))
         .andExpect(method(HttpMethod.POST))
+        .andExpect(header("Authorization", "Bearer " + CREDENTIAL))
         .andExpect(header("Idempotency-Key", "approve-" + KEY))
         .andExpect(jsonPath("$.businessKey").value(KEY.toString()))
         .andExpect(jsonPath("$.method").value("CREDIT_CARD"))
@@ -111,6 +114,7 @@ class HttpPaymentGatewayTest {
     server
         .expect(requestTo(lookup))
         .andExpect(method(HttpMethod.GET))
+        .andExpect(header("Authorization", "Bearer " + CREDENTIAL))
         .andRespond(
             withStatus(HttpStatus.NOT_FOUND)
                 .contentType(MediaType.APPLICATION_PROBLEM_JSON)
@@ -119,6 +123,31 @@ class HttpPaymentGatewayTest {
 
     assertThat(gateway.lookup(REQUEST)).isInstanceOf(Result.NotFound.class);
     assertThat(gateway.lookup(REQUEST)).isInstanceOf(Result.Unconfirmed.class);
+  }
+
+  @Test
+  @DisplayName("자격 거절(401·403)은 대역이 처리하지 않은 것이라 미확정이다")
+  void treatsCredentialRejectionAsUnconfirmed() {
+    server
+        .expect(requestTo("http://mock/mock/providers/PG_A/payments"))
+        .andRespond(withStatus(HttpStatus.UNAUTHORIZED));
+    server
+        .expect(requestTo("http://mock/mock/providers/PG_A/payments"))
+        .andRespond(withStatus(HttpStatus.FORBIDDEN));
+
+    assertThat(gateway.approve(REQUEST)).isInstanceOf(Result.Unconfirmed.class);
+    assertThat(gateway.approve(REQUEST)).isInstanceOf(Result.Unconfirmed.class);
+  }
+
+  @Test
+  @DisplayName("finance-mock 자격이 없거나 짧으면 만들지 않는다")
+  void requiresFinanceMockCredential() {
+    RestClient client = RestClient.builder().baseUrl("http://mock").build();
+
+    assertThatThrownBy(() -> new HttpPaymentGateway(client, ""))
+        .isInstanceOf(IllegalStateException.class);
+    assertThatThrownBy(() -> new HttpPaymentGateway(client, "short"))
+        .isInstanceOf(IllegalStateException.class);
   }
 
   private static String transaction(String status, long amount) {

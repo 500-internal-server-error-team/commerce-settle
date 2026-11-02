@@ -1,9 +1,11 @@
 package com.commercesettle.payment.infrastructure.client;
 
+import com.commercesettle.internalauth.InternalCredentials;
 import com.commercesettle.payment.application.port.PaymentGateway;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.time.OffsetDateTime;
 import java.util.UUID;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.client.HttpClientErrorException;
@@ -14,14 +16,23 @@ import org.springframework.web.client.RestClientException;
  * finance-mock PG·간편결제 대역의 HTTP 구현. 성공·확정 거절만 확정 결과로 보고, 처리 중·5xx·504(응답 유실)·타임아웃은 미확정으로 돌려준다. 조회의
  * 404는 대역이 MOCK_TRANSACTION_NOT_FOUND라고 답했을 때만 거래 부재로 본다. 응답의 provider·업무 키·금액·작업·재원·시나리오가 요청과 다르면
  * 결과를 믿지 않는다.
+ *
+ * <p>모든 요청에 finance-mock용 {@code service:payment} 내부 호출 자격(ADR 0010)을 붙인다. 자격 거절(401·403)은 대역이 요청을
+ * 처리하지 않았다는 뜻이지 승인 결과가 아니므로 미확정으로 둔다.
  */
 public class HttpPaymentGateway implements PaymentGateway {
   private static final String NOT_FOUND_CODE = "MOCK_TRANSACTION_NOT_FOUND";
 
   private final RestClient client;
+  private final String authorization;
 
-  public HttpPaymentGateway(RestClient client) {
+  /**
+   * @param credential finance-mock이 {@code service:payment}로 확인하는 자격. 없거나 43자 미만이면 기동하지 않는다.
+   */
+  public HttpPaymentGateway(RestClient client, String credential) {
     this.client = client;
+    this.authorization =
+        "Bearer " + InternalCredentials.requireFormat("service:payment", credential);
   }
 
   @Override
@@ -31,6 +42,7 @@ public class HttpPaymentGateway implements PaymentGateway {
           client
               .post()
               .uri("/mock/providers/{providerId}/payments", request.providerId())
+              .header(HttpHeaders.AUTHORIZATION, authorization)
               .header("Idempotency-Key", "approve-" + request.businessKey())
               .contentType(MediaType.APPLICATION_JSON)
               .body(
@@ -63,6 +75,7 @@ public class HttpPaymentGateway implements PaymentGateway {
                   request.providerId(),
                   request.businessKey(),
                   request.scenarioVersion())
+              .header(HttpHeaders.AUTHORIZATION, authorization)
               .retrieve()
               .body(MockTransaction.class);
       return interpret(body, request);
