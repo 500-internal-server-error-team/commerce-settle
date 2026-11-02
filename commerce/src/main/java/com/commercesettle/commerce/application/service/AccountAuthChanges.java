@@ -2,6 +2,7 @@ package com.commercesettle.commerce.application.service;
 
 import com.commercesettle.commerce.application.exception.AuthChangeUnconfirmedException;
 import com.commercesettle.commerce.application.port.AccountAuthGuard;
+import com.commercesettle.commerce.application.port.AuthGate;
 import com.commercesettle.commerce.domain.model.ActorKind;
 import java.util.UUID;
 import java.util.function.Function;
@@ -13,9 +14,11 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class AccountAuthChanges {
+  private final AuthGate gate;
   private final AccountAuthGuard guards;
 
-  public AccountAuthChanges(AccountAuthGuard guards) {
+  public AccountAuthChanges(AuthGate gate, AccountAuthGuard guards) {
+    this.gate = gate;
     this.guards = guards;
   }
 
@@ -25,6 +28,7 @@ public class AccountAuthChanges {
    */
   public Confirmed apply(
       ActorKind kind, UUID actorId, long authVersion, Function<UUID, Confirmed> change) {
+    gate.requireOpen();
     UUID changeId = UUID.randomUUID();
     guards.block(kind, actorId, changeId, authVersion);
     try {

@@ -1,6 +1,7 @@
 package com.commercesettle.commerce.application.service;
 
 import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
+import com.commercesettle.commerce.application.port.AuthGate;
 import com.commercesettle.commerce.application.port.AuthRateLimiter;
 import com.commercesettle.commerce.application.port.PasswordHasher;
 import com.commercesettle.commerce.application.port.SessionStore;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class SessionService {
+  private final AuthGate gate;
   private final AccountRepository accounts;
   private final PasswordHasher passwords;
   private final AuthRateLimiter rateLimiter;
@@ -23,10 +25,12 @@ public class SessionService {
   private final String unknownAccountHash;
 
   public SessionService(
+      AuthGate gate,
       AccountRepository accounts,
       PasswordHasher passwords,
       AuthRateLimiter rateLimiter,
       SessionStore sessions) {
+    this.gate = gate;
     this.accounts = accounts;
     this.passwords = passwords;
     this.rateLimiter = rateLimiter;
@@ -36,6 +40,7 @@ public class SessionService {
 
   // 계정 없음·비밀번호 오류·로그인 불가 상태를 구분하지 않아 계정 존재 여부를 드러내지 않는다.
   public Login login(ActorKind kind, String email, String password) {
+    gate.requireOpen();
     String emailNormalized = Account.normalizeEmail(email);
     rateLimiter.acquire(AuthRateLimiter.Operation.LOGIN, kind, emailNormalized);
 
@@ -52,6 +57,7 @@ public class SessionService {
   }
 
   public void logout(String tokenHash, ActorKind kind, UUID actorId) {
+    gate.requireOpen();
     sessions.delete(tokenHash, kind, actorId);
   }
 

@@ -40,6 +40,7 @@ class AesGcmPasswordResetDeliveryTest {
     return new AesGcmPasswordResetDelivery(
         new AuthProperties(
             UUID.randomUUID(),
+            "0".repeat(40),
             new AuthProperties.RateLimit("k".repeat(32), 5, 900, 3, 3600),
             new AuthProperties.PasswordReset(key)));
   }

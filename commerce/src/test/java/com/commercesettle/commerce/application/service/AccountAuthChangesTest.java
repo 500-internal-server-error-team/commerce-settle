@@ -21,9 +21,15 @@ class AccountAuthChangesTest {
   private final List<UUID> changeIds = new ArrayList<>();
   private RuntimeException blockFailure;
   private RuntimeException confirmFailure;
+  private boolean gateClosed;
 
   private final AccountAuthChanges changes =
       new AccountAuthChanges(
+          () -> {
+            if (gateClosed) {
+              throw new AuthenticationUnavailableException("closed");
+            }
+          },
           new AccountAuthGuard() {
             @Override
             public void block(ActorKind kind, UUID actorId, UUID changeId, long authVersion) {
@@ -98,5 +104,24 @@ class AccountAuthChangesTest {
     calls.add("commit");
     changeIds.add(changeId);
     return new Confirmed(5, true);
+  }
+
+  @Test
+  @DisplayName("인증 게이트가 닫혀 있으면 가드를 막지 않고 DB 변경도 실행하지 않는다")
+  void refusesWhileGateIsClosed() {
+    gateClosed = true;
+
+    assertThatThrownBy(
+            () ->
+                changes.apply(
+                    ActorKind.SELLER,
+                    ACTOR_ID,
+                    0,
+                    changeId -> {
+                      calls.add("change");
+                      return new Confirmed(1, true);
+                    }))
+        .isInstanceOf(AuthenticationUnavailableException.class);
+    assertThat(calls).isEmpty();
   }
 }

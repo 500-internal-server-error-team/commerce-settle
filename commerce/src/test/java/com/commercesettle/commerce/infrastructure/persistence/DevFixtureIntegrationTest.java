@@ -2,18 +2,22 @@ package com.commercesettle.commerce.infrastructure.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.mock;
 
 import com.commercesettle.commerce.application.port.AddressCipher;
+import com.commercesettle.commerce.application.port.AuthGate;
 import com.commercesettle.commerce.application.port.PasswordHasher;
 import com.commercesettle.commerce.application.service.BuyerAddressService;
 import com.commercesettle.commerce.application.service.InventoryReservationService;
 import com.commercesettle.commerce.domain.model.ShippingAddress;
 import com.commercesettle.commerce.domain.repository.OrderRepository;
+import com.commercesettle.commerce.infrastructure.cache.TestRedisRunId;
 import com.commercesettle.commerce.infrastructure.config.DevFixtureConfiguration;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -39,6 +43,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.jdbc.core.JdbcOperations;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -82,9 +88,15 @@ class DevFixtureIntegrationTest {
   @Autowired PasswordHasher passwords;
   @Autowired BuyerAddressService addresses;
   @Autowired StringRedisTemplate redis;
+  @Autowired AuthGate gate;
   @Autowired TestRestTemplate http;
   @Autowired OrderRepository orders;
   @Autowired AddressCipher cipher;
+
+  @DynamicPropertySource
+  static void approveRedisRunId(DynamicPropertyRegistry registry) {
+    registry.add("app.auth.redis-run-id", () -> TestRedisRunId.of(REDIS));
+  }
 
   @BeforeAll
   void startupActuallyLoadsFixtures() {
@@ -102,6 +114,7 @@ class DevFixtureIntegrationTest {
     assertThat(count("buyer_addresses")).isEqualTo(29);
     assertThat(count("orders")).isEqualTo(4);
     assertThat(count("order_addresses")).isEqualTo(4);
+    await().atMost(Duration.ofSeconds(10)).ignoreExceptions().untilAsserted(gate::requireOpen);
   }
 
   @BeforeEach

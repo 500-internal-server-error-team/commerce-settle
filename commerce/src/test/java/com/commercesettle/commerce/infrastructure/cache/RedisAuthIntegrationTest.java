@@ -372,6 +372,7 @@ class RedisAuthIntegrationTest {
             "spring.data.redis.username=commerce",
             "spring.data.redis.password=" + COMMERCE_PASSWORD,
             "app.auth.session-epoch=" + EPOCH,
+            "app.auth.redis-run-id=" + "0".repeat(40),
             "app.auth.rate-limit.identifier-hmac-key=" + "k".repeat(32),
             "app.auth.rate-limit.login-max-requests=5",
             "app.auth.rate-limit.login-window-seconds=900",
@@ -565,6 +566,7 @@ class RedisAuthIntegrationTest {
   private static AuthProperties properties(int maxRequests, int windowSeconds) {
     return new AuthProperties(
         EPOCH,
+        "0".repeat(40),
         new AuthProperties.RateLimit(
             "k".repeat(32), maxRequests, windowSeconds, RESET_MAX_REQUESTS, 3600),
         new AuthProperties.PasswordReset("d".repeat(32)));

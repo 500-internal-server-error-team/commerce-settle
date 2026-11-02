@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.commercesettle.commerce.application.exception.AuthRateLimitedException;
 import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
+import com.commercesettle.commerce.application.exception.AuthenticationUnavailableException;
+import com.commercesettle.commerce.application.port.AuthGate;
 import com.commercesettle.commerce.application.port.AuthRateLimiter;
 import com.commercesettle.commerce.application.port.PasswordHasher;
 import com.commercesettle.commerce.application.port.SessionStore;
@@ -31,6 +33,7 @@ class SessionServiceTest {
   private final List<String> limited = new ArrayList<>();
   private Account stored;
   private boolean rateLimited;
+  private boolean gateClosed;
   private SessionService service;
 
   @BeforeEach
@@ -66,7 +69,13 @@ class SessionServiceTest {
           @Override
           public void delete(String tokenHash, ActorKind kind, UUID actorId) {}
         };
-    service = new SessionService(new SingleAccountRepository(), hasher, limiter, sessions);
+    AuthGate gate =
+        () -> {
+          if (gateClosed) {
+            throw new AuthenticationUnavailableException("closed");
+          }
+        };
+    service = new SessionService(gate, new SingleAccountRepository(), hasher, limiter, sessions);
     checkedHashes.clear();
   }
 
@@ -81,6 +90,22 @@ class SessionServiceTest {
     assertThat(login.account()).isSameAs(stored);
     assertThat(limited).containsExactly("LOGIN:SELLER:seller@example.com");
     assertThat(issuedFor).containsExactly(stored.getId());
+  }
+
+  @Test
+  @DisplayName("인증 게이트가 닫혀 있으면 요청 제한·비밀번호 검사·세션 발급 전에 거절한다")
+  void refusesWhileGateIsClosed() {
+    stored = SellerAccount.register("seller@example.com", "hash:" + PASSWORD, "판매자", "ref", NOW);
+    gateClosed = true;
+
+    assertThatThrownBy(() -> service.login(ActorKind.SELLER, "seller@example.com", PASSWORD))
+        .isInstanceOf(AuthenticationUnavailableException.class);
+    assertThatThrownBy(() -> service.logout("a".repeat(64), ActorKind.SELLER, stored.getId()))
+        .isInstanceOf(AuthenticationUnavailableException.class);
+
+    assertThat(limited).isEmpty();
+    assertThat(checkedHashes).isEmpty();
+    assertThat(issuedFor).isEmpty();
   }
 
   @Test
