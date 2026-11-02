@@ -10,6 +10,8 @@ import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.commercesettle.payment.application.service.ApplyOrderPaymentRequestService;
+import com.commercesettle.payment.application.service.RefundEventHandler;
+import com.commercesettle.payment.application.service.RefundEvents;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -951,7 +953,7 @@ class PaymentRequestProcessingIntegrationTest {
       basePackages = "com.commercesettle.payment.infrastructure.persistence",
       useDefaultFilters = false,
       includeFilters = @ComponentScan.Filter(Repository.class))
-  @Import(ApplyOrderPaymentRequestService.class)
+  @Import({ApplyOrderPaymentRequestService.class, RefundEventHandler.class, RefundEvents.class})
   static class Config {
     @Bean
     NamedParameterJdbcTemplate namedParameterJdbcTemplate(DataSource dataSource) {

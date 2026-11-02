@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.mockito.Mockito.mock;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
@@ -14,6 +15,7 @@ import com.commercesettle.payment.application.event.PaymentCancellationRequested
 import com.commercesettle.payment.application.event.PaymentCancellationResultPayload;
 import com.commercesettle.payment.application.event.PaymentConfirmedPayload;
 import com.commercesettle.payment.application.event.PaymentDeclinedPayload;
+import com.commercesettle.payment.application.event.RefundEventPayload;
 import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
@@ -77,6 +79,7 @@ class ApplyOrderPaymentRequestServiceTest {
           reservations,
           entries,
           outbox,
+          mock(RefundEventHandler.class),
           TransactionOperations.withoutTransaction(),
           Clock.fixed(NOW, ZoneOffset.UTC),
           30_000);
@@ -1276,6 +1279,11 @@ class ApplyOrderPaymentRequestServiceTest {
     public UUID appendPaymentAccepted(EventEnvelope<PaymentAcceptedPayload> event) {
       accepted.add(event);
       return event.eventId();
+    }
+
+    @Override
+    public UUID appendRefundEvent(EventEnvelope<? extends RefundEventPayload> event) {
+      throw new UnsupportedOperationException();
     }
   }
 }

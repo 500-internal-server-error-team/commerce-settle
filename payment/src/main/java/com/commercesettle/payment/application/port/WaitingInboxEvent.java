@@ -3,6 +3,8 @@ package com.commercesettle.payment.application.port;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
+import com.commercesettle.payment.application.event.RefundApprovedPayload;
+import com.commercesettle.payment.application.event.RefundOrderRestoredPayload;
 import java.util.UUID;
 
 /**
@@ -11,10 +13,13 @@ import java.util.UUID;
  */
 public record WaitingInboxEvent(UUID inboxId, long version, int attempts, EventEnvelope<?> event) {
 
+  /** 처리 전에 잡는 주문 단위 잠금의 대상. 같은 주문의 결제 요청·취소·환불은 이 순서로 직렬화된다. */
   public UUID orderId() {
     return switch (event.payload()) {
       case OrderPaymentRequestedPayload request -> request.orderId();
       case PaymentCancellationRequestedPayload request -> request.orderId();
+      case RefundApprovedPayload approved -> approved.orderId();
+      case RefundOrderRestoredPayload restored -> restored.orderId();
       default -> throw new IllegalArgumentException("Unsupported inbox payload");
     };
   }

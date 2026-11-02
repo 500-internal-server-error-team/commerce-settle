@@ -3,6 +3,8 @@ package com.commercesettle.payment.infrastructure.persistence.inbox;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
+import com.commercesettle.payment.application.event.RefundApprovedPayload;
+import com.commercesettle.payment.application.event.RefundOrderRestoredPayload;
 import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
@@ -380,6 +382,8 @@ public class JdbcInboxStore implements InboxStore {
         switch (eventType) {
           case "OrderPaymentRequested" -> OrderPaymentRequestedPayload.class;
           case "PaymentCancellationRequested" -> PaymentCancellationRequestedPayload.class;
+          case "RefundApproved" -> RefundApprovedPayload.class;
+          case "RefundOrderRestored" -> RefundOrderRestoredPayload.class;
           default -> throw new IllegalArgumentException("Unsupported inbox event type");
         };
     return mapper.getTypeFactory().constructParametricType(EventEnvelope.class, payload);

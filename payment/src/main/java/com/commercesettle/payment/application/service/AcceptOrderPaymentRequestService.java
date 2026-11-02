@@ -29,4 +29,11 @@ public class AcceptOrderPaymentRequestService implements OrderPaymentRequestAcce
       EventEnvelope<PaymentCancellationRequestedPayload> event, Source source) {
     inbox.saveWaiting(event, source);
   }
+
+  @Override
+  @Transactional
+  public void acceptRefundEvent(EventEnvelope<?> event, Source source) {
+    // WAITING은 영속 메시지 인계이며 금융 환불 접수나 완료가 아니다.
+    inbox.saveWaiting(event, source);
+  }
 }
