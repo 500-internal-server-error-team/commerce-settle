@@ -19,7 +19,7 @@ public interface RetentionStore {
 
   List<SettlementRetentionGateway.Closure> sourceBatches(List<UUID> deliveries);
 
-  void cacheClosures(List<SettlementRetentionGateway.Closure> closures, Instant now);
+  Set<UUID> cacheClosures(List<SettlementRetentionGateway.Closure> closures, Instant now);
 
   String process(Target target, UUID id, Instant now);
 

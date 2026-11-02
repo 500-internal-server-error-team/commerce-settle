@@ -54,7 +54,7 @@ public class RetentionService {
         if (ids.isEmpty()) break;
         if (target == Target.DELIVERY) {
           try {
-            refresh(ids);
+            refresh(ids, false);
           } catch (RuntimeException error) {
             LOG.atWarn()
                 .addKeyValue("event", "retention.source-unavailable")
@@ -103,10 +103,10 @@ public class RetentionService {
 
   @Transactional(propagation = Propagation.NEVER)
   public void prepareReplay(UUID delivery) {
-    refresh(List.of(delivery));
+    refresh(List.of(delivery), true);
   }
 
-  private void refresh(List<UUID> deliveries) {
+  private void refresh(List<UUID> deliveries, boolean requireCachedClosure) {
     var refs = transactions.execute(status -> store.sourceBatches(deliveries));
     var pending =
         refs.stream()
@@ -127,7 +127,10 @@ public class RetentionService {
         throw new SettlementRetentionGateway.UnavailableException();
     }
     if (!seen.equals(pending.keySet())) throw new SettlementRetentionGateway.UnavailableException();
-    transactions.executeWithoutResult(status -> store.cacheClosures(closures, clock.instant()));
+    var cached = transactions.execute(status -> store.cacheClosures(closures, clock.instant()));
+    if (requireCachedClosure
+        && closures.stream().anyMatch(c -> c.closedAt() != null && !cached.contains(c.batchId())))
+      throw new SettlementRetentionGateway.UnavailableException();
   }
 
   public void holdSettlement(UUID batchId, String reason) {

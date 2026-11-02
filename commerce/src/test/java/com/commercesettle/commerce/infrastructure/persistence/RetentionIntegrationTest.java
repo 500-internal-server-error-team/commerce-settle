@@ -1137,6 +1137,55 @@ class RetentionIntegrationTest {
   }
 
   @Test
+  @DisplayName("종결 캐시의 한 행이 잠겨도 다른 배치를 정리하고 미확인 만료 재처리는 허용하지 않는다")
+  void skipsBusySourceCacheWithoutBlockingOtherBatches() throws Exception {
+    var busy = settlementNotice(Notification.Kind.SETTLEMENT_READY, "REVIEW_REQUIRED");
+    var ready = settlementNotice(Notification.Kind.SETTLEMENT_READY, "SENT");
+    when(settlement.lookup(anySet()))
+        .thenAnswer(
+            call -> {
+              Set<UUID> requested = call.getArgument(0);
+              return List.of(busy, ready).stream()
+                  .filter(n -> requested.contains(n.batch()))
+                  .map(
+                      n ->
+                          new SettlementRetentionGateway.Closure(
+                              n.batch(), n.seller(), NOW.minus(Duration.ofDays(91))))
+                  .toList();
+            });
+    var service =
+        new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, settlement);
+    try (var holder = jdbc.getDataSource().getConnection()) {
+      holder.setAutoCommit(false);
+      try (var statement =
+          holder.prepareStatement(
+              "SELECT batch_id FROM commerce.notification_retention_batches WHERE batch_id=? FOR UPDATE")) {
+        statement.setObject(1, busy.batch());
+        statement.executeQuery().close();
+      }
+      service.run(10, 1);
+      assertThat(notifications.find(ready.delivery())).isEmpty();
+      assertThat(notifications.find(busy.delivery())).isPresent();
+      assertThatThrownBy(
+              () ->
+                  notificationService.replay(
+                      "test", busy.delivery(), "busy-source-replay", 0, "test"))
+          .isInstanceOf(SettlementRetentionGateway.UnavailableException.class);
+      assertThat(notifications.find(busy.delivery()).orElseThrow().version()).isZero();
+      holder.rollback();
+    }
+    new RetentionService(
+            store, Clock.fixed(NOW.plusSeconds(61), ZoneOffset.UTC), manager, settlement)
+        .run(10, 1);
+    assertThat(count("notification_deliveries")).isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM commerce.retention_history WHERE result='PURGED'",
+                Long.class))
+        .isEqualTo(2);
+  }
+
+  @Test
   @DisplayName("정산 종결 캐시와 삭제의 동시 실행은 같은 종결 사실과 한 번의 삭제로 수렴한다")
   void convergesConcurrentSettlementHydrationAndPurge() throws Exception {
     var notice = settlementNotice(Notification.Kind.SETTLEMENT_READY, "SENT");
