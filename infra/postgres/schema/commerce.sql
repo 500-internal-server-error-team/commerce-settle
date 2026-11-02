@@ -264,6 +264,28 @@ CREATE INDEX ix_sale_events_product_period ON commerce.sale_events (product_id, 
 CREATE INDEX ix_sale_events_status_period ON commerce.sale_events (status, starts_at, ends_at);
 CREATE INDEX ix_sale_events_seller_created ON commerce.sale_events (seller_id, created_at, id);
 
+CREATE TABLE commerce.event_participations (
+    id uuid PRIMARY KEY,
+    event_id uuid NOT NULL,
+    buyer_id uuid NOT NULL,
+    order_id uuid NOT NULL,
+    status varchar(24) NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0,
+    CONSTRAINT uq_event_participations_order UNIQUE (order_id),
+    CONSTRAINT ck_event_participations_status
+        CHECK (status IN ('RESERVED', 'CONFIRMED', 'RELEASED', 'REFUNDED'))
+);
+-- 구매자당 진행 중·확정 참여는 1건이다. 해제(RELEASED)된 참여만 기간 내 다시 참여할 수 있다.
+CREATE UNIQUE INDEX uq_event_participations_active_buyer
+    ON commerce.event_participations (event_id, buyer_id)
+    WHERE status IN ('RESERVED', 'CONFIRMED', 'REFUNDED');
+CREATE INDEX ix_event_participations_event_status
+    ON commerce.event_participations (event_id, status);
+CREATE INDEX ix_event_participations_buyer_created
+    ON commerce.event_participations (buyer_id, created_at, id);
+
 CREATE TABLE commerce.idempotency_records (
     id uuid PRIMARY KEY,
     actor_kind varchar(24) NOT NULL,

@@ -164,6 +164,26 @@ public class ProductInventory extends AuditableEntity {
         now);
   }
 
+  /** 선착순 주문의 결제 확정: 이벤트 배정 −1, 판매 +1. {@link SaleEvent}가 S·R 변경과 함께 호출한다. */
+  InventoryMovement consumeFromEvent(UUID movementId, UUID cycleId, Instant now) {
+    requireEventAllocated();
+    return change(
+        movementId, InventoryOperation.ORDER_CONSUME, cycleId, 0, 0, -1, 1, "이벤트 결제 확정", now);
+  }
+
+  /** 종료된 이벤트의 예약 해제: 종료 때 반환하지 않은 배정분 1개를 가용으로 돌린다. */
+  InventoryMovement releaseFromEvent(UUID movementId, UUID cycleId, Instant now) {
+    requireEventAllocated();
+    return change(
+        movementId, InventoryOperation.ORDER_RELEASE, cycleId, 1, 0, -1, 0, "종료 이벤트 예약 해제", now);
+  }
+
+  private void requireEventAllocated() {
+    if (eventAllocatedQuantity < 1) {
+      throw new IllegalStateException("event allocation is empty: " + productId);
+    }
+  }
+
   private void requireReserved(int quantity) {
     if (reservedQuantity < quantity) {
       throw new IllegalStateException("reserved quantity is less than requested: " + productId);
