@@ -12,6 +12,7 @@ cd commerce-settle
 git switch develop
 python3 scripts/init_env.py
 ./gradlew --continue clean build
+python3 scripts/sync_redis_run_id.py
 docker compose up -d --build --wait --wait-timeout 300
 python3 scripts/smoke.py
 ```
@@ -23,7 +24,7 @@ export JAVA_HOME=$(/usr/libexec/java_home -v 21)
 export PATH="$JAVA_HOME/bin:$PATH"
 ```
 
-`init_env.py`는 필요한 비밀번호를 무작위로 생성해 `.env`에 저장하고 기존의 비어 있지 않은 값은 보존합니다. 새 비밀번호 변수가 추가돼 Compose가 실행을 거절하면 다시 실행해 빈 값만 채웁니다. 파일을 공유·커밋하지 않습니다. 주소록 암호문 키 `ADDRESS_ENCRYPTION_KEY`를 바꾸면 저장된 주소를 열 수 없습니다. `<대상>_GATEWAY_CREDENTIAL`은 Gateway가 대상 서비스에 보내는 [내부 호출 자격](decisions/0010-internal-service-credentials.md)입니다. 교체할 때는 이전 값을 대상의 `_PREVIOUS`에 옮기고 새 값을 넣은 뒤 대상 서비스와 Gateway를 재기동하며, 전환이 끝나면 `_PREVIOUS`를 비우고 대상을 다시 재기동합니다. 포트 충돌이 나면 `.env`의 포트 값을 변경합니다. Dockerfile은 미리 빌드한 `app.jar`를 사용하므로 최초 실행과 Java 변경 후에는 Gradle 빌드가 필요합니다.
+`init_env.py`는 필요한 비밀번호를 무작위로 생성해 `.env`에 저장하고 기존의 비어 있지 않은 값은 보존합니다. 새 비밀번호 변수가 추가돼 Compose가 실행을 거절하면 다시 실행해 빈 값만 채웁니다. 파일을 공유·커밋하지 않습니다. 주소록 암호문 키 `ADDRESS_ENCRYPTION_KEY`를 바꾸면 저장된 주소를 열 수 없습니다. `<대상>_GATEWAY_CREDENTIAL`은 Gateway가 대상 서비스에 보내는 [내부 호출 자격](decisions/0010-internal-service-credentials.md)입니다. 교체할 때는 이전 값을 대상의 `_PREVIOUS`에 옮기고 새 값을 넣은 뒤 대상 서비스와 Gateway를 재기동하며, 전환이 끝나면 `_PREVIOUS`를 비우고 대상을 다시 재기동합니다. `sync_redis_run_id.py`는 Redis를 먼저 띄워 현재 실행 식별자(run_id)를 `AUTH_REDIS_RUN_ID`로 승인하고, 값이 바뀌면 인증 세대 `AUTH_SESSION_EPOCH`도 새로 만들어 기존 세션을 무효로 합니다. Redis는 재시작·재생성할 때마다 run_id가 바뀌므로 `docker compose up` 전에 실행합니다. 기준은 [Redis 세션 검증과 복구](#redis-세션-검증과-복구)입니다. 포트 충돌이 나면 `.env`의 포트 값을 변경합니다. Dockerfile은 미리 빌드한 `app.jar`를 사용하므로 최초 실행과 Java 변경 후에는 Gradle 빌드가 필요합니다.
 
 줄바꿈은 `.gitattributes`로 LF(`*.bat`만 CRLF)에 고정합니다. 이 파일이 추가되기 전에 Windows의 `core.autocrlf=true`로 받은 작업 트리에는 CRLF 파일이 남아 PostgreSQL 초기화 스크립트가 `set: pipefail: invalid option`으로 실패할 수 있습니다. 진행 중인 변경을 커밋하거나 stash한 뒤 한 번 다시 체크아웃합니다. 이 명령은 커밋하지 않은 변경을 지웁니다.
 
@@ -36,6 +37,7 @@ git reset --hard
 
 ```bash
 docker compose build postgres
+python3 scripts/sync_redis_run_id.py
 docker compose up -d --wait --wait-timeout 300
 ```
 
@@ -57,6 +59,7 @@ export BUILDX_CONFIG="$PWD/work/buildx"
 ```bash
 python3 scripts/init_env.py
 ./gradlew bootJar
+python3 scripts/sync_redis_run_id.py
 APP_DEV_FIXTURES_ENABLED=true APP_DEV_FIXTURE_SCENARIOS_ENABLED=true \
 SETTLEMENT_DAILY_BATCH_ENABLED=false SETTLEMENT_PAYOUT_WORKER_ENABLED=false \
 APP_ORDER_STUB_ENABLED=false \
@@ -363,7 +366,9 @@ curl -i http://localhost:18083/mock/providers/EASY_PAY/payments/APPROVAL_ID/refu
 ```bash
 ./gradlew spotlessApply
 python3 scripts/test_init_env.py
+python3 scripts/test_sync_redis_run_id.py
 ./gradlew --continue build
+python3 scripts/sync_redis_run_id.py
 docker compose up -d --build --wait --wait-timeout 300
 python3 scripts/smoke.py
 ```
@@ -481,7 +486,9 @@ docker compose exec -T payment-api curl --fail http://localhost:9091/actuator/he
 
 ## Redis 세션 검증과 복구
 
-아래는 [Redis 세션 정책](policies.md#인증공통-api-기준)을 구현할 때의 검증·운영 기준입니다. 현재는 앱별 Redis ACL, Gateway의 세션 검증, 커머스의 로그인 세션 발급·로그아웃·로그인/복구 요청 제한, 비밀번호 재설정의 가드 차단·확정이 있습니다. `init_env.py`가 인증 세대 `AUTH_SESSION_EPOCH`, 제한 키용 `AUTH_RATE_LIMIT_HMAC_KEY`, 복구 토큰 전달 암호문용 `AUTH_RESET_DELIVERY_KEY`를 생성합니다. 세대를 바꾸면 기존 세션이 모두 무효가 되고, HMAC 키를 바꾸면 진행 중인 제한 시간창이 초기화되며, 전달 키를 바꾸면 아직 전달하지 않은 복구 토큰을 열 수 없습니다. 미확정 인증 변경의 재조정, 실행 식별자 설정과 차단·재개 기능은 아직 없습니다. smoke는 판매자 가입·로그인·Gateway 경유 조회·로그아웃 뒤 401, 계정 존재 여부와 관계없이 같은 복구 요청 응답, 쓸 수 없는 복구 토큰의 401과, Redis에 직접 넣은 세션의 역할 403·변경 중 가드 503, DB에 직접 넣은 구매자 계정과 같은 방식의 세션으로 주소 등록·재요청·목록·삭제를 확인합니다. 폐기·복구 흐름의 검증 완료로 간주하지 않습니다.
+아래는 [Redis 세션 정책](policies.md#인증공통-api-기준)을 구현할 때의 검증·운영 기준입니다. 현재는 앱별 Redis ACL, Gateway의 세션 검증, 커머스의 로그인 세션 발급·로그아웃·로그인/복구 요청 제한, 비밀번호 재설정의 가드 차단·확정이 있습니다. `init_env.py`가 인증 세대 `AUTH_SESSION_EPOCH`, 제한 키용 `AUTH_RATE_LIMIT_HMAC_KEY`, 복구 토큰 전달 암호문용 `AUTH_RESET_DELIVERY_KEY`를 생성합니다. 세대를 바꾸면 기존 세션이 모두 무효가 되고, HMAC 키를 바꾸면 진행 중인 제한 시간창이 초기화되며, 전달 키를 바꾸면 아직 전달하지 않은 복구 토큰을 열 수 없습니다. Gateway·커머스는 승인한 Redis 실행 식별자 `AUTH_REDIS_RUN_ID`로 사용자 인증 게이트를 판정하며, 미확정 인증 변경의 재조정은 아직 없습니다. smoke는 판매자 가입·로그인·Gateway 경유 조회·로그아웃 뒤 401, 계정 존재 여부와 관계없이 같은 복구 요청 응답, 쓸 수 없는 복구 토큰의 401과, Redis에 직접 넣은 세션의 역할 403·변경 중 가드 503, DB에 직접 넣은 구매자 계정과 같은 방식의 세션으로 주소 등록·재요청·목록·삭제를 확인합니다. CI의 `smoke_redis_restart.py`는 Redis 재시작 뒤 이전 세션과 새 로그인의 503, 새 세대·run_id로 재기동한 뒤 이전 세션의 401과 새 로그인 성공을 확인합니다. Redis와 Gateway·커머스를 다시 띄우므로 다른 사람이 쓰는 스택에서는 실행하지 않습니다. 폐기·복구 흐름의 검증 완료로 간주하지 않습니다.
+
+인증 게이트는 기동 직후 확인 전 상태로 사용자 인증을 503으로 거절하고, 연결한 Redis의 `INFO server` run_id가 `AUTH_REDIS_RUN_ID`와 같을 때만 엽니다. Redis가 앱보다 늦게 떠도 1초 간격으로 다시 확인합니다. 연 뒤 연결이 끊기거나 run_id가 다르면 닫고, 재연결이나 스크립트 재적재가 성공해도 재기동 전까지 다시 열지 않습니다. 첫 확인에서 run_id가 다르면 앱은 기동한 채 닫힌 상태로 둡니다. 닫히면 Gateway는 보호 작업을, 커머스는 세션 발급·로그아웃·비밀번호 복구 요청·재설정·인증 관련 계정 변경을 Redis를 쓰지 않고 503으로 거절합니다. 공개 작업, 서비스·운영자 자격과 Worker는 영향을 받지 않습니다. 닫은 사유(`RUN_ID_MISMATCH`·`DISCONNECTED`)와 시각은 `auth.redis-gate` ERROR 로그로 확인합니다. 짧은 단절에도 닫히는 것은 [ADR 0003](decisions/0003-redis-sessions.md)이 감수한 가용성 비용입니다.
 
 - 고정 30분 직전/정각/직후와 반복 조회를 시험해 expiresAt·TTL이 연장되지 않는지 확인합니다. Redis 쓰기 거절·시간 초과에는 토큰을 반환하지 않고 보호 요청은 503이어야 합니다.
 - 로그아웃·계정 정지·비밀번호 재설정과 동시 로그인을 경합시킵니다. Redis 가드 선차단 뒤 DB 롤백·커밋 결과 유실·Redis 후속 반영 실패를 주입하고, 차단 유지·이전 버전 거절·DB 확정 결과에 따른 재조정을 확인합니다.
@@ -494,7 +501,7 @@ docker compose exec -T payment-api curl --fail http://localhost:9091/actuator/he
 Redis 인증 저장소 장애·재시작·재연결 뒤에는 자동으로 보호 요청을 다시 허용하지 않습니다. 복구 절차는 다음과 같습니다.
 
 1. Gateway·커머스의 사용자 인증 게이트를 닫고 모든 인스턴스의 신규 보호 요청·세션 발급·비밀번호 재설정·인증 관련 계정 변경을 503으로 차단합니다. 기존 금융 작업과 서비스·운영자 자격은 별도로 처리합니다. 이미 시작한 이전 세대의 인증 변경은 DB 트랜잭션 종료·결과 확인까지 기다리거나 DB 인증 버전의 조건부 증가로 이전 버전 쓰기를 차단합니다. 종료 또는 차단을 확인하기 전에는 새 세대 가드를 구성하거나 인증을 재개하지 않습니다.
-2. 계정 변경의 미확정 결과를 PostgreSQL에서 확인하고 새 인증 세대 UUID와 현재 Redis 실행 식별자를 Gateway·커머스 전체에 같은 값으로 적용합니다. 기존 세대로 동작하는 인스턴스를 남기지 않습니다.
+2. 계정 변경의 미확정 결과를 PostgreSQL에서 확인하고 새 인증 세대 UUID와 현재 Redis 실행 식별자를 Gateway·커머스 전체에 같은 값으로 적용합니다. 기존 세대로 동작하는 인스턴스를 남기지 않습니다. 로컬·CI에서는 `python3 scripts/sync_redis_run_id.py`가 `redis-cli INFO server`의 `run_id`를 `AUTH_REDIS_RUN_ID`에 넣고 `AUTH_SESSION_EPOCH`를 새 UUID로 바꾸며, 이어서 `docker compose up -d --wait --wait-timeout 300`으로 Gateway·커머스를 다시 만듭니다. run_id만 바꾸고 세대를 그대로 두면 AOF에 남은 이전 세션이 다시 유효해지므로 두 값을 항상 함께 바꿉니다.
 3. 새 세대의 가드는 DB 확정 상태·인증 버전으로 구성합니다. 이전 세대 세션을 AOF·DB에서 새 세대로 복사하지 않으며, 사용자는 재로그인합니다.
 4. 이전 세대 토큰 거절·새 로그인·고정 만료·정지 계정 차단과 ACL을 확인한 뒤 인증 게이트를 엽니다. 이전 키 정리는 인증 영역의 해당 세대만 대상으로 하며 다른 캐시·업무 데이터를 지우지 않습니다.
 
@@ -506,7 +513,8 @@ AOF에 로그아웃 전 세션을 남긴 상태의 재시작과 Redis 데이터 
 # 컨테이너만 종료하고 DB·Kafka·Redis·관측 볼륨을 보존
 docker compose --profile observability --profile tools down
 
-# 같은 데이터로 재실행
+# 같은 데이터로 재실행. Redis가 새로 떠 run_id가 바뀌므로 승인값과 세대를 다시 맞춘다
+python3 scripts/sync_redis_run_id.py
 docker compose up -d --wait --wait-timeout 300
 python3 scripts/smoke.py
 
