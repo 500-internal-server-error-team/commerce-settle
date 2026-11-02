@@ -53,6 +53,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "spring.kafka.admin.auto-create=false",
       "settlement.daily-batch.schedule-enabled=false",
       "settlement.payout-worker.enabled=false",
+      "settlement.inbox-processor.enabled=false",
       "settlement.payout-worker.unconfirmed-retry-delay=0s",
       "settlement.payout-worker.max-attempts=3"
     })

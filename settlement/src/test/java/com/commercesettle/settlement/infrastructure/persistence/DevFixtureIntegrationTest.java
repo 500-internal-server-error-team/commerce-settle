@@ -27,7 +27,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "spring.kafka.admin.auto-create=false",
       "app.dev-fixtures.enabled=true",
       "settlement.daily-batch.schedule-enabled=false",
-      "settlement.payout-worker.enabled=false"
+      "settlement.payout-worker.enabled=false",
+      "settlement.inbox-processor.enabled=false"
     })
 @Testcontainers
 class DevFixtureIntegrationTest {
