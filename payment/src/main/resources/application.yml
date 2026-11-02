@@ -25,6 +25,12 @@ spring:
   sql:
     init:
       mode: never
+  task:
+    scheduling:
+      pool:
+        # 승인 Worker·결제 요청 처리기·Outbox 복구·격리 DLT 발행이 각자 스레드를 쓴다. 적체가 있으면 승인·처리 폴링은
+        # 쉬지 않고 이어서 실행하므로, 한 스레드를 나눠 쓰면 다른 폴링이 적체가 빌 때까지 멈춘다.
+        size: 4
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
     template:
@@ -115,6 +121,9 @@ app:
     # http일 때 finance-mock에 보내는 service:payment 자격(ADR 0010). Worker에만 주입한다.
     mock-credential: ${FINANCE_MOCK_PAYMENT_CREDENTIAL:}
     poll-interval-ms: 1000
+    # 동시에 실행하는 슬롯 수. 슬롯마다 한 폴링에 최대 max-jobs-per-poll건을 처리하고, 상한에 닿으면 기다리지 않고 다시 폴링한다.
+    # 외부 호출 동안 DB 연결을 쥐지 않지만 호출 전후 트랜잭션이 연결을 쓰므로 DB 연결 풀보다 작게 둔다.
+    concurrency: ${PAYMENT_APPROVAL_CONCURRENCY:6}
     max-jobs-per-poll: 20
     # 호출 제한 시간은 임대보다 짧아야 한다.
     lease-duration: 30s

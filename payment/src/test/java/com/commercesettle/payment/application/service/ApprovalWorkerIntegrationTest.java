@@ -22,8 +22,15 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
@@ -274,6 +281,60 @@ class ApprovalWorkerIntegrationTest {
     assertThat(worker.runOnce()).isFalse();
   }
 
+  @Test
+  @DisplayName("여러 실행 슬롯이 동시에 돌아도 작업마다 한 번만 승인을 요청하고 모든 결제를 한 번씩 확정한다")
+  void runsApprovalsConcurrentlyWithoutDuplicateCalls() throws Exception {
+    for (int i = 0; i < 24; i++) {
+      request(10_000 + i, 0, "CREDIT_CARD");
+    }
+    AtomicInteger inFlight = new AtomicInteger();
+    AtomicInteger maxInFlight = new AtomicInteger();
+    gateway.approve =
+        r -> {
+          maxInFlight.accumulateAndGet(inFlight.incrementAndGet(), Math::max);
+          try {
+            Thread.sleep(50);
+          } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+          } finally {
+            inFlight.decrementAndGet();
+          }
+          return new Result.Succeeded(UUID.randomUUID(), NOW);
+        };
+
+    ExecutorService slots = Executors.newFixedThreadPool(6);
+    List<Future<?>> runs = new ArrayList<>();
+    for (int i = 0; i < 6; i++) {
+      runs.add(
+          slots.submit(
+              () -> {
+                while (worker.runOnce()) {
+                  // 도래한 작업이 없을 때까지 실행한다.
+                }
+              }));
+    }
+    for (Future<?> run : runs) {
+      run.get(60, TimeUnit.SECONDS);
+    }
+    slots.shutdown();
+
+    assertThat(
+            jdbc()
+                .queryForObject(
+                    "SELECT count(*) FROM payment.payments WHERE status = 'CONFIRMED'", Long.class))
+        .isEqualTo(24);
+    assertThat(gateway.approvals).hasSize(24);
+    assertThat(new HashSet<>(gateway.approvals.stream().map(ApprovalRequest::businessKey).toList()))
+        .hasSize(24);
+    assertThat(
+            jdbc()
+                .queryForObject(
+                    "SELECT count(*) FROM payment.outbox WHERE event_type = 'PaymentConfirmed'",
+                    Long.class))
+        .isEqualTo(24);
+    assertThat(maxInFlight.get()).isGreaterThan(1);
+  }
+
   private String status() {
     return jdbc().queryForObject("SELECT status FROM payment.payments", String.class);
   }
@@ -378,8 +439,8 @@ class ApprovalWorkerIntegrationTest {
 
   /** 결과를 시험마다 정하는 PG 대역. 기본은 즉시 승인이다. */
   static final class FakeGateway implements PaymentGateway {
-    final List<ApprovalRequest> approvals = new ArrayList<>();
-    final List<ApprovalRequest> lookups = new ArrayList<>();
+    final List<ApprovalRequest> approvals = Collections.synchronizedList(new ArrayList<>());
+    final List<ApprovalRequest> lookups = Collections.synchronizedList(new ArrayList<>());
     Function<ApprovalRequest, Result> approve;
     Function<ApprovalRequest, Result> lookup;
 
