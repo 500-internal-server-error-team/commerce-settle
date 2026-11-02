@@ -8,6 +8,7 @@ import com.commercesettle.commerce.application.exception.IdempotencyConflictExce
 import com.commercesettle.commerce.application.exception.OrderRequestException;
 import com.commercesettle.commerce.application.exception.OrderStubException;
 import com.commercesettle.commerce.domain.exception.BuyerAddressNotFoundException;
+import com.commercesettle.commerce.domain.exception.CouponRejectedException;
 import com.commercesettle.commerce.domain.exception.DefaultAddressConflictException;
 import com.commercesettle.commerce.domain.exception.DuplicateAccountEmailException;
 import com.commercesettle.commerce.domain.exception.EventAdmissionClosedException;
@@ -165,6 +166,24 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
   ResponseEntity<Object> insufficientInventory(
       InsufficientInventoryException e, WebRequest request) {
     return respond(ErrorCode.INVENTORY_INSUFFICIENT, request);
+  }
+
+  @ExceptionHandler(CouponRejectedException.class)
+  ResponseEntity<Object> couponRejected(CouponRejectedException e, WebRequest request) {
+    if (e.reason() == CouponRejectedException.Reason.EXPIRED) {
+      return respond(ErrorCode.COUPON_EXPIRED, request);
+    }
+    String detail =
+        switch (e.reason()) {
+          case NOT_STARTED -> "아직 사용할 수 없는 쿠폰입니다.";
+          case NOT_AVAILABLE -> "다른 주문에 예약됐거나 이미 사용한 쿠폰입니다.";
+          case NOT_OWNED -> "본인 쿠폰이 아닙니다.";
+          case METHOD_NOT_ALLOWED -> "이 결제수단에는 쓸 수 없는 쿠폰입니다.";
+          case PRODUCT_MISMATCH -> "이 상품에는 쓸 수 없는 쿠폰입니다.";
+          case BELOW_MIN_ORDER -> "최소 주문금액보다 상품대금이 작습니다.";
+          case EXPIRED -> throw new IllegalStateException("handled above");
+        };
+    return respond(ErrorCode.COUPON_NOT_APPLICABLE, detail, null, request);
   }
 
   @ExceptionHandler(EventAdmissionClosedException.class)
