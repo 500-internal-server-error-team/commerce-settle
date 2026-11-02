@@ -96,6 +96,9 @@ app:
     enabled: false
     interval-ms: 1000
     batch-size: 100
+    # 선점 뒤 처리 결과나 실패를 기록하기 전까지 다른 처리기가 같은 요청을 다시 잡지 않는 시간.
+    # 한 건의 처리 트랜잭션보다 충분히 길어야 한다.
+    lease-ms: 30000
   outbox:
     # PAYMENT_ROLE=worker에서만 동작한다. 커밋된 결제 이벤트를 Kafka로 발행한다.
     enabled: false

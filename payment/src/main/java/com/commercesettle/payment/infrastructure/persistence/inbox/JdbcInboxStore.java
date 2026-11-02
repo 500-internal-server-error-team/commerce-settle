@@ -4,7 +4,6 @@ import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
-import com.commercesettle.payment.application.port.UnreadableInboxEventException;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,8 +18,11 @@ import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -31,6 +33,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 @Transactional(propagation = Propagation.MANDATORY)
 public class JdbcInboxStore implements InboxStore {
+  static final String ATTEMPTS_EXHAUSTED = "PAYMENT_REQUEST_ATTEMPTS_EXHAUSTED";
+  static final String BODY_UNREADABLE = "PAYMENT_REQUEST_BODY_UNREADABLE";
+
+  private static final Logger LOG = LoggerFactory.getLogger(JdbcInboxStore.class);
+
   private final NamedParameterJdbcTemplate jdbc;
   private final ObjectMapper mapper;
   private final String consumer;
@@ -112,50 +119,94 @@ public class JdbcInboxStore implements InboxStore {
   }
 
   @Override
-  public Optional<WaitingInboxEvent> claimNextWaiting(Instant now) {
-    return claimWaiting(null, now);
+  public Optional<WaitingInboxEvent> claimNextWaiting(
+      Instant now, Instant leaseUntil, int maxAttempts) {
+    return claimWaiting(null, now, leaseUntil, maxAttempts);
   }
 
   @Override
-  public Optional<WaitingInboxEvent> claimWaitingEvent(UUID eventId, Instant now) {
-    return claimWaiting(java.util.Objects.requireNonNull(eventId), now);
+  public Optional<WaitingInboxEvent> claimWaitingEvent(
+      UUID eventId, Instant now, Instant leaseUntil, int maxAttempts) {
+    return claimWaiting(Objects.requireNonNull(eventId), now, leaseUntil, maxAttempts);
   }
 
-  private Optional<WaitingInboxEvent> claimWaiting(UUID eventId, Instant now) {
+  private Optional<WaitingInboxEvent> claimWaiting(
+      UUID eventId, Instant now, Instant leaseUntil, int maxAttempts) {
+    if (!leaseUntil.isAfter(now) || maxAttempts < 1) {
+      throw new IllegalArgumentException("Invalid inbox claim");
+    }
     var params =
         new MapSqlParameterSource("consumer", consumer)
             .addValue("now", toTimestamp(now))
+            .addValue("leaseUntil", toTimestamp(leaseUntil))
+            .addValue("max", maxAttempts)
+            .addValue("exhausted", ATTEMPTS_EXHAUSTED)
             .addValue("eventId", eventId, Types.OTHER);
     applyTransactionLimits();
-    List<Claimed> rows =
-        jdbc.query(
+    // 확인 대상으로 넘긴 행은 대기 행에서 빠지므로 반복은 끝난다.
+    while (true) {
+      List<Claimed> rows =
+          jdbc.query(
+              """
+              WITH next AS (
+                  SELECT id FROM payment.inbox
+                  WHERE consumer = :consumer AND status = 'WAITING' AND next_run_at <= :now
+                    AND (CAST(:eventId AS uuid) IS NULL OR event_id = :eventId)
+                  ORDER BY next_run_at, id
+                  LIMIT 1
+                  FOR UPDATE SKIP LOCKED
+              )
+              UPDATE payment.inbox i
+              SET status = CASE WHEN i.attempts >= :max THEN 'REVIEW_REQUIRED' ELSE 'WAITING' END,
+                  next_run_at = CASE WHEN i.attempts >= :max THEN NULL ELSE :leaseUntil END,
+                  last_error_code = CASE WHEN i.attempts >= :max
+                      THEN :exhausted ELSE i.last_error_code END,
+                  attempts = CASE WHEN i.attempts >= :max THEN i.attempts ELSE i.attempts + 1 END,
+                  updated_at = :now, version = i.version + 1
+              FROM next WHERE i.id = next.id
+              RETURNING i.id, i.event_id, i.version, i.attempts, i.status, i.raw_body
+              """,
+              params,
+              (rs, row) ->
+                  new Claimed(
+                      rs.getObject("id", UUID.class),
+                      rs.getObject("event_id", UUID.class),
+                      rs.getLong("version"),
+                      rs.getInt("attempts"),
+                      rs.getString("status"),
+                      rs.getBytes("raw_body")));
+      if (rows.isEmpty()) {
+        return Optional.empty();
+      }
+      Claimed row = rows.get(0);
+      if (!"WAITING".equals(row.status())) {
+        // 마지막 시도가 결과를 남기지 못하고 끝났다. 상한을 넘겨 다시 처리하지 않는다.
+        logReview(row, ATTEMPTS_EXHAUSTED);
+        continue;
+      }
+      try {
+        EventEnvelope<OrderPaymentRequestedPayload> event =
+            mapper.readValue(row.body(), new TypeReference<>() {});
+        return Optional.of(new WaitingInboxEvent(row.id(), row.version(), row.attempts(), event));
+      } catch (IOException exception) {
+        // 저장 때 검증한 원문이므로 읽기 실패는 데이터 손상이나 계약 변경이다. 다시 읽어도 같으므로 재시도하지 않는다.
+        finishWaiting(row.id(), "REVIEW_REQUIRED", null, BODY_UNREADABLE, now);
+        logReview(row, BODY_UNREADABLE);
+      }
+    }
+  }
+
+  @Override
+  public boolean lockClaimed(UUID inboxId, long version) {
+    applyTransactionLimits();
+    return !jdbc.queryForList(
             """
-            SELECT id, version, attempts, raw_body FROM payment.inbox
-            WHERE consumer = :consumer AND status = 'WAITING' AND next_run_at <= :now
-              AND (CAST(:eventId AS uuid) IS NULL OR event_id = :eventId)
-            ORDER BY next_run_at, id
-            LIMIT 1
-            FOR UPDATE SKIP LOCKED
+            SELECT id FROM payment.inbox
+            WHERE id = :inboxId AND version = :version AND status = 'WAITING'
+            FOR UPDATE
             """,
-            params,
-            (rs, row) ->
-                new Claimed(
-                    rs.getObject("id", UUID.class),
-                    rs.getLong("version"),
-                    rs.getInt("attempts"),
-                    rs.getBytes("raw_body")));
-    if (rows.isEmpty()) {
-      return Optional.empty();
-    }
-    Claimed row = rows.get(0);
-    try {
-      EventEnvelope<OrderPaymentRequestedPayload> event =
-          mapper.readValue(row.body(), new TypeReference<>() {});
-      return Optional.of(new WaitingInboxEvent(row.id(), row.version(), row.attempts(), event));
-    } catch (IOException exception) {
-      // 저장 때 검증한 원문이므로 읽기 실패는 데이터 손상이나 계약 변경이다.
-      throw new UnreadableInboxEventException(row.id(), row.version(), row.attempts());
-    }
+            new MapSqlParameterSource("inboxId", inboxId).addValue("version", version))
+        .isEmpty();
   }
 
   @Override
@@ -181,23 +232,15 @@ public class JdbcInboxStore implements InboxStore {
                 Types.TIMESTAMP_WITH_TIMEZONE)
             .addValue("now", toTimestamp(now));
     applyTransactionLimits();
-    // 롤백 직후 다른 처리기가 이 행을 다시 선점했다면 기다리지 않고 그 처리기에 맡긴다.
-    boolean locked =
-        !jdbc.queryForList(
-                """
-                SELECT id FROM payment.inbox
-                WHERE id = :inboxId AND version = :version AND status = 'WAITING'
-                FOR UPDATE SKIP LOCKED
-                """,
-                params)
-            .isEmpty();
-    if (!locked) {
+    // 선점 때 다음 처리 시각을 임대 만료로 미뤘으므로 임대 안에서는 다른 처리기가 이 행을 잡지 않는다.
+    // 임대가 끝나 다른 처리기가 이미 선점했다면 버전이 바뀌어 기록하지 않는다.
+    if (!lockClaimed(inboxId, version)) {
       return false;
     }
     return jdbc.update(
             """
             UPDATE payment.inbox
-            SET attempts = attempts + 1, last_error_code = :errorCode,
+            SET last_error_code = :errorCode,
                 status = CASE WHEN CAST(:retryAt AS timestamptz) IS NULL
                     THEN 'REVIEW_REQUIRED' ELSE 'WAITING' END,
                 next_run_at = :retryAt, updated_at = :now, version = version + 1
@@ -288,5 +331,17 @@ public class JdbcInboxStore implements InboxStore {
 
   private record Original(UUID id, byte[] body) {}
 
-  private record Claimed(UUID id, long version, int attempts, byte[] body) {}
+  private void logReview(Claimed row, String errorCode) {
+    LOG.atWarn()
+        .addKeyValue("event", "payment.accept")
+        .addKeyValue("inboxId", row.id())
+        .addKeyValue("eventId", row.eventId())
+        .addKeyValue("attempts", row.attempts())
+        .addKeyValue("result", "REVIEW_REQUIRED")
+        .addKeyValue("errorCode", errorCode)
+        .log("Payment request needs review");
+  }
+
+  private record Claimed(
+      UUID id, UUID eventId, long version, int attempts, String status, byte[] body) {}
 }

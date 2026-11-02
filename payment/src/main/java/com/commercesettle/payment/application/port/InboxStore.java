@@ -12,12 +12,18 @@ public interface InboxStore {
   void saveWaiting(EventEnvelope<OrderPaymentRequestedPayload> event, Source source);
 
   /**
-   * 처리 시각이 된 WAITING 하나를 현재 트랜잭션에서 잠그고 가져온다. 다른 처리기가 잠근 행은 건너뛴다. 원문을 읽을 수 없으면 {@link
-   * UnreadableInboxEventException}을 던진다.
+   * 처리 시각이 된 WAITING 하나를 선점한다. 시도 횟수를 늘리고 다음 처리 시각을 leaseUntil로 미루므로, 호출 트랜잭션이 커밋된 뒤에는 처리 결과나 실패를
+   * 기록하기 전까지 다른 처리기가 다시 선점하지 않는다. 이미 maxAttempts번 시도한 행과 원문을 읽을 수 없는 행은 사유와 함께 REVIEW_REQUIRED로 남기고
+   * 다음 행을 찾는다. 다른 처리기가 잠근 행은 건너뛴다.
    */
-  Optional<WaitingInboxEvent> claimNextWaiting(Instant now);
+  Optional<WaitingInboxEvent> claimNextWaiting(Instant now, Instant leaseUntil, int maxAttempts);
 
-  Optional<WaitingInboxEvent> claimWaitingEvent(UUID eventId, Instant now);
+  /** {@link #claimNextWaiting}과 같지만 지정한 이벤트만 선점한다. */
+  Optional<WaitingInboxEvent> claimWaitingEvent(
+      UUID eventId, Instant now, Instant leaseUntil, int maxAttempts);
+
+  /** 선점한 버전 그대로인 WAITING 행을 현재 트랜잭션에서 잠근다. 그 사이 다른 처리기가 선점했거나 처리했으면 false를 돌려준다. */
+  boolean lockClaimed(UUID inboxId, long version);
 
   void markApplied(UUID inboxId, UUID resultRef, Instant now);
 
@@ -25,8 +31,8 @@ public interface InboxStore {
   void markReviewRequired(UUID inboxId, String errorCode, Instant now);
 
   /**
-   * 롤백된 처리의 실패를 별도 트랜잭션에서 기록한다. 시도 횟수를 하나 늘리고 사유를 저장하며, retryAt이 있으면 그 시각에 다시 처리할 WAITING으로, 없으면
-   * REVIEW_REQUIRED로 남긴다. 선점 이후 버전이 바뀌었거나 다른 처리기가 잠근 행이면 아무것도 바꾸지 않고 false를 돌려준다.
+   * 롤백된 처리의 실패를 별도 트랜잭션에서 기록한다. 시도 횟수는 선점 때 이미 늘렸으므로 사유만 저장하고, retryAt이 있으면 그 시각에 다시 처리할 WAITING으로,
+   * 없으면 REVIEW_REQUIRED로 남긴다. 선점 이후 버전이 바뀐 행이면 아무것도 바꾸지 않고 false를 돌려준다.
    */
   boolean recordFailure(UUID inboxId, long version, String errorCode, Instant retryAt, Instant now);
 

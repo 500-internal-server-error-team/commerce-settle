@@ -26,6 +26,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -44,6 +45,8 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -72,10 +75,12 @@ class PaymentRequestProcessingIntegrationTest {
   @Autowired private DataSource dataSource;
   @Autowired private PlatformTransactionManager manager;
   @Autowired private MovableClock clock;
+  @Autowired private HookedTransactions transactions;
 
   @AfterEach
   void deleteRows() {
     clock.set(NOW);
+    transactions.clear();
     JdbcTemplate jdbc = new JdbcTemplate(dataSource);
     jdbc.update("DELETE FROM payment.mileage_entries");
     jdbc.update("DELETE FROM payment.mileage_reservations");
@@ -187,7 +192,30 @@ class PaymentRequestProcessingIntegrationTest {
             jdbc.queryForList(
                 "SELECT status || ':' || attempts FROM payment.inbox ORDER BY status",
                 String.class))
-        .containsExactly("APPLIED:0", "WAITING:1");
+        .containsExactly("APPLIED:1", "WAITING:1");
+  }
+
+  @Test
+  @DisplayName("처리가 롤백된 직후 실패 기록 전에 다른 처리기가 돌아도 같은 요청을 다시 잡지 않고 실패가 1회로 기록된다")
+  void otherProcessorCannotClaimBetweenRollbackAndFailureRecord() {
+    saveWaiting();
+    insertConflictingApprovalJob();
+    AtomicReference<Boolean> otherProcessed = new AtomicReference<>();
+    transactions.afterNextRollback(() -> otherProcessed.set(service.processNext()));
+
+    assertThat(service.processNext()).isTrue();
+
+    assertThat(otherProcessed.get()).isFalse();
+    assertThat(
+            new JdbcTemplate(dataSource)
+                .queryForMap(
+                    "SELECT status, attempts, last_error_code, next_run_at = ? AS retry_due"
+                        + " FROM payment.inbox",
+                    Timestamp.from(NOW.plusSeconds(1))))
+        .containsEntry("status", "WAITING")
+        .containsEntry("attempts", 1)
+        .containsEntry("last_error_code", "PAYMENT_REQUEST_PROCESSING_FAILED")
+        .containsEntry("retry_due", true);
   }
 
   @Test
@@ -428,6 +456,42 @@ class PaymentRequestProcessingIntegrationTest {
     @Bean
     MovableClock clock() {
       return new MovableClock();
+    }
+
+    @Bean
+    HookedTransactions transactions(PlatformTransactionManager manager) {
+      return new HookedTransactions(new TransactionTemplate(manager));
+    }
+  }
+
+  /** 처리 트랜잭션이 롤백된 직후, 실패를 기록하기 전에 다른 처리기를 끼워 넣어 순서를 고정한다. */
+  static final class HookedTransactions implements TransactionOperations {
+    private final TransactionTemplate delegate;
+    private final AtomicReference<Runnable> afterRollback = new AtomicReference<>();
+
+    HookedTransactions(TransactionTemplate delegate) {
+      this.delegate = delegate;
+    }
+
+    void afterNextRollback(Runnable hook) {
+      afterRollback.set(hook);
+    }
+
+    void clear() {
+      afterRollback.set(null);
+    }
+
+    @Override
+    public <T> T execute(TransactionCallback<T> action) {
+      try {
+        return delegate.execute(action);
+      } catch (RuntimeException exception) {
+        Runnable hook = afterRollback.getAndSet(null);
+        if (hook != null) {
+          hook.run();
+        }
+        throw exception;
+      }
     }
   }
 
