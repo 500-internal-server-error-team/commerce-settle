@@ -101,6 +101,20 @@ public class BuyerCoupon extends AuditableEntity {
     return new Issued(coupon, history);
   }
 
+  /** 판매자 캠페인의 한 장. 사용 기간은 캠페인 기간이며 기한은 캠페인 종료 시각이다. 발급 업무 키는 구매자 ID다. */
+  public static Issued issueSeller(UUID id, CouponTemplate template, UUID buyerId, Instant now) {
+    if (template.getKind() != CouponKind.SELLER) {
+      throw new IllegalArgumentException("not a seller template: " + template.getId());
+    }
+    template.requireIssuableAt(now);
+    BuyerCoupon coupon =
+        new BuyerCoupon(
+            id, template, buyerId, template.getValidFrom(), template.getValidUntil(), now);
+    CouponHistory history =
+        coupon.history(CouponOperation.ISSUE, null, buyerId, null, coupon.discountAmount, 0, now);
+    return new Issued(coupon, history);
+  }
+
   /** 주문에 쓸 할인액. 상태·기한·수단·판매자/상품·최소 주문금액을 확인하며 상태를 바꾸지 않는다. grossAmount는 쿠폰 적용 전 상품대금이다. */
   public long discountFor(
       UUID sellerId, UUID productId, long grossAmount, Order.ExternalMethod method, Instant now) {
