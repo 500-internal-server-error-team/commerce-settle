@@ -19270,9 +19270,15 @@
             "type": "string"
           },
           "payoutId": {
-            "type": "string",
-            "format": "uuid",
-            "nullable": true
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "activeReservation": {
             "type": "boolean"

@@ -7,6 +7,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.commercesettle.internalauth.InternalAuthAutoConfiguration;
 import com.commercesettle.settlement.infrastructure.persistence.JdbcRefundClosureQuery;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.networknt.schema.InputFormat;
+import com.networknt.schema.Schema;
+import com.networknt.schema.SchemaLocation;
+import com.networknt.schema.SchemaRegistry;
+import com.networknt.schema.SpecificationVersion;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,6 +56,7 @@ class RefundClosureEvidenceIntegrationTest {
 
   @Autowired MockMvc mvc;
   @Autowired JdbcTemplate jdbc;
+  @Autowired ObjectMapper mapper;
   private final UUID refund = UUID.randomUUID();
   private final UUID payment = UUID.randomUUID();
   private final UUID order = UUID.randomUUID();
@@ -79,15 +87,20 @@ class RefundClosureEvidenceIntegrationTest {
   @Test
   @DisplayName("소유 DB의 원환불 증빙을 서비스 권한으로만 읽는다")
   void readsAuthoritativeOwnerStateThroughAuthenticatedHttp() throws Exception {
-    mvc.perform(get(path()).header(HttpHeaders.AUTHORIZATION, "Bearer " + COMMERCE))
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$.refundId").value(refund.toString()))
-        .andExpect(jsonPath("$.paymentId").value(payment.toString()))
-        .andExpect(jsonPath("$.orderId").value(order.toString()))
-        .andExpect(jsonPath("$.status").value("RELEASED"))
-        .andExpect(jsonPath("$.activeReservation").value(false))
-        .andExpect(jsonPath("$.itemVersion").value(4))
-        .andExpect(jsonPath("$.releasedAt").value(AT.toString()));
+    var result =
+        mvc.perform(get(path()).header(HttpHeaders.AUTHORIZATION, "Bearer " + COMMERCE))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.refundId").value(refund.toString()))
+            .andExpect(jsonPath("$.paymentId").value(payment.toString()))
+            .andExpect(jsonPath("$.orderId").value(order.toString()))
+            .andExpect(jsonPath("$.status").value("RELEASED"))
+            .andExpect(jsonPath("$.activeReservation").value(false))
+            .andExpect(jsonPath("$.itemVersion").value(4))
+            .andExpect(jsonPath("$.releasedAt").value(AT.toString()))
+            .andReturn();
+    var response = mapper.readTree(result.getResponse().getContentAsString());
+    assertThat(response.required("payoutId").isNull()).isTrue();
+    assertThat(closureSchema().validate(response.toString(), InputFormat.JSON)).isEmpty();
     mvc.perform(get(path())).andExpect(status().isUnauthorized());
     mvc.perform(get(path()).header(HttpHeaders.AUTHORIZATION, "Bearer " + GATEWAY))
         .andExpect(status().isForbidden());
@@ -118,6 +131,40 @@ class RefundClosureEvidenceIntegrationTest {
                 String.class,
                 reservation))
         .isEqualTo("ACTIVE");
+  }
+
+  @Test
+  @DisplayName("지급 배정 증빙은 명세에 맞고 지급 참조 누락·숫자는 거절한다")
+  void validatesAssignedPayoutAndRejectsIncompleteReferences() throws Exception {
+    var payout = UUID.randomUUID();
+    jdbc.update(
+        "UPDATE settlement.settlement_items SET status='PAYOUT_RESERVED',payout_id=?,version=version+1 WHERE id=?",
+        payout,
+        item);
+    var result =
+        mvc.perform(get(path()).header(HttpHeaders.AUTHORIZATION, "Bearer " + COMMERCE))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.payoutId").value(payout.toString()))
+            .andReturn();
+    var response = (ObjectNode) mapper.readTree(result.getResponse().getContentAsString());
+    var schema = closureSchema();
+
+    assertThat(schema.validate(response.toString(), InputFormat.JSON)).isEmpty();
+    var missing = response.deepCopy();
+    missing.remove("payoutId");
+    assertThat(schema.validate(missing.toString(), InputFormat.JSON)).isNotEmpty();
+    var numeric = response.deepCopy().put("payoutId", 123);
+    assertThat(schema.validate(numeric.toString(), InputFormat.JSON)).isNotEmpty();
+  }
+
+  private Schema closureSchema() throws Exception {
+    var canonical = mapper.readTree(getClass().getResourceAsStream("/contracts/openapi.json"));
+    var root = mapper.createObjectNode();
+    root.set("components", canonical.required("components"));
+    root.put("$ref", "#/components/schemas/ReservationClosureEvidence");
+    return SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_2020_12)
+        .getSchema(
+            SchemaLocation.of("urn:test:reservation-closure"), root.toString(), InputFormat.JSON);
   }
 
   private String path() {
