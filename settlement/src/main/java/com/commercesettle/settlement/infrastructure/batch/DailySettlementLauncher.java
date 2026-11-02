@@ -23,7 +23,8 @@ import org.springframework.stereotype.Component;
 /**
  * batchDate를 식별 파라미터로 일배치를 실행한다. 직전 실행이 실패·중단이면 Spring Batch가 같은 JobInstance를 이어서 재시작하고, 이미 완료됐으면
  * 새로 실행하지 않고 완료로 돌려준다(저장된 배치가 결과다). 같은 batchDate의 실행자 잠금을 쥔 채 실행하며, 다른 실행자가 쥐고 있으면 시작하지 않고 실행 중으로
- * 돌려준다. 실행 중으로 남은 실행은 건드리지 않는다(ADR 0007 D7의 강제 종료 복구는 후속). 실행자 ID는 비식별 파라미터로 남긴다.
+ * 돌려준다. 잠금을 잡았는데 실행 중으로 남은 실행이 있으면 강제 종료 잔류로 보고, 정체됐을 때만 정리한 뒤 한 번 다시 실행한다(ADR 0007 D7). 실행자 ID는
+ * 비식별 파라미터로 남긴다.
  */
 @Component
 public class DailySettlementLauncher {
@@ -34,14 +35,20 @@ public class DailySettlementLauncher {
   private final JobLauncher jobLauncher;
   private final Job dailySettlementJob;
   private final DailySettlementLock lock;
+  private final DailySettlementRecovery recovery;
   private final Clock clock;
   private final String executorId = "settlement-" + UUID.randomUUID();
 
   DailySettlementLauncher(
-      JobLauncher jobLauncher, Job dailySettlementJob, DailySettlementLock lock, Clock clock) {
+      JobLauncher jobLauncher,
+      Job dailySettlementJob,
+      DailySettlementLock lock,
+      DailySettlementRecovery recovery,
+      Clock clock) {
     this.jobLauncher = jobLauncher;
     this.dailySettlementJob = dailySettlementJob;
     this.lock = lock;
+    this.recovery = recovery;
     this.clock = clock;
   }
 
@@ -64,11 +71,11 @@ public class DailySettlementLauncher {
       return BatchStatus.STARTED;
     }
     try (DailySettlementLock.Held ignored = held.get()) {
-      return launch(batchDate, itemIds);
+      return launch(batchDate, itemIds, true);
     }
   }
 
-  private BatchStatus launch(LocalDate batchDate, Set<UUID> itemIds) {
+  private BatchStatus launch(LocalDate batchDate, Set<UUID> itemIds, boolean mayRecover) {
     JobParametersBuilder builder =
         new JobParametersBuilder()
             .addLocalDate(DailySettlementJobConfiguration.BATCH_DATE, batchDate)
@@ -90,6 +97,9 @@ public class DailySettlementLauncher {
     } catch (JobInstanceAlreadyCompleteException e) {
       return BatchStatus.COMPLETED;
     } catch (JobExecutionAlreadyRunningException e) {
+      if (mayRecover && recovery.recoverIfStale(batchDate)) {
+        return launch(batchDate, itemIds, false);
+      }
       logAlreadyRunning(batchDate);
       return BatchStatus.STARTED;
     } catch (JobRestartException | JobParametersInvalidException e) {
