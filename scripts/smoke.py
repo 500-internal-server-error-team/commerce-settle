@@ -192,6 +192,25 @@ def check_internal_credentials():
         "smoke", pg_lookup,
     ).stdout.strip()
     assert settlement_to_pg == "403", settlement_to_pg
+    # Settlement reaches the Commerce settlement context (404 means no product); Gateway cannot.
+    settlement_context = ("http://commerce:8080/internal/products/" + str(uuid.uuid4())
+                          + "/settlement-context")
+    lookup = compose(
+        "exec", "-T", "settlement", "sh", "-c",
+        'exec curl --silent --write-out "\\n%{http_code}" '
+        '-H "Authorization: Bearer $COMMERCE_SETTLEMENT_CREDENTIAL" "$1"',
+        "smoke", settlement_context,
+    ).stdout.strip()
+    body, _, status = lookup.rpartition("\n")
+    assert status == "404", lookup
+    assert json.loads(body)["code"] == "COMMON_RESOURCE_NOT_FOUND", body
+    gateway_to_context = compose(
+        "exec", "-T", "gateway", "sh", "-c",
+        'exec curl --silent --output /dev/null --write-out "%{http_code}" '
+        '-H "Authorization: Bearer $COMMERCE_GATEWAY_CREDENTIAL" "$1"',
+        "smoke", settlement_context,
+    ).stdout.strip()
+    assert gateway_to_context == "403", gateway_to_context
 
 
 def check_login_flow(base):
