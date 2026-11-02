@@ -778,6 +778,7 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 | `funding_account_ref` | `varchar(100)` | 업무 값 |
 | `scenario_version` | `varchar(32)` | 지급 생성 때 고정한 금융 실행 시나리오 버전 |
 | `succeeded_at` | `timestamptz?` | 업무 값 |
+| `unknown_since` | `timestamptz?` | 최초 UNKNOWN 전이 시각. 같은 미확정의 반복 조회에도 유지하는 경보 원천 |
 | `amount` | `bigint` | 업무 값 |
 | `business_key` | `uuid` | 업무 값 |
 | `external_ref` | `uuid?` | 업무 값 |

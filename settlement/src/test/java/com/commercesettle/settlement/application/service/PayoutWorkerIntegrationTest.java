@@ -196,6 +196,7 @@ class PayoutWorkerIntegrationTest {
     worker.runOnce();
 
     assertThat(payout()).containsEntry("status", "UNKNOWN").containsEntry("hold_reason", "UNKNOWN");
+    assertThat(payout().get("unknown_since")).isNotNull();
     assertThat(job()).containsEntry("status", "RETRY");
     assertThat(reservationStatuses()).containsOnly("ACTIVE");
 

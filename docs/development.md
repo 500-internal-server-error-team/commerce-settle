@@ -165,7 +165,24 @@ DB 주문의 신규 접수와 새 결제 회차에는 기본으로 gate를 적�
 
 전용 단일 실행기가 Commerce DB 관측과 Prometheus instant query를 15초 간격으로 수행합니다. DB 쿼리는 2초, HTTP는 전체 5초·응답 2 MiB 상한이며 요청 트랜잭션에서 원격 조회하지 않습니다. 수집 실패·지표 누락·오래된 원본 시각이면 닫습니다. `commerce_order_admission_open`은 열림 1/닫힘 0이며, Commerce의 두 금융 대기열 값과 원본 수집 시각을 `/actuator/prometheus`로 제공합니다. 상세 metric·필수 대상·임계값은 [접수 정책](policies.md#신규-접수-제한과-재개)을 따릅니다.
 
-현재 외부 소유 수집기는 연결 전이므로 기본 Compose에서 신규 주문을 보내면 `503 COMMON_CAPACITY_EXCEEDED`, `Retry-After: 30`입니다. 누락을 0으로 채우거나 gate를 우회해 정상 동작으로 표시하지 않습니다. Payment·Settlement·lag·데이터 파일시스템 관측 연결과 실제 환경 회복 검증은 [#120](https://github.com/500-internal-server-error-team/commerce-settle/issues/120)에 남아 있습니다. 주문 측 HTTP·DB 회귀는 실제 gate의 관측 누락 거절, 기존 결과/본문 충돌 우선, 거절 키 재사용, 결제 재시도 롤백·취소 비제한을 검사합니다. 임계값·복제 관측·원본 시각·히스테리시스와 실제 HTTP 관측 어댑터는 별도 좁은 테스트로 확인합니다.
+### 금융 관측과 접수 복구
+
+Payment API·Worker는 같은 소유 DB를 각각 관측합니다. Settlement도 자기 Inbox·Outbox·지급 Job을 관측하며, 중복 인스턴스를 합산하지 않습니다. 미래 재시도·유효 임대·수동 확인은 자동 실행 지연에서 제외합니다. 금융 UNKNOWN·환불·미지급·수동 확인 경보는 `infra/prometheus/financial.rules.yml`에서 기존 Alertmanager와 [Slack overlay](#dlt-관측과-조치)에 연결합니다. 격리·DLT와 알림 전용 경보는 기존 소유 규칙을 유지합니다.
+
+Kafka는 `commerce.v1 → payment.v1 토픽`, `payment.v1 → commerce.v1·settlement.v1 토픽`, `settlement.v1 → payment.v1·commerce.v1 토픽`의 **모든 파티션**을 수집합니다. 여기서 토픽은 `commerce-settle.` 접두사를 포함합니다. 초기 offset 부재·보존 범위 밖 offset·누락/실패 파티션을 0 lag로 바꾸지 않습니다. 신규 전용 환경에서 소비자를 켜기 전에 기존 offset 초기화 절차로 각 그룹의 모든 계약 토픽을 준비합니다. 예를 들어 새 Payment 그룹은 다음과 같습니다.
+
+```bash
+docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server kafka:9092 --group payment.v1 --reset-offsets \
+  --topic commerce-settle.commerce.v1 --topic commerce-settle.settlement.v1 \
+  --to-earliest --execute
+```
+
+운영 중인 그룹이나 공유 데이터에서 offset을 임의로 재설정하지 않습니다. 토픽 파티션을 늘리면 새 파티션의 시작점도 명시적으로 준비합니다. 기본 Outbox·Consumer/Worker 활성화 정책은 바꾸지 않으므로 전체 업무 시연에는 각 소유 기능의 실행 설정도 필요합니다. 미발행 금융 작업을 계속 쌓아 도래 지연이 60초에 도달하면 관측이 정상이어도 신규 접수가 닫힙니다.
+
+`python3 scripts/test_admission.py`는 새 이름의 전용 Compose 프로젝트·빈 볼륨·시험 계정/상품을 생성합니다. 실제 세 서비스 수집기·Kafka Admin·데이터 볼륨·Prometheus에서 유효 신호를 준비하고, 최소 60초 회복 뒤 Gateway로 일반 주문을 접수해 주문·Outbox 저장을 확인합니다. 데이터 볼륨 수집 중단 뒤 신규 주문 503·기존 키 재요청·조회·취소 접수 유지, 실제 Alertmanager의 수집 실패 경보 수신, 수집 재개와 다시 60초 회복 후 신규 주문을 검사합니다. 금융 수치는 고정하거나 gate를 끄지 않습니다. Commerce Outbox만 시험 인스턴스에서 활성화하며 전체 외부 결제·환불 왕복 시험은 아닙니다. 전용 컨테이너·볼륨·설정은 종료 시 제거하고, 정리 확인에 실패하면 정확한 시험 설정 위치를 남깁니다. 기본 CI에도 포함합니다.
+
+`KafkaLagMetricsIntegrationTest`는 실제 Kafka에서 세 그룹·다중 파티션 lag 합산, 미초기화·증설 파티션의 실패와 회복, 브로커 중단을 검사합니다. 각 소유 DB의 `FinancialQueueMetricsIntegrationTest`는 실제 PostgreSQL에서 미완료·미래 대기·유효 임대·수동 확인 구분, 같은 캡처의 값/시각과 수집 실패/회복을 확인합니다. 환불 결과 복구는 기존 `OrderWorkflowIntegrationTest`에서 접수 gate가 거절하는 동안에도 검증하며 금융 결과 입력은 시험 이벤트입니다. 전체 금융·알림 왕복의 최종 판정은 #120의 범위입니다.
 
 ## 결제 접수 결과 수신
 
@@ -327,7 +344,7 @@ Compose와 Gradle `bootRun`은 JVM 시간대를 `Asia/Seoul`로 지정합니다.
 | Payment 명세 | <http://localhost:8080/v3/api-docs/payment> | 기본 구성 |
 | Settlement 명세 | <http://localhost:8080/v3/api-docs/settlement> | 기본 구성 |
 | Zipkin | <http://localhost:9411> | 기본 구성, 메모리 저장소 |
-| Prometheus | <http://localhost:9090> | `observability` |
+| Prometheus | <http://localhost:9090> | 기본 구성 |
 | Alertmanager | <http://localhost:9093> | `observability`, 기본 외부 발송 없음 |
 | Grafana | <http://localhost:3000> | `observability`, 사용자 `admin`, 비밀번호 `.env`의 `GRAFANA_ADMIN_PASSWORD` |
 | Kafka-UI | <http://localhost:8081> | `observability` |
@@ -486,7 +503,7 @@ SLACK_WEBHOOK_URL_FILE=/path/to/slack-webhook-url \
 docker compose -f compose.yml -f compose.alertmanager-slack.yml --profile observability up -d --wait --wait-timeout 300
 ```
 
-`python3 scripts/test_observability.py`는 규칙 경계·중복/오래된 표본과 실제 Prometheus→Alertmanager→전용 시험 수신기의 발생·복구 전달, WARNING 억제, 대시보드 등록을 검사합니다. 시험 알림 주기만 짧게 하고 실제 Slack은 사용하지 않습니다. 전용 Compose 프로젝트·임시 설정·컨테이너·볼륨은 종료 때 제거하며 기본 CI에도 포함합니다. 이 검사는 Kafka lag·금융 Inbox/Outbox/Job·전체 저장소 관측이나 신규 접수 gate를 검증하지 않습니다.
+`python3 scripts/test_observability.py`는 규칙 경계·중복/오래된 표본과 실제 Prometheus→Alertmanager→전용 시험 수신기의 발생·복구 전달, WARNING 억제, 대시보드 등록을 검사합니다. 시험 알림 주기만 짧게 하고 실제 Slack은 사용하지 않습니다. 전용 Compose 프로젝트·임시 설정·컨테이너·볼륨은 종료 때 제거하며 기본 CI에도 포함합니다. 이 격리 전달 시험은 금융 규칙의 정적 경계도 확인합니다. 실제 금융 관측·신규 접수 gate는 [별도 시나리오](#금융-관측과-접수-복구)로 검사합니다.
 
 `./gradlew :commerce:test :payment:test`는 Docker에서 전용 `apache/kafka:4.2.2` 컨테이너를 만들어 Outbox 원문 발행·위치 저장·ACK 후 저장 실패의 재발행과 실제 수신, 초기 offset 부재, 인계 실패 후 offset 보존과 소비자 재기동의 재전달을 검증합니다. Docker가 없으면 이 통합 시험은 실패하며 생략하지 않습니다. 시험 컨테이너와 데이터는 종료 때 제거하고 개발 Kafka·DB·볼륨을 사용하지 않습니다. 기본 `build`·CI에도 포함되며, smoke는 기동된 실제 7개 토픽의 설정을 추가로 검사합니다. Payment Kafka 수신 시험의 인계 구현은 메모리 대역입니다. Commerce Outbox의 실제 DB·Kafka 전달 시험도 주문·외부 결제 전체의 금융 정합성·업무 멱등성·처리량 검증을 대신하지 않습니다.
 

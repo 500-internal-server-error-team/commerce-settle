@@ -373,7 +373,7 @@ Redis 단절·재접속·실행 식별자 변경을 감지하면 Gateway와 커�
 
 건수는 아직 종결되지 않은 로컬 행을 각각 세며 같은 업무가 서로 다른 단계에 있다는 이유로 합산한 총량과 비교하지 않습니다. 미발행 Outbox와 RECEIVED/WAITING/REVIEW_REQUIRED Inbox, 실행·재시도·수동 확인이 남은 금융 Job을 포함합니다. 예약된 미래 지급·재시도의 도래 전 시간은 지연으로 세지 않고, REVIEW_REQUIRED는 자동 실행 지연에서 제외하되 미완료 건수와 별도 알람에는 포함합니다. 이로써 정상적인 다음 실행 시각 대기나 5분 조회 주기를 적체로 오인하지 않습니다.
 
-Commerce의 각 인스턴스가 기존 내부 Prometheus에서 필요한 관측을 15초마다 묶어서 읽어 접수 상태를 판정합니다. 요청마다 원격 지표·다른 서비스 DB를 조회하지 않습니다. 각 소유 앱은 자기 DB의 논리 대기열·수집 시각을 내보내며 같은 대기열을 여러 인스턴스가 관측해도 중복 합산하지 않습니다. Kafka lag와 실제 데이터 파일시스템 사용률도 담당 수집기의 원본 관측 시각을 확인합니다. 누락된 지표를 0으로 대체하거나 Prometheus 조회 성공만으로 오래된 표본을 최신으로 취급하지 않습니다. Commerce의 gate와 자기 DB의 금융 Outbox·Inbox 관측을 구현했습니다. Payment·Settlement 대기열, Kafka lag·데이터 파일시스템 수집기는 연결 전이므로 기본 환경의 신규 접수는 닫힙니다. 외부 관측 연결과 실제 서비스 왕복은 [#120](https://github.com/500-internal-server-error-team/commerce-settle/issues/120)에서 추적합니다.
+Commerce의 각 인스턴스가 기존 내부 Prometheus에서 필요한 관측을 15초마다 묶어서 읽어 접수 상태를 판정합니다. 요청마다 원격 지표·다른 서비스 DB를 조회하지 않습니다. 각 소유 앱은 자기 DB의 논리 대기열·수집 시각을 내보내며 같은 대기열을 여러 인스턴스가 관측해도 중복 합산하지 않습니다. Kafka lag와 실제 데이터 파일시스템 사용률도 담당 수집기의 원본 관측 시각을 확인합니다. 누락된 지표를 0으로 대체하거나 Prometheus 조회 성공만으로 오래된 표본을 최신으로 취급하지 않습니다. 각 서비스의 금융 대기열과 Commerce의 Kafka Admin 관측, 실제 Kafka·PostgreSQL 데이터 볼륨의 파일시스템 관측을 연결했습니다. 기본 Compose는 Prometheus와 데이터 볼륨 수집기를 함께 실행합니다. 최초 그룹 offset을 준비하지 않았거나 기존 DB에 필요한 소유 스키마가 없으면 접수는 계속 닫힙니다. 전체 금융·알림 왕복의 최종 판정은 [#120](https://github.com/500-internal-server-error-team/commerce-settle/issues/120)에서 추적합니다.
 
 관측 연동은 다음 metric 이름과 label을 사용합니다. 값 metric과 원본 시각 metric의 수집기 label(`job`·`instance` 등)은 같아야 합니다. `signal`은 아래 표의 대문자 값이며 `resource`는 값 metric의 `queue`·`group`·`store` 값과 같습니다. 각 수집기는 값과 원본 시각을 같은 관측 묶음에서 캡처해 한 scrape에 내보냅니다. 원본 시각은 epoch 초이며 0은 미수집/실패입니다. Prometheus가 제공하는 표본 timestamp를 원본 수집 시각으로 대신하지 않습니다.
 
@@ -393,7 +393,7 @@ Commerce의 각 인스턴스가 기존 내부 Prometheus에서 필요한 관측�
 
 ## 운영 알람
 
-조치가 필요한 장애는 `Prometheus → Alertmanager`로 전달하며 Grafana는 원인 확인에 사용합니다. 현재 Payment·Settlement 격리·DLT/REPLAY 작업의 지표·규칙·대시보드와 Alertmanager를 연결했습니다. 기본은 화면 확인이고 Slack은 비밀 파일 overlay를 명시적으로 적용해야 합니다. 아래 기준 중 격리 관련 항목만 구현했으며 금융 업무·자원 수집기와 다른 소비자 관측은 구현 전입니다.
+조치가 필요한 장애는 `Prometheus → Alertmanager`로 전달하며 Grafana는 원인 확인에 사용합니다. 현재 Payment·Settlement 격리·DLT/REPLAY 작업의 지표·규칙·대시보드와 Alertmanager를 연결했습니다. 기본은 화면 확인이고 Slack은 비밀 파일 overlay를 명시적으로 적용해야 합니다. 금융 논리 대기열·미확정 결제/지급·미완료 환불·확정 배치 미지급·Kafka lag·데이터 파일시스템도 같은 경로로 연결했습니다. HTTP·CPU·메모리·컨테이너 생존 수집 전체를 구현했다는 뜻은 아닙니다.
 
 | 조건 | 초기 기준 | 등급·조치 |
 | --- | --- | --- |
@@ -407,7 +407,7 @@ Commerce의 각 인스턴스가 기존 내부 Prometheus에서 필요한 관측�
 | HTTP 장애 | 5분간 요청 100건 이상에서 5xx 비율 5% 초과가 5분 지속 | WARNING. 서비스·경로 템플릿별 오류·trace 확인 |
 | 자원 부족 | 메모리 제한 90% 초과 5분, 디스크 가용 10% 미만 5분, CPU 할당량 90% 초과 10분 | WARNING. 부하 중단·자원 조정 판단; 여유 메모리 5% 미만/OOM은 CRITICAL |
 
-Payment 격리는 소유 DB에서 상태별 건수·도래 후 최장 나이를 계산해 `/actuator/prometheus`로 노출합니다. 최근 5분 신규 원문과 소진 작업을 경보하며 발행 완료를 금융 업무 성공으로 간주하지 않습니다. 다른 업무의 건수·나이 지표는 구현 전입니다. 계정/주문 ID를 메트릭 label로 사용하지 않습니다. 무작업이면 나이·건수는 0이며 정상 대기·완료 건을 적체에서 제외합니다. Kafka lag는 메시지 수, 대기 나이는 초 단위입니다.
+Payment 격리는 소유 DB에서 상태별 건수·도래 후 최장 나이를 계산해 `/actuator/prometheus`로 노출합니다. 최근 5분 신규 원문과 소진 작업을 경보하며 발행 완료를 금융 업무 성공으로 간주하지 않습니다. 금융 작업의 수동 확인은 논리 대기열별로 세고, 결제 미확정은 현재 UNKNOWN 전이 시각, 지급 미확정은 반복 조회에도 유지하는 `unknown_since`, 미완료 환불은 `accepted_at`, 확정 배치 미지급은 `cutoff_at`부터 나이를 셉니다. 다음 회차에 아직 확정하지 않은 항목은 미지급 배치에 포함하지 않습니다. 금융 경보는 가장 최신 원본 시각의 복제 관측만 사용하고 동시각이면 최대값을 선택합니다. 데이터 파일시스템 70% 이상이 5분 지속되면 WARNING, 80% 이상이면 CRITICAL이며 금융 lag 50,000건 이상은 WARNING입니다. 계정/주문 ID를 메트릭 label로 사용하지 않습니다. 무작업이면 나이·건수는 0이며 정상 대기·완료 건을 적체에서 제외합니다. Kafka lag는 메시지 수, 대기 나이는 초 단위입니다.
 
 Alertmanager는 환경·서비스·알람 이름으로 묶고 최초 30초 대기·그룹 갱신 5분·반복 1시간을 기본으로 합니다. 같은 장애의 CRITICAL이 WARNING을 억제하고 복구도 안내합니다. Slack에는 등급·발생/지속 시각·영향·대시보드/조치 문서 링크를 보내고 개인정보·알림 본문·비밀값은 보내지 않습니다. 부하 시험 채널은 운영 채널과 분리합니다. [Alertmanager의 묶음·중복 억제](https://prometheus.io/docs/alerting/latest/alertmanager/)를 사용합니다.
 

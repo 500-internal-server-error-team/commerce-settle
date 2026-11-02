@@ -1,0 +1,67 @@
+rule_files: [financial.rules.yml]
+evaluation_interval: 15s
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_financial_queue_records{queue="payment.payment_jobs",job="apps",instance="old"}'
+        values: '999x4'
+      - series: 'commerce_settle_admission_observed_timestamp_seconds{signal="QUEUE_SIZE",resource="payment.payment_jobs",job="apps",instance="old"}'
+        values: '10x4'
+      - series: 'commerce_settle_financial_queue_records{queue="payment.payment_jobs",job="apps",instance="new"}'
+        values: '3x4'
+      - series: 'commerce_settle_admission_observed_timestamp_seconds{signal="QUEUE_SIZE",resource="payment.payment_jobs",job="apps",instance="new"}'
+        values: '0+15x4'
+    promql_expr_test:
+      - expr: financial:queue_value
+        eval_time: 1m
+        exp_samples:
+          - labels: 'financial:queue_value{queue="payment.payment_jobs"}'
+            value: 3
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_financial_queue_due_delay_seconds{queue="settlement.payout_jobs",job="apps",instance="one"}'
+        values: '999x4'
+      - series: 'commerce_settle_admission_observed_timestamp_seconds{signal="DUE_AGE",resource="settlement.payout_jobs",job="apps",instance="one"}'
+        values: '10x4'
+    promql_expr_test:
+      - expr: financial:due_queue_value
+        eval_time: 1m
+        exp_samples: []
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_data_filesystem_usage_ratio{store="kafka",job="data",instance="one"}'
+        values: '0.8x4'
+      - series: 'commerce_settle_admission_observed_timestamp_seconds{signal="STORAGE",resource="kafka",job="data",instance="one"}'
+        values: '0+15x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DataStoragePressure
+        exp_alerts:
+          - exp_labels: {severity: critical, store: kafka}
+            exp_annotations:
+              summary: 데이터 저장소 압박으로 신규 주문 접수를 중단합니다.
+              runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_financial_operation_age_seconds{operation="payment.unknown",job="apps",instance="one"}'
+        values: '300x4'
+      - series: 'commerce_settle_financial_operation_observed_timestamp_seconds{operation="payment.unknown",job="apps",instance="one"}'
+        values: '0+15x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FinancialUnknown
+        exp_alerts: []
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_financial_operation_age_seconds{operation="payment.unknown",job="apps",instance="one"}'
+        values: '301x4'
+      - series: 'commerce_settle_financial_operation_observed_timestamp_seconds{operation="payment.unknown",job="apps",instance="one"}'
+        values: '0+15x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FinancialUnknown
+        exp_alerts:
+          - exp_labels: {severity: warning, operation: payment.unknown}
+            exp_annotations:
+              summary: 금융 미확정 원거래를 조회하고 대조하세요.
+              runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
