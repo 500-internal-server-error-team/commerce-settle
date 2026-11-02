@@ -26,6 +26,7 @@ import com.networknt.schema.InputFormat;
 import com.networknt.schema.SchemaLocation;
 import com.networknt.schema.SchemaRegistry;
 import com.networknt.schema.SpecificationVersion;
+import java.net.URI;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
@@ -733,9 +734,19 @@ class OrderWorkflowIntegrationTest {
         version(r).put("expectedVersion", r.path("version").asLong() - 1),
         409);
 
-    var c = call("BUYER", f.buyer(), path, version(r), 201, key);
-
-    assertThat(call("BUYER", f.buyer(), path, version(r), 201, key)).isEqualTo(c);
+    var headers = new HttpHeaders();
+    headers.setBearerAuth(GATEWAY);
+    headers.set("X-Authenticated-Actor-Kind", "BUYER");
+    headers.set("X-Authenticated-Actor-Id", f.buyer().toString());
+    headers.setContentType(MediaType.APPLICATION_JSON);
+    headers.set("Idempotency-Key", key);
+    var request = new HttpEntity<>(version(r), headers);
+    var created = http.postForEntity(path, request, JsonNode.class);
+    var replay = http.postForEntity(path, request, JsonNode.class);
+    assertThat(created.getStatusCode().value()).isEqualTo(201);
+    assertThat(replay.getStatusCode().value()).isEqualTo(201);
+    var c = created.getBody();
+    assertThat(replay.getBody()).isEqualTo(c);
     assertThat(c.path("refundId")).isEqualTo(r.path("refundId"));
     assertThat(java.time.OffsetDateTime.parse(c.path("confirmedAt").asText()).toInstant())
         .isEqualTo(NOW);
@@ -750,6 +761,9 @@ class OrderWorkflowIntegrationTest {
                 UUID.class,
                 uuid(c, "id")))
         .isEqualTo(f.buyer());
+    var location = URI.create(path + "/" + uuid(c, "id"));
+    assertThat(created.getHeaders().getLocation()).isEqualTo(location);
+    assertThat(replay.getHeaders().getLocation()).isEqualTo(location);
   }
 
   @org.junit.jupiter.params.ParameterizedTest

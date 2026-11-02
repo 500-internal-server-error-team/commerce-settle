@@ -311,14 +311,23 @@ public class OrderWorkflowController {
   @Operation(
       operationId = "post_api_refund_requests_requestId_closure_confirmations",
       summary = "구매자의 실패 환불 종결 의사 확인")
-  @ApiResponse(responseCode = "201", description = "구매자 확인 기록 생성")
+  @ApiResponse(
+      responseCode = "201",
+      description = "구매자 확인 기록 생성",
+      headers =
+          @Header(
+              name = "Location",
+              required = true,
+              description = "생성한 확인 기록의 식별 URI. 별도 GET API는 제공하지 않는다.",
+              schema = @Schema(type = "string", format = "uri-reference")))
   public ResponseEntity<OrderWorkflowResponses.ClosureConfirmation> confirmClosure(
       @Parameter(hidden = true) AuthenticatedBuyer buyer,
       @PathVariable UUID requestId,
       @RequestHeader("Idempotency-Key") @Size(min = 8, max = 128) String key,
       @Valid @RequestBody OrderWorkflowRequests.Version r) {
     var c = refunds.confirmClosure(buyer.id(), requestId, key, r.expectedVersion());
-    return ResponseEntity.created(URI.create("/api/refund-requests/" + requestId))
+    return ResponseEntity.created(
+            URI.create("/api/refund-requests/" + requestId + "/closure-confirmations/" + c.id()))
         .body(
             new OrderWorkflowResponses.ClosureConfirmation(
                 c.id(),
