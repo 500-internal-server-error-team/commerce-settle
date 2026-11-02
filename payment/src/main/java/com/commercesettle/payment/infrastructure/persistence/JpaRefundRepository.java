@@ -42,6 +42,11 @@ class JpaRefundRepository implements RefundRepository {
   }
 
   @Override
+  public Optional<Refund> findByBusinessKeyForUpdate(UUID businessKey) {
+    return repository.findByBusinessKeyForUpdate(businessKey);
+  }
+
+  @Override
   public Optional<Refund> findActiveByPaymentId(UUID paymentId) {
     return repository.findFirstByPaymentIdAndStatusIn(paymentId, ACTIVE);
   }

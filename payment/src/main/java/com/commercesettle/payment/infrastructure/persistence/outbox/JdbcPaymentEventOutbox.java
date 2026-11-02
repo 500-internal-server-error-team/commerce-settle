@@ -9,6 +9,8 @@ import com.commercesettle.payment.application.event.RefundAcceptedPayload;
 import com.commercesettle.payment.application.event.RefundCompletedPayload;
 import com.commercesettle.payment.application.event.RefundEventPayload;
 import com.commercesettle.payment.application.event.RefundFailedPayload;
+import com.commercesettle.payment.application.event.RefundFinancialCompletedPayload;
+import com.commercesettle.payment.application.event.RefundReleaseRequestedPayload;
 import com.commercesettle.payment.application.event.RefundReservationRequestedPayload;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
 import com.commercesettle.payment.infrastructure.messaging.OutboxAppended;
@@ -32,6 +34,8 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
       Map.of(
           "RefundAccepted", RefundAcceptedPayload.class,
           "RefundReservationRequested", RefundReservationRequestedPayload.class,
+          "RefundFinancialCompleted", RefundFinancialCompletedPayload.class,
+          "RefundReleaseRequested", RefundReleaseRequestedPayload.class,
           "RefundCompleted", RefundCompletedPayload.class,
           "RefundFailed", RefundFailedPayload.class);
 
