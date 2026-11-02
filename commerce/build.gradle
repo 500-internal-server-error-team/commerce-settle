@@ -16,8 +16,12 @@ dependencies {
     testImplementation 'org.testcontainers:junit-jupiter'
 }
 
-tasks.named('processTestResources') {
+// 내부 호출 자격 판정이 요청을 명세 작업과 대조한다(ADR 0010). 테스트도 같은 리소스를 쓴다.
+tasks.named('processResources') {
     from(rootProject.file('docs/openapi.json')) { into 'contracts' }
+}
+
+tasks.named('processTestResources') {
     // 커머스가 발급한 세션을 Gateway의 실제 검증 스크립트로 확인한다.
     from(rootProject.file('gateway/src/main/resources/redis/verify-session.lua')) { into 'gateway' }
 }
