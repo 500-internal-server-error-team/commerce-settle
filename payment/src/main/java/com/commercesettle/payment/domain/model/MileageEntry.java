@@ -80,6 +80,13 @@ public class MileageEntry {
         wallet, reservation, MileageEntryKind.DEBIT, reservation.getPaymentId(), now);
   }
 
+  /** 예약 해제를 기록한다. 잔액은 바뀌지 않는다. 업무 키는 결제 회차 ID. */
+  public static MileageEntry release(
+      MileageWallet wallet, MileageReservation reservation, Instant now) {
+    return new MileageEntry(
+        wallet, reservation, MileageEntryKind.RELEASE, reservation.getCycleId(), now);
+  }
+
   public UUID getId() {
     return id;
   }

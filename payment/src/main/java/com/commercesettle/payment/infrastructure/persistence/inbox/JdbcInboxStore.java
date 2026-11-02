@@ -2,11 +2,13 @@ package com.commercesettle.payment.infrastructure.persistence.inbox;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
+import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
 import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -56,11 +58,10 @@ public class JdbcInboxStore implements InboxStore {
   }
 
   @Override
-  public void saveWaiting(EventEnvelope<OrderPaymentRequestedPayload> event, Source source) {
+  public void saveWaiting(EventEnvelope<?> event, Source source) {
     byte[] body = source.body();
     try {
-      EventEnvelope<OrderPaymentRequestedPayload> decoded =
-          mapper.readValue(body, new TypeReference<>() {});
+      EventEnvelope<?> decoded = mapper.readValue(body, envelopeType(event.eventType()));
       if (!event.equals(decoded)) {
         throw new IllegalArgumentException("Inbox event does not match its source body");
       }
@@ -163,13 +164,15 @@ public class JdbcInboxStore implements InboxStore {
                   attempts = CASE WHEN i.attempts >= :max THEN i.attempts ELSE i.attempts + 1 END,
                   updated_at = :now, version = i.version + 1
               FROM next WHERE i.id = next.id
-              RETURNING i.id, i.event_id, i.version, i.attempts, i.status, i.raw_body
+              RETURNING i.id, i.event_id, i.event_type, i.version, i.attempts, i.status,
+                  i.raw_body
               """,
             params,
             (rs, row) ->
                 new Claimed(
                     rs.getObject("id", UUID.class),
                     rs.getObject("event_id", UUID.class),
+                    rs.getString("event_type"),
                     rs.getLong("version"),
                     rs.getInt("attempts"),
                     rs.getString("status"),
@@ -184,12 +187,11 @@ public class JdbcInboxStore implements InboxStore {
       return Optional.of(new InboxClaim.Reviewed(row.id(), ATTEMPTS_EXHAUSTED));
     }
     try {
-      EventEnvelope<OrderPaymentRequestedPayload> event =
-          mapper.readValue(row.body(), new TypeReference<>() {});
+      EventEnvelope<?> event = mapper.readValue(row.body(), envelopeType(row.eventType()));
       return Optional.of(
           new InboxClaim.Claimed(
               new WaitingInboxEvent(row.id(), row.version(), row.attempts(), event)));
-    } catch (IOException exception) {
+    } catch (IOException | IllegalArgumentException exception) {
       // 저장 때 검증한 원문이므로 읽기 실패는 데이터 손상이나 계약 변경이다. 다시 읽어도 같으므로 재시도하지 않는다.
       finishWaiting(row.id(), "REVIEW_REQUIRED", null, BODY_UNREADABLE, now);
       logReview(row, BODY_UNREADABLE);
@@ -258,6 +260,7 @@ public class JdbcInboxStore implements InboxStore {
             """
             SELECT id, raw_body FROM payment.inbox
             WHERE consumer = :consumer AND status = 'APPLIED' AND result_ref = :paymentId
+              AND event_type = 'OrderPaymentRequested'
             ORDER BY created_at, id
             LIMIT 1
             """,
@@ -274,6 +277,54 @@ public class JdbcInboxStore implements InboxStore {
     } catch (IOException exception) {
       throw new IllegalStateException("Stored inbox body cannot be read: " + row.id());
     }
+  }
+
+  @Override
+  public Optional<UUID> findEarlyCancellation(UUID orderId, UUID paymentCycleId) {
+    return jdbc
+        .query(
+            """
+            SELECT id FROM payment.inbox
+            WHERE consumer = :consumer AND status = 'APPLIED' AND result_ref IS NULL
+              AND event_type = 'PaymentCancellationRequested' AND aggregate_id = :orderId
+              AND payload -> 'payload' ->> 'paymentCycleId' = :cycle
+            ORDER BY created_at, id
+            LIMIT 1
+            """,
+            new MapSqlParameterSource("consumer", consumer)
+                .addValue("orderId", orderId)
+                .addValue("cycle", paymentCycleId.toString()),
+            (rs, row) -> rs.getObject("id", UUID.class))
+        .stream()
+        .findFirst();
+  }
+
+  @Override
+  public void linkResult(UUID inboxId, UUID resultRef, Instant now) {
+    int updated =
+        jdbc.update(
+            """
+            UPDATE payment.inbox SET result_ref = :resultRef, updated_at = :now,
+                version = version + 1
+            WHERE id = :inboxId AND status = 'APPLIED' AND result_ref IS NULL
+            """,
+            new MapSqlParameterSource("inboxId", inboxId)
+                .addValue("resultRef", Objects.requireNonNull(resultRef))
+                .addValue("now", toTimestamp(now)));
+    if (updated != 1) {
+      throw new IllegalStateException("Inbox record cannot be linked: " + inboxId);
+    }
+  }
+
+  /** 저장·선점하는 이벤트 종류별 본문 타입. 처리하지 않는 종류는 받지 않는다. */
+  private JavaType envelopeType(String eventType) {
+    Class<?> payload =
+        switch (eventType) {
+          case "OrderPaymentRequested" -> OrderPaymentRequestedPayload.class;
+          case "PaymentCancellationRequested" -> PaymentCancellationRequestedPayload.class;
+          default -> throw new IllegalArgumentException("Unsupported inbox event type");
+        };
+    return mapper.getTypeFactory().constructParametricType(EventEnvelope.class, payload);
   }
 
   private void finishWaiting(
@@ -344,5 +395,11 @@ public class JdbcInboxStore implements InboxStore {
   }
 
   private record Claimed(
-      UUID id, UUID eventId, long version, int attempts, String status, byte[] body) {}
+      UUID id,
+      UUID eventId,
+      String eventType,
+      long version,
+      int attempts,
+      String status,
+      byte[] body) {}
 }

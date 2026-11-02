@@ -3,6 +3,8 @@ package com.commercesettle.payment.application.service;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
+import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
+import com.commercesettle.payment.application.event.PaymentCancellationResultPayload;
 import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
@@ -10,10 +12,12 @@ import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.commercesettle.payment.domain.exception.InvalidPaymentAmountException;
 import com.commercesettle.payment.domain.model.MileageEntry;
 import com.commercesettle.payment.domain.model.MileageReservation;
+import com.commercesettle.payment.domain.model.MileageReservationStatus;
 import com.commercesettle.payment.domain.model.MileageWallet;
 import com.commercesettle.payment.domain.model.Payment;
 import com.commercesettle.payment.domain.model.PaymentAmounts;
 import com.commercesettle.payment.domain.model.PaymentJob;
+import com.commercesettle.payment.domain.model.PaymentJobOperation;
 import com.commercesettle.payment.domain.repository.MileageEntryRepository;
 import com.commercesettle.payment.domain.repository.MileageReservationRepository;
 import com.commercesettle.payment.domain.repository.MileageWalletRepository;
@@ -45,6 +49,14 @@ import org.springframework.transaction.support.TransactionOperations;
 public class ApplyOrderPaymentRequestService {
   static final int MAX_ATTEMPTS = 10;
   static final String PROCESSING_FAILED = "PAYMENT_REQUEST_PROCESSING_FAILED";
+  static final String PAYMENT_CANCELLED = "PaymentCancelled";
+  static final String PAYMENT_CANCELLATION_REJECTED = "PaymentCancellationRejected";
+  static final String CANCELLED_BEFORE_APPROVAL = "CANCELLED_BEFORE_APPROVAL";
+  static final String CANCELLED_BEFORE_PAYMENT = "CANCELLED_BEFORE_PAYMENT";
+  static final String PAYMENT_IN_PROGRESS = "PAYMENT_IN_PROGRESS";
+  static final String PAYMENT_ALREADY_CONFIRMED = "PAYMENT_ALREADY_CONFIRMED";
+  static final String PAYMENT_CYCLE_MISMATCH = "PAYMENT_CYCLE_MISMATCH";
+  private static final String PAYMENT_CANCELLED_JOB = "PAYMENT_CANCELLED";
 
   private static final Logger LOG = LoggerFactory.getLogger(ApplyOrderPaymentRequestService.class);
 
@@ -171,7 +183,12 @@ public class ApplyOrderPaymentRequestService {
       return false;
     }
     UUID inboxId = claimed.get().inboxId();
-    OrderPaymentRequestedPayload payload = claimed.get().event().payload();
+    if (claimed.get().event().payload()
+        instanceof PaymentCancellationRequestedPayload cancellation) {
+      return cancel(claimed.get(), cancellation, now);
+    }
+    OrderPaymentRequestedPayload payload =
+        (OrderPaymentRequestedPayload) claimed.get().event().payload();
 
     if (payload.status() != OrderPaymentRequestedPayload.Status.PAYMENT_PENDING) {
       return review(claimed.get(), "PAYMENT_REQUEST_ORDER_NOT_PENDING", now);
@@ -190,6 +207,20 @@ public class ApplyOrderPaymentRequestService {
         return review(claimed.get(), "PAYMENT_REQUEST_ORDER_CONFLICT", now);
       }
       inbox.markApplied(inboxId, existing.get().getId(), now);
+      return true;
+    }
+
+    Optional<UUID> earlyCancellation =
+        inbox.findEarlyCancellation(payload.orderId(), payload.paymentCycleId());
+    if (earlyCancellation.isPresent()) {
+      // 취소가 먼저 처리됐다. 늦은 결제 요청으로 결제를 살리지 않고 취소 상태로 만든다. 승인 작업·마일리지 예약은 만들지 않는다.
+      Payment payment = payments.save(newPayment(payload, amounts.get(), now));
+      payment.cancel(now);
+      appendAccepted(payment, payload, now);
+      appendCancellationResult(
+          PAYMENT_CANCELLED, payment, CANCELLED_BEFORE_PAYMENT, cancelledEventId(payment), 0, now);
+      inbox.markApplied(inboxId, payment.getId(), now);
+      inbox.linkResult(earlyCancellation.get(), payment.getId(), now);
       return true;
     }
 
@@ -259,7 +290,7 @@ public class ApplyOrderPaymentRequestService {
     LOG.atWarn()
         .addKeyValue("event", "payment.accept")
         .addKeyValue("eventId", claimed.event().eventId())
-        .addKeyValue("orderId", claimed.event().payload().orderId())
+        .addKeyValue("orderId", claimed.event().aggregateId())
         .addKeyValue("result", "REVIEW_REQUIRED")
         .addKeyValue("errorCode", errorCode)
         .log("Payment request needs review");
@@ -316,21 +347,123 @@ public class ApplyOrderPaymentRequestService {
   /** 결제를 만들고 외부 결제액이 있으면 승인 작업도 남긴다. */
   private Payment createPayment(
       OrderPaymentRequestedPayload payload, PaymentAmounts amounts, Instant now) {
-    Payment payment =
-        payments.save(
-            Payment.create(
-                payload.orderId(),
-                payload.orderVersion(),
-                payload.paymentCycleId(),
-                payload.buyerId(),
-                payload.sellerId(),
-                payload.productId(),
-                amounts,
-                payload.policyVersion(),
-                now));
+    Payment payment = payments.save(newPayment(payload, amounts, now));
     if (amounts.externalAmount() > 0) {
       jobs.save(PaymentJob.approvalFor(payment, now));
     }
     return payment;
+  }
+
+  private static Payment newPayment(
+      OrderPaymentRequestedPayload payload, PaymentAmounts amounts, Instant now) {
+    return Payment.create(
+        payload.orderId(),
+        payload.orderVersion(),
+        payload.paymentCycleId(),
+        payload.buyerId(),
+        payload.sellerId(),
+        payload.productId(),
+        amounts,
+        payload.policyVersion(),
+        now);
+  }
+
+  /**
+   * 미결제 취소 요청을 처리한다. 외부 승인을 시작하기 전(PENDING)이거나 확정 거절된 결제만 취소하고, 승인 중·미확정·확정된 결제는 원거래 결과를 끝까지 확인하도록
+   * 취소를 거절한다. 결제가 아직 없으면 취소를 먼저 처리 완료로 남겨 늦게 온 결제 요청이 결제를 취소 상태로 만들게 한다.
+   */
+  private boolean cancel(
+      WaitingInboxEvent claimed, PaymentCancellationRequestedPayload request, Instant now) {
+    Optional<Payment> found = payments.findByOrderId(request.orderId());
+    if (found.isEmpty()) {
+      inbox.markApplied(claimed.inboxId(), null, now);
+      return true;
+    }
+    Payment payment = found.get();
+    // 저장된 결제는 항상 버전이 있다. 저장 전 결제는 처음 저장될 때 0이 된다.
+    long version = Objects.requireNonNullElse(payment.getVersion(), 0L);
+    if (!payment.getCurrentCycleId().equals(request.paymentCycleId())) {
+      reject(claimed, payment, PAYMENT_CYCLE_MISMATCH, version, now);
+    } else {
+      switch (payment.getStatus()) {
+        case PENDING, DECLINED -> {
+          payment.cancel(now);
+          releaseMileage(payment, now);
+          jobs.findByOperationAndBusinessKey(
+                  PaymentJobOperation.APPROVE, payment.getCurrentCycleId())
+              .filter(job -> job.closeBeforeRun(PAYMENT_CANCELLED_JOB, now))
+              .ifPresent(jobs::save);
+          payments.save(payment);
+          // 취소로 결제 버전이 하나 오른다.
+          appendCancellationResult(
+              PAYMENT_CANCELLED,
+              payment,
+              CANCELLED_BEFORE_APPROVAL,
+              cancelledEventId(payment),
+              version + 1,
+              now);
+        }
+        case CANCELLED -> {
+          // 이미 취소했고 PaymentCancelled도 남겼다. 같은 결과를 다시 만들지 않는다.
+        }
+        case PROCESSING, UNKNOWN -> reject(claimed, payment, PAYMENT_IN_PROGRESS, version, now);
+        case CONFIRMED -> reject(claimed, payment, PAYMENT_ALREADY_CONFIRMED, version, now);
+      }
+    }
+    inbox.markApplied(claimed.inboxId(), payment.getId(), now);
+    return true;
+  }
+
+  /** 차감하지 않은 마일리지 예약이 있으면 풀어 준다. 지갑을 잠가 같은 구매자의 다른 처리와 직렬화한다. */
+  private void releaseMileage(Payment payment, Instant now) {
+    Optional<MileageReservation> reservation = reservations.findByPaymentId(payment.getId());
+    if (reservation.isEmpty()
+        || reservation.get().getStatus() != MileageReservationStatus.RESERVED) {
+      return;
+    }
+    MileageWallet wallet =
+        wallets
+            .findByBuyerIdForUpdate(payment.getBuyerId())
+            .orElseThrow(() -> new IllegalStateException("Reserved mileage wallet is missing"));
+    wallet.releaseReserved(reservation.get().getAmount(), now);
+    reservation.get().release(now);
+    reservations.save(reservation.get());
+    entries.save(MileageEntry.release(wallet, reservation.get(), now));
+    wallets.save(wallet);
+  }
+
+  private void reject(
+      WaitingInboxEvent claimed, Payment payment, String reasonCode, long version, Instant now) {
+    // 취소 요청마다 거절 결과를 하나씩 남긴다.
+    UUID eventId =
+        UUID.nameUUIDFromBytes(
+            (PAYMENT_CANCELLATION_REJECTED + ":" + claimed.event().eventId())
+                .getBytes(StandardCharsets.UTF_8));
+    appendCancellationResult(
+        PAYMENT_CANCELLATION_REJECTED, payment, reasonCode, eventId, version, now);
+  }
+
+  private static UUID cancelledEventId(Payment payment) {
+    return UUID.nameUUIDFromBytes(
+        (PAYMENT_CANCELLED + ":" + payment.getId()).getBytes(StandardCharsets.UTF_8));
+  }
+
+  private void appendCancellationResult(
+      String eventType,
+      Payment payment,
+      String reasonCode,
+      UUID eventId,
+      long aggregateVersion,
+      Instant now) {
+    outbox.appendCancellationResult(
+        new EventEnvelope<>(
+            eventId,
+            eventType,
+            1,
+            now.atOffset(ZoneOffset.UTC),
+            payment.getId(),
+            aggregateVersion,
+            new PaymentCancellationResultPayload(
+                payment.getId(), payment.getOrderId(), payment.getCurrentCycleId(), reasonCode)));
   }
 }

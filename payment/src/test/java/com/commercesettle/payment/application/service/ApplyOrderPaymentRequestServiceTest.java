@@ -10,6 +10,8 @@ import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload.ExternalMethod;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload.Status;
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
+import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
+import com.commercesettle.payment.application.event.PaymentCancellationResultPayload;
 import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
@@ -23,6 +25,7 @@ import com.commercesettle.payment.domain.model.MileageWallet;
 import com.commercesettle.payment.domain.model.Payment;
 import com.commercesettle.payment.domain.model.PaymentJob;
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
+import com.commercesettle.payment.domain.model.PaymentJobStatus;
 import com.commercesettle.payment.domain.model.PaymentStatus;
 import com.commercesettle.payment.domain.repository.MileageEntryRepository;
 import com.commercesettle.payment.domain.repository.MileageReservationRepository;
@@ -507,6 +510,175 @@ class ApplyOrderPaymentRequestServiceTest {
         .isEqualTo(Duration.ofSeconds(seconds));
   }
 
+  @Test
+  @DisplayName("승인 전 카드 결제 취소는 결제를 취소하고 승인 작업을 닫고 PaymentCancelled를 남긴다")
+  void cancelsPendingCardPayment() {
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    inbox.add(card(orderId, cycleId));
+    service.processNext();
+    Payment payment = payments.all().get(0);
+    UUID cancellationId = inbox.addCancellation(orderId, cycleId);
+
+    assertThat(service.processNext()).isTrue();
+
+    assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELLED);
+    assertThat(jobs.saved.get(0).getStatus()).isEqualTo(PaymentJobStatus.DONE);
+    assertThat(outbox.cancellations)
+        .singleElement()
+        .satisfies(
+            event -> {
+              assertThat(event.eventType()).isEqualTo("PaymentCancelled");
+              assertThat(event.aggregateVersion()).isEqualTo(1);
+              assertThat(event.payload())
+                  .isEqualTo(
+                      new PaymentCancellationResultPayload(
+                          payment.getId(), orderId, cycleId, "CANCELLED_BEFORE_APPROVAL"));
+            });
+    assertThat(inbox.applied).containsEntry(cancellationId, payment.getId());
+  }
+
+  @Test
+  @DisplayName("승인 전 혼합 결제 취소는 마일리지 예약을 풀고 해제 원장을 남긴다")
+  void releasesMileageWhenCancellingMixedPayment() {
+    MileageWallet wallet = wallets.fund(BUYER_ID, 5_000);
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    inbox.add(mixed(orderId, cycleId));
+    service.processNext();
+    inbox.addCancellation(orderId, cycleId);
+
+    service.processNext();
+
+    assertThat(wallet.getBalance()).isEqualTo(5_000);
+    assertThat(wallet.getReservedAmount()).isZero();
+    assertThat(reservations.saved)
+        .singleElement()
+        .extracting(MileageReservation::getStatus)
+        .isEqualTo(MileageReservationStatus.RELEASED);
+    assertThat(entries.saved)
+        .extracting(MileageEntry::getKind)
+        .containsExactly(MileageEntryKind.RESERVE, MileageEntryKind.RELEASE);
+  }
+
+  @Test
+  @DisplayName("확정된 결제의 취소 요청은 결제를 그대로 두고 PaymentCancellationRejected를 남긴다")
+  void rejectsCancellationOfConfirmedPayment() {
+    wallets.fund(BUYER_ID, 12_000);
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    inbox.add(
+        payload(
+            orderId,
+            cycleId,
+            Status.PAYMENT_PENDING,
+            10_000,
+            0,
+            0,
+            10_000,
+            10_000,
+            10_000,
+            0,
+            0,
+            null,
+            null));
+    service.processNext();
+    inbox.addCancellation(orderId, cycleId);
+
+    service.processNext();
+
+    assertThat(payments.all().get(0).getStatus()).isEqualTo(PaymentStatus.CONFIRMED);
+    assertThat(outbox.cancellations)
+        .singleElement()
+        .satisfies(
+            event -> {
+              assertThat(event.eventType()).isEqualTo("PaymentCancellationRejected");
+              assertThat(event.payload().reasonCode()).isEqualTo("PAYMENT_ALREADY_CONFIRMED");
+            });
+  }
+
+  @Test
+  @DisplayName("외부 승인을 시작한 결제는 취소하지 않고 원거래 결과를 기다리도록 거절한다")
+  void rejectsCancellationWhilePaymentIsProcessing() {
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    inbox.add(card(orderId, cycleId));
+    service.processNext();
+    Payment payment = payments.all().get(0);
+    payment.startProcessing(NOW);
+    inbox.addCancellation(orderId, cycleId);
+
+    service.processNext();
+
+    assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PROCESSING);
+    assertThat(jobs.saved.get(0).getStatus()).isEqualTo(PaymentJobStatus.PENDING);
+    assertThat(outbox.cancellations)
+        .singleElement()
+        .extracting(event -> event.payload().reasonCode())
+        .isEqualTo("PAYMENT_IN_PROGRESS");
+  }
+
+  @Test
+  @DisplayName("다른 결제 회차의 취소 요청은 거절한다")
+  void rejectsCancellationOfOtherCycle() {
+    UUID orderId = UUID.randomUUID();
+    inbox.add(card(orderId, UUID.randomUUID()));
+    service.processNext();
+    inbox.addCancellation(orderId, UUID.randomUUID());
+
+    service.processNext();
+
+    assertThat(payments.all().get(0).getStatus()).isEqualTo(PaymentStatus.PENDING);
+    assertThat(outbox.cancellations)
+        .singleElement()
+        .extracting(event -> event.payload().reasonCode())
+        .isEqualTo("PAYMENT_CYCLE_MISMATCH");
+  }
+
+  @Test
+  @DisplayName("이미 취소한 결제에 취소 요청이 다시 오면 결과를 다시 만들지 않는다")
+  void ignoresRepeatedCancellation() {
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    inbox.add(card(orderId, cycleId));
+    service.processNext();
+    inbox.addCancellation(orderId, cycleId);
+    service.processNext();
+    UUID second = inbox.addCancellation(orderId, cycleId);
+
+    service.processNext();
+
+    assertThat(outbox.cancellations).hasSize(1);
+    assertThat(inbox.applied).containsKey(second);
+  }
+
+  @Test
+  @DisplayName("결제 요청보다 취소가 먼저 오면 늦은 결제 요청은 결제를 취소 상태로 만들고 승인·마일리지 예약을 하지 않는다")
+  void cancelsLatePaymentRequestAfterEarlyCancellation() {
+    MileageWallet wallet = wallets.fund(BUYER_ID, 5_000);
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    UUID cancellationId = inbox.addCancellation(orderId, cycleId);
+    service.processNext();
+    assertThat(payments.all()).isEmpty();
+    UUID requestId = inbox.add(mixed(orderId, cycleId));
+
+    service.processNext();
+
+    Payment payment = payments.all().get(0);
+    assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELLED);
+    assertThat(jobs.saved).isEmpty();
+    assertThat(reservations.saved).isEmpty();
+    assertThat(wallet.getReservedAmount()).isZero();
+    assertThat(outbox.accepted).hasSize(1);
+    assertThat(outbox.cancellations)
+        .singleElement()
+        .extracting(event -> event.payload().reasonCode())
+        .isEqualTo("CANCELLED_BEFORE_PAYMENT");
+    assertThat(inbox.applied).containsEntry(requestId, payment.getId());
+    assertThat(inbox.linked).containsEntry(cancellationId, payment.getId());
+  }
+
   private static OrderPaymentRequestedPayload mixed(UUID orderId, UUID cycleId) {
     return payload(
         orderId,
@@ -615,6 +787,8 @@ class ApplyOrderPaymentRequestServiceTest {
     private RuntimeException claimFailure;
     private RuntimeException recordFailure;
     private boolean leaseLost;
+    private final Map<UUID, UUID[]> cancellations = new HashMap<>();
+    private final Map<UUID, UUID> linked = new HashMap<>();
 
     UUID add(OrderPaymentRequestedPayload payload) {
       return add(payload, 1);
@@ -640,6 +814,27 @@ class ApplyOrderPaymentRequestServiceTest {
       return inboxId;
     }
 
+    UUID addCancellation(UUID orderId, UUID cycleId) {
+      UUID inboxId = UUID.randomUUID();
+      waiting.add(
+          new InboxClaim.Claimed(
+              new WaitingInboxEvent(
+                  inboxId,
+                  3,
+                  1,
+                  new EventEnvelope<>(
+                      UUID.randomUUID(),
+                      "PaymentCancellationRequested",
+                      1,
+                      OffsetDateTime.parse("2026-10-29T09:05:00+09:00"),
+                      orderId,
+                      1,
+                      new PaymentCancellationRequestedPayload(
+                          orderId, 1, cycleId, UUID.randomUUID())))));
+      cancellations.put(inboxId, new UUID[] {orderId, cycleId});
+      return inboxId;
+    }
+
     UUID addReviewed(String errorCode) {
       UUID inboxId = UUID.randomUUID();
       waiting.add(new InboxClaim.Reviewed(inboxId, errorCode));
@@ -647,7 +842,7 @@ class ApplyOrderPaymentRequestServiceTest {
     }
 
     @Override
-    public void saveWaiting(EventEnvelope<OrderPaymentRequestedPayload> event, Source source) {
+    public void saveWaiting(EventEnvelope<?> event, Source source) {
       throw new UnsupportedOperationException();
     }
 
@@ -678,7 +873,24 @@ class ApplyOrderPaymentRequestServiceTest {
     @Override
     public void markApplied(UUID inboxId, UUID resultRef, Instant now) {
       applied.put(inboxId, resultRef);
-      originals.putIfAbsent(resultRef, payloads.get(inboxId));
+      if (resultRef != null && payloads.containsKey(inboxId)) {
+        originals.putIfAbsent(resultRef, payloads.get(inboxId));
+      }
+    }
+
+    @Override
+    public Optional<UUID> findEarlyCancellation(UUID orderId, UUID paymentCycleId) {
+      return cancellations.entrySet().stream()
+          .filter(e -> applied.containsKey(e.getKey()) && applied.get(e.getKey()) == null)
+          .filter(e -> !linked.containsKey(e.getKey()))
+          .filter(e -> e.getValue()[0].equals(orderId) && e.getValue()[1].equals(paymentCycleId))
+          .map(Map.Entry::getKey)
+          .findFirst();
+    }
+
+    @Override
+    public void linkResult(UUID inboxId, UUID resultRef, Instant now) {
+      linked.put(inboxId, resultRef);
     }
 
     @Override
@@ -795,7 +1007,9 @@ class ApplyOrderPaymentRequestServiceTest {
 
     @Override
     public MileageReservation save(MileageReservation reservation) {
-      saved.add(reservation);
+      if (!saved.contains(reservation)) {
+        saved.add(reservation);
+      }
       return reservation;
     }
 
@@ -817,6 +1031,14 @@ class ApplyOrderPaymentRequestServiceTest {
 
   private static final class FakeOutbox implements PaymentEventOutbox {
     private final List<EventEnvelope<PaymentAcceptedPayload>> accepted = new ArrayList<>();
+    private final List<EventEnvelope<PaymentCancellationResultPayload>> cancellations =
+        new ArrayList<>();
+
+    @Override
+    public UUID appendCancellationResult(EventEnvelope<PaymentCancellationResultPayload> event) {
+      cancellations.add(event);
+      return event.eventId();
+    }
 
     @Override
     public UUID appendPaymentAccepted(EventEnvelope<PaymentAcceptedPayload> event) {

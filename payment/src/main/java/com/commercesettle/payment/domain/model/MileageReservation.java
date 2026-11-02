@@ -56,6 +56,15 @@ public class MileageReservation extends AuditableEntity {
     touch(now);
   }
 
+  /** 차감하지 않은 예약을 해제했음을 기록한다. RESERVED에서만 가능하다. */
+  public void release(Instant now) {
+    if (status != MileageReservationStatus.RESERVED) {
+      throw new IllegalStateException("예약 상태가 아니어서 해제할 수 없습니다: " + status);
+    }
+    status = MileageReservationStatus.RELEASED;
+    touch(now);
+  }
+
   public UUID getId() {
     return id;
   }

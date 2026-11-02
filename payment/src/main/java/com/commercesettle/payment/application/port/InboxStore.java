@@ -8,8 +8,11 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface InboxStore {
-  /** 수신 원본과 WAITING 작업을 저장한다. 같은 ID의 다른 본문은 별도로 격리한다. */
-  void saveWaiting(EventEnvelope<OrderPaymentRequestedPayload> event, Source source);
+  /**
+   * 수신 원본과 WAITING 작업을 저장한다. 같은 ID의 다른 본문은 별도로 격리한다. 결제 요청(OrderPaymentRequested)과 미결제 취소
+   * 요청(PaymentCancellationRequested)을 받는다.
+   */
+  void saveWaiting(EventEnvelope<?> event, Source source);
 
   /**
    * 처리 시각이 된 WAITING 하나를 선점한다. 시도 횟수를 늘리고 다음 처리 시각을 leaseUntil로 미루므로, 호출 트랜잭션이 커밋된 뒤에는 처리 결과나 실패를
@@ -38,4 +41,12 @@ public interface InboxStore {
 
   /** 결제를 처음 APPLIED로 만든 요청을 원문에서 다시 읽는다. 결제에 저장하지 않는 결제수단 비교에 쓴다. */
   Optional<OrderPaymentRequestedPayload> findOriginalRequest(UUID paymentId);
+
+  /**
+   * 결제가 생기기 전에 처리한 같은 주문·회차의 취소 요청을 찾는다. 결제 없이 APPLIED로 남긴 취소이며, 늦게 온 결제 요청이 결제를 살리지 않게 하는 데 쓴다.
+   */
+  Optional<UUID> findEarlyCancellation(UUID orderId, UUID paymentCycleId);
+
+  /** 결제 없이 APPLIED로 남긴 취소 요청을 나중에 만든 결제에 연결한다. */
+  void linkResult(UUID inboxId, UUID resultRef, Instant now);
 }

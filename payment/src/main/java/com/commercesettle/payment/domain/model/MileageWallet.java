@@ -64,6 +64,17 @@ public class MileageWallet extends AuditableEntity {
     touch(now);
   }
 
+  /** 예약을 차감하지 않고 풀어 준다. 잔액은 그대로이고 예약액만 줄어든다. */
+  public void releaseReserved(long amount, Instant now) {
+    requirePositive(amount);
+    if (amount > reservedAmount) {
+      throw new IllegalStateException(
+          "예약액 " + reservedAmount + "점보다 많은 " + amount + "점을 해제할 수 없습니다.");
+    }
+    reservedAmount -= amount;
+    touch(now);
+  }
+
   private static void requirePositive(long amount) {
     if (amount <= 0) {
       throw new IllegalArgumentException("마일리지 금액은 0보다 커야 합니다.");

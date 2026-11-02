@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
+import com.commercesettle.payment.application.event.EventEnvelope;
+import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
+import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor;
 import com.commercesettle.payment.infrastructure.config.KafkaListenerConfiguration;
 import com.commercesettle.payment.infrastructure.config.KafkaTopicConfiguration;
@@ -19,6 +22,7 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -117,11 +121,12 @@ class OrderPaymentRequestedListenerIntegrationTest {
           .withBean(
               OrderPaymentRequestAcceptor.class,
               () ->
-                  (event, source) -> {
-                    attemptedTraces.add(tracer.get().currentSpan().context());
-                    attempted.add(source);
-                    throw new IllegalStateException("simulated durable handoff failure");
-                  })
+                  acceptor(
+                      source -> {
+                        attemptedTraces.add(tracer.get().currentSpan().context());
+                        attempted.add(source);
+                        throw new IllegalStateException("simulated durable handoff failure");
+                      }))
           .run(
               context -> {
                 assertThat(context).hasNotFailed();
@@ -158,10 +163,11 @@ class OrderPaymentRequestedListenerIntegrationTest {
           .withBean(
               OrderPaymentRequestAcceptor.class,
               () ->
-                  (event, source) -> {
-                    acceptedTraces.add(tracer.get().currentSpan().context());
-                    accepted.add(source);
-                  })
+                  acceptor(
+                      source -> {
+                        acceptedTraces.add(tracer.get().currentSpan().context());
+                        accepted.add(source);
+                      }))
           .run(
               context -> {
                 assertThat(context).hasNotFailed();
@@ -228,5 +234,22 @@ class OrderPaymentRequestedListenerIntegrationTest {
             "spring.kafka.admin.fail-fast=true",
             "spring.kafka.listener.auto-startup=false",
             "app.kafka.order-payment-requested.enabled=true");
+  }
+
+  /** 결제 요청과 취소 요청을 같은 처리로 받는 시험용 접수기. */
+  private static OrderPaymentRequestAcceptor acceptor(
+      Consumer<OrderPaymentRequestAcceptor.Source> handle) {
+    return new OrderPaymentRequestAcceptor() {
+      @Override
+      public void accept(EventEnvelope<OrderPaymentRequestedPayload> event, Source source) {
+        handle.accept(source);
+      }
+
+      @Override
+      public void acceptCancellation(
+          EventEnvelope<PaymentCancellationRequestedPayload> event, Source source) {
+        handle.accept(source);
+      }
+    };
   }
 }
