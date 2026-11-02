@@ -339,8 +339,7 @@ class KakaoSelfMessageClientIntegrationTest {
   void retriesWithoutHttpWhenCredentialsAreLocked() throws IOException {
     Path lock = directory.resolve("credentials.json.lock");
     Files.createFile(
-        lock,
-        PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
+        lock, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")));
     try (var channel = FileChannel.open(lock, StandardOpenOption.WRITE);
         var held = channel.lock()) {
       assertThat(client.send("[구매자] 결제 완료")).isEqualTo(KakaoSelfMessageClient.Result.RETRYABLE);
