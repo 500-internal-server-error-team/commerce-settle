@@ -21,6 +21,8 @@ interface SpringDataBuyerCouponRepository extends JpaRepository<BuyerCoupon, UUI
 
   Optional<BuyerCoupon> findByBuyerIdAndKind(UUID buyerId, CouponKind kind);
 
+  boolean existsByTemplateIdAndBuyerId(UUID templateId, UUID buyerId);
+
   Page<BuyerCoupon> findByBuyerId(UUID buyerId, Pageable pageable);
 
   @Query(

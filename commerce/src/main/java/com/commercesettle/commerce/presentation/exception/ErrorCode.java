@@ -22,6 +22,7 @@ enum ErrorCode {
   INVENTORY_INSUFFICIENT(HttpStatus.CONFLICT, "가용 재고가 부족합니다."),
   COUPON_EXPIRED(HttpStatus.CONFLICT, "사용 기한이 지난 쿠폰입니다."),
   COUPON_NOT_APPLICABLE(HttpStatus.CONFLICT, "이 주문에 사용할 수 없는 쿠폰입니다."),
+  COUPON_BUDGET_EXHAUSTED(HttpStatus.CONFLICT, "캠페인의 발급 수나 할인 예산이 소진됐습니다."),
   EVENT_ADMISSION_CLOSED(HttpStatus.CONFLICT, "이벤트에 참여할 수 없습니다."),
   PRODUCT_EVENT_IN_PROGRESS(
       HttpStatus.CONFLICT, "공개 후 종료 전 이벤트가 있는 상품은 바꿀 수 없습니다. 이벤트를 먼저 종료해 주세요."),
