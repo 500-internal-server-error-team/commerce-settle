@@ -157,6 +157,7 @@ services:
       SPRING_DATA_REDIS_USERNAME: gateway
       SPRING_DATA_REDIS_PASSWORD: ${GATEWAY_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
       AUTH_SESSION_EPOCH: ${AUTH_SESSION_EPOCH:?Run python3 scripts/init_env.py}
+      AUTH_REDIS_RUN_ID: ${AUTH_REDIS_RUN_ID:?Run python3 scripts/sync_redis_run_id.py}
       COMMERCE_GATEWAY_CREDENTIAL: ${COMMERCE_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
       PAYMENT_GATEWAY_CREDENTIAL: ${PAYMENT_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
       SETTLEMENT_GATEWAY_CREDENTIAL: ${SETTLEMENT_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
@@ -185,6 +186,7 @@ services:
       SPRING_DATA_REDIS_USERNAME: commerce
       SPRING_DATA_REDIS_PASSWORD: ${COMMERCE_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
       AUTH_SESSION_EPOCH: ${AUTH_SESSION_EPOCH:?Run python3 scripts/init_env.py}
+      AUTH_REDIS_RUN_ID: ${AUTH_REDIS_RUN_ID:?Run python3 scripts/sync_redis_run_id.py}
       AUTH_RATE_LIMIT_HMAC_KEY: ${AUTH_RATE_LIMIT_HMAC_KEY:?Run python3 scripts/init_env.py}
       AUTH_RESET_DELIVERY_KEY: ${AUTH_RESET_DELIVERY_KEY:?Run python3 scripts/init_env.py}
       ADDRESS_ENCRYPTION_KEY: ${ADDRESS_ENCRYPTION_KEY:?Run python3 scripts/init_env.py}
