@@ -101,7 +101,8 @@ class SettlementEventServiceIntegrationTest {
             "settlement_batches",
             "payouts",
             "payout_jobs",
-            "settlement_reservations")) {
+            "settlement_reservations",
+            "outbox")) {
       jdbc.update("DELETE FROM settlement." + table);
     }
   }
