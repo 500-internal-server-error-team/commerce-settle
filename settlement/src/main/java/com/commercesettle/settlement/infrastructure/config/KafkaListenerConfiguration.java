@@ -10,7 +10,7 @@ public class KafkaListenerConfiguration {
 
   @Bean
   CommonErrorHandler kafkaErrorHandler() {
-    // 영속 인계·격리 구현 전에는 실패 레코드를 건너뛰지 않는다.
+    // 격리하지 않는 실패(반영 중 DB 오류, 격리 저장 실패, 격리 꺼짐)는 레코드를 건너뛰지 않는다.
     return new CommonContainerStoppingErrorHandler();
   }
 }

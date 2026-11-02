@@ -28,8 +28,8 @@ spring:
   task:
     scheduling:
       pool:
-        # 지급 Worker·대기 Inbox 폴링이 스레드를 오래 잡아도 10:00 일배치 cron이 제시간에 돈다.
-        size: 3
+        # 지급 Worker·대기 Inbox 폴링·격리 DLT 발행이 스레드를 오래 잡아도 10:00 일배치 cron이 제시간에 돈다.
+        size: 4
   batch:
     job:
       # 기동 시 자동 실행하지 않고 스케줄러가 batchDate로 실행한다(ADR 0007 D7).
@@ -116,6 +116,14 @@ logging:
 
 app:
   kafka:
+    quarantine:
+      # 해석할 수 없는 대상 이벤트의 원문 격리와 DLT 발행. 초기 SQL의 격리 테이블을 적용한 환경에서만 켠다.
+      # 결과 대기와 producer max.block.ms(기본 60초)의 합은 임대보다 짧아야 한다.
+      enabled: ${APP_KAFKA_QUARANTINE_ENABLED:false}
+      interval-ms: 1000
+      batch-size: 32
+      lease-ms: 240000
+      result-timeout-ms: 125000
     settlement-events:
       # PaymentConfirmed·PurchaseConfirmed 수신. 개발용 초기 SQL 적용과 신규 그룹 offset 초기화 후에만 활성화한다.
       enabled: ${APP_KAFKA_SETTLEMENT_EVENTS_ENABLED:false}
