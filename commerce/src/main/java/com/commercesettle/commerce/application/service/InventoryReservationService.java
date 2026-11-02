@@ -1,30 +1,42 @@
 package com.commercesettle.commerce.application.service;
 
+import com.commercesettle.commerce.domain.exception.EventAdmissionClosedException;
+import com.commercesettle.commerce.domain.exception.EventAdmissionClosedException.Reason;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
+import com.commercesettle.commerce.domain.exception.SaleEventNotFoundException;
+import com.commercesettle.commerce.domain.model.EventAdmission;
+import com.commercesettle.commerce.domain.model.EventParticipation;
 import com.commercesettle.commerce.domain.model.InventoryOperation;
 import com.commercesettle.commerce.domain.model.InventoryReservation;
 import com.commercesettle.commerce.domain.model.InventoryReservation.Outcome;
 import com.commercesettle.commerce.domain.model.InventoryReservation.Result;
 import com.commercesettle.commerce.domain.model.Product;
 import com.commercesettle.commerce.domain.model.ProductInventory;
+import com.commercesettle.commerce.domain.model.SaleEvent;
+import com.commercesettle.commerce.domain.repository.EventParticipationRepository;
 import com.commercesettle.commerce.domain.repository.InventoryMovementRepository;
 import com.commercesettle.commerce.domain.repository.InventoryReservationRepository;
 import com.commercesettle.commerce.domain.repository.ProductInventoryRepository;
 import com.commercesettle.commerce.domain.repository.ProductRepository;
+import com.commercesettle.commerce.domain.repository.SaleEventRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.BiFunction;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 주문 흐름이 호출하는 일반 주문 재고 예약·확정·해제·복원. 모든 메서드는 호출한 주문 트랜잭션에 참여하고 트랜잭션 밖 호출은 거절하며 따로 커밋하지 않는다. 그래서 예약
- * 변경은 주문 상태·Outbox와 함께 커밋되거나 롤백된다.
+ * 주문 흐름이 호출하는 재고 예약·확정·해제·복원. 모든 메서드는 호출한 주문 트랜잭션에 참여하고 트랜잭션 밖 호출은 거절하며 따로 커밋하지 않는다. 그래서 예약 변경은 주문
+ * 상태·Outbox와 함께 커밋되거나 롤백된다.
  *
  * <p>상품 변경·판매자 조정과 같은 순서로 재고 행을 먼저 잠근 뒤 예약 행을 읽는다. 예약의 상품은 바뀌지 않으므로 잠금 전에 상품 ID만 읽어 잠글 행을 찾는다.
+ *
+ * <p>선착순 주문은 생성 때만 상품·재고 행을 잠그지 않고 이벤트 행의 조건부 갱신 한 번으로 수량을 확보한다. 이후 확정·해제·재시도·복원은 재고 행 → 이벤트 행 순서로
+ * 잠근 뒤 이벤트 S·R, 참여 상태, 재고 수량을 함께 바꾼다.
  */
 @Service
 @Transactional(propagation = Propagation.MANDATORY)
@@ -33,6 +45,8 @@ public class InventoryReservationService {
   private final ProductInventoryRepository inventories;
   private final InventoryReservationRepository reservations;
   private final InventoryMovementRepository movements;
+  private final SaleEventRepository events;
+  private final EventParticipationRepository participations;
   private final Clock clock;
 
   public InventoryReservationService(
@@ -40,11 +54,15 @@ public class InventoryReservationService {
       ProductInventoryRepository inventories,
       InventoryReservationRepository reservations,
       InventoryMovementRepository movements,
+      SaleEventRepository events,
+      EventParticipationRepository participations,
       Clock clock) {
     this.products = products;
     this.inventories = inventories;
     this.reservations = reservations;
     this.movements = movements;
+    this.events = events;
+    this.participations = participations;
     this.clock = clock;
   }
 
@@ -87,13 +105,49 @@ public class InventoryReservationService {
     return Outcome.APPLIED;
   }
 
-  /** 확정 거절 뒤 재시도: 해제된 예약을 새 회차로 다시 확보한다. 가용 수량이 부족하면 거절하고 해제 상태를 유지한다. */
+  /**
+   * 선착순 주문 생성 때 상품 1개를 이벤트 수량에서 예약하고 참여를 기록한다. 열린 기간이 아니거나 남은 수량이 없거나 같은 구매자의 참여가 이미 있으면 {@link
+   * EventAdmissionClosedException}, 미공개·없는 이벤트는 {@link SaleEventNotFoundException}으로 거절한다. 같은
+   * 주문·이벤트·회차의 재처리는 ALREADY_APPLIED다. 이벤트 가격·상품 확인은 주문 응용 서비스가 맡는다.
+   */
+  public Outcome reserveForEvent(
+      UUID orderId, UUID eventId, UUID buyerId, UUID cycleId, Instant expiresAt) {
+    Optional<InventoryReservation> existing = reservations.findByOrderId(orderId);
+    if (existing.isPresent()) {
+      if (!existing.get().isSameEventReservation(eventId, cycleId)) {
+        throw new IllegalStateException("order already has a different reservation: " + orderId);
+      }
+      return Outcome.ALREADY_APPLIED;
+    }
+    UUID productId =
+        events
+            .findProductIdById(eventId)
+            .orElseThrow(() -> new SaleEventNotFoundException(eventId));
+    if (participations.existsActive(eventId, buyerId)) {
+      throw new EventAdmissionClosedException(Reason.ALREADY_PARTICIPATED);
+    }
+    Instant now = clock.instant();
+    if (!events.reserveSlot(eventId, now)) {
+      throw admissionRejected(eventId, now);
+    }
+    saveParticipation(
+        EventParticipation.reserve(UUID.randomUUID(), eventId, buyerId, orderId, now));
+    reservations.save(
+        InventoryReservation.reserveForEvent(
+            UUID.randomUUID(), orderId, productId, eventId, cycleId, expiresAt, now));
+    return Outcome.APPLIED;
+  }
+
+  /** 확정 거절 뒤 재시도: 해제된 예약을 새 회차로 다시 확보한다. 확보하지 못하면 거절하고 해제 상태를 유지한다. */
   public Outcome reserveAgain(UUID orderId, UUID newCycleId, Instant expiresAt) {
     return change(
         orderId,
         (reservation, inventory) ->
             reservation.reserveAgain(
-                inventory, newCycleId, expiresAt, UUID.randomUUID(), clock.instant()));
+                inventory, newCycleId, expiresAt, UUID.randomUUID(), clock.instant()),
+        (reservation, inventory, event, participation) ->
+            reservation.reserveAgainForEvent(
+                inventory, event, participation, newCycleId, expiresAt, clock.instant()));
   }
 
   /** 결제 확정 결과를 반영한다. 다른 회차의 결과는 STALE_CYCLE로 무시한다. */
@@ -101,7 +155,10 @@ public class InventoryReservationService {
     return change(
         orderId,
         (reservation, inventory) ->
-            reservation.consume(inventory, cycleId, UUID.randomUUID(), clock.instant()));
+            reservation.consume(inventory, cycleId, UUID.randomUUID(), clock.instant()),
+        (reservation, inventory, event, participation) ->
+            reservation.consumeForEvent(
+                inventory, event, participation, cycleId, UUID.randomUUID(), clock.instant()));
   }
 
   /** 확정 거절 또는 Payment가 승인을 차단한 취소를 반영한다. 기한 경과만으로 호출하지 않는다. */
@@ -109,7 +166,10 @@ public class InventoryReservationService {
     return change(
         orderId,
         (reservation, inventory) ->
-            reservation.release(inventory, cycleId, UUID.randomUUID(), clock.instant()));
+            reservation.release(inventory, cycleId, UUID.randomUUID(), clock.instant()),
+        (reservation, inventory, event, participation) ->
+            reservation.releaseForEvent(
+                inventory, event, participation, cycleId, UUID.randomUUID(), clock.instant()));
   }
 
   /** 미발송 주문의 환불 복구. 원장 상쇄 뒤 주문 복구 요청을 처리할 때 호출한다. */
@@ -127,23 +187,80 @@ public class InventoryReservationService {
         orderId,
         (reservation, inventory) ->
             reservation.restore(
-                inventory, operation, businessRef, UUID.randomUUID(), clock.instant()));
+                inventory, operation, businessRef, UUID.randomUUID(), clock.instant()),
+        (reservation, inventory, event, participation) ->
+            reservation.restoreForEvent(
+                inventory,
+                event,
+                participation,
+                operation,
+                businessRef,
+                UUID.randomUUID(),
+                clock.instant()));
   }
 
   private Outcome change(
-      UUID orderId, BiFunction<InventoryReservation, ProductInventory, Result> transition) {
+      UUID orderId,
+      BiFunction<InventoryReservation, ProductInventory, Result> general,
+      EventTransition forEvent) {
     UUID productId =
         reservations.findProductIdByOrderId(orderId).orElseThrow(() -> missingReservation(orderId));
     ProductInventory inventory = lockInventory(productId);
     InventoryReservation reservation =
         reservations.findByOrderId(orderId).orElseThrow(() -> missingReservation(orderId));
-    Result result = transition.apply(reservation, inventory);
+    if (!reservation.isForEvent()) {
+      Result result = general.apply(reservation, inventory);
+      if (result.outcome() == Outcome.APPLIED) {
+        save(result, inventory, reservation);
+      }
+      return result.outcome();
+    }
+    SaleEvent event =
+        events
+            .findByIdForUpdate(reservation.getEventId())
+            .orElseThrow(
+                () -> new IllegalStateException("sale event is missing for order " + orderId));
+    EventParticipation participation =
+        participations
+            .findByOrderId(orderId)
+            .orElseThrow(
+                () -> new IllegalStateException("participation is missing for order " + orderId));
+    Result result = forEvent.apply(reservation, inventory, event, participation);
     if (result.outcome() == Outcome.APPLIED) {
-      movements.save(result.movement());
-      inventories.save(inventory);
-      reservations.save(reservation);
+      events.save(event);
+      saveParticipation(participation);
+      save(result, inventory, reservation);
     }
     return result.outcome();
+  }
+
+  private void save(Result result, ProductInventory inventory, InventoryReservation reservation) {
+    if (result.movement() != null) {
+      movements.save(result.movement());
+      inventories.save(inventory);
+    }
+    reservations.save(reservation);
+  }
+
+  /** 같은 구매자의 진행 중·확정 참여와 겹치면 유일 인덱스 위반을 참여 한도 거절로 알린다. 호출자의 트랜잭션은 롤백된다. */
+  private void saveParticipation(EventParticipation participation) {
+    try {
+      participations.save(participation);
+    } catch (DataIntegrityViolationException e) {
+      throw new EventAdmissionClosedException(Reason.ALREADY_PARTICIPATED);
+    }
+  }
+
+  /** 조건부 갱신이 실패한 이유를 현재 이벤트 상태로 구분한다. 미공개 이벤트는 구매자에게 없는 이벤트다. */
+  private RuntimeException admissionRejected(UUID eventId, Instant now) {
+    SaleEvent event =
+        events
+            .findById(eventId)
+            .filter(SaleEvent::isPublished)
+            .orElseThrow(() -> new SaleEventNotFoundException(eventId));
+    EventAdmission admission = event.gauge(now).admission();
+    boolean notOpen = admission == EventAdmission.NOT_STARTED || admission == EventAdmission.CLOSED;
+    return new EventAdmissionClosedException(notOpen ? Reason.NOT_OPEN : Reason.NO_REMAINING);
   }
 
   private ProductInventory lockInventory(UUID productId) {
@@ -162,5 +279,14 @@ public class InventoryReservationService {
 
   private static IllegalStateException missingReservation(UUID orderId) {
     return new IllegalStateException("inventory reservation is missing for order " + orderId);
+  }
+
+  @FunctionalInterface
+  private interface EventTransition {
+    Result apply(
+        InventoryReservation reservation,
+        ProductInventory inventory,
+        SaleEvent event,
+        EventParticipation participation);
   }
 }

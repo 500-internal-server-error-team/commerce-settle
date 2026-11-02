@@ -19,6 +19,12 @@ public interface SaleEventRepository {
   /** 상품 재고 행을 잠근 뒤 이벤트 행을 쓰기 잠금으로 읽는다(재고 행 → 이벤트 행 순서). */
   Optional<SaleEvent> findByIdForUpdate(UUID eventId);
 
+  /**
+   * 선착순 참여의 수량 확보. 상품·재고 행을 잠그지 않고 열린 기간에 남은 수량이 있을 때만 R을 1 늘리는 조건부 갱신 한 번으로 처리한다. 갱신하지 못하면 false다.
+   * 이 트랜잭션에서 이미 읽은 이벤트 엔티티에는 반영되지 않는다.
+   */
+  boolean reserveSlot(UUID eventId, Instant now);
+
   /** 공개 후 종료 전(SCHEDULED·OPEN) 이벤트가 있는지. */
   boolean existsInProgressByProductId(UUID productId);
 
