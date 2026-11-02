@@ -93,6 +93,14 @@ public class SettlementBatch extends AuditableEntity {
         now);
   }
 
+  /** 운영 재처리로 지급 작업을 다시 열 때 되돌린다. 아직 호출하지 않은 지급이면 예약, 호출한 적이 있으면 처리 중이다. */
+  public void resumeAfterReview(boolean payoutStarted, Instant now) {
+    transition(
+        status == SettlementBatchStatus.REVIEW_REQUIRED,
+        payoutStarted ? SettlementBatchStatus.PROCESSING : SettlementBatchStatus.RESERVED,
+        now);
+  }
+
   private void transition(boolean allowed, SettlementBatchStatus next, Instant now) {
     if (!allowed) {
       throw new InvalidPayoutTransitionException("settlement batch", status, next);
