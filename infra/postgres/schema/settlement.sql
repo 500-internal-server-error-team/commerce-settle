@@ -167,6 +167,37 @@ CREATE UNIQUE INDEX uk_settlement_reservations_active_item
 CREATE INDEX ix_settlement_reservations_kind_ref
     ON settlement.settlement_reservations (kind, business_ref, status);
 
+-- 정산 원장. 결제 1건의 SOURCE(E·M·P)와 ALLOCATION(판매자·수수료)을 0원 leg까지 기록하고 각 측 합계는 B다.
+-- 환불 상쇄는 원 leg마다 반대 부호 1건(reversal_of)으로 남긴다.
+CREATE TABLE settlement.settlement_entries (
+    id                 uuid        PRIMARY KEY,
+    item_id            uuid        NOT NULL,
+    payment_id         uuid        NOT NULL,
+    side               varchar(16) NOT NULL,
+    leg                varchar(24) NOT NULL,
+    amount             bigint      NOT NULL,
+    business_ref       uuid        NOT NULL,
+    source_event_id    uuid        NOT NULL,
+    source_occurred_at timestamptz NOT NULL,
+    reversal_of        uuid,
+    policy_version     varchar(32) NOT NULL,
+    created_at         timestamptz NOT NULL,
+
+    CONSTRAINT uk_settlement_entries_payment_leg_ref UNIQUE (payment_id, leg, business_ref),
+    CONSTRAINT ck_settlement_entries_side_leg
+        CHECK ((side = 'SOURCE' AND leg IN ('EXTERNAL', 'MILEAGE', 'PLATFORM_COUPON'))
+            OR (side = 'ALLOCATION' AND leg IN ('SELLER', 'FEE'))),
+    CONSTRAINT ck_settlement_entries_original_amount CHECK (reversal_of IS NOT NULL OR amount >= 0)
+);
+
+CREATE UNIQUE INDEX uk_settlement_entries_reversal_of
+    ON settlement.settlement_entries (reversal_of) WHERE reversal_of IS NOT NULL;
+CREATE INDEX ix_settlement_entries_item_created ON settlement.settlement_entries (item_id, created_at, id);
+CREATE INDEX ix_settlement_entries_payment_side ON settlement.settlement_entries (payment_id, side);
+CREATE INDEX ix_settlement_entries_source_occurred
+    ON settlement.settlement_entries (source_occurred_at, payment_id, id);
+CREATE INDEX ix_settlement_entries_source_event ON settlement.settlement_entries (source_event_id);
+
 -- Spring Batch 5.2 메타데이터. 라이브러리의 schema-postgresql.sql에서 서비스 내부 FK만 뺐다(ADR 0006).
 -- Spring Batch가 시각을 LocalDateTime으로 쓰므로 원본의 timestamp를 유지한다.
 CREATE TABLE settlement.BATCH_JOB_INSTANCE (
