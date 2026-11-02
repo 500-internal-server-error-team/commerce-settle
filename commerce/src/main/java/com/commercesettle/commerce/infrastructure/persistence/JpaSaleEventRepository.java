@@ -5,6 +5,7 @@ import com.commercesettle.commerce.domain.model.SaleEventStatus;
 import com.commercesettle.commerce.domain.repository.PageResult;
 import com.commercesettle.commerce.domain.repository.SaleEventRepository;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -52,6 +53,13 @@ class JpaSaleEventRepository implements SaleEventRepository {
   public Optional<SaleEvent> findByIdForUpdate(UUID eventId) {
     TransactionLimits.apply(jdbc);
     return events.findLockedById(eventId);
+  }
+
+  /** 확정·종료 트랜잭션이 이벤트 행을 잠그고 있으면 잠금 대기 상한 안에서 끝낸다. */
+  @Override
+  public boolean reserveSlot(UUID eventId, Instant now) {
+    TransactionLimits.apply(jdbc);
+    return events.incrementReservedIfOpen(eventId, now.truncatedTo(ChronoUnit.MICROS)) == 1;
   }
 
   @Override

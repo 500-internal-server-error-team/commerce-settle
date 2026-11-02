@@ -12,6 +12,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 
 interface SpringDataSaleEventRepository extends JpaRepository<SaleEvent, UUID> {
@@ -21,6 +22,18 @@ interface SpringDataSaleEventRepository extends JpaRepository<SaleEvent, UUID> {
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select e from SaleEvent e where e.id = :eventId")
   Optional<SaleEvent> findLockedById(UUID eventId);
+
+  @Modifying(flushAutomatically = true)
+  @Query(
+      value =
+          """
+          UPDATE commerce.sale_events
+          SET reserved_count = reserved_count + 1, version = version + 1, updated_at = :now
+          WHERE id = :eventId AND status = 'OPEN' AND starts_at <= :now AND ends_at > :now
+            AND sold_count + reserved_count < quota
+          """,
+      nativeQuery = true)
+  int incrementReservedIfOpen(UUID eventId, Instant now);
 
   boolean existsByProductIdAndStatusIn(UUID productId, Collection<SaleEventStatus> statuses);
 
