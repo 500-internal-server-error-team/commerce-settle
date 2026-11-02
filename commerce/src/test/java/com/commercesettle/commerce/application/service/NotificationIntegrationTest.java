@@ -1106,7 +1106,7 @@ class NotificationIntegrationTest {
           .satisfies(
               body ->
                   assertThat(body)
-                      .contains("[판매자]", "판매 2건", "합계 30000원", "집계 상품")
+                      .contains("[판매자]", "결제 완료 주문 2건", "합계 30,000원", "집계 상품")
                       .doesNotContain("잔액", "마일리지"));
       assertThat(number("notification_mock_receipts")).isZero();
     }
