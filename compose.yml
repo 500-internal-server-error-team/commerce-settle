@@ -214,6 +214,8 @@ services:
       DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
       SPRING_DATA_REDIS_USERNAME: payment
       SPRING_DATA_REDIS_PASSWORD: ${PAYMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      PAYMENT_GATEWAY_CREDENTIAL: ${PAYMENT_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
+      PAYMENT_GATEWAY_CREDENTIAL_PREVIOUS: ${PAYMENT_GATEWAY_CREDENTIAL_PREVIOUS:-}
     depends_on:
       <<: *app-deps
       postgres:
@@ -236,6 +238,8 @@ services:
       DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
       SPRING_DATA_REDIS_USERNAME: payment
       SPRING_DATA_REDIS_PASSWORD: ${PAYMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      PAYMENT_GATEWAY_CREDENTIAL: ${PAYMENT_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
+      PAYMENT_GATEWAY_CREDENTIAL_PREVIOUS: ${PAYMENT_GATEWAY_CREDENTIAL_PREVIOUS:-}
     depends_on:
       <<: *app-deps
       postgres:
@@ -258,6 +262,9 @@ services:
       DB_PASSWORD: ${SETTLEMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
       SPRING_DATA_REDIS_USERNAME: settlement
       SPRING_DATA_REDIS_PASSWORD: ${SETTLEMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      SETTLEMENT_GATEWAY_CREDENTIAL: ${SETTLEMENT_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
+      SETTLEMENT_GATEWAY_CREDENTIAL_PREVIOUS: ${SETTLEMENT_GATEWAY_CREDENTIAL_PREVIOUS:-}
+      FINANCE_MOCK_SETTLEMENT_CREDENTIAL: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
     depends_on:
       <<: *app-deps
       postgres:
@@ -278,6 +285,8 @@ services:
       DB_PASSWORD: ${FINANCE_MOCK_DB_PASSWORD:?Run python3 scripts/init_env.py}
       SPRING_DATA_REDIS_USERNAME: finance-mock
       SPRING_DATA_REDIS_PASSWORD: ${FINANCE_MOCK_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      FINANCE_MOCK_SETTLEMENT_CREDENTIAL: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
+      FINANCE_MOCK_SETTLEMENT_CREDENTIAL_PREVIOUS: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL_PREVIOUS:-}
     depends_on:
       <<: *app-deps
       postgres:

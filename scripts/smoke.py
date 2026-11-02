@@ -123,17 +123,24 @@ def gateway_json(base, method, path, body=None, token=None, headers=None):
 
 
 def check_internal_credentials():
-    # Same network as Commerce: only the Gateway credential in the gateway container passes.
-    def direct(*headers):
+    # Same network as the backends: only the expected credential passes the caller check.
+    def direct(url, *headers):
         return compose(
             "exec", "-T", "gateway", "sh", "-c",
             'exec curl --silent --output /dev/null --write-out "%{http_code}" "$@"',
-            "smoke", *headers, "http://commerce:8080/api/products",
+            "smoke", *headers, url,
         ).stdout.strip()
 
-    assert direct() == "401"
-    assert direct("-H", "X-Authenticated-Actor-Kind: SELLER") == "401"
-    assert direct("-H", "Authorization: Bearer " + "x" * 43) == "401"
+    targets = [
+        "http://commerce:8080/api/products",
+        "http://payment-api:8080/api/payments",
+        "http://settlement:8080/api/sellers/me/payouts",
+        "http://finance-mock:8080/mock/payouts/" + str(uuid.uuid4()),
+    ]
+    for url in targets:
+        assert direct(url) == "401", url
+        assert direct(url, "-H", "X-Authenticated-Actor-Kind: SELLER") == "401", url
+        assert direct(url, "-H", "Authorization: Bearer " + "x" * 43) == "401", url
     passed = compose(
         "exec", "-T", "gateway", "sh", "-c",
         'exec curl --silent --output /dev/null --write-out "%{http_code}" '
@@ -141,6 +148,24 @@ def check_internal_credentials():
         "http://commerce:8080/api/products",
     ).stdout.strip()
     assert passed == "200", passed
+    # The Gateway's credentials are not valid for Finance Mock.
+    gateway_to_mock = compose(
+        "exec", "-T", "gateway", "sh", "-c",
+        'exec curl --silent --output /dev/null --write-out "%{http_code}" '
+        '-H "Authorization: Bearer $PAYMENT_GATEWAY_CREDENTIAL" "$1"',
+        "smoke", targets[-1] + "?scenarioVersion=payout-normal-v1",
+    ).stdout.strip()
+    assert gateway_to_mock == "401", gateway_to_mock
+    # Settlement's own credential reaches the original payout lookup (404 means no transaction).
+    lookup = compose(
+        "exec", "-T", "settlement", "sh", "-c",
+        'exec curl --silent --write-out "\\n%{http_code}" '
+        '-H "Authorization: Bearer $FINANCE_MOCK_SETTLEMENT_CREDENTIAL" "$1"',
+        "smoke", targets[-1] + "?scenarioVersion=payout-normal-v1",
+    ).stdout.strip()
+    body, _, status = lookup.rpartition("\n")
+    assert status == "404", lookup
+    assert json.loads(body)["code"] == "MOCK_TRANSACTION_NOT_FOUND", body
 
 
 def check_login_flow(base):
@@ -335,7 +360,8 @@ def main():
     print("PASS Redis ACL: per-app users, Commerce auth writes and read-only Gateway checks")
 
     check_internal_credentials()
-    print("PASS Commerce internal credential: direct calls without the Gateway credential get 401")
+    print("PASS internal credentials: direct backend calls need the target's credential, "
+          "Settlement reaches Finance Mock")
 
     check_session_auth(config, base)
     print("PASS Gateway session: 401 without a session, Redis session pass, role 403, pending guard 503")
