@@ -15,6 +15,7 @@ import com.commercesettle.commerce.domain.model.ProductInventory;
 import com.commercesettle.commerce.domain.model.ProductStatus;
 import com.commercesettle.commerce.domain.model.SaleEvent;
 import com.commercesettle.commerce.domain.model.SaleEventStatus;
+import com.commercesettle.commerce.domain.repository.PageResult;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -27,6 +28,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -52,6 +54,8 @@ class SaleEventIntegrationTest {
   @Autowired SaleEventService events;
   @Autowired ProductCatalogService catalog;
   @Autowired JdbcTemplate jdbc;
+  @Autowired InventoryReservationService reservations;
+  @Autowired TransactionTemplate tx;
 
   @Test
   @DisplayName("공개는 가용 감소·배정 증가·배정 이력·예정 상태를 함께 커밋하고 같은 키 재요청은 다시 배정하지 않는다")
@@ -284,6 +288,51 @@ class SaleEventIntegrationTest {
   }
 
   @Test
+  @DisplayName("공개 목록과 전체 건수는 예정·진행 중 이벤트만 포함하고 미공개·조기 종료·매진 이벤트는 뺀다")
+  void listsOnlyScheduledAndOpenEvents() {
+    UUID seller = UUID.randomUUID();
+    SaleEvent scheduled =
+        publish(
+            seller,
+            register(seller, stockedProduct(seller, 10), 5, hoursFromNow(1), hoursFromNow(2)));
+    SaleEvent open =
+        publish(
+            seller,
+            register(seller, stockedProduct(seller, 10), 5, hoursFromNow(-1), hoursFromNow(1)));
+    SaleEvent closed =
+        publish(
+            seller,
+            register(seller, stockedProduct(seller, 10), 5, hoursFromNow(-1), hoursFromNow(1)));
+    events.close(
+        seller,
+        closed.getId(),
+        key(),
+        events.sellerEvent(seller, closed.getId()).getVersion(),
+        "조기 종료");
+    SaleEvent soldOut =
+        publish(
+            seller,
+            register(seller, stockedProduct(seller, 10), 1, hoursFromNow(-1), hoursFromNow(1)));
+    sellOut(soldOut);
+    SaleEvent draft =
+        register(seller, stockedProduct(seller, 10), 5, hoursFromNow(1), hoursFromNow(2));
+
+    PageResult<SaleEvent> page = events.publishedEvents(0, 100);
+
+    assertThat(events.sellerEvent(seller, soldOut.getId()).getStatus())
+        .isEqualTo(SaleEventStatus.SOLD_OUT);
+    assertThat(page.items())
+        .extracting(SaleEvent::getStatus)
+        .containsOnly(SaleEventStatus.SCHEDULED, SaleEventStatus.OPEN);
+    assertThat(page.items())
+        .extracting(SaleEvent::getId)
+        .contains(scheduled.getId(), open.getId())
+        .doesNotContain(closed.getId(), soldOut.getId(), draft.getId());
+    assertThat(page.totalElements())
+        .isEqualTo(count("sale_events where status in ('SCHEDULED', 'OPEN')"));
+  }
+
+  @Test
   @DisplayName("같은 키로 다른 내용의 이벤트를 등록하면 충돌로 거절한다")
   void rejectsSameKeyWithDifferentRegistration() {
     UUID seller = UUID.randomUUID();
@@ -314,6 +363,21 @@ class SaleEventIntegrationTest {
 
   private SaleEvent publish(UUID seller, SaleEvent draft) {
     return events.publish(seller, draft.getId(), key(), draft.getVersion());
+  }
+
+  /** 수량 1개 이벤트를 주문 트랜잭션 대신 참여·결제 확정해 매진 종료한다. */
+  private void sellOut(SaleEvent event) {
+    UUID orderId = UUID.randomUUID();
+    UUID cycle = UUID.randomUUID();
+    tx.executeWithoutResult(
+        status ->
+            reservations.reserveForEvent(
+                orderId,
+                event.getId(),
+                UUID.randomUUID(),
+                cycle,
+                Instant.now().plus(Duration.ofMinutes(10))));
+    tx.executeWithoutResult(status -> reservations.consume(orderId, cycle));
   }
 
   private static Instant hoursFromNow(long hours) {

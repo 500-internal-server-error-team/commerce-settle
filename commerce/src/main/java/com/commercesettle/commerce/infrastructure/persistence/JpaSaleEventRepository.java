@@ -80,8 +80,7 @@ class JpaSaleEventRepository implements SaleEventRepository {
 
   @Override
   public PageResult<SaleEvent> findPublished(int page, int size) {
-    return toResult(
-        events.findByStatusNot(SaleEventStatus.DRAFT, PageRequest.of(page, size, NEWEST_FIRST)));
+    return toResult(events.findByStatusIn(IN_PROGRESS, PageRequest.of(page, size, NEWEST_FIRST)));
   }
 
   @Override
