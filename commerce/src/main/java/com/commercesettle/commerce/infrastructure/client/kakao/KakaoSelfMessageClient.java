@@ -66,7 +66,7 @@ public final class KakaoSelfMessageClient implements AutoCloseable {
                   HttpRequest.BodyPublishers.ofString(
                       KakaoTokenManager.form(Map.of("template_object", template))))
               .build();
-      HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+      HttpResponse<String> response = KakaoTokenManager.exchange(http, request, deadline);
       if (response.statusCode() == 401) {
         tokens.rejected(access);
         return Result.RETRYABLE;

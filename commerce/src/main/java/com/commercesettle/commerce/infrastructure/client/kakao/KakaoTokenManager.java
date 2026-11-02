@@ -11,6 +11,7 @@ import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.OverlappingFileLockException;
@@ -23,6 +24,10 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
@@ -91,17 +96,27 @@ public final class KakaoTokenManager {
             || !appId.equals(text(credentials, "appId"))) {
           throw new TokenFailure(true);
         }
-        String access = text(credentials, "accessToken");
+        ObjectNode tokens = credentials;
+        if (credentials.hasNonNull("pendingRefresh")) {
+          if (!(credentials.get("pendingRefresh") instanceof ObjectNode pending))
+            throw new TokenFailure(true);
+          tokens = pending;
+        }
+        String access = text(tokens, "accessToken");
         long now = clock.instant().getEpochSecond();
-        if (credentials.path("expiresAt").asLong(0) > now + 60
-            && !access.equals(rejectedAccessToken)) {
+        if (tokens.path("expiresAt").asLong(0) > now + 60 && !access.equals(rejectedAccessToken)) {
           if (verify(access, deadline)) {
+            if (tokens != credentials) {
+              credentials.setAll(tokens);
+              credentials.remove("pendingRefresh");
+              save(credentials);
+            }
             reauthenticationRequired.set(false);
             return access;
           }
           rejectedAccessToken = access;
         }
-        if (credentials.path("refreshExpiresAt").asLong(0) <= now) throw new TokenFailure(true);
+        if (tokens.path("refreshExpiresAt").asLong(0) <= now) throw new TokenFailure(true);
         String body =
             form(
                 Map.of(
@@ -112,31 +127,45 @@ public final class KakaoTokenManager {
                     "client_secret",
                     text(credentials, "clientSecret"),
                     "refresh_token",
-                    text(credentials, "refreshToken")));
+                    text(tokens, "refreshToken")));
         HttpResponse<String> response =
-            http.send(
+            exchange(
+                http,
                 HttpRequest.newBuilder(tokenUri)
                     .timeout(remaining(deadline))
                     .header("Content-Type", "application/x-www-form-urlencoded;charset=utf-8")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build(),
-                HttpResponse.BodyHandlers.ofString());
+                deadline);
         if (response.statusCode() == 429 || response.statusCode() >= 500)
           throw new TokenFailure(false);
         if (response.statusCode() != 200) throw new TokenFailure(true);
         JsonNode renewed = mapper.readTree(response.body());
         String next = text(renewed, "access_token");
         if (renewed.path("expires_in").asLong(0) <= 0) throw new TokenFailure(true);
-        if (!verify(next, deadline)) throw new TokenFailure(true);
-        credentials.put("accessToken", next);
-        credentials.put("expiresAt", Math.addExact(now, renewed.path("expires_in").asLong()));
+        ObjectNode nextTokens = mapper.createObjectNode();
+        nextTokens.put("accessToken", next);
+        nextTokens.put("expiresAt", Math.addExact(now, renewed.path("expires_in").asLong()));
+        nextTokens.put("refreshToken", text(tokens, "refreshToken"));
+        nextTokens.put("refreshExpiresAt", tokens.path("refreshExpiresAt").asLong());
         if (renewed.hasNonNull("refresh_token")) {
-          credentials.put("refreshToken", text(renewed, "refresh_token"));
+          nextTokens.put("refreshToken", text(renewed, "refresh_token"));
           if (renewed.path("refresh_token_expires_in").asLong(0) <= 0) throw new TokenFailure(true);
-          credentials.put(
+          nextTokens.put(
               "refreshExpiresAt",
               Math.addExact(now, renewed.path("refresh_token_expires_in").asLong()));
         }
+        try {
+          if (!verify(next, deadline)) throw new TokenFailure(true);
+        } catch (TokenFailure failure) {
+          if (!failure.reauthenticate) savePending(credentials, nextTokens);
+          throw failure;
+        } catch (IOException | InterruptedException failure) {
+          savePending(credentials, nextTokens);
+          throw failure;
+        }
+        credentials.setAll(nextTokens);
+        credentials.remove("pendingRefresh");
         save(credentials);
         rejectedAccessToken = null;
         reauthenticationRequired.set(false);
@@ -172,13 +201,14 @@ public final class KakaoTokenManager {
   private boolean verify(String access, long deadline) throws IOException, InterruptedException {
     if (access.equals(verifiedAccessToken)) return true;
     HttpResponse<String> response =
-        http.send(
+        exchange(
+            http,
             HttpRequest.newBuilder(infoUri)
                 .timeout(remaining(deadline))
                 .header("Authorization", "Bearer " + access)
                 .GET()
                 .build(),
-            HttpResponse.BodyHandlers.ofString());
+            deadline);
     if (response.statusCode() == 429 || response.statusCode() >= 500) throw new TokenFailure(false);
     if (response.statusCode() == 401) return false;
     if (response.statusCode() != 200) throw new TokenFailure(true);
@@ -210,6 +240,12 @@ public final class KakaoTokenManager {
     } finally {
       Files.deleteIfExists(temporary);
     }
+  }
+
+  private void savePending(ObjectNode credentials, ObjectNode tokens) throws IOException {
+    // 소유자 조회가 복구될 때까지 기존 자격과 분리해 보존하며, 검증 전에는 발송하지 않는다.
+    credentials.set("pendingRefresh", tokens);
+    save(credentials);
   }
 
   private static void secure(Path path, boolean directory) throws IOException {
@@ -246,6 +282,22 @@ public final class KakaoTokenManager {
     long nanos = deadline - System.nanoTime();
     if (nanos <= 0) throw new TokenFailure(false);
     return Duration.ofNanos(nanos);
+  }
+
+  static HttpResponse<String> exchange(HttpClient http, HttpRequest request, long deadline)
+      throws IOException, InterruptedException {
+    remaining(deadline);
+    var response = http.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+    try {
+      return response.get(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+    } catch (TimeoutException timeout) {
+      throw new HttpTimeoutException("KAKAO_HTTP_DEADLINE_EXCEEDED");
+    } catch (ExecutionException | CancellationException failure) {
+      throw new IOException("KAKAO_HTTP_UNAVAILABLE");
+    } finally {
+      // HttpRequest.timeout은 헤더 수신 뒤 본문 대기를 제한하지 않는다.
+      if (!response.isDone()) response.cancel(true);
+    }
   }
 
   static final class TokenFailure extends RuntimeException {

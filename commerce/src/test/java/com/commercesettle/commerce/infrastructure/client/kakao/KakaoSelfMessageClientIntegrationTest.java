@@ -1,6 +1,7 @@
 package com.commercesettle.commerce.infrastructure.client.kakao;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -25,12 +26,16 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.netty.DisposableServer;
 import reactor.netty.http.server.HttpServer;
+import reactor.netty.http.server.HttpServerResponse;
 
 class KakaoSelfMessageClientIntegrationTest {
   private static final long NOW = 1_793_606_400L;
@@ -40,6 +45,8 @@ class KakaoSelfMessageClientIntegrationTest {
   private final AtomicInteger sends = new AtomicInteger();
   private final AtomicInteger refreshes = new AtomicInteger();
   private final AtomicInteger identities = new AtomicInteger();
+  private final AtomicInteger stalledResponses = new AtomicInteger();
+  private final AtomicInteger cancelledStalls = new AtomicInteger();
   private DisposableServer server;
   private HttpClient http;
   private Path credentials;
@@ -55,6 +62,7 @@ class KakaoSelfMessageClientIntegrationTest {
   private String identityBody = "{\"id\":123,\"app_id\":456}";
   private boolean loseResponse;
   private boolean delayResponse;
+  private String stallPath;
 
   @BeforeEach
   void setUp() throws IOException {
@@ -82,17 +90,12 @@ class KakaoSelfMessageClientIntegrationTest {
                               if (request.uri().equals("/oauth/token")) {
                                 refreshes.incrementAndGet();
                                 refreshForm = form(body);
-                                return response
-                                    .status(refreshStatus)
-                                    .sendString(Mono.just(refreshBody))
-                                    .then();
+                                return respond(request.uri(), response, refreshStatus, refreshBody);
                               }
                               if (request.uri().equals("/v1/user/access_token_info")) {
                                 identities.incrementAndGet();
-                                return response
-                                    .status(identityStatus)
-                                    .sendString(Mono.just(identityBody))
-                                    .then();
+                                return respond(
+                                    request.uri(), response, identityStatus, identityBody);
                               }
                               sends.incrementAndGet();
                               sentAuthorization = request.requestHeaders().get("Authorization");
@@ -113,12 +116,26 @@ class KakaoSelfMessageClientIntegrationTest {
                                 return Mono.delay(Duration.ofSeconds(6))
                                     .then(response.sendString(Mono.just(sendBody)).then());
                               }
-                              return response
-                                  .status(sendStatus)
-                                  .sendString(Mono.just(sendBody))
-                                  .then();
+                              return respond(request.uri(), response, sendStatus, sendBody);
                             }))
             .bindNow();
+    client = clientAt(NOW);
+  }
+
+  private Mono<Void> respond(String path, HttpServerResponse response, int status, String body) {
+    if (path.equals(stallPath)) {
+      stalledResponses.incrementAndGet();
+      response.withConnection(connection -> connection.onDispose(cancelledStalls::incrementAndGet));
+      return response
+          .status(status)
+          .sendHeaders()
+          .then()
+          .then(response.sendString(Flux.concat(Mono.just("{"), Mono.never())).then());
+    }
+    return response.status(status).sendString(Mono.just(body)).then();
+  }
+
+  private KakaoSelfMessageClient clientAt(long epochSecond) {
     KakaoTokenManager tokens =
         new KakaoTokenManager(
             credentials,
@@ -128,15 +145,14 @@ class KakaoSelfMessageClientIntegrationTest {
             mapper,
             uri("/oauth/token"),
             uri("/v1/user/access_token_info"),
-            Clock.fixed(Instant.ofEpochSecond(NOW), ZoneOffset.UTC),
+            Clock.fixed(Instant.ofEpochSecond(epochSecond), ZoneOffset.UTC),
             registry);
-    client =
-        new KakaoSelfMessageClient(
-            http,
-            mapper,
-            tokens,
-            uri("/v2/api/talk/memo/default/send"),
-            URI.create("https://example.test/api/orders"));
+    return new KakaoSelfMessageClient(
+        http,
+        mapper,
+        tokens,
+        uri("/v2/api/talk/memo/default/send"),
+        URI.create("https://example.test/api/orders"));
   }
 
   @AfterEach
@@ -199,6 +215,65 @@ class KakaoSelfMessageClientIntegrationTest {
   }
 
   @ParameterizedTest
+  @ValueSource(ints = {429, 503})
+  @DisplayName("소유자 조회의 일시 장애 뒤 재시작해도 회전된 자격을 복구한다")
+  void recoversRotatedRefreshAfterTransientOwnerFailure(int status) throws IOException {
+    writeCredentials(NOW - 1, NOW + 1);
+    refreshBody =
+        "{\"access_token\":\"renewed-access\",\"expires_in\":3600,"
+            + "\"refresh_token\":\"next-refresh\",\"refresh_token_expires_in\":172800}";
+    identityStatus = status;
+
+    assertThat(client.send("[구매자] 결제 완료")).isEqualTo(KakaoSelfMessageClient.Result.RETRYABLE);
+
+    var pending = mapper.readTree(Files.readAllBytes(credentials));
+    assertThat(pending.path("accessToken").asText()).isEqualTo("original-access");
+    assertThat(pending.path("pendingRefresh").path("refreshToken").asText())
+        .isEqualTo("next-refresh");
+    assertThat(sends).hasValue(0);
+    assertThat(Files.getPosixFilePermissions(credentials))
+        .isEqualTo(PosixFilePermissions.fromString("rw-------"));
+    identityStatus = 200;
+    registry.clear();
+    client = clientAt(NOW + 2);
+
+    assertThat(client.send("[구매자] 결제 완료")).isEqualTo(KakaoSelfMessageClient.Result.ACCEPTED);
+
+    var saved = mapper.readTree(Files.readAllBytes(credentials));
+    assertThat(saved.has("pendingRefresh")).isFalse();
+    assertThat(saved.path("refreshToken").asText()).isEqualTo("next-refresh");
+    assertThat(saved.path("refreshExpiresAt").asLong()).isEqualTo(NOW + 172800);
+    assertThat(sentAuthorization).isEqualTo("Bearer renewed-access");
+    assertThat(refreshes).hasValue(1);
+  }
+
+  @Test
+  @DisplayName("보관한 access token도 만료됐으면 회전된 refresh token으로 복구한다")
+  void refreshesExpiredPendingAccessWithRetainedRotation() throws IOException {
+    writeCredentials(NOW - 1, NOW + 1);
+    refreshBody =
+        "{\"access_token\":\"renewed-access\",\"expires_in\":1,"
+            + "\"refresh_token\":\"next-refresh\",\"refresh_token_expires_in\":172800}";
+    identityStatus = 503;
+
+    assertThat(client.send("[구매자] 결제 완료")).isEqualTo(KakaoSelfMessageClient.Result.RETRYABLE);
+
+    identityStatus = 200;
+    refreshBody = "{\"access_token\":\"recovered-access\",\"expires_in\":3600}";
+    registry.clear();
+    client = clientAt(NOW + 2);
+
+    assertThat(client.send("[구매자] 결제 완료")).isEqualTo(KakaoSelfMessageClient.Result.ACCEPTED);
+
+    assertThat(refreshForm).containsEntry("refresh_token", "next-refresh");
+    assertThat(sentAuthorization).isEqualTo("Bearer recovered-access");
+    var saved = mapper.readTree(Files.readAllBytes(credentials));
+    assertThat(saved.has("pendingRefresh")).isFalse();
+    assertThat(saved.path("refreshToken").asText()).isEqualTo("next-refresh");
+    assertThat(saved.path("refreshExpiresAt").asLong()).isEqualTo(NOW + 172800);
+  }
+
+  @ParameterizedTest
   @CsvSource({
     "400, REJECTED",
     "403, REJECTED",
@@ -237,6 +312,33 @@ class KakaoSelfMessageClientIntegrationTest {
     assertThat(client.send("[구매자] 결제 완료")).isEqualTo(KakaoSelfMessageClient.Result.UNKNOWN);
 
     assertThat(sends).hasValue(1);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "/oauth/token, RETRYABLE",
+    "/v1/user/access_token_info, RETRYABLE",
+    "/v2/api/talk/memo/default/send, UNKNOWN"
+  })
+  @Timeout(10)
+  @DisplayName("헤더 뒤 본문이 멈춰도 제한 시간에 취소하고 다음 발송을 막지 않는다")
+  void cancelsStalledBodyWithinSharedDeadline(String path, KakaoSelfMessageClient.Result result)
+      throws IOException {
+    stallPath = path;
+    if (path.equals("/oauth/token")) writeCredentials(NOW - 1);
+    long started = System.nanoTime();
+
+    assertThat(client.send("[구매자] 결제 완료")).isEqualTo(result);
+
+    assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(7));
+    assertThat(stalledResponses).hasValue(1);
+    assertThat(sends).hasValue(path.endsWith("/send") ? 1 : 0);
+    await()
+        .atMost(Duration.ofSeconds(2))
+        .untilAsserted(() -> assertThat(cancelledStalls).hasValue(1));
+    stallPath = null;
+
+    assertThat(client.send("[구매자] 별도 주문 발송 완료")).isEqualTo(KakaoSelfMessageClient.Result.ACCEPTED);
   }
 
   @Test
@@ -374,6 +476,10 @@ class KakaoSelfMessageClientIntegrationTest {
   }
 
   private void writeCredentials(long expiresAt) throws IOException {
+    writeCredentials(expiresAt, NOW + 86400);
+  }
+
+  private void writeCredentials(long expiresAt, long refreshExpiresAt) throws IOException {
     var value = new LinkedHashMap<String, Object>();
     value.put("clientId", "test-client");
     value.put("clientSecret", "test-secret");
@@ -382,7 +488,7 @@ class KakaoSelfMessageClientIntegrationTest {
     value.put("accessToken", "original-access");
     value.put("refreshToken", "original-refresh");
     value.put("expiresAt", expiresAt);
-    value.put("refreshExpiresAt", NOW + 86400);
+    value.put("refreshExpiresAt", refreshExpiresAt);
     Files.write(credentials, mapper.writeValueAsBytes(value));
     Files.setPosixFilePermissions(credentials, PosixFilePermissions.fromString("rw-------"));
   }
