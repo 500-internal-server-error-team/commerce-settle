@@ -470,6 +470,64 @@ CREATE TABLE commerce.coupon_history (
 CREATE INDEX ix_coupon_history_coupon_created
     ON commerce.coupon_history (buyer_coupon_id, created_at, id);
 
+CREATE TABLE commerce.coupon_issue_runs (
+    id uuid PRIMARY KEY,
+    target_month date NOT NULL,
+    cutoff_at timestamptz NOT NULL,
+    policy_version varchar(32) NOT NULL,
+    replaces_run_id uuid,
+    target_count integer,
+    cutoff_spend bigint,
+    status varchar(24) NOT NULL,
+    cancelled_at timestamptz,
+    cancelled_by varchar(100),
+    cancellation_reason_code varchar(80),
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0,
+    CONSTRAINT ck_coupon_issue_runs_status
+        CHECK (status IN ('PREPARING', 'ISSUING', 'COMPLETED', 'EXPIRED', 'CANCELLED')),
+    CONSTRAINT ck_coupon_issue_runs_month
+        CHECK (target_month = date_trunc('month', target_month)::date),
+    CONSTRAINT ck_coupon_issue_runs_replaces CHECK (replaces_run_id IS NULL OR replaces_run_id <> id),
+    CONSTRAINT ck_coupon_issue_runs_counts CHECK (
+        (target_count IS NULL OR target_count >= 0) AND (cutoff_spend IS NULL OR cutoff_spend > 0)
+    ),
+    CONSTRAINT ck_coupon_issue_runs_cancellation CHECK (
+        (status = 'CANCELLED') = (cancelled_at IS NOT NULL)
+        AND (status = 'CANCELLED') = (cancelled_by IS NOT NULL)
+        AND (status = 'CANCELLED') = (cancellation_reason_code IS NOT NULL)
+    )
+);
+-- 취소되지 않은 회차는 혜택 월마다 하나이고, 대체 회차는 취소된 부모 하나만 잇는다.
+CREATE UNIQUE INDEX uq_coupon_issue_runs_active_month
+    ON commerce.coupon_issue_runs (target_month) WHERE status <> 'CANCELLED';
+CREATE UNIQUE INDEX uq_coupon_issue_runs_replaces
+    ON commerce.coupon_issue_runs (replaces_run_id) WHERE replaces_run_id IS NOT NULL;
+CREATE INDEX ix_coupon_issue_runs_status_month
+    ON commerce.coupon_issue_runs (status, target_month, id);
+
+CREATE TABLE commerce.coupon_issue_targets (
+    id uuid PRIMARY KEY,
+    run_id uuid NOT NULL,
+    template_id uuid NOT NULL,
+    buyer_id uuid NOT NULL,
+    external_spend bigint NOT NULL,
+    rank_no integer NOT NULL,
+    buyer_coupon_id uuid,
+    status varchar(24) NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0,
+    CONSTRAINT uq_coupon_issue_targets_run_buyer UNIQUE (run_id, buyer_id),
+    CONSTRAINT ck_coupon_issue_targets_status CHECK (status IN ('PENDING', 'ISSUED', 'EXPIRED')),
+    CONSTRAINT ck_coupon_issue_targets_spend CHECK (external_spend > 0),
+    CONSTRAINT ck_coupon_issue_targets_rank CHECK (rank_no BETWEEN 1 AND 100),
+    CONSTRAINT ck_coupon_issue_targets_coupon CHECK ((status = 'ISSUED') = (buyer_coupon_id IS NOT NULL))
+);
+CREATE UNIQUE INDEX uq_coupon_issue_targets_coupon
+    ON commerce.coupon_issue_targets (buyer_coupon_id) WHERE buyer_coupon_id IS NOT NULL;
+
 CREATE TABLE commerce.idempotency_records (
     id uuid PRIMARY KEY,
     actor_kind varchar(24) NOT NULL,
@@ -795,3 +853,71 @@ CREATE TABLE commerce.notification_retired_keys (
 );
 
 CREATE INDEX ix_notification_items_retention_order ON commerce.notification_items((CAST(payload->>'orderId' AS uuid)),delivery_id);
+
+-- Spring Batch 메타데이터(월간 우수고객 Job). 앱 기동 때 만들지 않고 이 초기 SQL로 관리한다.
+CREATE TABLE commerce.BATCH_JOB_INSTANCE (
+    JOB_INSTANCE_ID BIGINT       NOT NULL PRIMARY KEY,
+    VERSION         BIGINT,
+    JOB_NAME        VARCHAR(100) NOT NULL,
+    JOB_KEY         VARCHAR(32)  NOT NULL,
+    CONSTRAINT JOB_INST_UN UNIQUE (JOB_NAME, JOB_KEY)
+);
+
+CREATE TABLE commerce.BATCH_JOB_EXECUTION (
+    JOB_EXECUTION_ID BIGINT        NOT NULL PRIMARY KEY,
+    VERSION          BIGINT,
+    JOB_INSTANCE_ID  BIGINT        NOT NULL,
+    CREATE_TIME      TIMESTAMP     NOT NULL,
+    START_TIME       TIMESTAMP DEFAULT NULL,
+    END_TIME         TIMESTAMP DEFAULT NULL,
+    STATUS           VARCHAR(10),
+    EXIT_CODE        VARCHAR(2500),
+    EXIT_MESSAGE     VARCHAR(2500),
+    LAST_UPDATED     TIMESTAMP
+);
+
+CREATE TABLE commerce.BATCH_JOB_EXECUTION_PARAMS (
+    JOB_EXECUTION_ID BIGINT        NOT NULL,
+    PARAMETER_NAME   VARCHAR(100)  NOT NULL,
+    PARAMETER_TYPE   VARCHAR(100)  NOT NULL,
+    PARAMETER_VALUE  VARCHAR(2500),
+    IDENTIFYING      CHAR(1)       NOT NULL
+);
+
+CREATE TABLE commerce.BATCH_STEP_EXECUTION (
+    STEP_EXECUTION_ID  BIGINT        NOT NULL PRIMARY KEY,
+    VERSION            BIGINT        NOT NULL,
+    STEP_NAME          VARCHAR(100)  NOT NULL,
+    JOB_EXECUTION_ID   BIGINT        NOT NULL,
+    CREATE_TIME        TIMESTAMP     NOT NULL,
+    START_TIME         TIMESTAMP DEFAULT NULL,
+    END_TIME           TIMESTAMP DEFAULT NULL,
+    STATUS             VARCHAR(10),
+    COMMIT_COUNT       BIGINT,
+    READ_COUNT         BIGINT,
+    FILTER_COUNT       BIGINT,
+    WRITE_COUNT        BIGINT,
+    READ_SKIP_COUNT    BIGINT,
+    WRITE_SKIP_COUNT   BIGINT,
+    PROCESS_SKIP_COUNT BIGINT,
+    ROLLBACK_COUNT     BIGINT,
+    EXIT_CODE          VARCHAR(2500),
+    EXIT_MESSAGE       VARCHAR(2500),
+    LAST_UPDATED       TIMESTAMP
+);
+
+CREATE TABLE commerce.BATCH_STEP_EXECUTION_CONTEXT (
+    STEP_EXECUTION_ID  BIGINT        NOT NULL PRIMARY KEY,
+    SHORT_CONTEXT      VARCHAR(2500) NOT NULL,
+    SERIALIZED_CONTEXT TEXT
+);
+
+CREATE TABLE commerce.BATCH_JOB_EXECUTION_CONTEXT (
+    JOB_EXECUTION_ID   BIGINT        NOT NULL PRIMARY KEY,
+    SHORT_CONTEXT      VARCHAR(2500) NOT NULL,
+    SERIALIZED_CONTEXT TEXT
+);
+
+CREATE SEQUENCE commerce.BATCH_STEP_EXECUTION_SEQ MAXVALUE 9223372036854775807 NO CYCLE;
+CREATE SEQUENCE commerce.BATCH_JOB_EXECUTION_SEQ MAXVALUE 9223372036854775807 NO CYCLE;
+CREATE SEQUENCE commerce.BATCH_JOB_SEQ MAXVALUE 9223372036854775807 NO CYCLE;
