@@ -45,6 +45,7 @@ class AdmissionRunnerTest(unittest.TestCase):
                 self.assertEqual(environment[name], "0")
             self.assertEqual(start[2]["services"]["commerce"]["environment"]["APP_ORDER_STUB_ENABLED"], "false")
             self.assertTrue(any("--rmi" in command and "local" in command for command, *_args in calls))
+            self.assertTrue(any("--profile" in command and "*" in command and "down" in command for command, *_args in calls))
             self.assertFalse(owned.exists())
             self.assertEqual(unrelated.read_text(), "preserve")
 
