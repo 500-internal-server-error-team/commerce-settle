@@ -42,6 +42,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(
     properties = {
       "management.tracing.enabled=false",
+      "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123",
+      "settlement.payout.mock-credential=test-settlement-credential-0123456789abcdef0123",
       "spring.kafka.admin.auto-create=false",
       "settlement.daily-batch.schedule-enabled=false",
       "settlement.payout-worker.enabled=false",
