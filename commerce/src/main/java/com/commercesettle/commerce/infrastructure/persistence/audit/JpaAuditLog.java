@@ -21,6 +21,7 @@ class JpaAuditLog {
   private String beforeStatus;
   private String afterStatus;
   private String reasonCode;
+  private UUID eventId;
   private String correlationId;
   private Instant occurredAt;
 
@@ -36,6 +37,7 @@ class JpaAuditLog {
     this.beforeStatus = entry.beforeStatus();
     this.afterStatus = entry.afterStatus();
     this.reasonCode = entry.reasonCode();
+    this.eventId = entry.eventId();
     this.correlationId = entry.correlationId();
     this.occurredAt = entry.occurredAt().truncatedTo(ChronoUnit.MICROS);
   }

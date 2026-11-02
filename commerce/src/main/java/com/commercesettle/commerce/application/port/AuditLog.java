@@ -11,6 +11,7 @@ public interface AuditLog {
   /**
    * @param actorKind BUYER/SELLER/SERVICE/OPERATOR/SYSTEM
    * @param actorRef 검증한 계정 UUID·서비스/운영자/배치 식별자. 이메일을 넣지 않는다.
+   * @param eventId 수신 이벤트로 발생한 변경이면 원 eventId. HTTP·시스템 작업이면 null.
    * @param correlationId 비밀값이 아닌 추적 ID. 계정 인증 변경은 가드의 pendingChangeId다.
    */
   record Entry(
@@ -22,6 +23,7 @@ public interface AuditLog {
       String beforeStatus,
       String afterStatus,
       String reasonCode,
+      UUID eventId,
       String correlationId,
       Instant occurredAt) {
     public Entry {

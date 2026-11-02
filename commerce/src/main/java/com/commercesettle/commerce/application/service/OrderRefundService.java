@@ -81,7 +81,7 @@ public class OrderRefundService {
           orders.save(order);
           var r =
               requests.save(OrderRefundRequest.create(id, order, kind, reason, clock.instant()));
-          workflow.changed(order, before, "BUYER", buyer.toString(), "REFUND_REQUESTED");
+          workflow.changed(order, before, "BUYER", buyer.toString(), "REFUND_REQUESTED", null);
           audit(r, null, "BUYER", buyer.toString(), "REFUND_REQUESTED");
           if (kind == OrderRefundRequest.Kind.CANCEL) approved(order, r);
           return OrderRefundView.from(r);
@@ -197,7 +197,7 @@ public class OrderRefundService {
             orders.save(order);
             requests.save(r);
             audit(r, before, kind.name(), actor.toString(), operation);
-            workflow.changed(order, orderBefore, kind.name(), actor.toString(), operation);
+            workflow.changed(order, orderBefore, kind.name(), actor.toString(), operation, null);
           }
           return OrderRefundView.from(r);
         },
@@ -251,7 +251,7 @@ public class OrderRefundService {
                   orders.save(o);
                   requests.save(r);
                   audit(r, before, "OPERATOR", operator, "REFUND_CLOSED");
-                  workflow.changed(o, orderBefore, "OPERATOR", operator, "REFUND_CLOSED");
+                  workflow.changed(o, orderBefore, "OPERATOR", operator, "REFUND_CLOSED", null);
                   return OrderRefundView.from(r);
                 },
                 replay ->
@@ -289,6 +289,7 @@ public class OrderRefundService {
             before == null ? null : before.name(),
             r.getStatus().name(),
             reason,
+            null,
             r.getOrderId().toString(),
             clock.instant()));
   }
