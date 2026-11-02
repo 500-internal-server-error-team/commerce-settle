@@ -13,7 +13,6 @@ import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
-import com.commercesettle.payment.application.port.UnreadableInboxEventException;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.commercesettle.payment.domain.model.MileageEntry;
 import com.commercesettle.payment.domain.model.MileageEntryKind;
@@ -72,7 +71,8 @@ class ApplyOrderPaymentRequestServiceTest {
           entries,
           outbox,
           TransactionOperations.withoutTransaction(),
-          Clock.fixed(NOW, ZoneOffset.UTC));
+          Clock.fixed(NOW, ZoneOffset.UTC),
+          30_000);
 
   @Test
   @DisplayName("처리할 WAITING이 없으면 아무것도 바꾸지 않는다")
@@ -412,7 +412,17 @@ class ApplyOrderPaymentRequestServiceTest {
   }
 
   @Test
-  @DisplayName("처리 중 예외가 나면 선점한 버전으로 실패를 기록하고 1초 뒤 다시 처리하게 한다")
+  @DisplayName("임대 시간 뒤까지 다시 잡히지 않도록 선점하고, 상한 10회를 함께 넘긴다")
+  void claimsWithLeaseAndAttemptLimit() {
+    inbox.add(card(UUID.randomUUID(), UUID.randomUUID()));
+
+    service.processNext();
+
+    assertThat(inbox.claims).containsExactly(new Claim(NOW, NOW.plusSeconds(30), 10));
+  }
+
+  @Test
+  @DisplayName("첫 시도가 실패하면 선점한 버전으로 실패를 기록하고 1초 뒤 다시 처리하게 한다")
   void recordsFirstFailureForRetryAfterOneSecond() {
     jobs.failSave = true;
     UUID inboxId = inbox.add(card(UUID.randomUUID(), UUID.randomUUID()));
@@ -426,10 +436,10 @@ class ApplyOrderPaymentRequestServiceTest {
   }
 
   @Test
-  @DisplayName("9번 실패한 요청이 다시 실패하면 재시도 시각 없이 확인 대상으로 기록한다")
+  @DisplayName("10번째 시도가 실패하면 재시도 시각 없이 확인 대상으로 기록한다")
   void recordsTenthFailureAsReview() {
     jobs.failSave = true;
-    UUID inboxId = inbox.add(card(UUID.randomUUID(), UUID.randomUUID()), 9);
+    UUID inboxId = inbox.add(card(UUID.randomUUID(), UUID.randomUUID()), 10);
 
     service.processNext();
 
@@ -438,15 +448,16 @@ class ApplyOrderPaymentRequestServiceTest {
   }
 
   @Test
-  @DisplayName("원문을 읽을 수 없는 행은 첫 실패에도 재시도 없이 확인 대상으로 기록한다")
-  void recordsUnreadableBodyAsReviewWithoutRetry() {
-    UUID inboxId = UUID.randomUUID();
-    inbox.claimFailure = new UnreadableInboxEventException(inboxId, 5, 0);
+  @DisplayName("임대가 끝나 다른 처리기가 선점한 요청은 처리하지 않고 건너뛴다")
+  void skipsRequestWhenLeaseWasLost() {
+    inbox.leaseLost = true;
+    UUID inboxId = inbox.add(card(UUID.randomUUID(), UUID.randomUUID()));
 
     assertThat(service.processNext()).isTrue();
 
-    assertThat(inbox.failures)
-        .containsExactly(new Failure(inboxId, 5, "PAYMENT_REQUEST_BODY_UNREADABLE", null));
+    assertThat(payments.all()).isEmpty();
+    assertThat(inbox.applied).doesNotContainKey(inboxId);
+    assertThat(inbox.failures).isEmpty();
   }
 
   @Test
@@ -587,11 +598,13 @@ class ApplyOrderPaymentRequestServiceTest {
     private final Map<UUID, OrderPaymentRequestedPayload> originals = new HashMap<>();
     private final Map<UUID, String> reviewRequired = new LinkedHashMap<>();
     private final List<Failure> failures = new ArrayList<>();
+    private final List<Claim> claims = new ArrayList<>();
     private RuntimeException claimFailure;
     private RuntimeException recordFailure;
+    private boolean leaseLost;
 
     UUID add(OrderPaymentRequestedPayload payload) {
-      return add(payload, 0);
+      return add(payload, 1);
     }
 
     UUID add(OrderPaymentRequestedPayload payload, int attempts) {
@@ -619,16 +632,25 @@ class ApplyOrderPaymentRequestServiceTest {
     }
 
     @Override
-    public Optional<WaitingInboxEvent> claimNextWaiting(Instant now) {
+    public Optional<WaitingInboxEvent> claimNextWaiting(
+        Instant now, Instant leaseUntil, int maxAttempts) {
       if (claimFailure != null) {
         throw claimFailure;
       }
+      claims.add(new Claim(now, leaseUntil, maxAttempts));
       return Optional.ofNullable(waiting.poll());
     }
 
     @Override
-    public Optional<WaitingInboxEvent> claimWaitingEvent(UUID eventId, Instant now) {
-      return claimNextWaiting(now).filter(e -> e.event().eventId().equals(eventId));
+    public Optional<WaitingInboxEvent> claimWaitingEvent(
+        UUID eventId, Instant now, Instant leaseUntil, int maxAttempts) {
+      return claimNextWaiting(now, leaseUntil, maxAttempts)
+          .filter(e -> e.event().eventId().equals(eventId));
+    }
+
+    @Override
+    public boolean lockClaimed(UUID inboxId, long version) {
+      return !leaseLost;
     }
 
     @Override
@@ -659,6 +681,8 @@ class ApplyOrderPaymentRequestServiceTest {
   }
 
   private record Failure(UUID inboxId, long version, String errorCode, Instant retryAt) {}
+
+  private record Claim(Instant now, Instant leaseUntil, int maxAttempts) {}
 
   private static final class FakePayments implements PaymentRepository {
     private final Map<UUID, Payment> byId = new HashMap<>();
