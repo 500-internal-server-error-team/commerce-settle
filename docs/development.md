@@ -198,7 +198,7 @@ SELLER: POST /api/sellers/me/refund-requests/{requestId}/receipt
 
 Payment 내부 조회와 운영 종결은 ADR 0010의 `service:payment`·`operator:<식별자>` 자격을 인스턴스의 `app.internal-auth.senders`에 설정해야 합니다. 사용자 토큰이나 Gateway 자격으로 호출할 수 없습니다. 운영 종결은 외부 확정 거절·마일리지 미복원·정산 예약 해제·고객 확인을 모두 검증한 `RefundClosureEvidence`가 필요합니다. 기본 미연결 구현은 503이며 금융 실패만으로 주문을 PAID로 되돌리거나 자동 구매확정을 진행하지 않습니다.
 
-쿠폰·이벤트의 실제 예약·확정·해제·복원은 `OrderBenefits` 어댑터로 교체합니다. 주문 트랜잭션에 참여하고 이벤트 가격/버전·기간/참여 제한과 쿠폰 소유/수단/기한/예산을 다시 확인해야 합니다. `OrderWorkflowIntegrationTest`의 DB 기록 대역은 해당 호출·금액 사본·로컬 롤백만 검증하며 실제 쿠폰 예산·이벤트 재고 구현의 완료가 아닙니다. Payment/Settlement의 실제 회차 재접수·마일리지 재예약·승인 차단·원환불/예약 해제 조회·환불 복구 확인 왕복은 각 소유 서비스와 통합 검증해야 합니다. 금융 성공을 임의로 반환하는 기본 어댑터는 없습니다. 거래 알림과 신규 접수 용량 gate는 별도 미구현 경계입니다.
+`OrderBenefitsService`가 선착순 이벤트의 견적·예약·재시도·확정·해제·환불 복원·반품 입고를 주문 트랜잭션 안에서 처리하며 `EventOrderIntegrationTest`가 HTTP 경로로 검증합니다. 쿠폰은 구현 전이라 쿠폰을 쓴 주문은 503으로 중단합니다. `OrderWorkflowIntegrationTest`의 DB 기록 대역은 해당 호출·금액 사본·로컬 롤백만 검증하며 실제 쿠폰 예산 구현의 완료가 아닙니다. Payment/Settlement의 실제 회차 재접수·마일리지 재예약·승인 차단·원환불/예약 해제 조회·환불 복구 확인 왕복은 각 소유 서비스와 통합 검증해야 합니다. 금융 성공을 임의로 반환하는 기본 어댑터는 없습니다. 거래 알림과 신규 접수 용량 gate는 별도 미구현 경계입니다.
 
 ```bash
 ./gradlew :commerce:test --tests '*OrderWorkflow*' --tests '*OrderIntegrationTest' --tests '*PaymentAcceptedIntegrationTest'
