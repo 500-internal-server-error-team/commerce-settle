@@ -10,6 +10,7 @@ import com.commercesettle.commerce.application.exception.OrderStubException;
 import com.commercesettle.commerce.domain.exception.BuyerAddressNotFoundException;
 import com.commercesettle.commerce.domain.exception.DefaultAddressConflictException;
 import com.commercesettle.commerce.domain.exception.DuplicateAccountEmailException;
+import com.commercesettle.commerce.domain.exception.EventAdmissionClosedException;
 import com.commercesettle.commerce.domain.exception.InsufficientInventoryException;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.exception.SaleEventConflictException;
@@ -158,6 +159,17 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
   ResponseEntity<Object> insufficientInventory(
       InsufficientInventoryException e, WebRequest request) {
     return respond(ErrorCode.INVENTORY_INSUFFICIENT, request);
+  }
+
+  @ExceptionHandler(EventAdmissionClosedException.class)
+  ResponseEntity<Object> eventAdmissionClosed(EventAdmissionClosedException e, WebRequest request) {
+    String detail =
+        switch (e.reason()) {
+          case NOT_OPEN -> "신청 기간이 아닌 이벤트입니다.";
+          case NO_REMAINING -> "남은 이벤트 수량이 없습니다.";
+          case ALREADY_PARTICIPATED -> "이미 참여한 이벤트입니다.";
+        };
+    return respond(ErrorCode.EVENT_ADMISSION_CLOSED, detail, null, request);
   }
 
   @ExceptionHandler(DuplicateAccountEmailException.class)
