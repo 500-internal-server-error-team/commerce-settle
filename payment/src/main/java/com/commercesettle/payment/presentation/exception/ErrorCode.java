@@ -3,7 +3,7 @@ package com.commercesettle.payment.presentation.exception;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 
-/** 공통 오류 계약의 code 목록. 상수 이름이 응답 code 값이다. 업무 오류 코드는 해당 API를 구현할 때 추가한다. */
+/** 공통 오류 계약의 code 목록. 상수 이름이 응답 code 값이다. */
 enum ErrorCode {
   COMMON_VALIDATION_FAILED(HttpStatus.BAD_REQUEST, "입력값을 확인해 주세요."),
   COMMON_AUTHENTICATION_REQUIRED(HttpStatus.UNAUTHORIZED, "인증이 필요합니다."),
@@ -12,6 +12,7 @@ enum ErrorCode {
   COMMON_METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "요청을 처리할 수 없습니다."),
   COMMON_NOT_ACCEPTABLE(HttpStatus.NOT_ACCEPTABLE, "요청을 처리할 수 없습니다."),
   COMMON_UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "요청을 처리할 수 없습니다."),
+  COMMON_RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "요청이 많습니다. Retry-After 이후 다시 시도해 주세요."),
   COMMON_TEMPORARILY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "요청을 처리할 수 없습니다."),
   COMMON_INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "요청을 처리할 수 없습니다.");
 
@@ -41,6 +42,7 @@ enum ErrorCode {
       case 405 -> COMMON_METHOD_NOT_ALLOWED;
       case 406 -> COMMON_NOT_ACCEPTABLE;
       case 415 -> COMMON_UNSUPPORTED_MEDIA_TYPE;
+      case 429 -> COMMON_RATE_LIMITED;
       case 503 -> COMMON_TEMPORARILY_UNAVAILABLE;
       default -> COMMON_INTERNAL_ERROR;
     };

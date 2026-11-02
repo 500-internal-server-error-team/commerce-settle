@@ -8,6 +8,8 @@ import com.commercesettle.payment.domain.model.PaymentAmounts;
 import com.commercesettle.payment.domain.model.PaymentStatus;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
 import java.time.Instant;
+import java.util.Comparator;
+import java.util.List;
 import java.util.UUID;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
@@ -41,6 +43,7 @@ class PaymentRepositoryIntegrationTest {
 
   private static final Instant CREATED_AT = Instant.parse("2026-10-28T00:00:00.123456Z");
   private static final Instant CONFIRMED_AT = Instant.parse("2026-10-28T00:01:00.654321Z");
+  private static final PaymentAmounts AMOUNTS = new PaymentAmounts(10_000, 0, 0, 0);
 
   @Autowired private PaymentRepository paymentRepository;
   @Autowired private DataSource dataSource;
@@ -153,6 +156,67 @@ class PaymentRepositoryIntegrationTest {
         .isInstanceOf(ObjectOptimisticLockingFailureException.class);
     assertThat(paymentRepository.findById(payment.getId()).orElseThrow().getStatus())
         .isEqualTo(PaymentStatus.PROCESSING);
+  }
+
+  @Test
+  @DisplayName("구매자 본인의 결제만 ID로 찾는다")
+  void findsOnlyOwnPaymentById() {
+    Payment payment = paymentRepository.save(payment(UUID.randomUUID(), AMOUNTS));
+
+    assertThat(paymentRepository.findByIdAndBuyerId(payment.getId(), payment.getBuyerId()))
+        .isPresent();
+    assertThat(paymentRepository.findByIdAndBuyerId(payment.getId(), UUID.randomUUID())).isEmpty();
+  }
+
+  @Test
+  @DisplayName("구매자의 결제를 생성 시각 내림차순, 같은 시각은 ID 내림차순으로 페이지를 나눠 읽는다")
+  void pagesBuyerPaymentsNewestFirst() {
+    UUID buyer = UUID.randomUUID();
+    Payment oldest = paymentRepository.save(payment(UUID.randomUUID(), buyer, CREATED_AT));
+    Payment sameTimeA = paymentRepository.save(payment(UUID.randomUUID(), buyer, CONFIRMED_AT));
+    Payment sameTimeB = paymentRepository.save(payment(UUID.randomUUID(), buyer, CONFIRMED_AT));
+    paymentRepository.save(payment(UUID.randomUUID(), UUID.randomUUID(), CONFIRMED_AT));
+    List<UUID> sameTime =
+        List.of(sameTimeA.getId(), sameTimeB.getId()).stream()
+            // PostgreSQL은 uuid를 바이트 순(16진 문자열 순)으로 정렬한다. UUID.compareTo는 부호 있는 비교라 다르다.
+            .sorted(Comparator.comparing(UUID::toString).reversed())
+            .toList();
+
+    assertThat(paymentRepository.findByBuyer(buyer, null, 0, 2))
+        .extracting(Payment::getId)
+        .containsExactlyElementsOf(sameTime);
+    assertThat(paymentRepository.findByBuyer(buyer, null, 1, 2))
+        .extracting(Payment::getId)
+        .containsExactly(oldest.getId());
+    assertThat(paymentRepository.countByBuyer(buyer, null)).isEqualTo(3);
+  }
+
+  @Test
+  @DisplayName("orderId를 주면 그 주문의 본인 결제만 읽고 센다")
+  void filtersBuyerPaymentsByOrder() {
+    UUID buyer = UUID.randomUUID();
+    UUID orderId = UUID.randomUUID();
+    Payment target = paymentRepository.save(payment(orderId, buyer, CREATED_AT));
+    paymentRepository.save(payment(UUID.randomUUID(), buyer, CREATED_AT));
+
+    assertThat(paymentRepository.findByBuyer(buyer, orderId, 0, 20))
+        .extracting(Payment::getId)
+        .containsExactly(target.getId());
+    assertThat(paymentRepository.countByBuyer(buyer, orderId)).isEqualTo(1);
+    assertThat(paymentRepository.countByBuyer(UUID.randomUUID(), orderId)).isZero();
+  }
+
+  private static Payment payment(UUID orderId, UUID buyerId, Instant createdAt) {
+    return Payment.create(
+        orderId,
+        0,
+        UUID.randomUUID(),
+        buyerId,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        AMOUNTS,
+        "v1",
+        createdAt);
   }
 
   private static Payment payment(UUID orderId, PaymentAmounts amounts) {
