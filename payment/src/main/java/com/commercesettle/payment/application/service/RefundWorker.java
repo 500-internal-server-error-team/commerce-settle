@@ -16,8 +16,8 @@ import org.springframework.stereotype.Service;
 
 /**
  * 환불 Worker. 정산금 예약이 확인된 환불 작업 하나를 임대해 원외부 거래에 외부 결제액만 환불하고, 성공을 확인하면 사용 마일리지를 복원한다. 처음 호출하는 환불만 실행
- * 요청을 보내고, 결과를 모르는 환불은 원거래 조회부터 한다. 조회가 거래 부재(404)면 임대에 호출 제한 시간만큼 남았는지 다시 확인한 뒤 같은 업무 키·본문으로
- * 재전송한다.
+ * 요청을 보내고, 결과를 모르는 환불은 원거래 조회부터 한다. 외부 호출 직전에는 임대에 호출 제한 시간만큼 남았는지 확인한다. 조회가 거래 부재(404)면 임대에 호출 제한
+ * 시간만큼 남았는지 다시 확인한 뒤 같은 업무 키·본문으로 재전송한다.
  */
 @Service
 public class RefundWorker {
@@ -52,19 +52,29 @@ public class RefundWorker {
     if (prepared.isEmpty()) {
       return true;
     }
-    Optional<Result> result =
-        prepared.get().request().map(request -> call(job, request, prepared.get().firstCall()));
+    Optional<RefundRequest> request = prepared.get().request();
+    // 준비 트랜잭션 커밋까지 걸린 시간만큼 임대가 줄었으므로 외부 호출 직전에 남은 임대를 다시 확인한다.
+    if (request.isPresent()
+        && !jobs.holdsLease(job.jobId(), job.leaseToken(), settings.httpTimeout())) {
+      logLeaseLost(job, "Refund was not called because the lease was lost");
+      return true;
+    }
+    Optional<Result> result = request.map(r -> call(job, r, prepared.get().firstCall()));
     try {
       recorder.record(job, result);
     } catch (RefundLeaseLostException e) {
-      LOG.atWarn()
-          .addKeyValue("event", "payment.refund")
-          .addKeyValue("paymentId", job.paymentId())
-          .addKeyValue("jobId", job.jobId())
-          .addKeyValue("result", "LEASE_LOST")
-          .log("Refund result was not recorded because the lease was lost");
+      logLeaseLost(job, "Refund result was not recorded because the lease was lost");
     }
     return true;
+  }
+
+  private static void logLeaseLost(LeasedJob job, String message) {
+    LOG.atWarn()
+        .addKeyValue("event", "payment.refund")
+        .addKeyValue("paymentId", job.paymentId())
+        .addKeyValue("jobId", job.jobId())
+        .addKeyValue("result", "LEASE_LOST")
+        .log(message);
   }
 
   private Result call(LeasedJob job, RefundRequest request, boolean firstCall) {
