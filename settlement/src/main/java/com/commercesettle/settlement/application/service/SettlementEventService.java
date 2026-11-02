@@ -170,7 +170,7 @@ public class SettlementEventService {
           review(inboxId, event, "PURCHASE_ALREADY_RECORDED_WITH_DIFFERENT_VALUES", now);
         }
       }
-      // 환불 흐름 구현 전이라 생기지 않는다. 환불 작업에서 다시 정한다.
+      // 계약상 오지 않는다. Commerce는 진행 중인 환불이 있으면 구매확정하지 않고, 해제 뒤에는 항목이 원상태로 돌아와 있다.
       case REFUND_RESERVED, REFUNDED -> review(inboxId, event, "PURCHASE_DURING_REFUND", now);
     }
   }
