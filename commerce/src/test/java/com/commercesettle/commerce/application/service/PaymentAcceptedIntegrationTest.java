@@ -68,12 +68,15 @@ import org.testcontainers.kafka.KafkaContainer;
       "app.auth.password-reset.delivery-key=payment-accepted-test-delivery-key-32bytes",
       "app.address.encryption-key=payment-accepted-test-address-key-32bytes",
       "app.kafka.payment-accepted.enabled=true",
+      "app.internal-auth.senders.gateway.current="
+          + PaymentAcceptedIntegrationTest.GATEWAY_CREDENTIAL,
       "spring.kafka.consumer.auto-offset-reset=earliest"
     })
 @Testcontainers
 @Timeout(90)
 @Import(PaymentAcceptedIntegrationTest.TestBeans.class)
 class PaymentAcceptedIntegrationTest {
+  static final String GATEWAY_CREDENTIAL = "test-gateway-credential-0123456789abcdef0123";
   private static final String TOPIC = "commerce-settle.payment.v1";
   private static final Instant NOW = Instant.parse("2026-11-02T01:00:00.123456Z");
 
@@ -570,6 +573,7 @@ class PaymentAcceptedIntegrationTest {
   private static HttpHeaders headers(UUID buyer) {
     var h = new HttpHeaders();
     h.setContentType(MediaType.APPLICATION_JSON);
+    h.setBearerAuth(GATEWAY_CREDENTIAL);
     h.set("X-Authenticated-Actor-Kind", "BUYER");
     h.set("X-Authenticated-Actor-Id", buyer.toString());
     return h;
