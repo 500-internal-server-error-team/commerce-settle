@@ -25,7 +25,7 @@ import org.springframework.stereotype.Service;
 public class MockPayoutService {
   private static final String ACTOR_KIND = "SERVICE";
 
-  /** 서비스 자격 검증 전까지 발신 서비스를 지급 호출자로 고정한다. */
+  /** HTTP 경계에서 service:settlement 자격을 검증한 지급 호출자. */
   private static final String ACTOR_ID = "settlement";
 
   private static final String OPERATION = "MOCK:PAYOUT:PAYOUT";

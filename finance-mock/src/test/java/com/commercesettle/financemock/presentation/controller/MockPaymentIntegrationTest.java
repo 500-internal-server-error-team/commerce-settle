@@ -64,13 +64,21 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {
-      "management.server.port=0", "management.tracing.enabled=false",
-      "finance-mock.pg.receipts-enabled=false", "finance-mock.pg.holidays=2026-11-03"
+      "management.server.port=0",
+      "management.tracing.enabled=false",
+      "finance-mock.pg.receipts-enabled=false",
+      "finance-mock.pg.holidays=2026-11-03",
+      "app.internal-auth.senders[service\\:settlement].current="
+          + MockPaymentIntegrationTest.SETTLEMENT,
+      "app.internal-auth.senders[service\\:payment].current=" + MockPaymentIntegrationTest.PAYMENT
     })
 @Import(MockPaymentIntegrationTest.TimeConfiguration.class)
 @Testcontainers
 @Timeout(30)
 class MockPaymentIntegrationTest {
+  static final String SETTLEMENT = "test-settlement-credential-0123456789abcdef0123";
+  static final String PAYMENT = "test-payment-credential-0123456789abcdef0123456";
+
   @Container @ServiceConnection
   static final PostgreSQLContainer<?> POSTGRES =
       new PostgreSQLContainer<>("postgres:18.3").withInitScript("db/finance_mock.sql");
@@ -101,6 +109,64 @@ class MockPaymentIntegrationTest {
                 "EASY_PAY", "w-" + UUID.randomUUID(), AccountPurpose.WALLET, AMOUNT, NOW));
   }
 
+  @Test
+  @DisplayName("PG의 승인·조회·환불은 Payment 자격만 허용하며 거절 요청은 금융 상태를 바꾸지 않는다")
+  void rejectsOtherCallersWithoutFinancialEffects() throws Exception {
+    var provider = PaymentProvider.EASY_PAY;
+    String version = normal(provider);
+    UUID key = UUID.randomUUID();
+    var body = approval(key, provider, version);
+    String lookupPath =
+        "/mock/providers/EASY_PAY/transactions/"
+            + key
+            + "?operation=APPROVE&scenarioVersion="
+            + version;
+    int before =
+        jdbc.queryForObject("SELECT count(*) FROM finance_mock.idempotency_records", Integer.class);
+    for (String credential :
+        new String[] {null, "unknown-credential-0123456789abcdef01234567890", SETTLEMENT}) {
+      int expected = SETTLEMENT.equals(credential) ? 403 : 401;
+      json(post(provider, "/payments", body, credential), expected);
+      json(get(lookupPath, credential), expected);
+    }
+    assertThat(count(key)).isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM finance_mock.idempotency_records", Integer.class))
+        .isEqualTo(before);
+    assertBalance(wallet, AMOUNT);
+    assertBalance(funding, 1_000_000);
+
+    UUID original =
+        UUID.fromString(json(post(provider, "/payments", body), 202).path("id").asText());
+    UUID refundKey = UUID.randomUUID();
+    before =
+        jdbc.queryForObject("SELECT count(*) FROM finance_mock.idempotency_records", Integer.class);
+    for (String credential :
+        new String[] {null, "unknown-credential-0123456789abcdef01234567890", SETTLEMENT}) {
+      json(
+          post(
+              provider,
+              "/payments/" + original + "/refunds",
+              Map.of("businessKey", refundKey, "amount", AMOUNT),
+              credential),
+          SETTLEMENT.equals(credential) ? 403 : 401);
+    }
+    var headers = new HttpHeaders();
+    headers.setBearerAuth(PAYMENT);
+    json(
+        http.postForEntity("/mock/payouts", new HttpEntity<>(Map.of(), headers), String.class),
+        403);
+    assertThat(count(refundKey)).isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM finance_mock.idempotency_records", Integer.class))
+        .isEqualTo(before);
+    assertBalance(wallet, 0);
+    assertBalance(funding, 1_000_000);
+    assertThat(cash()).isEmpty();
+  }
+
   @ParameterizedTest
   @EnumSource(PaymentProvider.class)
   @DisplayName("승인·원결과 조회·전액 환불을 연결하고 재요청·중복 환불에도 금액을 보존한다")
@@ -116,7 +182,7 @@ class MockPaymentIntegrationTest {
     assertThat(original.path("pgReceiptDueAt").asText())
         .isEqualTo("2026-11-10T10:00:00.123456+09:00");
     assertThat(original.path("pgReceivedAmount").isNull()).isTrue();
-    assertThat(json(http.getForEntity(approved.getHeaders().getLocation(), String.class), 200))
+    assertThat(json(get(approved.getHeaders().getLocation().toString(), PAYMENT), 200))
         .isEqualTo(original);
     assertThat(json(post(provider, "/payments", body), 202)).isEqualTo(original);
     assertBalance(wallet, provider == PaymentProvider.EASY_PAY ? 0 : AMOUNT);
@@ -651,7 +717,13 @@ class MockPaymentIntegrationTest {
   }
 
   private ResponseEntity<String> post(PaymentProvider provider, String path, Object body) {
+    return post(provider, path, body, PAYMENT);
+  }
+
+  private ResponseEntity<String> post(
+      PaymentProvider provider, String path, Object body, String credential) {
     var headers = new HttpHeaders();
+    if (credential != null) headers.setBearerAuth(credential);
     headers.setContentType(MediaType.APPLICATION_JSON);
     headers.set("Idempotency-Key", UUID.randomUUID().toString());
     return http.exchange(
@@ -668,7 +740,7 @@ class MockPaymentIntegrationTest {
 
   private ResponseEntity<String> lookup(
       PaymentProvider provider, UUID key, String operation, String version) {
-    return http.getForEntity(
+    return get(
         "/mock/providers/"
             + provider
             + "/transactions/"
@@ -677,7 +749,13 @@ class MockPaymentIntegrationTest {
             + operation
             + "&scenarioVersion="
             + version,
-        String.class);
+        PAYMENT);
+  }
+
+  private ResponseEntity<String> get(String path, String credential) {
+    var headers = new HttpHeaders();
+    if (credential != null) headers.setBearerAuth(credential);
+    return http.exchange(path, HttpMethod.GET, new HttpEntity<>(headers), String.class);
   }
 
   private JsonNode json(ResponseEntity<String> response, int expected) throws Exception {

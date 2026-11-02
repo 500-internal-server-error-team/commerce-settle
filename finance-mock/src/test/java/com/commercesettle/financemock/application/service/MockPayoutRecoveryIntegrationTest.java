@@ -39,7 +39,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     properties = {
       "management.tracing.enabled=false",
       "app.internal-auth.senders[service\\:settlement].current="
-          + "test-settlement-credential-0123456789abcdef0123"
+          + "test-settlement-credential-0123456789abcdef0123",
+      "app.internal-auth.senders[service\\:payment].current="
+          + "test-payment-credential-0123456789abcdef0123456"
     })
 @Testcontainers
 class MockPayoutRecoveryIntegrationTest {

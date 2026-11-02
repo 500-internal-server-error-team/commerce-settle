@@ -27,7 +27,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "management.tracing.enabled=false",
       "app.dev-fixtures.enabled=true",
       "app.internal-auth.senders[service\\:settlement].current="
-          + DevFixtureIntegrationTest.SETTLEMENT
+          + DevFixtureIntegrationTest.SETTLEMENT,
+      "app.internal-auth.senders[service\\:payment].current="
+          + "test-payment-credential-0123456789abcdef0123456"
     })
 @Testcontainers
 class DevFixtureIntegrationTest {
@@ -121,6 +123,7 @@ class DevFixtureIntegrationTest {
         .isEqualTo(before);
     assertThat(count("mock_transactions")).isEqualTo(4);
 
+    headers.setBearerAuth("test-payment-credential-0123456789abcdef0123456");
     var approval =
         Map.of(
             "businessKey",
@@ -143,7 +146,12 @@ class DevFixtureIntegrationTest {
     assertThat(original.path("status").asText()).isEqualTo("SUCCEEDED");
     assertThat(
             mapper.readTree(
-                http.getForEntity(approved.getHeaders().getLocation(), String.class).getBody()))
+                http.exchange(
+                        approved.getHeaders().getLocation(),
+                        HttpMethod.GET,
+                        new HttpEntity<>(headers),
+                        String.class)
+                    .getBody()))
         .isEqualTo(original);
     loader.load();
     assertThat(

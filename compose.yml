@@ -232,6 +232,7 @@ services:
     environment:
       <<: *app-env
       PAYMENT_ROLE: worker
+      FINANCE_MOCK_PAYMENT_CREDENTIAL: ${FINANCE_MOCK_PAYMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
       SPRINGDOC_API_DOCS_ENABLED: 'false'
       DB_URL: jdbc:postgresql://postgres:5432/payment
       DB_USERNAME: payment
@@ -287,6 +288,8 @@ services:
       SPRING_DATA_REDIS_PASSWORD: ${FINANCE_MOCK_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
       FINANCE_MOCK_SETTLEMENT_CREDENTIAL: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
       FINANCE_MOCK_SETTLEMENT_CREDENTIAL_PREVIOUS: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL_PREVIOUS:-}
+      FINANCE_MOCK_PAYMENT_CREDENTIAL: ${FINANCE_MOCK_PAYMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
+      FINANCE_MOCK_PAYMENT_CREDENTIAL_PREVIOUS: ${FINANCE_MOCK_PAYMENT_CREDENTIAL_PREVIOUS:-}
     depends_on:
       <<: *app-deps
       postgres:

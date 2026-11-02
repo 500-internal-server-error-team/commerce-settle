@@ -51,7 +51,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "management.tracing.enabled=false",
       // 인라인 속성은 ':'도 구분자로 읽으므로 발신자 ID의 ':'를 이스케이프한다.
       "app.internal-auth.senders[service\\:settlement].current="
-          + MockPayoutIntegrationTest.SETTLEMENT
+          + MockPayoutIntegrationTest.SETTLEMENT,
+      "app.internal-auth.senders[service\\:payment].current="
+          + "test-payment-credential-0123456789abcdef0123456"
     })
 @AutoConfigureMockMvc
 @Testcontainers
