@@ -25,8 +25,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 판매자 한 명의 일배치. 대상 선점·지급 예약·합계·배치·지급·지급 작업을 한 트랜잭션에 고정한다. 지급 전 검증에 실패하면 선점까지 모두 롤백해 항목이 PAYABLE로 남고
- * 다음 실행에서 다시 고려된다.
+ * 판매자 한 명의 일배치. 대상 선점·지급 예약·합계·배치·지급·지급 작업과 정산 확정 알림 요청을 한 트랜잭션에 고정한다. 지급 전 검증에 실패하면 선점까지 모두 롤백해
+ * 항목이 PAYABLE로 남고 다음 실행에서 다시 고려된다.
  */
 @Service
 public class SellerSettlementService {
@@ -36,6 +36,7 @@ public class SellerSettlementService {
   private final PayoutJobRepository payoutJobs;
   private final ProductSettlementContextReader contexts;
   private final DailySettlementSettings settings;
+  private final SettlementNoticeService notices;
   private final Clock clock;
 
   public SellerSettlementService(
@@ -45,6 +46,7 @@ public class SellerSettlementService {
       PayoutJobRepository payoutJobs,
       ProductSettlementContextReader contexts,
       DailySettlementSettings settings,
+      SettlementNoticeService notices,
       Clock clock) {
     this.items = items;
     this.batches = batches;
@@ -52,6 +54,7 @@ public class SellerSettlementService {
     this.payoutJobs = payoutJobs;
     this.contexts = contexts;
     this.settings = settings;
+    this.notices = notices;
     this.clock = clock;
   }
 
@@ -130,6 +133,7 @@ public class SellerSettlementService {
                 netAmount,
                 now));
     payoutJobs.save(PayoutJob.schedule(payout, now));
+    notices.ready(batch, payout, now);
     return Optional.of(batch);
   }
 }

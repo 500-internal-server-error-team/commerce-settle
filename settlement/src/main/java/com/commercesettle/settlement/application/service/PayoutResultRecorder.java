@@ -35,6 +35,7 @@ class PayoutResultRecorder {
   private final SettlementBatchRepository batches;
   private final SettlementItemRepository items;
   private final PayoutWorkerSettings settings;
+  private final SettlementNoticeService notices;
   private final Clock clock;
 
   PayoutResultRecorder(
@@ -43,12 +44,14 @@ class PayoutResultRecorder {
       SettlementBatchRepository batches,
       SettlementItemRepository items,
       PayoutWorkerSettings settings,
+      SettlementNoticeService notices,
       Clock clock) {
     this.jobs = jobs;
     this.payouts = payouts;
     this.batches = batches;
     this.items = items;
     this.settings = settings;
+    this.notices = notices;
     this.clock = clock;
   }
 
@@ -85,7 +88,9 @@ class PayoutResultRecorder {
         payout.succeed(succeeded.succeededAt(), succeeded.externalRef(), now);
         if (items.completePayout(payout.getId(), payout.getAmount(), now)) {
           release(job, PayoutJobStatus.DONE, Duration.ZERO);
-          batch(payout).complete(now);
+          SettlementBatch batch = batch(payout);
+          batch.complete(now);
+          notices.payoutCompleted(batch, payout, now);
         } else {
           // 돈은 나갔지만 완료할 항목이 지급 금액과 맞지 않는다. 성공만 남기고 항목·예약은 운영 확인에 맡긴다.
           release(job, PayoutJobStatus.REVIEW_REQUIRED, Duration.ZERO);
@@ -95,7 +100,9 @@ class PayoutResultRecorder {
       case Result.Declined declined -> {
         release(job, PayoutJobStatus.REVIEW_REQUIRED, Duration.ZERO);
         payout.decline(declined.externalRef(), now);
-        batch(payout).requireReview(now);
+        SettlementBatch batch = batch(payout);
+        batch.requireReview(now);
+        notices.actionRequired(batch, payout, now);
       }
       case Result.Rejected rejected -> {
         release(job, PayoutJobStatus.REVIEW_REQUIRED, Duration.ZERO);
