@@ -6,8 +6,16 @@ import com.commercesettle.commerce.domain.model.CouponFunder;
 import com.commercesettle.commerce.domain.model.CouponIssueRun;
 import com.commercesettle.commerce.domain.model.CouponIssueRunStatus;
 import com.commercesettle.commerce.domain.model.Order;
+import com.commercesettle.commerce.infrastructure.batch.GradeCouponExecutions;
 import com.commercesettle.commerce.infrastructure.batch.GradeCouponLauncher;
 import com.commercesettle.commerce.infrastructure.scheduling.GradeCouponScheduler;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.networknt.schema.InputFormat;
+import com.networknt.schema.SchemaLocation;
+import com.networknt.schema.SchemaRegistry;
+import com.networknt.schema.SpecificationVersion;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
@@ -21,25 +29,36 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.batch.core.JobExecution;
+import org.springframework.batch.core.JobParametersBuilder;
+import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
- * 실제 PostgreSQL과 Spring Batch로 월간 우수고객 회차의 대상 선정·검증·발급·재개·만료를 확인한다. 회차는 혜택 월마다 하나라 시험마다 다른 월을 쓰고
- * 시각을 그 월에 맞춘다.
+ * 실제 PostgreSQL과 Spring Batch로 월간 우수고객 회차의 대상 선정·검증·발급·재개·만료와, 운영자 HTTP 경로의 회차 조회·집계 오류 교정·실행 잔류
+ * 복구를 확인한다. 회차는 혜택 월마다 하나라 시험마다 다른 월을 쓰고 시각을 그 월에 맞춘다.
  */
 // 인증 설정은 필수 기동 값이다. 회차는 직접 실행하므로 스케줄러를 끈다.
 @SpringBootTest(
+    webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {
+      "management.server.port=0",
       "management.tracing.enabled=false",
       "app.coupons.grade-scheduler-enabled=false",
       "app.coupons.expiry-scheduler-enabled=false",
@@ -47,12 +66,15 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "app.auth.rate-limit.identifier-hmac-key=grade-coupon-test-hmac-key-32bytes-long",
       "app.auth.password-reset.delivery-key=grade-coupon-test-delivery-key-32bytes",
       "app.address.encryption-key=grade-coupon-test-address-key-32bytes-long",
-      "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123"
+      "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123",
+      "app.internal-auth.senders[operator\\:test].current=" + GradeCouponIntegrationTest.OPERATOR
     })
 @Testcontainers
 @Import(GradeCouponIntegrationTest.Beans.class)
 class GradeCouponIntegrationTest {
+  static final String OPERATOR = "test-operator-credential-0123456789abcdef0123";
   private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+  private static final String RUNS = "/internal/coupon-issue-runs";
 
   @Container @ServiceConnection
   static final PostgreSQLContainer<?> POSTGRES =
@@ -63,6 +85,10 @@ class GradeCouponIntegrationTest {
   @Autowired CouponService coupons;
   @Autowired JdbcTemplate jdbc;
   @Autowired TestClock clock;
+  @Autowired TestRestTemplate http;
+  @Autowired ObjectMapper mapper;
+  @Autowired GradeCouponExecutions executions;
+  @Autowired JobRepository jobs;
 
   @Test
   @DisplayName("100위 동점자를 모두 포함해 104명을 고정하고 등급별로 발급하며, 같은 월을 다시 실행해도 바꾸지 않는다")
@@ -280,6 +306,204 @@ class GradeCouponIntegrationTest {
 
     assertThat(launcher.run(month)).isEmpty();
     assertThat(count("coupon_issue_runs where target_month = ?", month)).isZero();
+  }
+
+  @Test
+  @DisplayName("운영 조회의 목록·단건 응답이 계약 스키마와 맞고, 월 첫날이 아닌 혜택 월과 없는 회차는 거절한다")
+  void listsRunsForOperators() throws Exception {
+    LocalDate month = LocalDate.of(2032, 1, 1);
+    confirmed(UUID.randomUUID(), 120_000, month.minusMonths(1));
+    clock.at(month, 0, 20);
+    launcher.run(month);
+    UUID runId = grades.currentRun(month).orElseThrow().getId();
+
+    JsonNode page = operator(RUNS + "?targetMonth=2032-01-01&status=COMPLETED", null, 200, key());
+    JsonNode run = operator(RUNS + "/" + runId, null, 200, key());
+
+    matches("CouponIssueRunPage", page);
+    matches("CouponIssueRunPage", operator(RUNS + "?size=1", null, 200, key()));
+    matches("CouponIssueRun", run);
+    assertThat(page.path("totalElements").asLong()).isEqualTo(1);
+    assertThat(run.path("issuedCount").asLong()).isEqualTo(1);
+    assertThat(run.path("targetCount").asInt()).isEqualTo(1);
+    assertThat(run.path("replacementRunId").isNull()).isTrue();
+    operator(RUNS + "?targetMonth=2032-01-15", null, 400, key());
+    assertThat(operator(RUNS + "/" + UUID.randomUUID(), null, 404, key()).path("code").asText())
+        .isEqualTo("COMMON_RESOURCE_NOT_FOUND");
+  }
+
+  @Test
+  @DisplayName("발급 전 회차를 교정하면 원회차 취소·대체 회차·감사 2건을 남기고, 같은 키는 같은 결과, 다른 본문은 409이며 새 회차로 발급한다")
+  void replacesRunBeforeIssuance() throws Exception {
+    LocalDate month = LocalDate.of(2032, 2, 1);
+    for (int i = 0; i < 3; i++) {
+      confirmed(UUID.randomUUID(), 100_000 + i, month.minusMonths(1));
+    }
+    clock.at(month, 0, 20);
+    CouponIssueRun original = grades.currentRun(month).orElseThrow();
+    String key = key();
+
+    JsonNode created = replace(original.getId(), original.getVersion(), 201, key);
+    JsonNode replay = replace(original.getId(), original.getVersion(), 201, key);
+    JsonNode changed = replace(original.getId(), original.getVersion() + 1, 409, key);
+    JsonNode cancelled = operator(RUNS + "/" + original.getId(), null, 200, key());
+
+    matches("CouponIssueRun", created);
+    assertThat(replay).isEqualTo(created);
+    assertThat(changed.path("code").asText()).isEqualTo("COMMON_IDEMPOTENCY_CONFLICT");
+    assertThat(created.path("replacesRunId").asText()).isEqualTo(original.getId().toString());
+    assertThat(created.path("status").asText()).isEqualTo("PREPARING");
+    assertThat(created.path("cutoffAt").asText()).isEqualTo(cancelled.path("cutoffAt").asText());
+    assertThat(cancelled.path("status").asText()).isEqualTo("CANCELLED");
+    assertThat(cancelled.path("cancelledBy").asText()).isEqualTo("operator:test");
+    assertThat(cancelled.path("cancellationReasonCode").asText()).isEqualTo("AGGREGATION_ERROR");
+    assertThat(cancelled.path("replacementRunId")).isEqualTo(created.path("id"));
+    assertThat(
+            jdbc.queryForList(
+                "select action from commerce.audit_logs where correlation_id = ? order by action",
+                String.class,
+                original.getId().toString()))
+        .containsExactly("COUPON_ISSUE_RUN_CREATED", "COUPON_ISSUE_RUN_REPLACED");
+
+    assertThat(launcher.run(month)).contains(CouponIssueRunStatus.COMPLETED);
+    assertThat(
+            count(
+                "coupon_issue_targets where run_id = ? and status = 'ISSUED'",
+                UUID.fromString(created.path("id").asText())))
+        .isEqualTo(3);
+    assertThat(count("coupon_issue_targets where run_id = ?", original.getId())).isZero();
+  }
+
+  @Test
+  @DisplayName("발급 이력·버전 불일치·기한 경과·이미 취소한 회차의 교정은 각 사유의 409로 거절한다")
+  void rejectsReplacementsThatCannotApply() {
+    LocalDate month = LocalDate.of(2032, 3, 1);
+    for (int i = 0; i < 2; i++) {
+      confirmed(UUID.randomUUID(), 100_000 + i, month.minusMonths(1));
+    }
+    clock.at(month, 0, 20);
+    UUID issuing = grades.currentRun(month).orElseThrow().getId();
+    grades.prepare(issuing);
+    grades.issue(issuing, grades.pendingTargetIds(issuing, 1).get(0));
+    long version = grades.currentRun(month).orElseThrow().getVersion();
+
+    assertThat(code(replace(issuing, version, 409, key()))).isEqualTo("COUPON_RUN_NOT_REPLACEABLE");
+
+    LocalDate next = LocalDate.of(2032, 4, 1);
+    clock.at(next, 0, 20);
+    CouponIssueRun run = grades.currentRun(next).orElseThrow();
+    assertThat(code(replace(run.getId(), run.getVersion() + 1, 409, key())))
+        .isEqualTo("COUPON_RUN_VERSION_CONFLICT");
+    replace(run.getId(), run.getVersion(), 201, key());
+    assertThat(code(replace(run.getId(), run.getVersion(), 409, key())))
+        .isEqualTo("COUPON_RUN_NOT_REPLACEABLE");
+
+    CouponIssueRun replacement = grades.currentRun(next).orElseThrow();
+    clock.at(next.plusMonths(1), 0, 0);
+    assertThat(code(replace(replacement.getId(), replacement.getVersion(), 409, key())))
+        .isEqualTo("COUPON_RUN_EXPIRED");
+  }
+
+  @Test
+  @DisplayName("다른 실행자가 회차 잠금을 쥐고 있으면 교정은 EXECUTION_ACTIVE로 거절하고 발급도 시작하지 않는다")
+  void rejectsWhileExecutorHoldsLock() {
+    LocalDate month = LocalDate.of(2032, 5, 1);
+    confirmed(UUID.randomUUID(), 100_000, month.minusMonths(1));
+    clock.at(month, 0, 20);
+    CouponIssueRun run = grades.currentRun(month).orElseThrow();
+
+    try (var held = executions.tryLock(run.getId()).orElseThrow()) {
+      assertThat(code(replace(run.getId(), run.getVersion(), 409, key())))
+          .isEqualTo("COUPON_RUN_EXECUTION_ACTIVE");
+      assertThat(launcher.run(month)).contains(CouponIssueRunStatus.PREPARING);
+    }
+
+    assertThat(launcher.run(month)).contains(CouponIssueRunStatus.COMPLETED);
+  }
+
+  @Test
+  @DisplayName("강제 종료로 남은 진행 중 실행은 최근 갱신이면 교정·재실행을 막고, 정체되면 FAILED로 정리한 뒤 같은 회차를 재시작해 완료한다")
+  void recoversStaleExecution() throws Exception {
+    LocalDate month = LocalDate.of(2032, 6, 1);
+    confirmed(UUID.randomUUID(), 100_000, month.minusMonths(1));
+    clock.at(month, 0, 20);
+    CouponIssueRun run = grades.currentRun(month).orElseThrow();
+    JobExecution left =
+        jobs.createJobExecution(
+            "gradeCouponJob",
+            new JobParametersBuilder()
+                .addLocalDate("targetMonth", month)
+                .addString("runId", run.getId().toString())
+                .toJobParameters());
+
+    assertThat(code(replace(run.getId(), run.getVersion(), 409, key())))
+        .isEqualTo("COUPON_RUN_EXECUTION_ACTIVE");
+    assertThat(launcher.run(month)).contains(CouponIssueRunStatus.PREPARING);
+
+    jdbc.update(
+        "update commerce.batch_job_execution set create_time = now() - interval '1 hour',"
+            + " last_updated = now() - interval '1 hour' where job_execution_id = ?",
+        left.getId());
+
+    assertThat(launcher.run(month)).contains(CouponIssueRunStatus.COMPLETED);
+    assertThat(
+            jdbc.queryForObject(
+                "select status from commerce.batch_job_execution where job_execution_id = ?",
+                String.class,
+                left.getId()))
+        .isEqualTo("FAILED");
+  }
+
+  private JsonNode replace(UUID runId, long expectedVersion, int expected, String key) {
+    ObjectNode body =
+        mapper
+            .createObjectNode()
+            .put("expectedVersion", expectedVersion)
+            .put("reasonCode", "AGGREGATION_ERROR");
+    return operator(RUNS + "/" + runId + "/replacements", body, expected, key);
+  }
+
+  private JsonNode operator(String path, ObjectNode body, int expected, String key) {
+    HttpHeaders headers = new HttpHeaders();
+    headers.setBearerAuth(OPERATOR);
+    headers.setContentType(MediaType.APPLICATION_JSON);
+    headers.set("Idempotency-Key", key);
+    ResponseEntity<JsonNode> response =
+        http.exchange(
+            path,
+            body == null ? HttpMethod.GET : HttpMethod.POST,
+            new HttpEntity<>(body, headers),
+            JsonNode.class);
+    assertThat(response.getStatusCode().value())
+        .as("%s: %s", path, response.getBody())
+        .isEqualTo(expected);
+    if (expected == 201) {
+      assertThat(response.getHeaders().getLocation())
+          .hasPath(RUNS + "/" + response.getBody().path("id").asText());
+    }
+    return response.getBody();
+  }
+
+  private static String code(JsonNode error) {
+    return error.path("code").asText();
+  }
+
+  private void matches(String name, JsonNode node) throws Exception {
+    var canonical = mapper.readTree(getClass().getResourceAsStream("/contracts/openapi.json"));
+    var root = mapper.createObjectNode();
+    root.set("components", canonical.path("components"));
+    root.put("$ref", "#/components/schemas/" + name);
+    var schema =
+        SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_2020_12)
+            .getSchema(
+                SchemaLocation.of("urn:test:grade-coupon:" + name),
+                root.toString(),
+                InputFormat.JSON);
+    assertThat(schema.validate(node.toString(), InputFormat.JSON)).isEmpty();
+  }
+
+  private static String key() {
+    return UUID.randomUUID().toString();
   }
 
   private long grade(List<UUID> ranked, List<UUID> tied) {

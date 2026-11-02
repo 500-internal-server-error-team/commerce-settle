@@ -117,6 +117,26 @@ class JpaCouponIssueTargetRepository implements CouponIssueTargetRepository {
   }
 
   @Override
+  public Issuance issuance(UUID runId) {
+    return jdbc.queryForObject(
+        """
+        SELECT
+            (SELECT count(*) FROM commerce.coupon_issue_targets
+             WHERE run_id = ? AND status = 'ISSUED') AS issued,
+            (SELECT count(*) FROM commerce.coupon_issue_targets
+             WHERE run_id = ? AND buyer_coupon_id IS NOT NULL) AS linked,
+            (SELECT count(*) FROM commerce.coupon_history h
+             JOIN commerce.coupon_issue_targets t ON t.id = h.business_ref
+             WHERE t.run_id = ? AND h.operation = 'ISSUE') AS histories
+        """,
+        (rs, row) ->
+            new Issuance(rs.getLong("issued"), rs.getLong("linked"), rs.getLong("histories")),
+        runId,
+        runId,
+        runId);
+  }
+
+  @Override
   public Optional<CouponIssueTarget> findByIdForUpdate(UUID targetId) {
     TransactionLimits.apply(jdbc);
     return targets.findLockedById(targetId);

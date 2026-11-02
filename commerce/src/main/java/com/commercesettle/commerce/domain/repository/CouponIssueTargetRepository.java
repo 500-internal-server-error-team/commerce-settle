@@ -23,6 +23,15 @@ public interface CouponIssueTargetRepository {
 
   List<UUID> findPendingIds(UUID runId, int limit);
 
+  /** 회차의 발급 흔적: ISSUED 대상, 연결 쿠폰이 있는 대상, 대상 ID를 업무 키로 한 ISSUE 이력. 하나라도 있으면 교정하지 않는다. */
+  Issuance issuance(UUID runId);
+
+  record Issuance(long issuedTargets, long linkedTargets, long issueHistories) {
+    public boolean any() {
+      return issuedTargets > 0 || linkedTargets > 0 || issueHistories > 0;
+    }
+  }
+
   Optional<CouponIssueTarget> findByIdForUpdate(UUID targetId);
 
   CouponIssueTarget save(CouponIssueTarget target);

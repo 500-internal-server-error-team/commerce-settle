@@ -1,5 +1,7 @@
 package com.commercesettle.commerce.domain.model;
 
+import com.commercesettle.commerce.domain.exception.CouponRunConflictException;
+import com.commercesettle.commerce.domain.exception.CouponRunConflictException.Reason;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -59,6 +61,41 @@ public class CouponIssueRun extends AuditableEntity {
       throw new IllegalArgumentException("month has not closed yet: " + targetMonth);
     }
     return run;
+  }
+
+  /** 집계 오류 교정의 대체 회차. 원회차의 월·마감·정책 버전을 그대로 쓰며 기한도 같다. */
+  public static CouponIssueRun replacing(UUID id, CouponIssueRun original, Instant now) {
+    if (original.status != CouponIssueRunStatus.CANCELLED) {
+      throw new IllegalStateException("only a cancelled run can be replaced: " + original.id);
+    }
+    CouponIssueRun run = new CouponIssueRun(id, original.targetMonth, now);
+    run.cutoffAt = original.cutoffAt;
+    run.policyVersion = original.policyVersion;
+    run.replacesRunId = original.id;
+    return run;
+  }
+
+  /**
+   * 발급 0건인 회차를 집계 오류로 취소한다. 만료·취소된 회차는 교정하지 않고, 기한이 지났거나 버전이 다르면 거절한다. 발급 이력·실행 여부는 호출자가 같은 회차 잠금
+   * 아래에서 확인한다.
+   */
+  public void cancel(long expectedVersion, String operator, String reasonCode, Instant now) {
+    if (status != CouponIssueRunStatus.PREPARING
+        && status != CouponIssueRunStatus.ISSUING
+        && status != CouponIssueRunStatus.COMPLETED) {
+      throw new CouponRunConflictException(Reason.NOT_REPLACEABLE);
+    }
+    if (isExpiredAt(now)) {
+      throw new CouponRunConflictException(Reason.EXPIRED);
+    }
+    if (expectedVersion != getVersion()) {
+      throw new CouponRunConflictException(Reason.VERSION_CONFLICT);
+    }
+    status = CouponIssueRunStatus.CANCELLED;
+    cancelledAt = truncate(now);
+    cancelledBy = Objects.requireNonNull(operator, "operator");
+    cancellationReasonCode = Objects.requireNonNull(reasonCode, "reasonCode");
+    touch(now);
   }
 
   /** 대상 확정·검증을 마쳤다. 대상이 없으면 바로 완료한다. */
@@ -145,6 +182,18 @@ public class CouponIssueRun extends AuditableEntity {
 
   public Long getCutoffSpend() {
     return cutoffSpend;
+  }
+
+  public Instant getCancelledAt() {
+    return cancelledAt;
+  }
+
+  public String getCancelledBy() {
+    return cancelledBy;
+  }
+
+  public String getCancellationReasonCode() {
+    return cancellationReasonCode;
   }
 
   public CouponIssueRunStatus getStatus() {
