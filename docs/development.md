@@ -152,9 +152,21 @@ curl -i http://localhost:8080/api/orders \
 
 목록은 `createdAt DESC, id DESC`, 기본 20개·최대 100개입니다. 데이터 범위를 벗어난 유효한 페이지는 빈 `items`와 본인 주문의 `totalElements`를 반환합니다. 타인·없는 주문은 404이며 정지·삭제 구매자는 접근할 수 없습니다. DB 재기동 뒤에도 주문과 키를 보존합니다. 배송 사본은 기존 `weekdays-v1`(Asia/Seoul, 공휴일 없는 달력), seed 기본 67과 `order-regular-v1` 정책 버전을 사용합니다. seed는 `app.orders.simulation-seed`로 지정할 수 있습니다.
 
-Outbox relay는 기존 `app.outbox.enabled=false` 기본값을 유지합니다. 격리한 실험 인스턴스에서 켜면 `commerce-settle.commerce.v1`에 주문 ID를 key로 발행합니다. Payment의 `PaymentAccepted` 발행은 #75에서 구현됐습니다. 재시도 상한(#76), Commerce의 결과 소비·주문 확정과 신규 접수 제한 gate는 구현 전입니다. 따라서 이 API의 주문은 대기 상태를 유지하며 10분이 지났다는 이유로 예약을 해제하지 않습니다. 새 주문의 재고 예약이 누적되는 실험은 전용 DB에서 실행합니다.
+Outbox relay는 기존 `app.outbox.enabled=false` 기본값을 유지합니다. 격리한 실험 인스턴스에서 켜면 `commerce-settle.commerce.v1`에 주문 ID를 key로 발행합니다. Payment의 `PaymentAccepted` 발행은 #75에서 구현됐습니다. Payment의 재시도 상한(#76), Commerce의 결제 확정·거절·취소 반영과 신규 접수 제한 gate는 구현 전입니다. 접수 ID 연결은 [결제 접수 결과 수신](#결제-접수-결과-수신)에서 확인합니다. 따라서 이 API의 주문은 대기 상태를 유지하며 10분이 지났다는 이유로 예약을 해제하지 않습니다. 새 주문의 재고 예약이 누적되는 실험은 전용 DB에서 실행합니다.
 
 `OrderIntegrationTest`는 실제 HTTP·PostgreSQL에서 11필드 입력·본인 조회·금액/이벤트 계약·영구 멱등·동시 요청·마지막 재고 경쟁·DB 저장 실패의 전체 롤백을 검증합니다.
+
+## 결제 접수 결과 수신
+
+Commerce의 `PaymentAccepted` Listener와 처리기는 기본 비활성입니다. 격리한 시험 인스턴스에서 `APP_KAFKA_PAYMENT_ACCEPTED_ENABLED=true`, `APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED=true`로 각각 활성화합니다. Payment는 기존 주문 요청 Listener·Worker 처리기·Outbox Relay, Commerce는 주문 Outbox Relay를 함께 켜야 전체 왕복이 진행됩니다. 기본 `auto-offset-reset=none`은 유지하며 새 소비 그룹의 시작 offset은 시험 전에 명시적으로 준비합니다. 새 DB에는 갱신한 Commerce 초기 SQL을 적용하고, 기존 DB·볼륨에 전체 SQL을 재실행하거나 데이터를 초기화하지 않습니다.
+
+`commerce.v1`은 `commerce-settle.payment.v1`의 원문·최초 위치와 WAITING 행을 커밋한 뒤 ACK합니다. 같은 ID·같은 bytes는 원래 결과를 유지하고 다른 bytes는 `inbox_conflicts`에 보존합니다. 잘못된 스키마·미지원 이벤트는 현재 무ACK로 Consumer를 중단하므로 입력 원인을 확인한 뒤 재개합니다. DLT 발행이나 금융 보상으로 자동 전환하지 않습니다.
+
+처리기는 1초마다 최대 100건을 한 건씩 별도 트랜잭션으로 처리합니다. 도래한 잠긴 Inbox는 건너뛰고, 주문의 회차·버전·기존 ID를 확인해 `paymentId`와 Inbox APPLIED를 함께 저장합니다. `PAYMENT_PENDING`·금액·주소 사본·재고 예약은 유지합니다. envelope의 Payment aggregateVersion을 주문 버전으로 비교하지 않습니다.
+
+선행 주문 미도착·일시 반영 실패는 1초부터 최대 60초 간격으로 지수 재시도하며 10회 소진 시 사유와 함께 REVIEW_REQUIRED로 남깁니다. 반영 트랜잭션이 롤백되면 별도 트랜잭션에서 재시도 기록을 남기며, 이미 다른 처리기가 완료한 행은 변경하지 않습니다. 이전 회차·버전·상태·다른 ID의 충돌은 즉시 확인 대상으로 보존합니다. 운영 HTTP 재처리 API·확정/거절/취소 반영은 후속 작업입니다.
+
+`PaymentAcceptedIntegrationTest`는 전용 PostgreSQL·Kafka에서 HTTP 주문 조회, 원자 반영·롤백·중복·충돌·잠금 대기 상한·건너뛰기·지수 재시도·소진·Consumer 재시작을 검증합니다. 이 시험은 빈 전용 토픽에서 `earliest`를 명시적으로 사용하며 운영 기본값을 바꾸지 않습니다.
 
 ## 주문 API stub
 

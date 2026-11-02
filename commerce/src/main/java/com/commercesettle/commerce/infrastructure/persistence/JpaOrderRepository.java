@@ -52,6 +52,25 @@ class JpaOrderRepository implements OrderRepository {
   }
 
   @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Order save(Order order) {
+    TransactionLimits.apply(jdbc);
+    return orders.saveAndFlush(order);
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<Order> findLockedById(UUID orderId) {
+    TransactionLimits.apply(jdbc);
+    return orders.findLockedById(orderId);
+  }
+
+  @Override
+  public Optional<Order> findByPaymentId(UUID paymentId) {
+    return orders.findByPaymentId(paymentId);
+  }
+
+  @Override
   public PageResult<Order> findByBuyer(UUID buyerId, int page, int size) {
     long offset = (long) page * size;
     if (offset > Integer.MAX_VALUE) {

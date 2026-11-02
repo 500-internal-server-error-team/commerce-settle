@@ -1183,11 +1183,13 @@ Commerce는 추가로 전체 행의 (aggregate_id,aggregate_version,sequence_no)
 
 **인덱스:** (status,created_at,id).
 
-Payment는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니다.
+Payment·Commerce는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니다.
+
+Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원자 저장하고 `result_ref`에 주문 ID를 남깁니다. Commerce Inbox에는 `attempts integer NOT NULL DEFAULT 0 CHECK (attempts>=0)`와 `last_error_code varchar(80)?`를 추가해 선행 주문 미도착·반영 실패를 1~60초 지수 대기로 최대 10회 처리하고 소진 시 REVIEW_REQUIRED로 보존합니다. 이전 회차·버전·상태·다른 결제 ID는 즉시 확인 대상으로 남기며 주문을 덮어쓰지 않습니다. 원문·최초 출처·기존 처리 결과와 충돌 이력은 재시작·중복 인계에도 유지합니다. Payment의 재시도 컬럼·처리 변경은 별도 #76 범위입니다.
 
 ### inbox_conflicts
 
-소유: 현재 `payment`. 같은 consumer·eventId에 다른 bytes가 도착한 기록입니다. 원래 Inbox·처리 결과를 덮어쓰지 않습니다.
+소유: `commerce`·`payment`. 같은 consumer·eventId에 다른 bytes가 도착한 기록입니다. 원래 Inbox·처리 결과를 덮어쓰지 않습니다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |

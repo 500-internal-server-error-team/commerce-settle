@@ -196,6 +196,8 @@ OrderPaymentRequested·PaymentConfirmed는 할인 부담별 S/P와 정산 기준
 
 aggregateVersion은 발신 집계의 버전이고 서로 다른 서비스의 버전을 하나의 순서로 비교하지 않습니다. 재전달은 원래 이벤트/업무 키를 사용하며, 늦은 승인 원장·자동 확정은 다음 정산에서 누락 없이 반영합니다. 금융 이벤트에는 주소·비밀번호·로그인 토큰을 싣지 않습니다.
 
+Commerce는 `PaymentAccepted` v1을 수신해 본인 주문 조회의 `paymentId`를 연결합니다. 원문·출처와 Inbox 대기를 커밋한 뒤 ACK하고, 주문 연결·Inbox 완료를 같은 트랜잭션에 저장합니다. 동일 연결은 주문 버전 증가 뒤에도 무변경으로 처리하며, 이전 회차·버전·다른 ID의 충돌은 사유와 함께 보존합니다. 이 접수 통지로 주문 상태·금액·재고 예약은 바꾸지 않습니다. 소비·처리기는 기본 비활성이고 [활성화와 복구](development.md#결제-접수-결과-수신)를 따릅니다. 나머지 결제 결과와 RefundAccepted 반영은 구현 전입니다.
+
 PaymentAccepted·RefundAccepted 이벤트로 주문 조회에 금융 처리 ID를 먼저 연결합니다. 결제/실패/취소 결과는 현재 paymentCycleId와 대조하며 오래된 회차 결과로 새 예약을 해제하지 않습니다.
 
 지급 생성 전 Settlement는 서비스 자격의 ProductSettlementContext로 상품·판매자 일치와 판매자 상태·수취 시험계정·버전을 확인합니다. 커머스의 상품 영역이 소유 관계를 확인하고 판매자 영역이 상태·계좌·버전을 제공합니다. 이 조회 계약이 판매자 정보의 소유권을 상품이나 Settlement로 옮기지는 않습니다. 수취 계정과 출금 시험계정을 payouts에 사본으로 저장하고 이후 재시도에는 현재 프로필을 다시 적용하지 않습니다. SettlementBatch는 상품 회차 대신 sellerId+batchDate+policyVersion으로 식별합니다. Payout의 holdReason·nextAttemptAt으로 보류와 다음 시도를 안내하고 succeededAt으로 실제 성공을 구분합니다. 원래 업무 키·계정 사본·항목 연결은 보류/재시작에 유지합니다.

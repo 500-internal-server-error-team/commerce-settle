@@ -80,6 +80,13 @@ logging:
     dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Seoul"
 
 app:
+  kafka:
+    payment-accepted:
+      enabled: false
+  payment-accepted-processor:
+    enabled: false
+    interval-ms: 1000
+    batch-size: 100
   dev-fixtures:
     enabled: ${APP_DEV_FIXTURES_ENABLED:false}
     password: ${DEV_FIXTURE_PASSWORD:}

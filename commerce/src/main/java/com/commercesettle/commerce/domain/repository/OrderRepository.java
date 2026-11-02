@@ -10,6 +10,13 @@ public interface OrderRepository {
   /** 호출자의 트랜잭션 안에서 주문·주소를 함께 저장하며 트랜잭션 밖 호출은 거절한다. */
   Order save(Order order, OrderAddress address);
 
+  /** 기존 주문의 변경을 호출자의 트랜잭션에 저장한다. */
+  Order save(Order order);
+
+  Optional<Order> findLockedById(UUID orderId);
+
+  Optional<Order> findByPaymentId(UUID paymentId);
+
   Optional<Order> findByBuyerAndId(UUID buyerId, UUID orderId);
 
   PageResult<Order> findByBuyer(UUID buyerId, int page, int size);
