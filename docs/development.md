@@ -207,7 +207,15 @@ SELLER: POST /api/sellers/me/refund-requests/{requestId}/receipt
 
 주문 스케줄러는 `APP_ORDER_WORKFLOW_ENABLED=true`, 결과 처리기는 `APP_ORDER_RESULT_PROCESSOR_ENABLED=true`로 시험 인스턴스에서 활성화합니다. 결과 수신은 기존 `APP_KAFKA_PAYMENT_ACCEPTED_ENABLED=true`를 공유하며, 접수 ID 처리기는 기존 플래그를 별도로 유지합니다. 기본값은 모두 false입니다. 이 설정은 인스턴스 환경에 전달해야 하며 `.env` 추가만으로 기존 Compose 컨테이너에 전달되지 않습니다. 빈 전용 DB에는 갱신한 초기 SQL을 적용하고 기존 볼륨을 초기화하지 않습니다.
 
-Payment 내부 조회와 운영 종결은 ADR 0010의 `service:payment`·`operator:<식별자>` 자격을 인스턴스의 `app.internal-auth.senders`에 설정해야 합니다. 사용자 토큰이나 Gateway 자격으로 호출할 수 없습니다. 운영 종결은 외부 확정 거절·마일리지 미복원·정산 예약 해제·고객 확인을 모두 검증한 `RefundClosureEvidence`가 필요합니다. 기본 미연결 구현은 503이며 금융 실패만으로 주문을 PAID로 되돌리거나 자동 구매확정을 진행하지 않습니다.
+Payment 내부 조회와 운영 종결은 ADR 0010의 `service:payment`·`operator:<식별자>` 자격을 인스턴스의 `app.internal-auth.senders`에 설정해야 합니다. 사용자 토큰이나 Gateway 자격으로 호출할 수 없습니다. 운영 종결은 [소유 증빙과 구매자 확인](api.md#실패-환불의-운영-종결)을 모두 대조하는 `RefundClosureEvidence`를 사용합니다. 기본은 비활성(503)이며 금융 실패만으로 주문을 PAID로 되돌리거나 자동 구매확정을 진행하지 않습니다.
+
+증빙 읽기를 연결하려면 #131의 금융 환불 스키마·불변 DECLINED 상태와 #154의 실제 원예약 해제를 먼저 적용·검증합니다. Payment의 읽기 구현은 `refunds`와 원결제의 `RESTORE` 원장을 사용하며 #131 스키마가 없으면 503입니다. Settlement는 기존 `settlement_reservations`와 항목을 읽으며 없는 원예약은 404입니다. 두 읽기 API는 Gateway에 공개하지 않고 `SERVICE:commerce`만 허용합니다.
+
+- Commerce: `APP_REFUND_CLOSURE_ENABLED=true`, `PAYMENT_URL`, `SETTLEMENT_URL`, 각 대상에 발급한 `PAYMENT_COMMERCE_CREDENTIAL`, `SETTLEMENT_COMMERCE_CREDENTIAL`을 설정합니다. 현재 클라이언트는 각 GET 연결/응답을 3초로 제한하고 리다이렉트·자동 재시도를 하지 않습니다. 활성화 때 자격 누락·짧은 값은 기동 실패입니다.
+- Payment와 Settlement: 각각 `app.internal-auth.senders[service:commerce].current`에 자기 대상의 동일 자격을 추가합니다. Gateway·서로 다른 대상 자격을 재사용하지 않습니다. 기존 [내부 자격 설정](#내부-호출-자격)과 같이 외부 설정/Compose override로 전달합니다. 기본 Compose에는 이 선택 연동을 활성화하지 않습니다.
+- 새 빈 전용 Commerce DB에는 변경한 초기 SQL을 적용합니다. 기존 공유 볼륨을 지우거나 전체 SQL을 재실행하지 않습니다.
+
+검증은 `:commerce:test --tests '*HttpRefundClosureEvidenceTest' --tests '*OrderWorkflowIntegrationTest'`와 각 소유 모듈의 `*RefundClosureEvidenceIntegrationTest`로 재현합니다. Commerce의 HTTP 응답 대역 검사는 금융/예약 증빙 변경·누락·UNKNOWN·고객 확인 불일치를, 실제 PostgreSQL 주문 시험은 확인 기록·멱등·권한·주문/요청 버전 경합·잠금 상한·증빙 저장을 검사합니다. 소유 서비스 시험은 실제 SQL+인증 필터+MVC 왕복입니다. Payment의 `refunds`는 #131 미병합에 따른 명시적 읽기 계약 fixture이므로 실제 금융 실행이나 전체 SAGA 왕복 통과를 의미하지 않습니다. 선행 #131/#154 적용 후 실제 서비스 간 왕복은 상위 #120의 통합 검증으로 남습니다.
 
 `OrderBenefitsService`가 선착순 이벤트의 견적·예약·재시도·확정·해제·환불 복원·반품 입고를 주문 트랜잭션 안에서 처리하며 `EventOrderIntegrationTest`가 HTTP 경로로 검증합니다. 쿠폰은 구현 전이라 쿠폰을 쓴 주문은 503으로 중단합니다. `OrderWorkflowIntegrationTest`의 DB 기록 대역은 해당 호출·금액 사본·로컬 롤백만 검증하며 실제 쿠폰 예산 구현의 완료가 아닙니다. Payment/Settlement의 실제 회차 재접수·마일리지 재예약·승인 차단·원환불/예약 해제 조회·환불 복구 확인 왕복은 각 소유 서비스와 통합 검증해야 합니다. 금융 성공을 임의로 반환하는 기본 어댑터는 없습니다. 거래 알림은 [모의 거래 알림](#모의-거래-알림) 범위를 구현했습니다. 신규 접수 용량 gate는 별도 [PR #125](https://github.com/500-internal-server-error-team/commerce-settle/pull/125)에서 구현했으며 이 알림 변경의 일부가 아닙니다.
 

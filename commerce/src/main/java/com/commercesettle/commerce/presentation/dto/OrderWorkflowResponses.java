@@ -14,6 +14,16 @@ import java.util.List;
 import java.util.UUID;
 
 public final class OrderWorkflowResponses {
+  @Schema(
+      name = "RefundClosureConfirmation",
+      additionalProperties = Schema.AdditionalPropertiesValue.FALSE)
+  public record ClosureConfirmation(
+      @JsonProperty(required = true) UUID id,
+      @JsonProperty(required = true) UUID requestId,
+      @JsonProperty(required = true) UUID refundId,
+      @Schema(minimum = "0") @JsonProperty(required = true) long orderVersion,
+      @JsonProperty(required = true) OffsetDateTime confirmedAt) {}
+
   private OrderWorkflowResponses() {}
 
   private static OffsetDateTime time(Instant value) {

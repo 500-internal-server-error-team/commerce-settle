@@ -333,6 +333,17 @@
 
 **인덱스:** (order_id,created_at,id); (seller_id,status,created_at,id); UNIQUE(refund_id) WHERE refund_id IS NOT NULL.
 
+### refund_closure_confirmations · refund_closure_evidence
+
+소유: `commerce`. 실패 환불의 구매자 의사와 운영 종결 증빙을 추가 전용으로 보존합니다.
+
+| 테이블 | 필드·제약 |
+| --- | --- |
+| `refund_closure_confirmations` | `id` UUID PK, `request_id`·`refund_id`·`payment_id`·`order_id`·`buyer_id` UUID NOT NULL, `request_version`·`order_version` bigint≥0, `confirmed_at` timestamptz NOT NULL. `(request_id,confirmed_at)` 조회 인덱스 |
+| `refund_closure_evidence` | `id` UUID PK, `request_id` UUID UNIQUE NOT NULL, `operator_ref` varchar(100) NOT NULL, `snapshot` jsonb object NOT NULL, `closed_at` timestamptz NOT NULL |
+
+확인은 인증된 구매자와 원요청 소유권을 대조해 서버 시각·현재 버전으로 기록하며 본문에서 구매자·원환불·시각을 받지 않습니다. 종결의 `snapshot`에는 해당 확인과 원주문/요청 버전, Payment·Settlement의 증빙 응답과 버전, 확인 시각을 보존합니다. `order_refund_requests.closure_evidence_ref`가 증빙 UUID를 참조합니다. 상태·증빙·감사는 한 트랜잭션에 저장하며 금융 이력과 함께 보존하고 자동 삭제하지 않습니다. FK는 두지 않으며 응용 경계와 UNIQUE가 참조·중복을 보호합니다.
+
 ### inventory_reservations
 
 소유: `commerce`. 주문 재고 예약.

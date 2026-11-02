@@ -76,6 +76,28 @@ CREATE INDEX ix_orders_refund_deadline ON commerce.orders (status, refund_deadli
 CREATE INDEX ix_orders_payment_wait ON commerce.orders (status, payment_wait_until, id);
 CREATE UNIQUE INDEX uq_orders_payment ON commerce.orders (payment_id) WHERE payment_id IS NOT NULL;
 
+-- 구매자 의사와 종결에 사용한 소유 서비스 증빙은 추가 전용으로 보존한다.
+CREATE TABLE commerce.refund_closure_confirmations (
+    id uuid PRIMARY KEY,
+    request_id uuid NOT NULL,
+    refund_id uuid NOT NULL,
+    payment_id uuid NOT NULL,
+    order_id uuid NOT NULL,
+    buyer_id uuid NOT NULL,
+    request_version bigint NOT NULL CHECK (request_version >= 0),
+    order_version bigint NOT NULL CHECK (order_version >= 0),
+    confirmed_at timestamptz NOT NULL
+);
+CREATE INDEX ix_refund_closure_confirmations_request ON commerce.refund_closure_confirmations (request_id, confirmed_at);
+
+CREATE TABLE commerce.refund_closure_evidence (
+    id uuid PRIMARY KEY,
+    request_id uuid NOT NULL UNIQUE,
+    operator_ref varchar(100) NOT NULL,
+    snapshot jsonb NOT NULL CHECK (jsonb_typeof(snapshot) = 'object'),
+    closed_at timestamptz NOT NULL
+);
+
 CREATE TABLE commerce.order_refund_requests (
     id uuid PRIMARY KEY,
     order_id uuid NOT NULL,

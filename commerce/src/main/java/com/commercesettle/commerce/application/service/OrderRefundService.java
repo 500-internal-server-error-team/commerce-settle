@@ -5,6 +5,7 @@ import com.commercesettle.commerce.application.event.OrderLifecycleEvents;
 import com.commercesettle.commerce.application.port.AuditLog;
 import com.commercesettle.commerce.application.port.OrderBenefits;
 import com.commercesettle.commerce.application.port.RefundClosureEvidence;
+import com.commercesettle.commerce.application.port.RefundClosureStore;
 import com.commercesettle.commerce.domain.exception.OrderStateException;
 import com.commercesettle.commerce.domain.model.ActorKind;
 import com.commercesettle.commerce.domain.model.Order;
@@ -31,6 +32,7 @@ public class OrderRefundService {
   private final IdempotentRequests keys;
   private final AuditLog audit;
   private final RefundClosureEvidence closure;
+  private final RefundClosureStore closureStore;
   private final OrderBenefits benefits;
   private final TransactionTemplate transactions;
   private final Clock clock;
@@ -44,6 +46,7 @@ public class OrderRefundService {
       IdempotentRequests keys,
       AuditLog audit,
       RefundClosureEvidence closure,
+      RefundClosureStore closureStore,
       OrderBenefits benefits,
       PlatformTransactionManager manager,
       Clock clock,
@@ -55,6 +58,7 @@ public class OrderRefundService {
     this.keys = keys;
     this.audit = audit;
     this.closure = closure;
+    this.closureStore = closureStore;
     this.benefits = benefits;
     this.clock = clock;
     this.notifications = notifications;
@@ -254,7 +258,10 @@ public class OrderRefundService {
     first.requireVersion(expected);
     if (first.getStatus() != OrderRefundRequest.Status.FAILED_REVIEW
         || first.getReceivedAt() != null) throw conflict();
-    var evidence = closure.verify(first.getRefundId(), customer);
+    var firstOrder =
+        orders.findById(first.getOrderId()).orElseThrow(OrderWorkflowService::notFound);
+    var subject = subject(first, firstOrder);
+    var evidence = closure.verify(subject, customer);
     if (!evidence.safe() || !java.util.Objects.equals(first.getRefundId(), evidence.refundId()))
       throw conflict();
     return transactions.execute(
@@ -270,11 +277,18 @@ public class OrderRefundService {
                           .orElseThrow(OrderWorkflowService::notFound);
                   var r = requests.findById(id).orElseThrow(OrderWorkflowService::notFound);
                   r.requireVersion(expected);
+                  o.requireVersion(subject.orderVersion());
                   if (!java.util.Objects.equals(r.getRefundId(), evidence.refundId()))
                     throw conflict();
                   var before = r.getStatus();
                   var orderBefore = o.getStatus();
                   r.close(reason, evidence.reference(), clock.instant());
+                  closureStore.preserve(
+                      UUID.fromString(evidence.reference()),
+                      r.getId(),
+                      operator,
+                      evidence.snapshot(),
+                      clock.instant());
                   o.resumeAfterRefund(clock.instant());
                   orders.save(o);
                   requests.save(r);
@@ -285,6 +299,70 @@ public class OrderRefundService {
                 replay ->
                     OrderRefundView.from(
                         requests.findById(replay).orElseThrow(OrderWorkflowService::notFound))));
+  }
+
+  @Transactional(propagation = Propagation.NEVER)
+  public RefundClosureStore.Confirmation confirmClosure(
+      UUID buyer, UUID id, String key, long expected) {
+    workflow.requireAccount(ActorKind.BUYER, buyer);
+    var request =
+        OrderWorkflowService.request(
+            "BUYER", buyer, "CONFIRM_REFUND_CLOSURE", key, List.of(id, expected));
+    var prior =
+        transactions.execute(
+            status ->
+                keys.replayPermanent(
+                    request,
+                    existing ->
+                        closureStore
+                            .find(existing)
+                            .filter(c -> c.subject().buyerId().equals(buyer))
+                            .orElseThrow(OrderWorkflowService::notFound)));
+    if (prior != null && prior.isPresent()) return prior.get();
+    var initial =
+        requests
+            .findById(id)
+            .filter(r -> r.getBuyerId().equals(buyer))
+            .orElseThrow(OrderWorkflowService::notFound);
+    UUID confirmationId = UUID.randomUUID();
+    return transactions.execute(
+        status ->
+            keys.executePermanent(
+                request,
+                confirmationId,
+                201,
+                ignored -> {
+                  var order = workflow.ownedLocked(ActorKind.BUYER, buyer, initial.getOrderId());
+                  var r = requests.findById(id).orElseThrow(OrderWorkflowService::notFound);
+                  r.requireVersion(expected);
+                  if (r.getStatus() != OrderRefundRequest.Status.FAILED_REVIEW
+                      || r.getReceivedAt() != null
+                      || r.getRefundId() == null
+                      || order.getStatus() != Order.Status.REFUND_PENDING) throw conflict();
+                  var c =
+                      new RefundClosureStore.Confirmation(
+                          confirmationId,
+                          subject(r, order),
+                          clock.instant().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+                  closureStore.confirm(c);
+                  return c;
+                },
+                existing ->
+                    closureStore
+                        .find(existing)
+                        .filter(c -> c.subject().buyerId().equals(buyer))
+                        .orElseThrow(OrderWorkflowService::notFound)));
+  }
+
+  private static RefundClosureEvidence.Subject subject(OrderRefundRequest r, Order o) {
+    return new RefundClosureEvidence.Subject(
+        r.getId(),
+        r.getRefundId(),
+        o.getPaymentId(),
+        o.getId(),
+        r.getBuyerId(),
+        r.getVersion(),
+        o.getVersion());
   }
 
   private void approved(Order order, OrderRefundRequest r) {
