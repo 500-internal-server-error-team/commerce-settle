@@ -4,7 +4,16 @@ import java.util.UUID;
 
 /** 원결과 조회만 수행한다. 통신/조회 실패·미확정은 종결 근거가 아니다. */
 public interface RefundClosureEvidence {
-  Evidence verify(UUID refundId, String customerConfirmationRef);
+  Evidence verify(Subject subject, String customerConfirmationRef);
+
+  record Subject(
+      UUID requestId,
+      UUID refundId,
+      UUID paymentId,
+      UUID orderId,
+      UUID buyerId,
+      long requestVersion,
+      long orderVersion) {}
 
   record Evidence(
       UUID refundId,
@@ -12,7 +21,8 @@ public interface RefundClosureEvidence {
       boolean mileageNotRestored,
       boolean reservationReleased,
       boolean customerConfirmed,
-      String reference) {
+      String reference,
+      String snapshot) {
     public boolean safe() {
       return refundId != null
           && externalDeclined
@@ -20,7 +30,8 @@ public interface RefundClosureEvidence {
           && reservationReleased
           && customerConfirmed
           && reference != null
-          && !reference.isBlank();
+          && !reference.isBlank()
+          && snapshot != null;
     }
   }
 }

@@ -307,6 +307,27 @@ public class OrderWorkflowController {
             r.customerConfirmationRef()));
   }
 
+  @PostMapping("/api/refund-requests/{requestId}/closure-confirmations")
+  @Operation(
+      operationId = "post_api_refund_requests_requestId_closure_confirmations",
+      summary = "구매자의 실패 환불 종결 의사 확인")
+  @ApiResponse(responseCode = "201", description = "구매자 확인 기록 생성")
+  public ResponseEntity<OrderWorkflowResponses.ClosureConfirmation> confirmClosure(
+      @Parameter(hidden = true) AuthenticatedBuyer buyer,
+      @PathVariable UUID requestId,
+      @RequestHeader("Idempotency-Key") @Size(min = 8, max = 128) String key,
+      @Valid @RequestBody OrderWorkflowRequests.Version r) {
+    var c = refunds.confirmClosure(buyer.id(), requestId, key, r.expectedVersion());
+    return ResponseEntity.created(URI.create("/api/refund-requests/" + requestId))
+        .body(
+            new OrderWorkflowResponses.ClosureConfirmation(
+                c.id(),
+                c.subject().requestId(),
+                c.subject().refundId(),
+                c.subject().orderVersion(),
+                c.confirmedAt().atZone(java.time.ZoneId.of("Asia/Seoul")).toOffsetDateTime()));
+  }
+
   private static URI orderLocation(UUID id) {
     return URI.create("/api/orders/" + id);
   }

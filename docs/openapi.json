@@ -7821,7 +7821,7 @@
         "x-owner-service": "commerce",
         "x-actor": "OPERATOR",
         "x-implemented": true,
-        "description": "검증한 OPERATOR 자격만 허용한다. 외부 환불 확정 거절·마일리지 미복원·정산 예약 해제·고객 확인 근거를 트랜잭션 밖에서 조회하고, 주문 잠금 아래 요청 버전·금융 ID·입고 여부를 재검사한다. RefundClosureEvidence 어댑터 미연결은 503이며 미확정·불충분 근거는 409다.",
+        "description": "OPERATOR 전용. 소유 서비스의 불변 종결 사실과 구매자의 확인 ID를 대조한다. 확인은 원환불·구매자·주문/요청 버전과 결속되고 금융 거절·예약 해제 이후여야 한다. 트랜잭션 밖에서 각 증빙을 두 번 읽어 변경을 거절하고, 같은 주문 버전·잠금 아래 증빙 사본·운영자·상태·감사를 원자 보존한다. 누락·UNKNOWN·불일치는 409, 미연결·통신/스키마 장애는 503. #131/#154 금융 실행을 대신하지 않는다.",
         "security": [
           {
             "serviceCredential": []
@@ -11263,6 +11263,371 @@
                 "schema": {
                   "type": "string",
                   "format": "uri-reference"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/refund-requests/{requestId}/closure-confirmations": {
+      "post": {
+        "operationId": "post_api_refund_requests_requestId_closure_confirmations",
+        "summary": "구매자의 실패 환불 종결 의사 확인",
+        "tags": [
+          "commerce"
+        ],
+        "x-owner-service": "commerce",
+        "x-actor": "BUYER",
+        "x-implemented": true,
+        "description": "본인 FAILED_REVIEW·미입고 요청만 확인한다. 서버가 원환불·구매자·환불 요청/주문 버전·시각을 추가 전용 기록으로 보존한다. 운영자 대리 입력은 허용하지 않는다. 같은 멱등키 재요청은 같은 확인 ID를 반환한다.",
+        "security": [
+          {
+            "accountSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "고객 확인 생성",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefundClosureConfirmation"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expectedVersion"
+                ],
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/refunds/{refundId}/financial-closure-evidence": {
+      "get": {
+        "operationId": "get_internal_payment_refunds_refundId_closure_evidence",
+        "summary": "원환불 종결 증빙 조회",
+        "tags": [
+          "payment"
+        ],
+        "x-owner-service": "payment",
+        "x-actor": "SERVICE:commerce",
+        "x-implemented": true,
+        "description": "소유 서비스 DB의 한 SQL 스냅샷만 반환. #131의 DECLINED 금융 환불·외부 DECLINED는 불변 종결 상태이며 재실행하지 않는다. mileageNotRestored는 원환불 복원 시각과 원결제/환불의 RESTORE 원장을 함께 대조한다. #131 스키마 미설치·읽기 장애는 503이다.",
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "refundId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회·처리 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialClosureEvidence"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/refunds/{refundId}/reservation-closure-evidence": {
+      "get": {
+        "operationId": "get_internal_settlement_refunds_refundId_closure_evidence",
+        "summary": "원환불 종결 증빙 조회",
+        "tags": [
+          "settlement"
+        ],
+        "x-owner-service": "settlement",
+        "x-actor": "SERVICE:commerce",
+        "x-implemented": true,
+        "description": "#154의 원예약·정산 항목을 한 SQL 스냅샷에서 조회. RELEASED 원예약은 같은 환불로 재활성화하지 않는다. 활성 예약·지급 배정·현재 항목 상태와 버전도 반환. 미설치·읽기 장애는 503, 같은 환불의 복수 예약은 409다.",
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "refundId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회·처리 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationClosureEvidence"
                 }
               }
             }
@@ -18787,6 +19152,159 @@
           "reasonCode"
         ],
         "description": "원래 월·마감·정책 버전·만료를 유지한 집계 오류 교정. 처리자는 검증한 운영자 자격에서 기록한다. 구매자·등급·금액·마감·기간을 입력받지 않는다."
+      },
+      "RefundClosureConfirmation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "refundId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orderVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "confirmedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "requestId",
+          "refundId",
+          "orderVersion",
+          "confirmedAt"
+        ]
+      },
+      "FinancialClosureEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "refundId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orderId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "buyerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string"
+          },
+          "externalStatus": {
+            "type": "string"
+          },
+          "mileageNotRestored": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "decidedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "refundId",
+          "requestId",
+          "paymentId",
+          "orderId",
+          "buyerId",
+          "status",
+          "externalStatus",
+          "mileageNotRestored",
+          "version",
+          "decidedAt"
+        ]
+      },
+      "ReservationClosureEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "refundId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reservationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orderId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string"
+          },
+          "itemStatus": {
+            "type": "string"
+          },
+          "payoutId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "activeReservation": {
+            "type": "boolean"
+          },
+          "reservationVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "itemVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "releasedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "refundId",
+          "reservationId",
+          "paymentId",
+          "orderId",
+          "status",
+          "itemStatus",
+          "payoutId",
+          "activeReservation",
+          "reservationVersion",
+          "itemVersion",
+          "releasedAt"
+        ]
       }
     }
   },
