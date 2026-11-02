@@ -84,9 +84,19 @@ app:
   order-admission:
     prometheus-url: ${APP_ORDER_ADMISSION_PROMETHEUS_URL:http://prometheus:9090}
     paused: ${APP_ORDER_ADMISSION_PAUSED:false}
+  kakao-self:
+    enabled: ${KAKAO_SELF_DEMO_ENABLED:false}
+    credentials-file: ${KAKAO_SELF_CREDENTIALS_FILE:}
+    user-id: ${KAKAO_SELF_USER_ID:}
+    app-id: ${KAKAO_SELF_APP_ID:}
+    message-link: ${KAKAO_SELF_MESSAGE_LINK:}
+    buyer-ids: ${KAKAO_SELF_BUYER_IDS:}
+    seller-ids: ${KAKAO_SELF_SELLER_IDS:}
   notifications:
     consumer-enabled: ${APP_NOTIFICATIONS_CONSUMER_ENABLED:false}
     worker-enabled: ${APP_NOTIFICATIONS_WORKER_ENABLED:false}
+    metrics:
+      enabled: ${APP_NOTIFICATION_METRICS_ENABLED:false}
     mock:
       seed: ${APP_NOTIFICATIONS_MOCK_SEED:67}
       delay-ms: ${APP_NOTIFICATIONS_MOCK_DELAY_MS:0}

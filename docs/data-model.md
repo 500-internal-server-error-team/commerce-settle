@@ -1023,14 +1023,15 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 | `kind` | `varchar(40)` | 정책의 거래 알림 종류 |
 | `recipient_kind` | `varchar(16)` | BUYER/SELLER |
 | `recipient_id` | `uuid` | 종류에 맞는 계정 ID; 논리 참조 |
-| `channel` | `varchar(24)` | MOCK_KAKAO 고정 |
+| `channel` | `varchar(24)` | 기본 MOCK_KAKAO; 지정한 본인 시연은 KAKAO_SELF. 생성 뒤 불변 |
+| `channel_account_ref` | `varchar(64)?` | KAKAO_SELF는 앱 ID·카카오 사용자 ID 조합의 SHA-256. 생성 뒤 불변이며 현재 설정과 다르면 발송 차단; MOCK_KAKAO는 NULL |
 | `dedup_key` | `varchar(200)` | 단건=원업무 ID, 판매 묶음=KST 구간 시작 |
 | `item_count` | `integer` | 중복 제외 항목 수; 1 이상 |
 | `first_occurred_at` | `timestamptz` | 항목 중 가장 이른 발생 시각 |
 | `total_amount` | `bigint` | 판매 묶음의 주문 결제액 합계; 그 외 0 |
 | `template_version` | `varchar(32)` | 최초 렌더 때 고정 |
 | `title` | `varchar(120)` | 안내 제목 |
-| `body` | `varchar(1000)` | 모의 안내 본문; COLLECTING이면 빈 값 |
+| `body` | `varchar(1000)` | 고정 안내 본문; COLLECTING이면 빈 값. 실제 self-send 텍스트는 200자 상한 |
 | `status` | `varchar(24)` | COLLECTING/PENDING/SENDING/UNKNOWN/RETRY/SENT/REVIEW_REQUIRED |
 | `bucket_start` | `timestamptz?` | 판매 묶음만 사용 |
 | `bucket_end` | `timestamptz?` | 시작+1분; 닫힌 본문은 불변 |
@@ -1040,7 +1041,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 | `lease_token` | `uuid?` | 작업 임대마다 새 값 |
 | `lease_until` | `timestamptz?` | 임대 만료 |
 | `last_error_code` | `varchar(80)?` | 민감값 없는 실패 코드 |
-| `sent_at` | `timestamptz?` | 원모의 수신 ACCEPTED 확인 시각 |
+| `sent_at` | `timestamptz?` | MOCK_KAKAO 원수신 ACCEPTED 또는 카카오 self-send 성공 응답 확인 시각 |
 | `created_at` | `timestamptz` | 생성 |
 | `updated_at` | `timestamptz` | 갱신 |
 | `version` | `bigint` | 낙관적 버전 |

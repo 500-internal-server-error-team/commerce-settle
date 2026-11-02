@@ -26,6 +26,13 @@ class Handler(BaseHTTPRequestHandler):
                     f'payment_quarantine_originals{{{labels}}} {active}',
                     f'payment_quarantine_delivery_records{{{labels},kind="DLT",status="REVIEW_REQUIRED"}} {active}',
                     f'payment_quarantine_delivery_overdue_seconds{{{labels},kind="DLT"}} {active * 1000}',
+                    f'commerce_notification_observed_timestamp_seconds{{application="commerce"}} {time.time()}',
+                    'commerce_notification_collection_success{application="commerce"} 1',
+                    f'commerce_notification_overdue_seconds{{application="commerce"}} {active * 1000}',
+                    f'commerce_notification_review_required{{application="commerce"}} {active}',
+                    f'commerce_notification_retry_exhausted{{application="commerce"}} {active}',
+                    f'commerce_notification_financial_action_recent{{application="commerce"}} {active}',
+                    f'commerce_notification_kakao_reauthentication_required{{application="commerce"}} {active}',
                 ]
                 raw = ("\n".join(lines) + "\n").encode()
             elif self.path == "/notifications":

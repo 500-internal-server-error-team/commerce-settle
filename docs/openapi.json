@@ -17435,10 +17435,12 @@
             "enum": [
               "PAYMENT_COMPLETED",
               "SHIPMENT_STARTED",
+              "SHIPMENT_DELIVERED",
               "PURCHASE_CONFIRMED",
               "CANCELLATION_COMPLETED",
               "RETURN_REQUESTED",
               "RETURN_DECIDED",
+              "RETURN_RECEIVED",
               "REFUND_COMPLETED",
               "SALE_COMPLETED",
               "SETTLEMENT_READY",
@@ -17448,10 +17450,14 @@
             ]
           },
           "channel": {
-            "const": "MOCK_KAKAO"
+            "type": "string",
+            "enum": [
+              "MOCK_KAKAO",
+              "KAKAO_SELF"
+            ]
           },
           "isMock": {
-            "const": true
+            "type": "boolean"
           },
           "status": {
             "type": "string",
@@ -17511,7 +17517,7 @@
           "createdAt",
           "sentAt"
         ],
-        "description": "인증된 같은 종류·ID의 계정만 조회. COLLECTING의 body는 빈 문자열이며 마감 후 고정. SENT는 모의 수신 기록 확인, 실제 카카오 전달 아님. 발생 시각은 항목 중 가장 이른 시각.",
+        "description": "인증된 같은 종류·ID 계정만 조회. COLLECTING 본문은 마감 후 고정. SENT는 MOCK_KAKAO 원수신 또는 KAKAO_SELF 성공 응답 확인이며 읽음·팝업 확인 아님. 본인 시연 채널은 서버 설정의 시험 계정에만 적용. 발생 시각은 항목 중 가장 이른 시각.",
         "examples": [
           {
             "id": "99000000-0000-4000-8000-000000000001",
@@ -17525,6 +17531,31 @@
             "occurredAt": "2026-10-26T12:00:00+09:00",
             "createdAt": "2026-10-26T12:00:01+09:00",
             "sentAt": "2026-10-26T12:00:02+09:00"
+          }
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "channel": {
+                  "const": "MOCK_KAKAO"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "isMock": {
+                  "const": true
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "isMock": {
+                  "const": false
+                }
+              }
+            }
           }
         ]
       },
@@ -17643,7 +17674,7 @@
           "lastErrorCode",
           "version"
         ],
-        "description": "운영자 전용. 원수신처는 mock:<종류>:<계정 UUID>. 본문·키·수신자 수정 불가."
+        "description": "운영자 전용. 내부 수신자·종류·채널·본문·키는 불변. MOCK_KAKAO는 mock:<종류>:<계정 UUID>, KAKAO_SELF는 지정한 본인 카카오 계정으로 전달하며 실제 계정·토큰은 응답에 노출하지 않음."
       },
       "NotificationDeliveryPage": {
         "type": "object",
@@ -17874,7 +17905,7 @@
           "expectedVersion",
           "reason"
         ],
-        "description": "원 deliveryId·수신자·본문 고정. REVIEW_REQUIRED/RETRY/UNKNOWN에서만 새 라운드 접수. SENT·COLLECTING·PENDING·유효 임대는 409. UNKNOWN은 조회부터 재개."
+        "description": "원 deliveryId·수신자·본문 고정. REVIEW_REQUIRED/RETRY/UNKNOWN에서만 새 라운드 접수. SENT·COLLECTING·PENDING·유효 임대는 409. UNKNOWN은 조회부터 재개. KAKAO_SELF는 원수신 조회가 없으며 미확정 건을 재발송하면 중복 가능성이 남는다. 운영자는 본인 채팅·발송 이력을 확인하고 사유를 기록해야 한다."
       },
       "PaymentNoticeRequestedPayload": {
         "type": "object",

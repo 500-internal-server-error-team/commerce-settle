@@ -312,6 +312,7 @@ services:
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./infra/prometheus/quarantine.rules.yml:/etc/prometheus/quarantine.rules.yml:ro
+      - ./infra/prometheus/notification.rules.yml:/etc/prometheus/notification.rules.yml:ro
       - prometheus-data:/prometheus
     ports:
       - 127.0.0.1:${PROMETHEUS_PORT:-9090}:9090

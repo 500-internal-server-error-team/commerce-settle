@@ -34,6 +34,7 @@ jobs:
           python3 scripts/test_sync_redis_run_id.py
           python3 scripts/test_pr_body.py
           python3 -B -m unittest discover -s scripts -p 'test_ci_helpers.py'
+          python3 -B scripts/test_kakao_login.py
       - name: Check Java formatting and Checkstyle (main and test)
         run: ./gradlew --daemon --parallel --continue spotlessCheck checkstyleMain checkstyleTest
       - name: Run tests, architecture checks and package all applications
@@ -43,7 +44,7 @@ jobs:
         run: ./gradlew --stop
       - name: Initialize local settings
         run: python3 scripts/init_env.py
-      - name: Verify quarantine monitoring and alert delivery
+      - name: Verify quarantine and notification alert delivery
         run: python3 scripts/test_observability.py
       - name: Start the stack from empty volumes
         run: |
