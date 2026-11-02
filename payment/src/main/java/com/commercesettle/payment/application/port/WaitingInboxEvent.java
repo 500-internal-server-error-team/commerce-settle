@@ -2,6 +2,7 @@ package com.commercesettle.payment.application.port;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
+import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
 import java.util.UUID;
 
 /**
@@ -10,10 +11,11 @@ import java.util.UUID;
  */
 public record WaitingInboxEvent(UUID inboxId, long version, int attempts, EventEnvelope<?> event) {
 
-  /** 결제 요청이면 그 본문을, 아니면 빈 값을 돌려준다. */
-  public java.util.Optional<OrderPaymentRequestedPayload> paymentRequest() {
-    return event.payload() instanceof OrderPaymentRequestedPayload payload
-        ? java.util.Optional.of(payload)
-        : java.util.Optional.empty();
+  public UUID orderId() {
+    return switch (event.payload()) {
+      case OrderPaymentRequestedPayload request -> request.orderId();
+      case PaymentCancellationRequestedPayload request -> request.orderId();
+      default -> throw new IllegalArgumentException("Unsupported inbox payload");
+    };
   }
 }

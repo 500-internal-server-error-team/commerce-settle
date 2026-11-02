@@ -688,7 +688,7 @@ class ApplyOrderPaymentRequestServiceTest {
     service.processNext();
     service.processNext();
 
-    assertThat(payments.lockedOrders).containsExactly(orderId, orderId);
+    assertThat(inbox.lockedOrders).containsExactly(orderId, orderId);
   }
 
   @Test
@@ -716,6 +716,137 @@ class ApplyOrderPaymentRequestServiceTest {
         .isEqualTo("CANCELLED_BEFORE_PAYMENT");
     assertThat(inbox.applied).containsEntry(requestId, payment.getId());
     assertThat(inbox.linked).containsEntry(cancellationId, payment.getId());
+  }
+
+  @Test
+  @DisplayName("취소된 결제라도 정책이 달라진 재요청은 충돌로 남긴다")
+  void rejectsChangedPolicyAfterCancellation() {
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    inbox.add(card(orderId, cycleId));
+    service.processNext();
+    inbox.addCancellation(orderId, cycleId);
+    service.processNext();
+    UUID conflicting =
+        inbox.add(
+            withPolicyAndMethod(
+                card(orderId, cycleId), "v2", ExternalMethod.CREDIT_CARD, "card-ref"));
+
+    service.processNext();
+
+    assertThat(inbox.reviewRequired).containsEntry(conflicting, "PAYMENT_REQUEST_ORDER_CONFLICT");
+    assertThat(inbox.applied).doesNotContainKey(conflicting);
+    assertThat(outbox.cancellations).hasSize(1);
+  }
+
+  @Test
+  @DisplayName("검토 대상 원문으로 취소한 뒤 동일 요청이 오면 원문 이력을 보존하고 기존 결제로 연결한다")
+  void acceptsSameRequestAfterReviewedCancellation() {
+    wallets.fund(BUYER_ID, 1_000);
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    UUID original = inbox.add(mixed(orderId, cycleId));
+    service.processNext();
+    inbox.addCancellation(orderId, cycleId);
+    service.processNext();
+    UUID replay = inbox.add(mixed(orderId, cycleId));
+
+    service.processNext();
+
+    assertThat(inbox.applied).containsEntry(replay, payments.all().getFirst().getId());
+    assertThat(inbox.reviewRequired).containsKey(original);
+    assertThat(jobs.saved).isEmpty();
+    assertThat(outbox.cancellations).hasSize(1);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "v2, CREDIT_CARD, card-ref",
+    "v1, DEBIT_CARD, card-ref",
+    "v1, CREDIT_CARD, other-card-ref"
+  })
+  @DisplayName("취소 선처리로 만든 결제도 정책·결제수단이 다른 재요청은 거절한다")
+  void rejectsConflictingReplayAfterReviewedCancellation(
+      String policy, ExternalMethod method, String account) {
+    wallets.fund(BUYER_ID, 1_000);
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    inbox.add(mixed(orderId, cycleId));
+    service.processNext();
+    inbox.addCancellation(orderId, cycleId);
+    service.processNext();
+    UUID conflict =
+        inbox.add(withPolicyAndMethod(mixed(orderId, cycleId), policy, method, account));
+
+    service.processNext();
+
+    assertThat(inbox.reviewRequired).containsEntry(conflict, "PAYMENT_REQUEST_ORDER_CONFLICT");
+    assertThat(inbox.applied).doesNotContainKey(conflict);
+    assertThat(outbox.cancellations).hasSize(1);
+  }
+
+  @Test
+  @DisplayName("취소한 주문의 금액이 바뀐 요청은 원결제를 바꾸지 않고 충돌로 남긴다")
+  void rejectsChangedAmountAfterCancellation() {
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    inbox.add(card(orderId, cycleId));
+    service.processNext();
+    inbox.addCancellation(orderId, cycleId);
+    service.processNext();
+    UUID conflict =
+        inbox.add(
+            payload(
+                orderId,
+                cycleId,
+                Status.PAYMENT_PENDING,
+                20_000,
+                0,
+                0,
+                0,
+                20_000,
+                20_000,
+                20_000,
+                0,
+                ExternalMethod.CREDIT_CARD,
+                "card-ref"));
+
+    service.processNext();
+
+    assertThat(inbox.reviewRequired).containsEntry(conflict, "PAYMENT_REQUEST_ORDER_CONFLICT");
+    assertThat(payments.all().getFirst().getAmounts().grossAmount()).isEqualTo(10_000);
+    assertThat(outbox.cancellations).hasSize(1);
+  }
+
+  @Test
+  @DisplayName("결제 대기가 아닌 원문은 취소 선처리에서도 승인된 요청으로 사용하지 않는다")
+  void rejectsNonPendingSourceForCancellation() {
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    inbox.add(
+        payload(
+            orderId,
+            cycleId,
+            Status.PAID,
+            10_000,
+            0,
+            0,
+            0,
+            10_000,
+            10_000,
+            10_000,
+            0,
+            ExternalMethod.CREDIT_CARD,
+            "card-ref"));
+    service.processNext();
+    UUID cancellation = inbox.addCancellation(orderId, cycleId);
+
+    service.processNext();
+
+    assertThat(inbox.reviewRequired)
+        .containsEntry(cancellation, "PAYMENT_CANCELLATION_REQUEST_INVALID");
+    assertThat(payments.all()).isEmpty();
+    assertThat(outbox.cancellations).isEmpty();
   }
 
   private static OrderPaymentRequestedPayload mixed(UUID orderId, UUID cycleId) {
@@ -817,7 +948,8 @@ class ApplyOrderPaymentRequestServiceTest {
 
   private static final class FakeInbox implements InboxStore {
     private final Queue<InboxClaim> waiting = new ArrayDeque<>();
-    private final Map<UUID, OrderPaymentRequestedPayload> payloads = new HashMap<>();
+    private final Map<UUID, OrderPaymentRequestedPayload> payloads = new LinkedHashMap<>();
+    private final List<UUID> lockedOrders = new ArrayList<>();
     private final Map<UUID, UUID> applied = new HashMap<>();
     private final Map<UUID, OrderPaymentRequestedPayload> originals = new HashMap<>();
     private final Map<UUID, String> reviewRequired = new LinkedHashMap<>();
@@ -905,8 +1037,13 @@ class ApplyOrderPaymentRequestServiceTest {
     }
 
     @Override
+    public void lockOrder(UUID orderId) {
+      lockedOrders.add(orderId);
+    }
+
+    @Override
     public boolean lockClaimed(UUID inboxId, long version) {
-      return !leaseLost;
+      return !leaseLost && !applied.containsKey(inboxId);
     }
 
     @Override
@@ -933,11 +1070,23 @@ class ApplyOrderPaymentRequestServiceTest {
     }
 
     @Override
-    public Optional<OrderPaymentRequestedPayload> findPaymentRequest(
-        UUID orderId, UUID paymentCycleId) {
-      return payloads.values().stream()
-          .filter(p -> p.orderId().equals(orderId) && p.paymentCycleId().equals(paymentCycleId))
+    public Optional<PaymentRequest> findPaymentRequest(UUID orderId, UUID paymentCycleId) {
+      return payloads.entrySet().stream()
+          .filter(
+              e ->
+                  e.getValue().orderId().equals(orderId)
+                      && e.getValue().paymentCycleId().equals(paymentCycleId))
+          .map(e -> new PaymentRequest(e.getKey(), e.getValue()))
           .findFirst();
+    }
+
+    @Override
+    public void linkPaymentRequest(UUID inboxId, UUID paymentId, Instant now) {
+      originals.put(paymentId, payloads.get(inboxId));
+      linked.put(inboxId, paymentId);
+      if (!reviewRequired.containsKey(inboxId)) {
+        markApplied(inboxId, paymentId, now);
+      }
     }
 
     @Override
@@ -967,7 +1116,6 @@ class ApplyOrderPaymentRequestServiceTest {
 
   private static final class FakePayments implements PaymentRepository {
     private final Map<UUID, Payment> byId = new HashMap<>();
-    private final List<UUID> lockedOrders = new ArrayList<>();
 
     List<Payment> all() {
       return new ArrayList<>(byId.values());
@@ -1002,11 +1150,6 @@ class ApplyOrderPaymentRequestServiceTest {
     @Override
     public long countByBuyer(UUID buyerId, UUID orderId) {
       throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void lockOrder(UUID orderId) {
-      lockedOrders.add(orderId);
     }
   }
 

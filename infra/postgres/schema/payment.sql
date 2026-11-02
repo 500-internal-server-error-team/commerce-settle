@@ -101,7 +101,10 @@ CREATE TABLE payment.inbox (
 );
 CREATE INDEX inbox_state ON payment.inbox(status, created_at, id);
 CREATE INDEX inbox_waiting ON payment.inbox(consumer, next_run_at, id) WHERE status = 'WAITING';
-CREATE INDEX inbox_applied_result ON payment.inbox(consumer, result_ref, created_at, id) WHERE status = 'APPLIED';
+CREATE INDEX inbox_request_result ON payment.inbox(consumer, result_ref, created_at, id)
+    WHERE result_ref IS NOT NULL AND event_type = 'OrderPaymentRequested';
+CREATE INDEX inbox_order_cycle ON payment.inbox(consumer, aggregate_id, (payload -> 'payload' ->> 'paymentCycleId'), created_at, id)
+    WHERE event_type IN ('OrderPaymentRequested', 'PaymentCancellationRequested');
 
 CREATE TABLE payment.inbox_conflicts (
     id uuid PRIMARY KEY,

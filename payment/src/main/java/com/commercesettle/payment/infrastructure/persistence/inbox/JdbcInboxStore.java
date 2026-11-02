@@ -200,6 +200,14 @@ public class JdbcInboxStore implements InboxStore {
   }
 
   @Override
+  public void lockOrder(UUID orderId) {
+    applyTransactionLimits();
+    jdbc.queryForList(
+        "SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))",
+        new MapSqlParameterSource("key", "payment-order:" + Objects.requireNonNull(orderId)));
+  }
+
+  @Override
   public boolean lockClaimed(UUID inboxId, long version) {
     applyTransactionLimits();
     return !jdbc.queryForList(
@@ -259,7 +267,7 @@ public class JdbcInboxStore implements InboxStore {
         jdbc.query(
             """
             SELECT id, raw_body FROM payment.inbox
-            WHERE consumer = :consumer AND status = 'APPLIED' AND result_ref = :paymentId
+            WHERE consumer = :consumer AND result_ref = :paymentId
               AND event_type = 'OrderPaymentRequested'
             ORDER BY created_at, id
             LIMIT 1
@@ -300,8 +308,7 @@ public class JdbcInboxStore implements InboxStore {
   }
 
   @Override
-  public Optional<OrderPaymentRequestedPayload> findPaymentRequest(
-      UUID orderId, UUID paymentCycleId) {
+  public Optional<PaymentRequest> findPaymentRequest(UUID orderId, UUID paymentCycleId) {
     List<Original> rows =
         jdbc.query(
             """
@@ -322,9 +329,31 @@ public class JdbcInboxStore implements InboxStore {
     try {
       EventEnvelope<OrderPaymentRequestedPayload> event =
           mapper.readValue(row.body(), new TypeReference<>() {});
-      return Optional.of(event.payload());
+      return Optional.of(new PaymentRequest(row.id(), event.payload()));
     } catch (IOException exception) {
-      return Optional.empty();
+      throw new IllegalStateException("Stored payment request cannot be read: " + row.id());
+    }
+  }
+
+  @Override
+  public void linkPaymentRequest(UUID inboxId, UUID paymentId, Instant now) {
+    int updated =
+        jdbc.update(
+            """
+        UPDATE payment.inbox SET result_ref = :paymentId,
+            status = CASE WHEN status = 'WAITING' THEN 'APPLIED' ELSE status END,
+            next_run_at = CASE WHEN status = 'WAITING' THEN NULL ELSE next_run_at END,
+            updated_at = :now, version = version + 1
+        WHERE id = :id AND consumer = :consumer AND event_type = 'OrderPaymentRequested'
+          AND status IN ('WAITING', 'REVIEW_REQUIRED', 'APPLIED')
+          AND (result_ref IS NULL OR result_ref = :paymentId)
+        """,
+            new MapSqlParameterSource("id", inboxId)
+                .addValue("consumer", consumer)
+                .addValue("paymentId", Objects.requireNonNull(paymentId))
+                .addValue("now", toTimestamp(now)));
+    if (updated != 1) {
+      throw new IllegalStateException("Payment request cannot be linked: " + inboxId);
     }
   }
 

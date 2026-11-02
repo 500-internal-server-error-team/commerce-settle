@@ -5,8 +5,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
+import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
+import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.commercesettle.payment.application.service.ApplyOrderPaymentRequestService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,6 +24,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -499,7 +502,7 @@ class PaymentRequestProcessingIntegrationTest {
                     + " FROM payment.inbox ORDER BY event_type",
                 String.class))
         .containsExactly(
-            "OrderPaymentRequested:REVIEW_REQUIRED:-",
+            "OrderPaymentRequested:REVIEW_REQUIRED:" + paymentId,
             "PaymentCancellationRequested:APPLIED:" + paymentId);
     assertThat(
             jdbc.queryForList(
@@ -507,6 +510,40 @@ class PaymentRequestProcessingIntegrationTest {
         .containsExactly("PaymentAccepted", "PaymentCancelled");
     assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.mileage_reservations", Long.class))
         .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT last_error_code FROM payment.inbox WHERE event_type = 'OrderPaymentRequested'",
+                String.class))
+        .isEqualTo("PAYMENT_REQUEST_MILEAGE_INSUFFICIENT");
+    assertThat(
+            new TransactionTemplate(manager)
+                .<Optional<OrderPaymentRequestedPayload>>execute(
+                    status -> inbox.findOriginalRequest(paymentId)))
+        .hasValueSatisfying(
+            request -> assertThat(request.methodAccountRef()).isEqualTo("test-card"));
+
+    UUID replay = UUID.randomUUID();
+    saveWaiting(event(replay, ORDER_ID, CYCLE_ID, 10_000, 2_000));
+    service.processEvent(replay);
+    UUID conflict = UUID.randomUUID();
+    saveWaiting(
+        event(conflict, ORDER_ID, CYCLE_ID, 10_000, 2_000)
+            .replace("\"policyVersion\": \"test-v1\"", "\"policyVersion\": \"test-v2\""));
+    service.processEvent(conflict);
+
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT result_ref FROM payment.inbox WHERE event_id = ?", UUID.class, replay))
+        .isEqualTo(paymentId);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT last_error_code FROM payment.inbox WHERE event_id = ?",
+                String.class,
+                conflict))
+        .isEqualTo("PAYMENT_REQUEST_ORDER_CONFLICT");
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.payments", Long.class))
+        .isEqualTo(1);
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.outbox", Long.class)).isEqualTo(2);
   }
 
   @Test
@@ -572,6 +609,218 @@ class PaymentRequestProcessingIntegrationTest {
                 "SELECT count(*) FROM payment.inbox WHERE attempts > 1 OR last_error_code IS NOT NULL",
                 Long.class))
         .isZero();
+  }
+
+  @Test
+  @DisplayName("다른 처리기가 선점한 원문도 취소가 먼저 적용되면 같은 트랜잭션에서 연결·완료하고 재활성화하지 않는다")
+  void cancellationCompletesAlreadyClaimedRequest() throws Exception {
+    UUID requestId = UUID.randomUUID();
+    saveWaiting(event(requestId, ORDER_ID, CYCLE_ID, 10_000, 0));
+    saveCancellation(ORDER_ID, CYCLE_ID);
+    JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+    UUID cancellationId =
+        jdbc.queryForObject(
+            "SELECT event_id FROM payment.inbox WHERE event_type = 'PaymentCancellationRequested'",
+            UUID.class);
+    var claimed = new CountDownLatch(1);
+    var resume = new CountDownLatch(1);
+    transactions.afterClaim(
+        requestId,
+        () -> {
+          claimed.countDown();
+          awaitRelease(resume);
+        });
+    var executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<Boolean> original = executor.submit(() -> service.processEvent(requestId));
+      assertThat(claimed.await(10, TimeUnit.SECONDS)).isTrue();
+
+      assertThat(service.processEvent(cancellationId)).isTrue();
+
+      UUID paymentId =
+          jdbc.queryForObject(
+              "SELECT id FROM payment.payments WHERE status = 'CANCELLED'", UUID.class);
+      assertThat(jdbc.queryForList("SELECT result_ref FROM payment.inbox", UUID.class))
+          .containsExactly(paymentId, paymentId);
+      assertThat(jdbc.queryForList("SELECT DISTINCT status FROM payment.inbox", String.class))
+          .containsExactly("APPLIED");
+      assertThat(
+              new TransactionTemplate(manager)
+                  .<Optional<OrderPaymentRequestedPayload>>execute(
+                      status -> inbox.findOriginalRequest(paymentId)))
+          .isPresent();
+      resume.countDown();
+      assertThat(original.get(10, TimeUnit.SECONDS)).isTrue();
+      assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.payment_jobs", Long.class))
+          .isZero();
+      assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.outbox", Long.class))
+          .isEqualTo(2);
+    } finally {
+      resume.countDown();
+      executor.shutdownNow();
+    }
+  }
+
+  @Test
+  @DisplayName("주문 잠금 대기가 상한을 넘으면 업무 변경은 롤백되고 원문은 같은 키로 재시도된다")
+  void boundsOrderLockWaitAndRetriesWithoutBusinessChanges() throws Exception {
+    UUID requestId = UUID.randomUUID();
+    saveWaiting(event(requestId, ORDER_ID, CYCLE_ID, 10_000, 0));
+    var held = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var executor = Executors.newSingleThreadExecutor();
+    Future<?> holder =
+        executor.submit(
+            () ->
+                new TransactionTemplate(manager)
+                    .executeWithoutResult(
+                        status -> {
+                          new JdbcTemplate(dataSource)
+                              .queryForList(
+                                  "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+                                  "payment-order:" + ORDER_ID);
+                          held.countDown();
+                          awaitRelease(release);
+                        }));
+    try {
+      assertThat(held.await(10, TimeUnit.SECONDS)).isTrue();
+      long started = System.nanoTime();
+
+      assertThat(service.processEvent(requestId)).isTrue();
+
+      assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+      JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+      assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.payments", Long.class)).isZero();
+      assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.outbox", Long.class)).isZero();
+      assertThat(jdbc.queryForMap("SELECT status, attempts, last_error_code FROM payment.inbox"))
+          .containsEntry("status", "WAITING")
+          .containsEntry("attempts", 1)
+          .containsEntry("last_error_code", "PAYMENT_REQUEST_PROCESSING_FAILED");
+    } finally {
+      release.countDown();
+      holder.get(10, TimeUnit.SECONDS);
+      executor.shutdownNow();
+    }
+    clock.set(NOW.plusSeconds(2));
+    service.processEvent(requestId);
+    assertThat(
+            new JdbcTemplate(dataSource)
+                .queryForObject("SELECT status FROM payment.inbox", String.class))
+        .isEqualTo("APPLIED");
+  }
+
+  private static void awaitRelease(CountDownLatch latch) {
+    try {
+      if (!latch.await(10, TimeUnit.SECONDS))
+        throw new IllegalStateException("Test barrier timed out");
+    } catch (InterruptedException exception) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException(exception);
+    }
+  }
+
+  @Test
+  @DisplayName("취소 처리의 커밋이 실패하면 원문 연결·결제·Outbox가 함께 롤백되고 같은 요청으로 복구된다")
+  void rollsBackCancellationSourceLinkWithBusinessChanges() {
+    fundWallet(1_000);
+    saveWaiting(event(UUID.randomUUID(), ORDER_ID, CYCLE_ID, 10_000, 2_000));
+    service.processNext();
+    saveCancellation(ORDER_ID, CYCLE_ID);
+    transactions.beforeNextProcessingCommit(
+        () -> {
+          throw new IllegalStateException("simulated processing rollback");
+        });
+
+    service.processNext();
+
+    JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.payments", Long.class)).isZero();
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.outbox", Long.class)).isZero();
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT status, result_ref, last_error_code FROM payment.inbox WHERE event_type = 'OrderPaymentRequested'"))
+        .containsEntry("status", "REVIEW_REQUIRED")
+        .containsEntry("result_ref", null)
+        .containsEntry("last_error_code", "PAYMENT_REQUEST_MILEAGE_INSUFFICIENT");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM payment.inbox WHERE event_type = 'PaymentCancellationRequested'",
+                String.class))
+        .isEqualTo("WAITING");
+    clock.set(NOW.plusSeconds(2));
+
+    service.processNext();
+
+    assertThat(jdbc.queryForObject("SELECT status FROM payment.payments", String.class))
+        .isEqualTo("CANCELLED");
+    assertThat(
+            jdbc.queryForObject("SELECT count(DISTINCT result_ref) FROM payment.inbox", Long.class))
+        .isEqualTo(1);
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.outbox", Long.class)).isEqualTo(2);
+  }
+
+  @Test
+  @DisplayName("누적 Inbox에서도 상태와 관계없는 원문 연결 및 주문·회차 조회는 인덱스 조건으로 탐색한다")
+  void keepsRequestLookupsIndexedAcrossStatuses() throws Exception {
+    fundWallet(1_000);
+    saveWaiting(event(UUID.randomUUID(), ORDER_ID, CYCLE_ID, 10_000, 2_000));
+    service.processNext();
+    saveCancellation(ORDER_ID, CYCLE_ID);
+    service.processNext();
+    JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+    UUID paymentId = jdbc.queryForObject("SELECT id FROM payment.payments", UUID.class);
+    // 조회 계획용 합성 이력. Envelope와 SHA를 보존하되 금융 작업으로 처리하지 않는다.
+    jdbc.update(
+        """
+        WITH template AS (SELECT payload FROM payment.inbox WHERE event_type = 'OrderPaymentRequested' LIMIT 1),
+        identities AS (SELECT gen_random_uuid() AS event_id, gen_random_uuid() AS order_id,
+            gen_random_uuid() AS cycle_id, gen_random_uuid() AS result_id, n FROM generate_series(1, 10000) n),
+        bodies AS (SELECT identities.*, jsonb_set(payload || jsonb_build_object('eventId', event_id::text,
+            'aggregateId', order_id::text), '{payload}', payload -> 'payload' ||
+            jsonb_build_object('orderId', order_id::text, 'paymentCycleId', cycle_id::text)) AS body
+            FROM identities CROSS JOIN template)
+        INSERT INTO payment.inbox (id, consumer, event_id, event_type, event_version, occurred_at,
+            payload, raw_body, body_hash, source_topic, source_partition, source_offset,
+            aggregate_id, aggregate_version, status, result_ref, last_error_code)
+        SELECT gen_random_uuid(), 'payment.v1', event_id, 'OrderPaymentRequested', 1,
+            (body ->> 'occurredAt')::timestamptz, body, convert_to(body::text, 'UTF8'),
+            encode(sha256(convert_to(body::text, 'UTF8')), 'hex'), 'commerce-settle.fixture.plan.v1', 0, n,
+            order_id, 0, CASE WHEN n % 2 = 0 THEN 'APPLIED' ELSE 'REVIEW_REQUIRED' END,
+            result_id, CASE WHEN n % 2 = 0 THEN NULL ELSE 'FIXTURE_REVIEW' END FROM bodies
+        """);
+    jdbc.execute("ANALYZE payment.inbox");
+    UUID appliedId =
+        jdbc.queryForObject(
+            "SELECT result_ref FROM payment.inbox WHERE status = 'APPLIED' AND event_type = 'OrderPaymentRequested' LIMIT 1",
+            UUID.class);
+    for (UUID result : List.of(paymentId, appliedId)) {
+      String plan =
+          jdbc.queryForObject(
+              """
+          EXPLAIN (FORMAT JSON) SELECT id, raw_body FROM payment.inbox
+          WHERE consumer = 'payment.v1' AND result_ref = ? AND event_type = 'OrderPaymentRequested'
+          ORDER BY created_at, id LIMIT 1
+          """,
+              String.class,
+              result);
+      assertThat(mapper.readTree(plan).findValuesAsText("Index Cond"))
+          .withFailMessage("Result lookup lost its key index: %s", plan)
+          .anySatisfy(condition -> assertThat(condition).contains("result_ref"));
+    }
+    String plan =
+        jdbc.queryForObject(
+            """
+        EXPLAIN (FORMAT JSON) SELECT id, raw_body FROM payment.inbox
+        WHERE consumer = 'payment.v1' AND event_type = 'OrderPaymentRequested'
+          AND aggregate_id = ? AND payload -> 'payload' ->> 'paymentCycleId' = ?
+        ORDER BY created_at, id LIMIT 1
+        """,
+            String.class,
+            ORDER_ID,
+            CYCLE_ID.toString());
+    assertThat(mapper.readTree(plan).findValuesAsText("Index Cond"))
+        .withFailMessage("Order/cycle lookup lost its key index: %s", plan)
+        .anySatisfy(condition -> assertThat(condition).contains("aggregate_id", "paymentCycleId"));
   }
 
   private void saveCancellation(UUID orderId, UUID cycleId) {
@@ -731,6 +980,8 @@ class PaymentRequestProcessingIntegrationTest {
   static final class HookedTransactions implements TransactionOperations {
     private final TransactionTemplate delegate;
     private final AtomicReference<Runnable> afterRollback = new AtomicReference<>();
+    private final AtomicReference<ClaimHook> afterClaim = new AtomicReference<>();
+    private final AtomicReference<Runnable> beforeProcessingCommit = new AtomicReference<>();
 
     HookedTransactions(TransactionTemplate delegate) {
       this.delegate = delegate;
@@ -740,14 +991,34 @@ class PaymentRequestProcessingIntegrationTest {
       afterRollback.set(hook);
     }
 
+    void afterClaim(UUID eventId, Runnable action) {
+      afterClaim.set(new ClaimHook(eventId, action));
+    }
+
+    void beforeNextProcessingCommit(Runnable action) {
+      beforeProcessingCommit.set(action);
+    }
+
     void clear() {
+      beforeProcessingCommit.set(null);
+      afterClaim.set(null);
       afterRollback.set(null);
     }
 
     @Override
     public <T> T execute(TransactionCallback<T> action) {
+      T result;
       try {
-        return delegate.execute(action);
+        result =
+            delegate.execute(
+                status -> {
+                  T value = action.doInTransaction(status);
+                  if (value == null) {
+                    Runnable hook = beforeProcessingCommit.getAndSet(null);
+                    if (hook != null) hook.run();
+                  }
+                  return value;
+                });
       } catch (RuntimeException exception) {
         Runnable hook = afterRollback.getAndSet(null);
         if (hook != null) {
@@ -755,7 +1026,18 @@ class PaymentRequestProcessingIntegrationTest {
         }
         throw exception;
       }
+      ClaimHook hook = afterClaim.get();
+      if (hook != null
+          && result instanceof Optional<?> row
+          && row.orElse(null) instanceof InboxClaim.Claimed(WaitingInboxEvent claimed)
+          && claimed.event().eventId().equals(hook.eventId())
+          && afterClaim.compareAndSet(hook, null)) {
+        hook.action().run();
+      }
+      return result;
     }
+
+    private record ClaimHook(UUID eventId, Runnable action) {}
   }
 
   /** 재시도 대기를 기다리지 않고 다음 처리 시각으로 옮기기 위한 시계. */
