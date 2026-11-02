@@ -22,7 +22,7 @@ import org.springframework.dao.TransientDataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.CannotCreateTransactionException;
 
-/** Payment 전용 금융 대역. 자격 판정 구현 전까지 발신 서비스는 payment로 고정한다. */
+/** HTTP 경계에서 service:payment 자격을 검증한 Payment 전용 금융 대역. */
 @Service
 public class MockPaymentService {
   private static final Logger LOGGER = LoggerFactory.getLogger(MockPaymentService.class);

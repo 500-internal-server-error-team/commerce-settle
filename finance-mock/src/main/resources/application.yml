@@ -70,13 +70,16 @@ logging:
 app:
   internal-auth:
     service: finance-mock
-    # 발신자별 내부 호출 자격(ADR 0010). Settlement 자격이 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
+    # 발신자별 내부 호출 자격(ADR 0010). 현재 자격이 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
     # Gateway를 거치는 사용자 요청은 없으므로 gateway 자격은 두지 않는다.
     required-sender: service:settlement
     senders:
       "[service:settlement]":
         current: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL}
         previous: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL_PREVIOUS:}
+      "[service:payment]":
+        current: ${FINANCE_MOCK_PAYMENT_CREDENTIAL}
+        previous: ${FINANCE_MOCK_PAYMENT_CREDENTIAL_PREVIOUS:}
   dev-fixtures:
     enabled: ${APP_DEV_FIXTURES_ENABLED:false}
     run-scenarios: ${APP_DEV_FIXTURE_SCENARIOS_ENABLED:false}

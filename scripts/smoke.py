@@ -137,7 +137,9 @@ def check_internal_credentials():
         "http://settlement:8080/api/sellers/me/payouts",
         "http://finance-mock:8080/mock/payouts/" + str(uuid.uuid4()),
     ]
-    for url in targets:
+    pg_lookup = ("http://finance-mock:8080/mock/providers/PG_A/transactions/" + str(uuid.uuid4())
+                 + "?operation=APPROVE&scenarioVersion=smoke-unconfigured-pg-v1")
+    for url in targets + [pg_lookup]:
         assert direct(url) == "401", url
         assert direct(url, "-H", "X-Authenticated-Actor-Kind: SELLER") == "401", url
         assert direct(url, "-H", "Authorization: Bearer " + "x" * 43) == "401", url
@@ -166,6 +168,30 @@ def check_internal_credentials():
     body, _, status = lookup.rpartition("\n")
     assert status == "404", lookup
     assert json.loads(body)["code"] == "MOCK_TRANSACTION_NOT_FOUND", body
+    # Payment reaches the PG lookup; its scenario is deliberately not configured without fixtures.
+    lookup = compose(
+        "exec", "-T", "payment-worker", "sh", "-c",
+        'exec curl --silent --write-out "\\n%{http_code}" '
+        '-H "Authorization: Bearer $FINANCE_MOCK_PAYMENT_CREDENTIAL" "$1"',
+        "smoke", pg_lookup,
+    ).stdout.strip()
+    body, _, status = lookup.rpartition("\n")
+    assert status == "503", lookup
+    assert json.loads(body)["code"] == "MOCK_SCENARIO_UNAVAILABLE", body
+    payment_to_payout = compose(
+        "exec", "-T", "payment-worker", "sh", "-c",
+        'exec curl --silent --output /dev/null --write-out "%{http_code}" '
+        '-H "Authorization: Bearer $FINANCE_MOCK_PAYMENT_CREDENTIAL" "$1"',
+        "smoke", targets[-1] + "?scenarioVersion=payout-normal-v1",
+    ).stdout.strip()
+    assert payment_to_payout == "403", payment_to_payout
+    settlement_to_pg = compose(
+        "exec", "-T", "settlement", "sh", "-c",
+        'exec curl --silent --output /dev/null --write-out "%{http_code}" '
+        '-H "Authorization: Bearer $FINANCE_MOCK_SETTLEMENT_CREDENTIAL" "$1"',
+        "smoke", pg_lookup,
+    ).stdout.strip()
+    assert settlement_to_pg == "403", settlement_to_pg
 
 
 def check_login_flow(base):

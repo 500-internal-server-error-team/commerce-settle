@@ -318,7 +318,7 @@ Compose는 루프백에만 게시하므로 다른 장비에서 바로 접근할 
 
 이 fixture의 지연은 모두 0ms이고 지정한 장애 확률은 100%, 나머지는 0%입니다. 설계 문서의 초기 분포 제안과 구분합니다. seed는 20261102, 입금 지연은 PG_A/EASY_PAY 5·PG_B 6·PG_C 7영업일입니다. 정상 조회 버전을 따로 선택해 원금융 버전을 유지하면서 조회 장애를 해소합니다.
 
-PAYOUT 재원은 기존 `fixture-payout-funding`(기초잔액 1,000,000원), EASY_PAY 지갑은 `fixture-easy-wallet`(1,000,000원)을 사용합니다. 카드의 `accountRef`는 합성 참조를 사용하며 잔액을 차감하지 않습니다. 외부 수단은 CREDIT_CARD·DEBIT_CARD·EASY_PAY만 허용합니다. 서비스 자격 판정은 별도 구현이므로 루프백·컨테이너 내부의 로컬 시험만 허용하며 Gateway에는 공개하지 않습니다.
+PAYOUT 재원은 기존 `fixture-payout-funding`(기초잔액 1,000,000원), EASY_PAY 지갑은 `fixture-easy-wallet`(1,000,000원)을 사용합니다. 카드의 `accountRef`는 합성 참조를 사용하며 잔액을 차감하지 않습니다. 외부 수단은 CREDIT_CARD·DEBIT_CARD·EASY_PAY만 허용합니다. 승인·조회·환불은 `FINANCE_MOCK_PAYMENT_CREDENTIAL`로 검증한 `service:payment`만 허용하며 기존 지급은 `service:settlement`만 받습니다. `init_env.py`로 두 현재 자격을 준비하고 교체 중에만 각 `_PREVIOUS`를 설정합니다. 루프백·컨테이너 내부의 로컬 시험에 한정하며 Gateway에는 공개하지 않습니다.
 
 기존 환경의 스키마가 현재 금융 Mock DDL과 일치하는지 먼저 확인합니다. 새 빈 전용 개발 DB가 준비된 환경에서 `./gradlew :finance-mock:bootJar` 후 다음으로 로컬 시험 인스턴스를 엽니다. 다른 작업의 포트·컨테이너와 겹치지 않는지 확인합니다.
 
@@ -327,16 +327,19 @@ docker compose build finance-mock
 docker compose run --rm --no-deps -p 127.0.0.1:18083:8080 -e APP_DEV_FIXTURES_ENABLED=true finance-mock
 ```
 
-다른 터미널에서 승인하고, 응답의 `id`를 전액 환불 경로에 넣습니다. 아래 업무 키는 실행마다 새 UUID로 바꾸며 재요청 시험에서는 같은 값을 유지합니다.
+다른 터미널에서 `.env`의 `FINANCE_MOCK_PAYMENT_CREDENTIAL`을 환경 변수로 읽은 뒤 승인하고, 응답의 `id`를 전액 환불 경로에 넣습니다. 자격은 출력하거나 버전 관리에 넣지 않습니다. 아래 업무 키는 실행마다 새 UUID로 바꾸며 재요청 시험에서는 같은 값을 유지합니다.
 
 ```bash
 curl -i http://localhost:18083/mock/providers/EASY_PAY/payments \
+  -H "Authorization: Bearer $FINANCE_MOCK_PAYMENT_CREDENTIAL" \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: pg-approve-demo-001' \
   -d '{"businessKey":"00000000-0000-4000-8000-000000000121","method":"EASY_PAY","accountRef":"fixture-easy-wallet","fundingAccountRef":"fixture-payout-funding","amount":30000,"scenarioVersion":"fixture-pg-normal-v1"}'
 
-curl 'http://localhost:18083/mock/providers/EASY_PAY/transactions/00000000-0000-4000-8000-000000000121?operation=APPROVE&scenarioVersion=fixture-pg-normal-v1'
+curl 'http://localhost:18083/mock/providers/EASY_PAY/transactions/00000000-0000-4000-8000-000000000121?operation=APPROVE&scenarioVersion=fixture-pg-normal-v1' \
+  -H "Authorization: Bearer $FINANCE_MOCK_PAYMENT_CREDENTIAL"
 
 curl -i http://localhost:18083/mock/providers/EASY_PAY/payments/APPROVAL_ID/refunds \
+  -H "Authorization: Bearer $FINANCE_MOCK_PAYMENT_CREDENTIAL" \
   -H 'Content-Type: application/json' -H 'Idempotency-Key: pg-refund-demo-001' \
   -d '{"businessKey":"00000000-0000-4000-8000-000000000122","amount":30000}'
 ```
@@ -359,7 +362,7 @@ python3 scripts/smoke.py
 
 운영·테스트 Java 코드의 포맷·Checkstyle, 단위·통합·ArchUnit 테스트와 패키징을 검사합니다. `spotlessApply`는 로컬 수정용이며 CI는 `spotlessCheck`로 위반을 차단합니다. 테스트 추가 기준은 [테스트 작성](../CONTRIBUTING.md#테스트-작성)을 따릅니다.
 
-Python 테스트는 환경 초기화가 기존 설정을 보존하는지 확인합니다. smoke는 각 실행의 DB·Redis 연결·메트릭, Gateway 문서 라우팅·관리 경로 차단, 자격 없는 커머스·Payment·Settlement·Finance Mock 직접 호출과 Gateway 자격의 Finance Mock 호출의 `401`, Settlement 자격의 Finance Mock 원지급 조회, DB 간 접근 거부, 앱별 Redis ACL(커머스의 인증 키 쓰기·스크립트 실행과 `SCRIPT`·`FUNCTION`·키 목록·DB 전환 거절, Gateway의 `EVALSHA_RO` 검증과 쓰기·`EVAL`·`SCRIPT` 거절, 나머지 앱의 인증 키 거절), Kafka·Redis 왕복과 Zipkin의 Gateway→Commerce 추적 전파를 검사합니다. 임시 Kafka 토픽·Redis 키는 삭제합니다. CI는 낮은 부하의 k6 실행도 확인합니다. 결제·SAGA의 정합성과 성능은 업무 시나리오로 검증합니다.
+Python 테스트는 환경 초기화가 기존 설정을 보존하는지 확인합니다. smoke는 각 실행의 DB·Redis 연결·메트릭, Gateway 문서 라우팅·관리 경로 차단, 자격 없는 커머스·Payment·Settlement·Finance Mock 직접 호출과 Gateway 자격의 Finance Mock 호출의 `401`, Settlement 자격의 Finance Mock 원지급 조회, Payment 자격의 PG 조회와 두 자격의 교차 호출 `403`, DB 간 접근 거부, 앱별 Redis ACL(커머스의 인증 키 쓰기·스크립트 실행과 `SCRIPT`·`FUNCTION`·키 목록·DB 전환 거절, Gateway의 `EVALSHA_RO` 검증과 쓰기·`EVAL`·`SCRIPT` 거절, 나머지 앱의 인증 키 거절), Kafka·Redis 왕복과 Zipkin의 Gateway→Commerce 추적 전파를 검사합니다. 임시 Kafka 토픽·Redis 키는 삭제합니다. CI는 낮은 부하의 k6 실행도 확인합니다. 결제·SAGA의 정합성과 성능은 업무 시나리오로 검증합니다.
 
 정적 검사만 실행할 때는 `./gradlew spotlessCheck checkstyleMain checkstyleTest`, 테스트만 실행할 때는 `./gradlew test`를 사용합니다. `build`는 이 검사들을 포함하므로 별도 실행이 필수는 아닙니다.
 
@@ -448,10 +451,11 @@ Gateway 자체 오류는 `application/problem+json`과 실제 추적의 `traceId
 | --- | --- | --- |
 | `gateway` → 커머스·Payment·Settlement | `<대상>_GATEWAY_CREDENTIAL`(`_PREVIOUS`) | Gateway가 대상별 값을 붙임 |
 | `service:settlement` → Finance Mock | `FINANCE_MOCK_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 지급 Worker의 `HttpPayoutGateway` |
+| `service:payment` → Finance Mock | `FINANCE_MOCK_PAYMENT_CREDENTIAL`(`_PREVIOUS`) | PG 수신 경계·로컬 시험 연결. Compose는 Payment Worker에 현재 값을 전달하며 실제 승인·환불 Worker 클라이언트는 구현 전 |
 
 변수 이름은 `<대상>_<발신자>_CREDENTIAL`이며 `init_env.py`가 `.env.example`의 빈 값을 256비트 URL-safe 값으로 채웁니다. `_PREVIOUS`는 교체 중에만 받는 쪽에 둡니다. 값이 없거나 43자 미만이면 받는 쪽과 보내는 쪽 모두 기동하지 않습니다. 거절은 `internal_auth_rejections_total{sender,status}` 지표와 `<서비스>.internal-auth` 경고 로그로 확인하며, 자격 원문은 남기지 않습니다.
 
-남은 서비스·운영자 쌍(Payment→커머스·Finance Mock, Settlement→커머스·Payment, 운영자→전체)은 호출을 구현하는 PR에서 다음을 함께 추가합니다.
+남은 서비스·운영자 쌍(Payment→커머스, Settlement→커머스·Payment, 운영자→전체)과 Payment→Finance Mock의 실제 Worker 클라이언트는 호출을 구현하는 PR에서 아래 미연결 항목을 추가합니다.
 
 1. 받는 쪽: `application.yml`의 `app.internal-auth.senders`에 발신자를 추가합니다. `:`가 있는 키는 `"[service:payment]"`처럼 대괄호로 감쌉니다.
 2. 보내는 쪽: 해당 클라이언트의 모든 요청에 `Authorization: Bearer <자격>`을 붙이고 `InternalCredentials.requireFormat`으로 기동 때 형식을 확인합니다. 자격 거절 `401`·`403`은 업무 결과로 확정하지 않습니다.
