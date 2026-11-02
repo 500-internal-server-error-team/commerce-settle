@@ -1,6 +1,12 @@
 package com.commercesettle.payment.presentation.exception;
 
+import com.commercesettle.payment.domain.exception.IdempotencyConflictException;
+import com.commercesettle.payment.domain.exception.InvalidReconciliationCursorException;
+import com.commercesettle.payment.domain.exception.PaymentJobNotFoundException;
 import com.commercesettle.payment.domain.exception.PaymentNotFoundException;
+import com.commercesettle.payment.domain.exception.PaymentStateConflictException;
+import com.commercesettle.payment.domain.exception.ReconciliationCutoffNotReadyException;
+import com.commercesettle.payment.domain.exception.VersionConflictException;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
 import java.net.URI;
@@ -14,12 +20,14 @@ import org.springframework.beans.TypeMismatchException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.core.MethodParameter;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.CannotCreateTransactionException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -48,6 +56,38 @@ public class PaymentExceptionHandler extends ResponseEntityExceptionHandler {
   @ExceptionHandler(PaymentNotFoundException.class)
   ResponseEntity<Object> paymentNotFound(PaymentNotFoundException e, WebRequest request) {
     return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "결제를 찾을 수 없습니다.", null, request);
+  }
+
+  @ExceptionHandler(PaymentStateConflictException.class)
+  ResponseEntity<Object> stateConflict(PaymentStateConflictException e, WebRequest request) {
+    return respond(ErrorCode.PAYMENT_STATE_CONFLICT, e.getMessage(), null, request);
+  }
+
+  @ExceptionHandler(PaymentJobNotFoundException.class)
+  ResponseEntity<Object> jobNotFound(PaymentJobNotFoundException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "작업을 찾을 수 없습니다.", null, request);
+  }
+
+  @ExceptionHandler(VersionConflictException.class)
+  ResponseEntity<Object> versionConflict(VersionConflictException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_VERSION_CONFLICT, request);
+  }
+
+  /** 같은 키의 동시 요청은 먼저 커밋한 요청만 멱등 기록을 남기고 나머지는 충돌로 끝난다. */
+  @ExceptionHandler({IdempotencyConflictException.class, DuplicateKeyException.class})
+  ResponseEntity<Object> idempotencyConflict(RuntimeException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_IDEMPOTENCY_CONFLICT, request);
+  }
+
+  @ExceptionHandler(ReconciliationCutoffNotReadyException.class)
+  ResponseEntity<Object> cutoffNotReady(
+      ReconciliationCutoffNotReadyException e, WebRequest request) {
+    return respond(ErrorCode.RECONCILIATION_CUTOFF_NOT_READY, request);
+  }
+
+  @ExceptionHandler(InvalidReconciliationCursorException.class)
+  ResponseEntity<Object> invalidCursor(InvalidReconciliationCursorException e, WebRequest request) {
+    return invalid(List.of(error("cursor", "최초 조회와 같은 cutoffAt·size의 cursor가 아닙니다.")), request);
   }
 
   @ExceptionHandler({TransientDataAccessException.class, CannotCreateTransactionException.class})
@@ -89,6 +129,19 @@ public class PaymentExceptionHandler extends ResponseEntityExceptionHandler {
                   .map(MessageSourceResolvable::getDefaultMessage)
                   .forEach(reason -> errors.add(error(name, reason)));
             });
+    return invalid(errors, request);
+  }
+
+  @Override
+  protected ResponseEntity<Object> handleMethodArgumentNotValid(
+      MethodArgumentNotValidException ex,
+      HttpHeaders headers,
+      HttpStatusCode status,
+      WebRequest request) {
+    List<Map<String, String>> errors =
+        ex.getBindingResult().getFieldErrors().stream()
+            .map(field -> error(field.getField(), field.getDefaultMessage()))
+            .toList();
     return invalid(errors, request);
   }
 

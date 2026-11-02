@@ -6,8 +6,11 @@ import com.commercesettle.payment.domain.model.PaymentJobStatus;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository;
 import java.sql.Types;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -16,6 +19,9 @@ import org.springframework.transaction.annotation.Transactional;
 /** 작업 임대는 업무 상태 전이가 아니라 실행권 선점이라 조건부 SQL로 처리하고, 만료는 DB 시각으로 판정한다. */
 @Repository
 class JpaPaymentJobRepository implements PaymentJobRepository {
+  private static final Sort NEWEST_FIRST =
+      Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
+
   private final SpringDataPaymentJobRepository repository;
   private final NamedParameterJdbcTemplate jdbc;
 
@@ -113,6 +119,62 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
                 .addValue("errorCode", errorCode, Types.VARCHAR))
         == 1;
   }
+
+  @Override
+  public Optional<PaymentJob> findById(UUID jobId) {
+    return repository.findById(jobId);
+  }
+
+  @Override
+  public List<PaymentJob> findPage(int page, int size) {
+    return repository.findAll(PageRequest.of(page, size, NEWEST_FIRST)).getContent();
+  }
+
+  @Override
+  public long count() {
+    return repository.count();
+  }
+
+  @Override
+  public ReplayResult replay(UUID jobId, long expectedVersion) {
+    limits();
+    var params = new MapSqlParameterSource().addValue("id", jobId);
+    var current =
+        jdbc.query(
+            """
+            SELECT status, version,
+                   (status = 'RUNNING' AND lease_until > clock_timestamp()) AS leased
+            FROM payment.payment_jobs WHERE id = :id FOR UPDATE
+            """,
+            params,
+            (rs, row) ->
+                new Current(
+                    PaymentJobStatus.valueOf(rs.getString("status")),
+                    rs.getLong("version"),
+                    rs.getBoolean("leased")));
+    if (current.isEmpty()) {
+      return new ReplayResult.NotFound();
+    }
+    Current job = current.getFirst();
+    if (job.version() != expectedVersion) {
+      return new ReplayResult.VersionConflict();
+    }
+    if (job.status() == PaymentJobStatus.DONE || job.leased()) {
+      return new ReplayResult.StateConflict(job.status());
+    }
+    jdbc.update(
+        """
+        UPDATE payment.payment_jobs
+        SET status = 'PENDING', attempts = 0, next_run_at = clock_timestamp(),
+            lease_owner = NULL, lease_token = NULL, lease_until = NULL,
+            updated_at = clock_timestamp(), version = version + 1
+        WHERE id = :id
+        """,
+        params);
+    return new ReplayResult.Replayed(job.status());
+  }
+
+  private record Current(PaymentJobStatus status, long version, boolean leased) {}
 
   /** 다른 트랜잭션의 작업 잠금은 1초, SQL 한 문장은 5초까지만 기다린다. 호출자의 더 짧은 상한은 유지한다. */
   private void limits() {

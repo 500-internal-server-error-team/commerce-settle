@@ -15,6 +15,11 @@ class JpaMileageWalletRepository implements MileageWalletRepository {
   }
 
   @Override
+  public Optional<MileageWallet> findByBuyerId(UUID buyerId) {
+    return repository.findByBuyerId(buyerId);
+  }
+
+  @Override
   public Optional<MileageWallet> findByBuyerIdForUpdate(UUID buyerId) {
     return repository.findByBuyerIdForUpdate(buyerId);
   }

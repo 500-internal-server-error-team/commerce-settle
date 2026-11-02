@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.commercesettle.payment.application.dto.PaymentPageView;
 import com.commercesettle.payment.application.dto.PaymentView;
+import com.commercesettle.payment.application.service.PaymentAttemptQueryService;
 import com.commercesettle.payment.application.service.PaymentQueryService;
 import com.commercesettle.payment.domain.exception.PaymentNotFoundException;
 import com.commercesettle.payment.domain.model.PaymentStatus;
@@ -50,6 +51,7 @@ class PaymentControllerTest {
 
   @Autowired MockMvc mvc;
   @MockitoBean PaymentQueryService payments;
+  @MockitoBean PaymentAttemptQueryService attempts;
 
   @Test
   @DisplayName("본인 결제를 KST 시각과 null 필드까지 담아 반환한다")
