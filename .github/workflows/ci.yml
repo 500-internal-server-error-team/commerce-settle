@@ -32,6 +32,7 @@ jobs:
         run: |
           python3 scripts/test_init_env.py
           python3 scripts/test_pr_body.py
+          python3 -B -m unittest discover -s scripts -p 'test_ci_helpers.py'
       - name: Check Java formatting and Checkstyle (main and test)
         run: ./gradlew --daemon --parallel --continue spotlessCheck checkstyleMain checkstyleTest
       - name: Run tests, architecture checks and package all applications

@@ -4,6 +4,7 @@ import base64
 from contextlib import contextmanager
 import json
 from pathlib import Path
+import re
 import secrets
 import shutil
 import signal
@@ -51,6 +52,10 @@ def until(action, description, seconds=100):
     raise AssertionError(description)
 
 
+def integration_rules(production):
+    return re.sub(r"(?m)^    interval: [^\n]+$", "    interval: 1s", production)
+
+
 def verify():
     project = "cs-quarantine-observation-" + secrets.token_hex(5)
     with owned_settings(project) as directory:
@@ -65,9 +70,12 @@ def verify():
         )
         (directory / "alertmanager.yml").write_text(test_alerts)
         (directory / "slack-webhook").write_text("https://example.invalid/unused-test-only")
+        (directory / "integration.rules.yml").write_text(integration_rules(
+            (ROOT / "infra/prometheus/quarantine.rules.yml").read_text(),
+        ))
         (directory / "prometheus.yml").write_text(
             "global:\n  scrape_interval: 1s\n  evaluation_interval: 1s\n"
-            "rule_files: [/etc/prometheus/quarantine.rules.yml]\n"
+            "rule_files: [/etc/prometheus/integration.rules.yml]\n"
             "alerting:\n  alertmanagers:\n    - static_configs:\n        - targets: [alertmanager:9093]\n"
             "scrape_configs:\n  - job_name: commerce-settle\n    static_configs:\n      - targets: [fixture:8000]\n"
         )
@@ -89,6 +97,7 @@ def verify():
                         mount(directory / "prometheus.yml", "/etc/prometheus/prometheus.yml"),
                         mount(ROOT / "infra/prometheus/prometheus.yml", "/etc/prometheus/production.yml"),
                         mount(ROOT / "infra/prometheus/quarantine.rules.yml", "/etc/prometheus/quarantine.rules.yml"),
+                        mount(directory / "integration.rules.yml", "/etc/prometheus/integration.rules.yml"),
                         mount(ROOT / "infra/prometheus/quarantine.rules.test.yml", "/etc/prometheus/quarantine.rules.test.yml"),
                     ],
                     "ports": ["127.0.0.1::9090"],
