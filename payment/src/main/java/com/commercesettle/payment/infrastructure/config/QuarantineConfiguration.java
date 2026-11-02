@@ -2,6 +2,9 @@ package com.commercesettle.payment.infrastructure.config;
 
 import com.commercesettle.payment.application.service.QuarantineService;
 import com.commercesettle.payment.infrastructure.messaging.QuarantineRelay;
+import com.commercesettle.payment.infrastructure.observability.QuarantineMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
+import javax.sql.DataSource;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -13,6 +16,15 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableScheduling
 @ConditionalOnProperty(name = "app.kafka.quarantine.enabled", havingValue = "true")
 public class QuarantineConfiguration {
+  @Bean(initMethod = "start", destroyMethod = "close")
+  QuarantineMetrics quarantineMetrics(
+      DataSource dataSource,
+      MeterRegistry registry,
+      @Value("${spring.kafka.consumer.group-id:payment.v1}") String consumer,
+      @Value("${app.kafka.quarantine.metrics.interval-ms:15000}") long intervalMs) {
+    return new QuarantineMetrics(dataSource, registry, consumer, intervalMs);
+  }
+
   @Bean
   QuarantineRelay quarantineRelay(
       QuarantineService service,

@@ -273,6 +273,7 @@ Compose와 Gradle `bootRun`은 JVM 시간대를 `Asia/Seoul`로 지정합니다.
 | Settlement 명세 | <http://localhost:8080/v3/api-docs/settlement> | 기본 구성 |
 | Zipkin | <http://localhost:9411> | 기본 구성, 메모리 저장소 |
 | Prometheus | <http://localhost:9090> | `observability` |
+| Alertmanager | <http://localhost:9093> | `observability`, 기본 외부 발송 없음 |
 | Grafana | <http://localhost:3000> | `observability`, 사용자 `admin`, 비밀번호 `.env`의 `GRAFANA_ADMIN_PASSWORD` |
 | Kafka-UI | <http://localhost:8081> | `observability` |
 
@@ -324,7 +325,7 @@ Commerce·Payment·Settlement는 자기 원본 토픽 `commerce-settle.<서비�
 
 현재 구현한 전달 기반은 Commerce의 `OrderPaymentRequested` Outbox 저장·발행과 Payment의 Inbox 영속 인계입니다. 업무 유즈케이스는 자기 트랜잭션에서 `OrderEventOutbox.appendPaymentRequested`를 호출해야 하며, 트랜잭션 밖 단독 저장은 거절됩니다. 실제 전송은 `OutboxRelay`가 저장된 topic·key·원문 bytes로 수행하며 직접 발행 경로는 두지 않습니다. 발행 경로의 선택 이유와 CDC 대안은 [Kafka 결정](decisions/0005-kafka-event-delivery-and-capacity.md#발행-경로-통일)을 따릅니다. 최초 직렬화한 bytes를 보존해 재발행하고, Kafka ACK 뒤에만 발행 위치와 완료 상태를 저장합니다. 주문 API·예약과 실제 결제 접수 로직은 아직 연결하지 않았습니다.
 
-Payment의 `AcceptOrderPaymentRequestService`는 Inbox의 `WAITING`·`next_run_at`에 원본과 메시지 처리 대기 작업을 저장·커밋한 뒤 반환합니다. 같은 ID·동일 bytes는 원래 상태를 유지하고 다른 bytes는 `inbox_conflicts`에 격리합니다. 별도 `inbox_jobs`나 가짜 paymentId의 금융 Job을 만들지 않습니다. 후속 `ApplyOrderPaymentRequestService`는 결제·마일리지 예약·승인 작업·Inbox 완료를 함께 저장하며 전액 마일리지는 즉시 확정합니다. 이 처리기는 기본 비활성이고 PG 실행·결과 Outbox·재시도 상한은 미연결입니다. 수신 ACK는 대기 작업의 저장 완료만 뜻합니다.
+Payment의 `AcceptOrderPaymentRequestService`는 Inbox의 `WAITING`·`next_run_at`에 원본과 메시지 처리 대기 작업을 저장·커밋한 뒤 반환합니다. 같은 ID·동일 bytes는 원래 상태를 유지하고 다른 bytes는 `inbox_conflicts`에 격리합니다. 별도 `inbox_jobs`나 가짜 paymentId의 금융 Job을 만들지 않습니다. 대기 행은 Worker의 `ApplyOrderPaymentRequestService`가 처리하며, 실패의 재시도·확인 대상 전환은 [데이터 모델](data-model.md#inbox)을 따릅니다. 수신 ACK는 이 대기 작업의 저장 완료만 뜻합니다.
 
 `app.outbox.enabled`와 `app.kafka.order-payment-requested.enabled`는 기본 `false`입니다. 빈 개발 DB에 서비스별 초기 SQL을 적용하고 아래 신규 그룹 초기화를 마친 뒤 각각 활성화합니다. 수신 구현 Bean이 없으면 활성화한 Listener는 시작에 실패합니다. 테스트 대역을 운영 구현으로 등록하지 않습니다. 기존 개발 컨테이너에 초기 SQL을 재실행하거나 볼륨을 임의로 초기화하지 않습니다.
 
@@ -357,6 +358,27 @@ Payment 원문 격리는 새 빈 DB의 초기 SQL을 검증한 뒤 `app.kafka.qu
 `QuarantineRelay`는 한 번에 하나만 임대하고 전용 실행기에서 Kafka 응답을 기다립니다. 공통 예약 스레드와 DB 트랜잭션을 점유하지 않으며 중복 신호는 합칩니다. 기본 주기는 1초, 주기당 최대 32개, 임대 240초, 결과 대기 125초입니다. `max.block.ms`와 결과 대기의 합은 임대보다 짧아야 합니다. 발행 실패는 1초부터 최대 60초 간격으로 10회까지 재시도하고, 소진하면 원문과 작업을 REVIEW_REQUIRED로 보존합니다.
 
 원인 수정 뒤 인증된 운영 호출자는 `QuarantineService.requestReplay(id,expectedVersion,operator,reasonCode)`로 원래 토픽·키·본문을 재발행합니다. 예상 버전과 활성 재처리 부재를 검사하고 요청자·사유를 기록합니다. REVIEW_REQUIRED 작업은 `resumeDelivery(deliveryId,expectedVersion,operator,reasonCode)`로 상태·버전을 확인하고 이전 시도 수와 재개 이력을 보존하며 재개합니다. DLT 가용성과 독립적으로 요청할 수 있고, 발행 완료가 업무 성공을 뜻하지는 않습니다. 공개 관리 UI·HTTP API는 제공하지 않습니다.
+
+### DLT 관측과 조치
+
+격리 기능을 켠 Payment는 15초마다 자기 DB를 전용 실행기에서 관측하고 `/actuator/prometheus`로 마지막 성공 표본을 노출합니다. SQL 제한 시간은 2초이며 scrape와 공통 예약 스레드에서 DB를 조회하지 않습니다. 원문·키·업무 ID는 지표 label에 넣지 않습니다.
+
+Grafana의 `commerce-settle / Payment quarantine`은 최근 5분 신규 격리, DLT/REPLAY 상태별 작업·도래 후 최장 대기, 수집 성공과 표본 나이를 보여줍니다. 미래 재시도와 유효 임대는 지연에서 제외합니다. 같은 논리 작업은 인스턴스 간 합산하지 않으며 수집 실패·45초 이상 지난 표본은 상태 집계에서 제외합니다. 수집 없음을 0건으로 해석하지 않습니다.
+
+Prometheus는 신규 격리·재시도 소진을 CRITICAL, 도래 후 5분/15분 지연을 WARNING/CRITICAL로 Alertmanager에 전달합니다. DB 관측 실패·오래된 표본과 Payment 관측 대상 중단도 경보합니다. 신규 격리는 DB 기록 시각 기준 최근 5분 창이며 창 종료로 알람이 해제돼도 업무 복구 완료를 뜻하지 않습니다. 상세 기준은 [운영 알람](policies.md#운영-알람)을 따릅니다.
+
+1. 신규 격리는 원본 위치·오류 코드를 확인하고 생산자/스키마 원인을 조사합니다. 원문을 Slack·일반 로그에 붙이지 않습니다.
+2. 발행 지연·REVIEW_REQUIRED는 Kafka 가용성, 발행 작업 상태·시도 수·임대를 확인합니다. DLT가 비어 있어도 DB 발행 대기를 확인합니다.
+3. 원인 수정 뒤 위의 `requestReplay` 또는 `resumeDelivery`로 재처리하며 발행 완료와 실제 Inbox·업무 결과를 따로 대조합니다. 인증된 운영 호출 수단과 Inbox 업무 실패의 수동 재개는 별도 구현 대상입니다.
+
+기본 수신처는 Alertmanager 화면입니다. 팀 Incoming Webhook을 연결할 때만 비밀 URL을 저장소 밖 파일에 두고 다음 overlay를 사용합니다. 해당 Webhook의 채널이 수신처이며 실제 채널로 시험 메시지를 자동 발송하지 않습니다.
+
+```bash
+SLACK_WEBHOOK_URL_FILE=/path/to/slack-webhook-url \
+docker compose -f compose.yml -f compose.alertmanager-slack.yml --profile observability up -d --wait --wait-timeout 300
+```
+
+`python3 scripts/test_observability.py`는 규칙 경계·중복/오래된 표본과 실제 Prometheus→Alertmanager→전용 시험 수신기의 발생·복구 전달, WARNING 억제, 대시보드 등록을 검사합니다. 시험 알림 주기만 짧게 하고 실제 Slack은 사용하지 않습니다. 전용 Compose 프로젝트·임시 설정·컨테이너·볼륨은 종료 때 제거하며 기본 CI에도 포함합니다. 이 검사는 Kafka lag·금융 Inbox/Outbox/Job·전체 저장소 관측이나 신규 접수 gate를 검증하지 않습니다.
 
 `./gradlew :commerce:test :payment:test`는 Docker에서 전용 `apache/kafka:4.2.2` 컨테이너를 만들어 Outbox 원문 발행·위치 저장·ACK 후 저장 실패의 재발행과 실제 수신, 초기 offset 부재, 인계 실패 후 offset 보존과 소비자 재기동의 재전달을 검증합니다. Docker가 없으면 이 통합 시험은 실패하며 생략하지 않습니다. 시험 컨테이너와 데이터는 종료 때 제거하고 개발 Kafka·DB·볼륨을 사용하지 않습니다. 기본 `build`·CI에도 포함되며, smoke는 기동된 실제 7개 토픽의 설정을 추가로 검사합니다. Payment Kafka 수신 시험의 인계 구현은 메모리 대역입니다. Commerce Outbox의 실제 DB·Kafka 전달 시험도 주문·외부 결제 전체의 금융 정합성·업무 멱등성·처리량 검증을 대신하지 않습니다.
 
