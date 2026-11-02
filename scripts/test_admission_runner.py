@@ -28,7 +28,8 @@ class AdmissionRunnerTest(unittest.TestCase):
                     calls.append((command, kwargs["env"].copy(), override))
                 else:
                     calls.append((command, kwargs.get("env"), None))
-                return CompletedProcess(command, 0, "", "")
+                output = "run_id:" + "a" * 40 + "\n" if any("redis-cli INFO server" in value for value in command) else ""
+                return CompletedProcess(command, 0, output, "")
 
             with patch.object(test_admission.tempfile, "mkdtemp", return_value=str(owned)), patch.object(
                 test_admission.subprocess, "run", side_effect=run
@@ -36,12 +37,13 @@ class AdmissionRunnerTest(unittest.TestCase):
                 os.environ, {"COMPOSE_PROFILES": "observability,tools", "APP_ORDER_STUB_ENABLED": "true", "ALERTMANAGER_PORT": "9093"}
             ), test_admission.stack():
                 pass
-            environment = calls[0][1]
+            start = next(call for call in calls if call[2] is not None)
+            environment = start[1]
             self.assertEqual(environment["COMPOSE_PROFILES"], "")
             self.assertEqual(environment["APP_ORDER_STUB_ENABLED"], "false")
             for name in ["GATEWAY_PORT", "ZIPKIN_PORT", "PROMETHEUS_PORT", "ALERTMANAGER_PORT"]:
                 self.assertEqual(environment[name], "0")
-            self.assertEqual(calls[0][2]["services"]["commerce"]["environment"]["APP_ORDER_STUB_ENABLED"], "false")
+            self.assertEqual(start[2]["services"]["commerce"]["environment"]["APP_ORDER_STUB_ENABLED"], "false")
             self.assertTrue(any("--rmi" in command and "local" in command for command, *_args in calls))
             self.assertFalse(owned.exists())
             self.assertEqual(unrelated.read_text(), "preserve")
@@ -53,7 +55,8 @@ class AdmissionRunnerTest(unittest.TestCase):
             output = io.StringIO()
 
             def run(command, **_kwargs):
-                return CompletedProcess(command, int("down" in command), "", "daemon unavailable")
+                output = "run_id:" + "a" * 40 + "\n" if any("redis-cli INFO server" in value for value in command) else ""
+                return CompletedProcess(command, int("down" in command), output, "daemon unavailable")
 
             with patch.object(test_admission.tempfile, "mkdtemp", return_value=str(owned)), patch.object(
                 test_admission.subprocess, "run", side_effect=run
