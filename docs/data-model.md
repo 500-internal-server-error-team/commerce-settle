@@ -294,6 +294,7 @@
 | `payment_confirmed_at` | `timestamptz?` | 업무 값 |
 | `refund_deadline_at` | `timestamptz?` | 업무 값 |
 | `purchase_confirmed_at` | `timestamptz?` | 업무 값 |
+| `closed_at` | `timestamptz?` | 종결 상태 전이 때 고정. 주문 보존 기한의 시작 |
 | `payment_wait_until` | `timestamptz` | 업무 값 |
 | `policy_version` | `varchar(32)` | 업무 값 |
 | `created_at` | `timestamptz` | NOT NULL |
@@ -1364,3 +1365,15 @@ Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원
 ## 구현 시 검증
 
 테이블을 구현할 때 위 부분 유니크·체크·인덱스와 실제 enum을 DDL에 명시한다. 동시에 같은 쿠폰·마일리지·마지막 재고를 쓰는 경우와 환불/지급 예약 경합, 자동 구매확정/환불 마감 경합을 실제 DB로 검사한다. 상품 변경과 신규 일반 주문·이벤트 공개의 양쪽 잠금 순서, 이벤트 기간의 상품 변경 거절, 미결제 기한 취소와 결제 확정/재시도의 경합도 실제 DB에서 검사하고, Payment의 승인 차단 확정 전에는 예약이 유지되는지 확인한다. 현재 문서·그림의 구조 검사는 DB 동작 검증을 대신하지 않는다.
+
+## 주문·알림 보존 작업
+
+`orders.closed_at`은 CANCELLED/REFUNDED/PURCHASE_CONFIRMED에서만 필수이며 `(closed_at,id)` 부분 인덱스로 도래 주문을 조회합니다. `order_addresses.masked_at`이 있으면 세 암호문은 복호화 불가능한 `00` 마커이고 조회 경계에서 평문을 만들지 않습니다. `hold_reason`은 분쟁을 포함한 보존 보류 사유입니다.
+
+- `retention_checks`: `(target_kind,target_id)` PK, `result`, `checked_at`, `next_run_at`. ORDER/DELIVERY별 재조회 지점입니다. 보류는 하루 뒤, 실패는 60초 뒤 재시도하며 보류 해제는 다음 실행에서 다시 검사합니다.
+- `retention_history`: `id` PK, `target_kind`, `target_id`, `result`, `checked_at`. 마스킹·삭제·보류·보류 해제·실패를 추가 기록하며 `(target_kind,target_id,checked_at,id)` 인덱스로 조회합니다. 개인정보와 알림 본문을 기록하지 않습니다.
+- `notification_retired_keys`: `(source_service,kind,business_ref,recipient_kind,recipient_id)` PK, 32바이트 `payload_hash`, `retired_at`. 항목 본문 삭제 후에도 늦은 중복이 새 발송을 만들지 않게 하는 최소 업무 멱등 기록입니다. 자동 삭제하지 않습니다.
+
+발송 삭제는 모든 연결 주문·주소를 ID 순서로 잠근 뒤 발송 행을 잠그고 직전 조건을 재검사합니다. 항목·시도·모의 수신·발송 제거와 멱등키·보존 이력 저장은 같은 로컬 트랜잭션입니다. FK 없이 연결을 보호하며 미완료 Inbox·Outbox·금융 Job·audit와 쿠폰 사용 기록은 삭제하지 않습니다.
+
+정산·지급 알림의 원천 종결·보류 연결 정보는 아직 제공되지 않아 이 레코드는 삭제 대상에 넣지 않습니다. 같은 90일 정책의 구현을 끝내려면 해당 소유 계약과 저장·재검사 경로가 추가로 필요합니다.

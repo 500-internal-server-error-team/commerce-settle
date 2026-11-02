@@ -9,7 +9,7 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
-/** 주소록과 독립된 주문 당시 배송지 암호문. 이 구현에서는 사본 변경·마스킹을 제공하지 않는다. */
+/** 주소록과 독립된 주문 당시 배송지 암호문. 마스킹 뒤에는 복호화할 수 없다. */
 @Entity
 @Table(name = "order_addresses")
 public class OrderAddress extends AuditableEntity {
@@ -58,7 +58,12 @@ public class OrderAddress extends AuditableEntity {
     return orderId;
   }
 
+  public Instant getMaskedAt() {
+    return maskedAt;
+  }
+
   public SealedShippingAddress getSealed() {
+    if (maskedAt != null) throw new IllegalStateException("Order address has been masked");
     return new SealedShippingAddress(
         recipientCiphertext.clone(), phoneCiphertext.clone(), addressCiphertext.clone());
   }

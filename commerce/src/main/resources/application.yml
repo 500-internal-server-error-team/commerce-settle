@@ -109,6 +109,11 @@ app:
     settlement-url: ${SETTLEMENT_URL:http://settlement:8080}
     payment-credential: ${PAYMENT_COMMERCE_CREDENTIAL:}
     settlement-credential: ${SETTLEMENT_COMMERCE_CREDENTIAL:}
+  retention:
+    enabled: ${COMMERCE_RETENTION_ENABLED:false}
+    batch-size: ${COMMERCE_RETENTION_BATCH_SIZE:100}
+    max-batches: ${COMMERCE_RETENTION_MAX_BATCHES:10}
+    cron: ${COMMERCE_RETENTION_CRON:0 0 3 * * *}
   kafka:
     payment-accepted:
       enabled: ${APP_KAFKA_PAYMENT_ACCEPTED_ENABLED:false}
