@@ -31,6 +31,7 @@ jobs:
       - name: Verify Python helpers
         run: |
           python3 scripts/test_init_env.py
+          python3 scripts/test_sync_redis_run_id.py
           python3 scripts/test_pr_body.py
           python3 -B -m unittest discover -s scripts -p 'test_ci_helpers.py'
       - name: Check Java formatting and Checkstyle (main and test)
@@ -45,14 +46,19 @@ jobs:
       - name: Verify quarantine monitoring and alert delivery
         run: python3 scripts/test_observability.py
       - name: Start the stack from empty volumes
-        run: docker compose up -d --build --wait --wait-timeout 300
+        run: |
+          python3 scripts/sync_redis_run_id.py
+          docker compose up -d --build --wait --wait-timeout 300
       - name: Verify service, database and messaging boundaries
         run: python3 scripts/smoke.py
+      - name: Verify auth stays blocked after a Redis restart until re-approval
+        run: python3 scripts/smoke_redis_restart.py
       - name: Verify the load tool at a small arrival rate
         run: docker compose --profile tools run --rm --no-deps -e RATE=2 -e DURATION_SECONDS=3 k6
       - name: Verify restart with retained data
         run: |
           docker compose down
+          python3 scripts/sync_redis_run_id.py
           docker compose up -d --wait --wait-timeout 300
           python3 scripts/smoke.py
       - name: Upload verification reports
