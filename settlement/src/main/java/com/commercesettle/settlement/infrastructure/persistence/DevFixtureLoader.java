@@ -2,9 +2,11 @@ package com.commercesettle.settlement.infrastructure.persistence;
 
 import com.commercesettle.settlement.domain.model.SettlementAmounts;
 import com.commercesettle.settlement.domain.model.SettlementItem;
+import com.commercesettle.settlement.domain.model.SettlementItemStatus;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -62,6 +64,21 @@ public class DevFixtureLoader {
     return IntStream.range(0, 8)
         .mapToObj(i -> items.findByPaymentId(id("payment-settlement-" + i)).orElseThrow().getId())
         .collect(Collectors.toUnmodifiableSet());
+  }
+
+  /**
+   * 마감 전에 지급 가능해진 fixture 항목이 아직 지급에 묶이지 않았는지. 판매자 skip은 일배치를 COMPLETED로 끝내고 같은 파라미터로 다시 실행하지 않으므로
+   * 실행 결과 대신 항목으로 확인한다.
+   */
+  public boolean hasUnsettledItemsBefore(Instant cutoffAt) {
+    return IntStream.range(0, 8)
+        .mapToObj(i -> items.findByPaymentId(id("payment-settlement-" + i)))
+        .flatMap(Optional::stream)
+        .anyMatch(
+            item ->
+                item.getStatus() == SettlementItemStatus.PAYABLE
+                    && item.getPayoutId() == null
+                    && item.getReadyAt().isBefore(cutoffAt));
   }
 
   private static UUID id(String name) {

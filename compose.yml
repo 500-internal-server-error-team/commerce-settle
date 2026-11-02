@@ -284,6 +284,9 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      # 기동 직후 fixture 일배치가 커머스 지급 컨텍스트를 조회한다.
+      commerce:
+        condition: service_healthy
 
   finance-mock:
     <<: *app

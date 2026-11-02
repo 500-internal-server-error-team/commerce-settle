@@ -85,8 +85,11 @@ class DevFixtureIntegrationTest {
     assertThat(items.findById(foreign.getId()).orElseThrow().getStatus().name())
         .isEqualTo("PAYABLE");
     jdbc.update("DELETE FROM settlement.settlement_items WHERE id=?", foreign.getId());
+    Instant cutoff = Instant.parse("2026-09-01T01:00:00Z");
+    assertThat(loader.hasUnsettledItemsBefore(cutoff)).isTrue();
     assertThat(launcher.runFixture(LocalDate.of(2026, 9, 1), loader.itemIds()))
         .isEqualTo(BatchStatus.COMPLETED);
+    assertThat(loader.hasUnsettledItemsBefore(cutoff)).isFalse();
     assertThat(count("settlement_batches")).isEqualTo(2);
     assertThat(count("payouts")).isEqualTo(2);
     assertThat(count("payout_jobs")).isEqualTo(2);
@@ -157,6 +160,36 @@ class DevFixtureIntegrationTest {
                             c.getBean(org.springframework.boot.ApplicationRunner.class)
                                 .run(new org.springframework.boot.DefaultApplicationArguments()))
                     .doesNotThrowAnyException());
+  }
+
+  @Test
+  void rejectsCompletedRunThatSkippedFixtureSellers() {
+    var launcher = org.mockito.Mockito.mock(DailySettlementLauncher.class);
+    org.mockito.Mockito.when(
+            launcher.runFixture(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anySet()))
+        .thenReturn(BatchStatus.COMPLETED);
+    var loader = org.mockito.Mockito.mock(DevFixtureLoader.class);
+    org.mockito.Mockito.when(loader.hasUnsettledItemsBefore(Instant.parse("2026-09-01T01:00:00Z")))
+        .thenReturn(true);
+    new org.springframework.boot.test.context.runner.ApplicationContextRunner()
+        .withUserConfiguration(
+            com.commercesettle.settlement.infrastructure.config.DevFixtureConfiguration.class)
+        .withBean(DevFixtureLoader.class, () -> loader)
+        .withBean(DailySettlementLauncher.class, () -> launcher)
+        .withPropertyValues(
+            "app.dev-fixtures.enabled=true",
+            "app.dev-fixtures.run-scenarios=true",
+            "settlement.daily-batch.schedule-enabled=false",
+            "settlement.payout-worker.enabled=false")
+        .run(
+            c ->
+                org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () ->
+                            c.getBean(org.springframework.boot.ApplicationRunner.class)
+                                .run(new org.springframework.boot.DefaultApplicationArguments()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("skipped sellers"));
   }
 
   private int count(String table) {
