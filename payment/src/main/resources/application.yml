@@ -108,6 +108,9 @@ app:
     # 실패는 최대 10회까지 1~60초 간격으로 재시도한 뒤 REVIEW_REQUIRED로 남긴다.
     enabled: false
     interval-ms: 1000
+    # 동시에 처리하는 슬롯 수와 슬롯별 한 주기 상한. 상한에 닿으면 기다리지 않고 이어서 처리한다.
+    # 처리 트랜잭션마다 DB 연결을 쓰므로 승인 슬롯과 합쳐 DB 연결 풀보다 작게 둔다.
+    concurrency: ${PAYMENT_REQUEST_CONCURRENCY:3}
     batch-size: 100
     # 선점 뒤 처리 결과나 실패를 기록하기 전까지 다른 처리기가 같은 요청을 다시 잡지 않는 시간.
     # 한 건의 처리 트랜잭션보다 충분히 길어야 한다.
