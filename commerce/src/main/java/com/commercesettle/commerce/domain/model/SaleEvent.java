@@ -100,17 +100,17 @@ public class SaleEvent extends AuditableEntity {
    */
   public InventoryMovement publish(
       ProductInventory inventory, long expectedVersion, UUID movementId, Instant now) {
-    requireSameProduct(inventory);
-    requireDraft();
-    requireVersion(expectedVersion);
-    if (!now.isBefore(endsAt)) {
+    requireSameProduct(inventory); // ① 이 이벤트 상품의 재고가 맞는지
+    requireDraft(); // ② 아직 미공개(DRAFT)인지
+    requireVersion(expectedVersion); // ③ 클라이언트가 본 버전과 같은지
+    if (!now.isBefore(endsAt)) { // ④ 종료 시각이 이미 지났는지
       throw new SaleEventConflictException(Reason.PERIOD_ENDED);
     }
-    InventoryMovement movement = inventory.allocateToEvent(movementId, id, quota, now);
-    status = now.isBefore(startsAt) ? SaleEventStatus.SCHEDULED : SaleEventStatus.OPEN;
+    InventoryMovement movement = inventory.allocateToEvent(movementId, id, quota, now); // ⑤ 재고 배정
+    status = now.isBefore(startsAt) ? SaleEventStatus.SCHEDULED : SaleEventStatus.OPEN; // ⑥ 상태 전이
     publishedAt = truncate(now);
-    touch(now);
-    return movement;
+    touch(now); // updatedAt 갱신
+    return movement; // ⑦ 이동 기록 반환
   }
 
   /** 시작 시각이 된 예정 이벤트를 연다. 바꾸지 않았으면 false다. */
