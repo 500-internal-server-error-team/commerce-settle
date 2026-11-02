@@ -36,14 +36,18 @@ public class ApprovalWorkerConfiguration {
         scenarioVersion);
   }
 
-  /** {@code http}면 finance-mock PG 대역을 호출하고, {@code stub}이면 즉시 승인하는 개발용 대역을 쓴다. 그 밖의 값은 기동을 멈춘다. */
+  /**
+   * {@code http}면 finance-mock PG 대역을 호출하고, {@code stub}이면 즉시 승인하는 개발용 대역을 쓴다. 그 밖의 값은 기동을 멈춘다.
+   * {@code http}는 finance-mock용 {@code service:payment} 자격이 없으면 기동을 멈춘다.
+   */
   @Bean
   PaymentGateway paymentGateway(
       RestClient.Builder builder,
       ApprovalWorkerSettings settings,
       Clock clock,
       @Value("${app.payment-approval.gateway:stub}") String gateway,
-      @Value("${app.payment-approval.mock-base-url:http://finance-mock:8080}") String baseUrl) {
+      @Value("${app.payment-approval.mock-base-url:http://finance-mock:8080}") String baseUrl,
+      @Value("${app.payment-approval.mock-credential:}") String credential) {
     return switch (gateway) {
       case "stub" -> new StubPaymentGateway(clock);
       case "http" -> {
@@ -51,7 +55,7 @@ public class ApprovalWorkerConfiguration {
         JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(http);
         requestFactory.setReadTimeout(settings.httpTimeout());
         yield new HttpPaymentGateway(
-            builder.baseUrl(baseUrl).requestFactory(requestFactory).build());
+            builder.baseUrl(baseUrl).requestFactory(requestFactory).build(), credential);
       }
       default -> throw new IllegalArgumentException("Unknown payment approval gateway");
     };

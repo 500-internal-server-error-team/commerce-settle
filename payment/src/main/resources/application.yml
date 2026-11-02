@@ -112,6 +112,8 @@ app:
     # stub: 즉시 승인하는 개발용 대역(finance-mock PG 대역 #121 병합 전), http: finance-mock PG 대역
     gateway: ${PAYMENT_APPROVAL_GATEWAY:stub}
     mock-base-url: ${FINANCE_MOCK_URL:http://finance-mock:8080}
+    # http일 때 finance-mock에 보내는 service:payment 자격(ADR 0010). Worker에만 주입한다.
+    mock-credential: ${FINANCE_MOCK_PAYMENT_CREDENTIAL:}
     poll-interval-ms: 1000
     max-jobs-per-poll: 20
     # 호출 제한 시간은 임대보다 짧아야 한다.
@@ -121,6 +123,7 @@ app:
     max-attempts: 10
     card-provider: PG_A
     funding-account-ref: ${PAYMENT_FUNDING_ACCOUNT_REF:payout-funding-default}
+    # finance-mock에 이 이름의 PG 시나리오가 있어야 한다. 없으면 대역이 503으로 답하고 승인은 미확정으로 남는다.
     scenario-version: ${PAYMENT_SCENARIO_VERSION:pg-normal-v1}
   outbox:
     # PAYMENT_ROLE=worker에서만 동작한다. 커밋된 결제 이벤트를 Kafka로 발행한다.
