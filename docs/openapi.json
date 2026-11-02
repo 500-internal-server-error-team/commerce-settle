@@ -6550,8 +6550,8 @@
         ],
         "x-owner-service": "payment",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "실제 DB에서 구매자 본인 결제의 외부 승인 시도를 조회한다. 없거나 다른 구매자의 결제는 404이다. 목록은 createdAt DESC,id DESC 순서이며 page≥0,size=1..100(기본20)을 사용한다. 계정·재원 참조와 외부 거래 ID는 반환하지 않는다.",
         "security": [
           {
             "accountSession": []
@@ -6791,8 +6791,8 @@
         ],
         "x-owner-service": "payment",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "실제 DB에서 구매자 본인 마일리지 지갑을 조회한다. availableAmount=balance-reservedAmount이며, 지갑이 없는 구매자는 모든 값이 0이다.",
         "security": [
           {
             "accountSession": []
@@ -6892,8 +6892,8 @@
         ],
         "x-owner-service": "payment",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "실제 DB에서 구매자 본인 마일리지 원장을 createdAt DESC,id DESC 순서로 조회한다. page≥0,size=1..100(기본20)을 사용하며 SEED는 paymentId가 null이다. 지갑이 없으면 빈 목록이다.",
         "security": [
           {
             "accountSession": []
@@ -7709,8 +7709,8 @@
         ],
         "x-owner-service": "payment",
         "x-actor": "SERVICE:settlement",
-        "x-implemented": false,
-        "description": "payment의 platformCouponAmount(P)·settlementBaseAmount(B)와 최초 feeAmount·sellerNetAmount를 사용한다. E+M+P=B=feeAmount+sellerNetAmount를 대조한다.",
+        "x-implemented": true,
+        "description": "payment의 platformCouponAmount(P)·settlementBaseAmount(B)와 최초 feeAmount·sellerNetAmount를 사용한다. E+M+P=B=feeAmount+sellerNetAmount를 대조한다. CONFIRMED 결제만 반환하며 확정 전·거절·취소 결제는 409 PAYMENT_STATE_CONFLICT, 없는 결제는 404이다.",
         "security": [
           {
             "serviceCredential": []
@@ -7952,8 +7952,8 @@
         ],
         "x-owner-service": "payment",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "실제 DB의 결제 작업을 createdAt DESC,id DESC 순서로 조회한다. page≥0,size=1..100(기본20)을 사용하며 resourceId는 환불 작업이면 환불 ID, 그 밖에는 결제 ID이다. 임대 token은 반환하지 않는다.",
         "security": [
           {
             "serviceCredential": []
@@ -8073,8 +8073,8 @@
         ],
         "x-owner-service": "payment",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "같은 작업 행의 원업무 키·금액·결제수단·고정한 승인 시도로 작업을 즉시 다시 대기(PENDING)시키고 자동 시도 횟수를 새로 센다. 새 금융 거래를 만들지 않으며 미확정 시도는 원거래 조회부터 재개한다. expectedVersion이 다르면 409 COMMON_VERSION_CONFLICT, DONE이거나 유효한 임대 중이면 409 PAYMENT_STATE_CONFLICT이다. reason은 감사 기록의 사유 코드로 남기므로 [A-Z][A-Z0-9_]{0,79} 형식만 받는다. 작업 변경·멱등 기록·감사 행(PAYMENT_JOB_REPLAYED)은 한 트랜잭션이며 같은 키·본문의 재요청은 작업을 다시 바꾸지 않고 현재 작업을 반환한다.",
         "security": [
           {
             "serviceCredential": []
@@ -10819,8 +10819,8 @@
         ],
         "x-owner-service": "payment",
         "x-actor": "SERVICE:settlement",
-        "x-implemented": false,
-        "description": "Settlement 전용 서비스 자격의 읽기 전용 조회. 사용자·Gateway·일반 운영자 자격은 거절하며 Gateway에 공개하지 않는다. occurredAt<=cutoffAt인 PaymentConfirmed·RefundFinancialCompleted를 원천 불변 이력에서 복원한다. 미발행·발행 위치 미확정도 PENDING/null 위치로 포함한다. 검증한 최대 업무 트랜잭션 시간보다 긴 안전 여유 이후에만 기준선을 고정하며 미래 마감·준비 전 기준선은 409 RECONCILIATION_CUTOFF_NOT_READY이다. 이력·안전 여유의 보장을 확인할 수 없으면 503이고 현재 상태로 대체하지 않는다. 최초 조회 이후 cursor에 결속한 snapshotAt·조회 경계·cutoffAt·size를 유지하며 잘못된 cursor/다른 조건 재사용은 400이다. 이 조회는 다른 서비스 DB 직접 접근이나 금융 실행 권한을 부여하지 않는다.",
+        "x-implemented": true,
+        "description": "Settlement 전용 서비스 자격의 읽기 전용 조회. 사용자·Gateway·일반 운영자 자격은 거절하며 Gateway에 공개하지 않는다. occurredAt<=cutoffAt인 PaymentConfirmed·RefundFinancialCompleted를 원천 불변 이력에서 복원한다. 미발행·발행 위치 미확정도 PENDING/null 위치로 포함한다. 검증한 최대 업무 트랜잭션 시간보다 긴 안전 여유 이후에만 기준선을 고정하며 미래 마감·준비 전 기준선은 409 RECONCILIATION_CUTOFF_NOT_READY이다. 이력·안전 여유의 보장을 확인할 수 없으면 503이고 현재 상태로 대체하지 않는다. 최초 조회 이후 cursor에 결속한 snapshotAt·조회 경계·cutoffAt·size를 유지하며 잘못된 cursor/다른 조건 재사용은 400이다. 이 조회는 다른 서비스 DB 직접 접근이나 금융 실행 권한을 부여하지 않는다. 현재 원천은 Payment Outbox의 PaymentConfirmed이며 RefundFinancialCompleted는 환불 SAGA 발행과 함께 포함한다. 안전 여유는 app.payment-reconciliation.safety-margin(기본 10분)이고, 기준선 시각은 최초 조회의 DB 시각이다.",
         "security": [
           {
             "serviceCredential": []
