@@ -48,6 +48,25 @@ class PaymentJobTest {
         .isInstanceOf(IllegalArgumentException.class);
   }
 
+  @Test
+  @DisplayName("환불 작업은 정산금 예약이 확인된 환불의 업무 키로 만든다")
+  void createsRefundJobKeyedByRefund() {
+    Refund refund =
+        Refund.accept(
+            RefundTest.confirmed(new PaymentAmounts(10_000, 0, 0, 10_000)), UUID.randomUUID(), NOW);
+    assertThatThrownBy(() -> PaymentJob.refundFor(refund, NOW))
+        .isInstanceOf(IllegalArgumentException.class);
+    refund.reserved(NOW);
+
+    PaymentJob job = PaymentJob.refundFor(refund, NOW);
+
+    assertThat(job.getOperation()).isEqualTo(PaymentJobOperation.REFUND);
+    assertThat(job.getRefundId()).isEqualTo(refund.getId());
+    assertThat(job.getPaymentId()).isEqualTo(refund.getPaymentId());
+    assertThat(job.getBusinessKey()).isEqualTo(refund.getBusinessKey());
+    assertThat(job.getStatus()).isEqualTo(PaymentJobStatus.PENDING);
+  }
+
   private static Payment payment(PaymentAmounts amounts) {
     return Payment.create(
         UUID.randomUUID(),

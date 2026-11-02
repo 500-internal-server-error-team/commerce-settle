@@ -47,6 +47,30 @@ public class PaymentJob extends AuditableEntity {
     this.nextRunAt = getCreatedAt();
   }
 
+  private PaymentJob(Refund refund, Instant now) {
+    super(now);
+    this.id = UUID.randomUUID();
+    this.paymentId = refund.getPaymentId();
+    this.refundId = refund.getId();
+    this.operation = PaymentJobOperation.REFUND;
+    this.businessKey = refund.getBusinessKey();
+    this.status = PaymentJobStatus.PENDING;
+    this.attempts = 0;
+    this.nextRunAt = getCreatedAt();
+  }
+
+  /**
+   * 정산금 예약이 확인된 환불의 외부 환불·마일리지 복원 작업을 만든다. 업무 키는 환불의 업무 키라서 환불마다 하나만 만든다. 외부 결제액이 0원이어도 복원 단계를 실행하기
+   * 위해 만든다.
+   */
+  public static PaymentJob refundFor(Refund refund, Instant now) {
+    Objects.requireNonNull(refund, "refund");
+    if (refund.getStatus() != RefundStatus.EXTERNAL_PENDING) {
+      throw new IllegalArgumentException("정산금 예약이 확인된 환불만 작업을 만듭니다: " + refund.getStatus());
+    }
+    return new PaymentJob(refund, now);
+  }
+
   /** 외부 결제액이 있는 결제의 승인 작업을 만든다. 결제 회차마다 하나만 만든다. */
   public static PaymentJob approvalFor(Payment payment, Instant now) {
     Objects.requireNonNull(payment, "payment");
