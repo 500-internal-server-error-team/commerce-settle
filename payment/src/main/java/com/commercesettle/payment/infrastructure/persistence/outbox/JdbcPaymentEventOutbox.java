@@ -6,7 +6,9 @@ import com.commercesettle.payment.application.event.PaymentCancellationResultPay
 import com.commercesettle.payment.application.event.PaymentConfirmedPayload;
 import com.commercesettle.payment.application.event.PaymentDeclinedPayload;
 import com.commercesettle.payment.application.event.RefundAcceptedPayload;
+import com.commercesettle.payment.application.event.RefundCompletedPayload;
 import com.commercesettle.payment.application.event.RefundEventPayload;
+import com.commercesettle.payment.application.event.RefundFailedPayload;
 import com.commercesettle.payment.application.event.RefundReservationRequestedPayload;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
 import com.commercesettle.payment.infrastructure.messaging.OutboxAppended;
@@ -29,7 +31,9 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
   private static final Map<String, Class<? extends RefundEventPayload>> REFUND_EVENTS =
       Map.of(
           "RefundAccepted", RefundAcceptedPayload.class,
-          "RefundReservationRequested", RefundReservationRequestedPayload.class);
+          "RefundReservationRequested", RefundReservationRequestedPayload.class,
+          "RefundCompleted", RefundCompletedPayload.class,
+          "RefundFailed", RefundFailedPayload.class);
 
   private final NamedParameterJdbcTemplate jdbc;
   private final ObjectMapper mapper;
