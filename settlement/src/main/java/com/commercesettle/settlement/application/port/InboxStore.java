@@ -4,6 +4,7 @@ import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -27,6 +28,12 @@ public interface InboxStore {
    * REVIEW_REQUIRED로 남기고 false를 돌려준다.
    */
   boolean markWaiting(UUID inboxId, Duration baseDelay, int maxAttempts, Instant now);
+
+  /**
+   * 결제가 오지 않아 {@code maxAttempts}번 판정 뒤 REVIEW_REQUIRED로 남은 같은 결제의 구매확정을 WAITING·시도 0으로 되돌리고 되돌린
+   * Inbox ID를 돌려준다. 다른 사유로 운영 확인에 남은 행은 건드리지 않는다.
+   */
+  List<UUID> reviveExhaustedPurchases(UUID paymentId, int maxAttempts, Instant now);
 
   /** 수신 위치와 최초 bytes. */
   record Source(String topic, int partition, long offset, byte[] body) {}

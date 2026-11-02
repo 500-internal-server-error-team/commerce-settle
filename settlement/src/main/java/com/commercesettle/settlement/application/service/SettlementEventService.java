@@ -95,6 +95,16 @@ public class SettlementEventService {
         SettlementEntry.initial(
             item, event.eventId(), event.occurredAt().toInstant(), payment.policyVersion(), now));
     inbox.markApplied(inboxId.get(), item.getId(), now);
+    // 대기를 소진한 구매확정은 원인(결제 미도착)이 사라졌으므로 처리기가 다시 판정하게 한다.
+    for (UUID revived :
+        inbox.reviveExhaustedPurchases(payment.paymentId(), MAX_WAITING_ATTEMPTS, now)) {
+      LOGGER
+          .atInfo()
+          .addKeyValue("event", "inbox.waiting-revived")
+          .addKeyValue("inboxId", revived)
+          .addKeyValue("paymentId", payment.paymentId())
+          .log("Exhausted purchase confirmation is waiting again after a late payment");
+    }
   }
 
   @Transactional
