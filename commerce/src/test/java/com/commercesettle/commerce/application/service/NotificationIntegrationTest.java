@@ -765,15 +765,17 @@ class NotificationIntegrationTest {
     var rejected = store.find(id).orElseThrow();
     String key = UUID.randomUUID().toString();
     String reason = "private-notification-replay-reason";
-    assertThatThrownBy(
-            () ->
-                tx.executeWithoutResult(
-                    status -> {
-                      service.replay("operator:test", id, key, rejected.version(), reason);
-                      assertThat(logEntries(output, "notification.replay", id)).isEmpty();
-                      throw new IllegalStateException("business failed");
-                    }))
-        .isInstanceOf(IllegalStateException.class);
+    jdbc.execute(
+        "CREATE FUNCTION commerce.reject_replay_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test replay commit failure'; END $$");
+    jdbc.execute(
+        "CREATE CONSTRAINT TRIGGER reject_replay_commit AFTER INSERT ON commerce.notification_attempts DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.operation='REPLAY') EXECUTE FUNCTION commerce.reject_replay_commit()");
+    try {
+      assertThatThrownBy(() -> service.replay("operator:test", id, key, rejected.version(), reason))
+          .hasStackTraceContaining("test replay commit failure");
+    } finally {
+      jdbc.execute("DROP TRIGGER reject_replay_commit ON commerce.notification_attempts");
+      jdbc.execute("DROP FUNCTION commerce.reject_replay_commit()");
+    }
     assertThat(store.find(id).orElseThrow().version()).isEqualTo(rejected.version());
     assertThat(logEntries(output, "notification.replay", id)).isEmpty();
     service.replay("operator:test", id, key, rejected.version(), reason);

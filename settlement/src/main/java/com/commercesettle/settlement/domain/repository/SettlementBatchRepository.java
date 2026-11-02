@@ -2,7 +2,9 @@ package com.commercesettle.settlement.domain.repository;
 
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 public interface SettlementBatchRepository {
@@ -10,6 +12,8 @@ public interface SettlementBatchRepository {
   SettlementBatch save(SettlementBatch batch);
 
   Optional<SettlementBatch> findById(UUID id);
+
+  List<SettlementBatch> findAllById(Set<UUID> ids);
 
   Optional<SettlementBatch> find(UUID sellerId, LocalDate batchDate, String policyVersion);
 }

@@ -52,6 +52,8 @@ jobs:
           docker compose up -d --build --wait --wait-timeout 300
       - name: Verify service, database and messaging boundaries
         run: python3 scripts/smoke.py
+      - name: Verify source-backed notification retention
+        run: python3 -B scripts/smoke_retention.py
       - name: Verify auth stays blocked after a Redis restart until re-approval
         run: python3 scripts/smoke_redis_restart.py
       - name: Verify the load tool at a small arrival rate

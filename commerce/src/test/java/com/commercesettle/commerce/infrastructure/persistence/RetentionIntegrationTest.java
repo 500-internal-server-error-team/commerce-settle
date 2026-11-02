@@ -3,12 +3,18 @@ package com.commercesettle.commerce.infrastructure.persistence;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.ArgumentMatchers.anySet;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.commercesettle.commerce.application.port.AddressCipher;
 import com.commercesettle.commerce.application.port.NotificationGateway;
 import com.commercesettle.commerce.application.port.NotificationStore;
 import com.commercesettle.commerce.application.port.RetentionStore;
 import com.commercesettle.commerce.application.port.RetentionStore.Target;
+import com.commercesettle.commerce.application.port.SettlementRetentionGateway;
+import com.commercesettle.commerce.application.service.NotificationService;
 import com.commercesettle.commerce.application.service.RetentionService;
 import com.commercesettle.commerce.domain.exception.OrderStateException;
 import com.commercesettle.commerce.domain.model.ActorKind;
@@ -43,6 +49,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -58,6 +65,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -68,6 +76,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     properties = {
       "management.tracing.enabled=false",
       "app.retention.enabled=true",
+      "app.retention.settlement-credential=test-commerce-retention-credential-0123456789abcdef",
       "app.retention.cron=-",
       "app.retention.batch-size=2",
       "app.retention.max-batches=1",
@@ -92,6 +101,8 @@ class RetentionIntegrationTest {
   @Autowired AddressCipher cipher;
   @Autowired RetentionStore store;
   @Autowired NotificationStore notifications;
+  @MockitoBean SettlementRetentionGateway settlement;
+  @Autowired NotificationService notificationService;
   @Autowired NotificationReceiptStore receipts;
   @Autowired PlatformTransactionManager manager;
   @Autowired ObjectMapper mapper;
@@ -104,11 +115,13 @@ class RetentionIntegrationTest {
   @BeforeEach
   void clean() throws Exception {
     scheduler.submit(() -> {}).get(5, TimeUnit.SECONDS);
+    org.mockito.Mockito.reset(settlement);
     for (String table :
         List.of(
             "retention_history",
             "retention_checks",
             "notification_retired_keys",
+            "notification_retention_batches",
             "notification_attempts",
             "notification_mock_receipts",
             "notification_items",
@@ -209,7 +222,8 @@ class RetentionIntegrationTest {
       assertThat(process(Target.ORDER, available.getId(), NOW)).isEqualTo("MASKED");
       holder.rollback();
     }
-    var restarted = new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager);
+    var restarted =
+        new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, settlement);
     restarted.run(1, 2);
     assertThat(
             jdbc.queryForObject(
@@ -266,7 +280,7 @@ class RetentionIntegrationTest {
     jdbc.execute(
         "CREATE TRIGGER fail_retention BEFORE INSERT ON commerce.retention_history FOR EACH ROW EXECUTE FUNCTION commerce.fail_retention()");
     try {
-      new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager).run(1, 3);
+      new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, settlement).run(1, 3);
       assertThat(
               jdbc.queryForObject(
                   "SELECT masked_at FROM commerce.order_addresses WHERE order_id=?",
@@ -289,7 +303,8 @@ class RetentionIntegrationTest {
       jdbc.execute("DROP TRIGGER fail_retention ON commerce.retention_history");
       jdbc.execute("DROP FUNCTION commerce.fail_retention()");
     }
-    new RetentionService(store, Clock.fixed(NOW.plusSeconds(61), ZoneOffset.UTC), manager)
+    new RetentionService(
+            store, Clock.fixed(NOW.plusSeconds(61), ZoneOffset.UTC), manager, settlement)
         .run(1, 3);
     assertThat(
             jdbc.queryForObject(
@@ -541,7 +556,7 @@ class RetentionIntegrationTest {
     var ready = closed(NOW.minus(Duration.ofDays(91)));
     jdbc.update(
         "UPDATE commerce.order_addresses SET hold_reason='DISPUTE' WHERE order_id=?", held.getId());
-    var first = new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager);
+    var first = new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, settlement);
     first.run(1, 1);
     assertThat(
             jdbc.queryForObject(
@@ -556,7 +571,7 @@ class RetentionIntegrationTest {
                 ready.getId()))
         .isNull();
 
-    new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager).run(1, 1);
+    new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, settlement).run(1, 1);
 
     assertThat(
             jdbc.queryForObject(
@@ -587,7 +602,8 @@ class RetentionIntegrationTest {
           id);
     }
     UUID ready = delivery("SENT", closed(NOW.minus(Duration.ofDays(91))));
-    var service = new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager);
+    var service =
+        new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, settlement);
 
     try (var holder = jdbc.getDataSource().getConnection()) {
       holder.setAutoCommit(false);
@@ -606,7 +622,8 @@ class RetentionIntegrationTest {
       holder.rollback();
     }
 
-    new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager).run(batchSize, 3);
+    new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, settlement)
+        .run(batchSize, 3);
 
     assertThat(count("notification_deliveries")).isZero();
     assertThat(count("notification_retired_keys")).isEqualTo(batchSize + 1);
@@ -725,7 +742,16 @@ class RetentionIntegrationTest {
   void releasesHoldForImmediateRecheck() {
     var expired = closed(NOW.minus(Duration.ofDays(91)));
     UUID delivery = delivery("SENT", expired);
-    var service = new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager);
+    jdbc.update(
+        "UPDATE commerce.notification_items SET source_service='payment',kind='PAYMENT_COMPLETED',business_ref=?,payload=jsonb_set(payload,'{orderId}',to_jsonb(CAST(? AS text))) WHERE delivery_id=?",
+        expired.getPaymentId(),
+        expired.getId().toString().toUpperCase(java.util.Locale.ROOT),
+        delivery);
+    jdbc.update(
+        "UPDATE commerce.notification_deliveries SET kind='PAYMENT_COMPLETED' WHERE id=?",
+        delivery);
+    var service =
+        new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, settlement);
     service.hold(expired.getId(), "DISPUTE");
     assertThat(process(Target.ORDER, expired.getId(), NOW)).isEqualTo("HELD");
     assertThat(process(Target.DELIVERY, delivery, NOW)).isEqualTo("HELD");
@@ -776,6 +802,403 @@ class RetentionIntegrationTest {
       throw new IllegalStateException(error);
     }
   }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = Notification.Kind.class,
+      names = {"SETTLEMENT_READY", "PAYOUT_COMPLETED", "PAYOUT_ACTION_REQUIRED"})
+  @DisplayName("정산 배치의 실제 종결 90일 뒤 모든 정산·지급 알림 연결 기록을 함께 지운다")
+  void purgesSettlementNoticesUsingOwnerClosure(Notification.Kind kind) {
+    var notice = settlementNotice(kind, "SENT");
+    when(settlement.lookup(anySet()))
+        .thenAnswer(
+            call -> {
+              assertThat(
+                      org.springframework.transaction.support.TransactionSynchronizationManager
+                          .isActualTransactionActive())
+                  .isFalse();
+              return List.of(
+                  new SettlementRetentionGateway.Closure(
+                      notice.batch(), notice.seller(), NOW.minus(Duration.ofDays(90))));
+            });
+
+    new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, settlement).run(10, 1);
+
+    assertThat(count("notification_deliveries")).isZero();
+    assertThat(count("notification_items")).isZero();
+    assertThat(count("notification_attempts")).isZero();
+    assertThat(count("notification_mock_receipts")).isZero();
+    assertThat(count("notification_retired_keys")).isEqualTo(1);
+    verify(settlement).lookup(java.util.Set.of(notice.batch()));
+    new TransactionTemplate(manager)
+        .executeWithoutResult(status -> notifications.append(notice.draft()));
+    assertThat(count("notification_deliveries")).isZero();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"NONTERMINAL", "UNAVAILABLE", "MISSING", "OTHER_SELLER"})
+  @DisplayName("미종결·조회 불가·부재·판매자 불일치 정산 알림은 보존하고 주문 연결 대상은 계속 처리한다")
+  void preservesUnverifiedSettlementWithoutBlockingOrders(String result) {
+    var notice = settlementNotice(Notification.Kind.SETTLEMENT_READY, "SENT");
+    var order = closed(NOW.minus(Duration.ofDays(91)));
+    UUID ready = delivery("SENT", order);
+    when(settlement.lookup(anySet()))
+        .thenAnswer(
+            call -> {
+              if (result.equals("UNAVAILABLE"))
+                throw new SettlementRetentionGateway.UnavailableException();
+              if (result.equals("MISSING")) return List.of();
+              return List.of(
+                  new SettlementRetentionGateway.Closure(
+                      notice.batch(),
+                      result.equals("OTHER_SELLER") ? UUID.randomUUID() : notice.seller(),
+                      result.equals("NONTERMINAL") ? null : NOW.minus(Duration.ofDays(91))));
+            });
+
+    new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, settlement).run(10, 1);
+
+    assertThat(notifications.find(notice.delivery())).isPresent();
+    assertThat(notifications.find(ready)).isEmpty();
+    assertThat(count("notification_mock_receipts")).isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT closed_at FROM commerce.notification_retention_batches WHERE batch_id=?",
+                OffsetDateTime.class,
+                notice.batch()))
+        .isNull();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"MOCK_KAKAO", "KAKAO_SELF"})
+  @DisplayName("보존 보류와 해제는 정산 배치 행에서 직렬화하고 두 채널의 만료 알림을 정리한다")
+  void holdsAndReleasesSettlementNotifications(String channel) throws Exception {
+    var notice = settlementNotice(Notification.Kind.PAYOUT_COMPLETED, "SENT");
+    jdbc.update(
+        "UPDATE commerce.notification_items SET payload=jsonb_set(payload,'{batchId}',to_jsonb(CAST(? AS text))) WHERE delivery_id=?",
+        notice.batch().toString().toUpperCase(java.util.Locale.ROOT),
+        notice.delivery());
+    jdbc.update(
+        "UPDATE commerce.notification_deliveries SET channel=?,channel_account_ref=? WHERE id=?",
+        channel,
+        channel.equals("KAKAO_SELF") ? "a".repeat(64) : null,
+        notice.delivery());
+    var service =
+        new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, settlement);
+    when(settlement.lookup(anySet()))
+        .thenReturn(
+            List.of(
+                new SettlementRetentionGateway.Closure(
+                    notice.batch(), notice.seller(), NOW.minus(Duration.ofDays(90)))));
+    service.holdSettlement(notice.batch(), "DISPUTE");
+
+    service.run(10, 1);
+    assertThat(notifications.find(notice.delivery())).isPresent();
+    service.holdSettlement(notice.batch(), null);
+    service.run(10, 1);
+
+    assertThat(notifications.find(notice.delivery())).isEmpty();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM commerce.retention_history WHERE target_kind='SETTLEMENT'",
+                Long.class))
+        .isEqualTo(2);
+    verify(settlement, times(1)).lookup(anySet());
+  }
+
+  @Test
+  @DisplayName("첫 보존 실행 전 재처리도 원천 기한을 확인하고 원천 장애 중 완료된 동일 멱등 요청을 재사용한다")
+  void verifiesSettlementBeforeReplayAndReusesCompletedRequest() {
+    var old = settlementNotice(Notification.Kind.PAYOUT_ACTION_REQUIRED, "REVIEW_REQUIRED");
+    when(settlement.lookup(anySet()))
+        .thenReturn(
+            List.of(
+                new SettlementRetentionGateway.Closure(
+                    old.batch(), old.seller(), NOW.minus(Duration.ofDays(90)))));
+
+    assertThatThrownBy(
+            () -> notificationService.replay("test", old.delivery(), "old-replay-key", 0, "test"))
+        .isInstanceOf(Notification.StateConflictException.class);
+    assertThat(notifications.find(old.delivery()).orElseThrow().version()).isZero();
+    var active = settlementNotice(Notification.Kind.SETTLEMENT_READY, "REVIEW_REQUIRED");
+    when(settlement.lookup(anySet()))
+        .thenReturn(
+            List.of(new SettlementRetentionGateway.Closure(active.batch(), active.seller(), null)));
+    var first =
+        notificationService.replay("test", active.delivery(), "active-replay-key", 0, "test");
+    when(settlement.lookup(anySet()))
+        .thenThrow(new SettlementRetentionGateway.UnavailableException());
+
+    var duplicate =
+        notificationService.replay("test", active.delivery(), "active-replay-key", 0, "test");
+    assertThat(duplicate.id()).isEqualTo(first.id());
+    assertThat(duplicate.version()).isEqualTo(first.version());
+    var unverified = settlementNotice(Notification.Kind.SETTLEMENT_READY, "REVIEW_REQUIRED");
+    assertThatThrownBy(
+            () ->
+                notificationService.replay(
+                    "test", unverified.delivery(), "new-replay-key", 0, "test"))
+        .isInstanceOf(SettlementRetentionGateway.UnavailableException.class);
+    assertThatThrownBy(
+            () ->
+                notificationService.replay(
+                    "test", active.delivery(), "active-replay-key", 0, "different"))
+        .isInstanceOf(RuntimeException.class);
+    verify(settlement, times(3)).lookup(anySet());
+  }
+
+  @Test
+  @DisplayName("연결된 배치 여럿의 종결 조회를 한 번의 원천 호출로 묶는다")
+  void batchesSettlementClosureLookups() {
+    var notices =
+        java.util.stream.IntStream.range(0, 3)
+            .mapToObj(index -> settlementNotice(Notification.Kind.SETTLEMENT_READY, "SENT"))
+            .toList();
+    when(settlement.lookup(anySet()))
+        .thenReturn(
+            notices.stream()
+                .map(
+                    n ->
+                        new SettlementRetentionGateway.Closure(
+                            n.batch(), n.seller(), NOW.minus(Duration.ofDays(91))))
+                .toList());
+
+    new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, settlement).run(10, 1);
+
+    assertThat(count("notification_deliveries")).isZero();
+    verify(settlement)
+        .lookup(
+            notices.stream().map(SourceNotice::batch).collect(java.util.stream.Collectors.toSet()));
+  }
+
+  @Test
+  @DisplayName("정산 보류의 행 잠금은 삭제와 재처리를 함께 막고 커밋 뒤 최신 보류를 확인한다")
+  void serializesSettlementHoldWithPurgeAndReplay() throws Exception {
+    var notice = settlementNotice(Notification.Kind.SETTLEMENT_READY, "REVIEW_REQUIRED");
+    new TransactionTemplate(manager)
+        .executeWithoutResult(
+            tx ->
+                store.cacheClosures(
+                    List.of(
+                        new SettlementRetentionGateway.Closure(
+                            notice.batch(), notice.seller(), NOW.minus(Duration.ofDays(91)))),
+                    NOW));
+    try (var holder = jdbc.getDataSource().getConnection()) {
+      holder.setAutoCommit(false);
+      try (var statement =
+          holder.prepareStatement(
+              "UPDATE commerce.notification_retention_batches SET hold_reason='DISPUTE' WHERE batch_id=?")) {
+        statement.setObject(1, notice.batch());
+        statement.executeUpdate();
+      }
+      assertThatThrownBy(() -> process(Target.DELIVERY, notice.delivery(), NOW))
+          .isInstanceOf(DataAccessException.class);
+      assertThatThrownBy(
+              () ->
+                  new TransactionTemplate(manager)
+                      .executeWithoutResult(
+                          tx -> notifications.replay(notice.delivery(), 0, "test", "test", NOW)))
+          .isInstanceOf(DataAccessException.class);
+      assertThat(notifications.find(notice.delivery()).orElseThrow().version()).isZero();
+      holder.commit();
+    }
+    assertThat(process(Target.DELIVERY, notice.delivery(), NOW)).isEqualTo("HELD");
+    assertThat(count("notification_mock_receipts")).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("정산 종결 확인과 무관하게 진행 중 발송의 임대·시도·수신 기록을 유지한다")
+  void preservesLiveSettlementDeliveryLease() {
+    var notice = settlementNotice(Notification.Kind.PAYOUT_COMPLETED, "PENDING");
+    new TransactionTemplate(manager)
+        .executeWithoutResult(
+            tx ->
+                store.cacheClosures(
+                    List.of(
+                        new SettlementRetentionGateway.Closure(
+                            notice.batch(), notice.seller(), NOW.minus(Duration.ofDays(91)))),
+                    NOW));
+    var lease =
+        new TransactionTemplate(manager)
+            .execute(tx -> notifications.claim(NOW.plus(Duration.ofDays(1))));
+
+    assertThat(lease.lease()).isNotNull();
+    assertThat(process(Target.DELIVERY, notice.delivery(), NOW)).isEqualTo("HELD");
+    assertThat(count("notification_attempts")).isEqualTo(2);
+    assertThat(count("notification_mock_receipts")).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("실제 HTTP 원천 응답을 기다리는 동안 DB 트랜잭션과 커넥션을 점유하지 않는다")
+  void releasesDatabaseResourcesWhileWaitingForOwnerHttp() throws Exception {
+    var notice = settlementNotice(Notification.Kind.SETTLEMENT_READY, "SENT");
+    var entered = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var server =
+        com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext(
+        "/internal/settlement-retention",
+        exchange -> {
+          exchange.getRequestBody().readAllBytes();
+          entered.countDown();
+          awaitRelease(release);
+          byte[] body =
+              ("[{\"batchId\":\""
+                      + notice.batch()
+                      + "\",\"sellerId\":\""
+                      + notice.seller()
+                      + "\",\"closedAt\":\""
+                      + NOW.minus(Duration.ofDays(91))
+                      + "\"}]")
+                  .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+          exchange.getResponseHeaders().set("Content-Type", "application/json");
+          exchange.sendResponseHeaders(200, body.length);
+          exchange.getResponseBody().write(body);
+          exchange.close();
+        });
+    server.start();
+    try (var executor = Executors.newSingleThreadExecutor()) {
+      var gateway =
+          new com.commercesettle.commerce.infrastructure.client.HttpSettlementRetentionGateway(
+              org.springframework.web.client.RestClient.create(
+                  "http://127.0.0.1:" + server.getAddress().getPort()),
+              "test-commerce-retention-credential-0123456789abcdef");
+      var service = new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, gateway);
+      var worker = executor.submit(() -> service.run(10, 1));
+      try {
+        assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(
+                ((com.zaxxer.hikari.HikariDataSource) jdbc.getDataSource())
+                    .getHikariPoolMXBean()
+                    .getActiveConnections())
+            .isZero();
+      } finally {
+        release.countDown();
+      }
+      worker.get(5, TimeUnit.SECONDS);
+      assertThat(notifications.find(notice.delivery())).isEmpty();
+    } finally {
+      server.stop(0);
+    }
+  }
+
+  private SourceNotice settlementNotice(Notification.Kind kind, String status) {
+    UUID batch = UUID.randomUUID();
+    UUID seller = UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO commerce.seller_accounts(id,email_normalized,password_hash,display_name,status,payout_account_ref,created_at,updated_at,version) VALUES (?,?,'test','test','ACTIVE','test-account',?,?,0)",
+        seller,
+        seller + "@test.invalid",
+        time(NOW),
+        time(NOW));
+    var payload =
+        mapper
+            .createObjectNode()
+            .put("batchId", batch.toString())
+            .put("sellerId", seller.toString())
+            .put("amount", 5000)
+            .put("cutoffAt", NOW.minus(Duration.ofDays(92)).toString())
+            .put("batchDate", "2026-08-02")
+            .put("succeededAt", NOW.minus(Duration.ofDays(92)).toString());
+    var draft =
+        new NotificationStore.Draft(
+            "settlement",
+            UUID.randomUUID(),
+            kind,
+            kind == Notification.Kind.PAYOUT_COMPLETED ? UUID.randomUUID() : batch,
+            ActorKind.SELLER,
+            seller,
+            NOW.minus(Duration.ofDays(92)),
+            payload);
+    new TransactionTemplate(manager).executeWithoutResult(tx -> notifications.append(draft));
+    UUID id =
+        jdbc.queryForObject(
+            "SELECT delivery_id FROM commerce.notification_items WHERE business_ref=? AND recipient_id=?",
+            UUID.class,
+            draft.businessRef(),
+            seller);
+    jdbc.update(
+        "UPDATE commerce.notification_deliveries SET status=?,sent_at=?,attempt_count=1 WHERE id=?",
+        status,
+        status.equals("SENT") ? time(NOW) : null,
+        id);
+    jdbc.update(
+        "INSERT INTO commerce.notification_attempts(id,delivery_id,attempt_no,operation,status,started_at,finished_at) VALUES (?,?,1,'SEND','SUCCEEDED',?,?)",
+        UUID.randomUUID(),
+        id,
+        time(NOW),
+        time(NOW));
+    jdbc.update(
+        "INSERT INTO commerce.notification_mock_receipts(id,delivery_id,request_hash,result,processed_at) VALUES (?,?,?,'ACCEPTED',?)",
+        UUID.randomUUID(),
+        id,
+        "1".repeat(64),
+        time(NOW));
+    return new SourceNotice(id, batch, seller, draft);
+  }
+
+  @Test
+  @DisplayName("정산 종결 캐시와 삭제의 동시 실행은 같은 종결 사실과 한 번의 삭제로 수렴한다")
+  void convergesConcurrentSettlementHydrationAndPurge() throws Exception {
+    var notice = settlementNotice(Notification.Kind.SETTLEMENT_READY, "SENT");
+    var barrier = new CyclicBarrier(2);
+    java.util.concurrent.Callable<String> run =
+        () -> {
+          barrier.await(5, TimeUnit.SECONDS);
+          new TransactionTemplate(manager)
+              .executeWithoutResult(
+                  tx ->
+                      store.cacheClosures(
+                          List.of(
+                              new SettlementRetentionGateway.Closure(
+                                  notice.batch(), notice.seller(), NOW.minus(Duration.ofDays(91)))),
+                          NOW));
+          return process(Target.DELIVERY, notice.delivery(), NOW);
+        };
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var first = executor.submit(run);
+      var second = executor.submit(run);
+      assertThat(Arrays.asList(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS)))
+          .containsExactlyInAnyOrder("PURGED", null);
+    }
+    assertThat(notifications.find(notice.delivery())).isEmpty();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM commerce.retention_history WHERE result='PURGED'",
+                Long.class))
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("정산 종결 캐시의 SQL 호출 수는 배치 수가 늘어도 고정된다")
+  void boundsSqlCallsWhenCachingSourceClosures() {
+    var counts = new ArrayList<Integer>();
+    for (int size : List.of(1, 3)) {
+      var closures =
+          java.util.stream.IntStream.range(0, size)
+              .mapToObj(i -> settlementNotice(Notification.Kind.SETTLEMENT_READY, "SENT"))
+              .map(
+                  n ->
+                      new SettlementRetentionGateway.Closure(
+                          n.batch(), n.seller(), NOW.minus(Duration.ofDays(91))))
+              .toList();
+      var observed = org.mockito.Mockito.spy(jdbc);
+      var adapter = new JdbcRetentionStore(observed);
+      new TransactionTemplate(manager)
+          .executeWithoutResult(tx -> adapter.cacheClosures(closures, NOW));
+      counts.add(
+          (int)
+              org.mockito.Mockito.mockingDetails(observed).getInvocations().stream()
+                  .filter(
+                      call ->
+                          call.getArguments().length > 0
+                              && call.getArguments()[0] instanceof String)
+                  .count());
+    }
+    assertThat(counts.get(0)).isEqualTo(counts.get(1));
+  }
+
+  private record SourceNotice(
+      UUID delivery, UUID batch, UUID seller, NotificationStore.Draft draft) {}
 
   private void sentinels(Order order) throws Exception {
     UUID event = UUID.randomUUID();

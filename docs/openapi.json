@@ -11714,6 +11714,90 @@
           }
         }
       }
+    },
+    "/internal/settlement-retention": {
+      "post": {
+        "operationId": "post_internal_settlement_retention",
+        "summary": "알림 보존용 배치 종결 조회",
+        "tags": [
+          "settlement"
+        ],
+        "x-owner-service": "settlement",
+        "x-actor": "SERVICE:commerce",
+        "x-implemented": true,
+        "description": "Commerce가 1~1000개 배치의 실제 종결 시각을 묶어서 조회한다. COMPLETED 전이는 되돌릴 수 없으며 closedAt은 그 전이 시각이다. 미종결은 closedAt=null, 없는 ID는 결과에서 생략한다. 금융 상태·보류·금액을 변경하지 않는 내부 조회이며 Gateway에 공개하지 않는다.",
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettlementRetentionLookup"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "조회·처리 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "maxItems": 1000,
+                  "items": {
+                    "$ref": "#/components/schemas/SettlementBatchClosure"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -19320,6 +19404,55 @@
           "reservationVersion",
           "itemVersion",
           "releasedAt"
+        ]
+      },
+      "SettlementRetentionLookup": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "batchIds": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1000,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "required": [
+          "batchIds"
+        ]
+      },
+      "SettlementBatchClosure": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "batchId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sellerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "closedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "batchId",
+          "sellerId",
+          "closedAt"
         ]
       }
     }

@@ -48,6 +48,7 @@ public class JdbcNotificationStore implements NotificationStore {
   public void append(Draft draft) {
     TransactionLimits.apply(jdbc);
     validate(draft);
+    NotificationRetentionGuard.registerBatch(jdbc, draft);
     NotificationRetentionGuard.lock(
         jdbc,
         draft.source(),
@@ -388,6 +389,7 @@ public class JdbcNotificationStore implements NotificationStore {
   @Transactional(propagation = Propagation.MANDATORY)
   public void replay(UUID id, long expected, String operator, String reason, Instant now) {
     TransactionLimits.apply(jdbc);
+    NotificationRetentionGuard.lockBatches(jdbc, id);
     var n =
         jdbc
             .query(

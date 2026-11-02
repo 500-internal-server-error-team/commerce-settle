@@ -105,6 +105,7 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 | POST | `/internal/payment-jobs/{jobId}/replays` | 원업무 작업 재처리 | OPERATOR | `ReplayRequest` | `Job` | `Idempotency-Key` | 202 |
 | GET | `/internal/payout-jobs` | 운영 작업 목록 | OPERATOR | `—` | `JobPage` | — | 200 |
 | POST | `/internal/payout-jobs/{jobId}/replays` | 원업무 작업 재처리 | OPERATOR | `ReplayRequest` | `Job` | `Idempotency-Key` | 202 |
+| POST | `/internal/settlement-retention` | 알림 보존용 배치 종결 묶음 조회 | SERVICE:commerce | `SettlementRetentionLookup` | `SettlementBatchClosure[]` | — | 200 |
 | POST | `/internal/settlement-batches` | 정산 배치 생성·재개 | OPERATOR | `BatchCreate` | `SettlementBatch` | `Idempotency-Key` | 202 |
 | POST | `/mock/providers/{providerId}/payments` | 모의 외부 승인 | SERVICE:payment | `MockApproval` | `MockTransaction` | `Idempotency-Key` | 202 |
 | GET | `/mock/providers/{providerId}/transactions/{businessKey}` | 원대역 거래 조회 | SERVICE:payment | `—` | `MockTransaction` | — | 200 |
@@ -280,7 +281,8 @@ Commerce의 기본 MOCK_KAKAO 저장·조회·발송·복구와 명시적 [본�
 구조 검증은 JSON·로컬 ref·경로 변수·operationId·명시 권한/오류·DTO 검사를 다룹니다. 컨트롤러·Gateway·DB·금융 동시성 검증은 구현 단계에서 별도로 수행합니다. OpenAPI 형식 기준은 [공식 OAS3.1.1](https://spec.openapis.org/oas/v3.1.1.html)입니다.
 
 주문에 연결된 알림의 운영 재처리는 [보존 기한](policies.md#보존과-삭제) 안에서만 허용합니다. 기한 초과는 기존 상태 충돌 409이며 보존 보류가 재처리 기한을 연장하지 않습니다. 이미 정리한 알림은 조회에서 404이고 늦은 원업무 중복 수신으로 본문·발송을 다시 만들지 않습니다.
-정산·지급 알림의 기한 판정에는 소유 서비스의 종결·보류 연동이 더 필요합니다. 이 미완료 범위는 [보존 실행](development.md#주문-주소알림-보존-실행)을 따릅니다.
+정산·지급 알림은 Settlement 소유 배치 종결 시각을 내부 묶음 조회로 확인합니다. 미종결은 closedAt=null이며, 없는 ID는 결과에서 생략합니다. Commerce는 미확인 원천의 재처리를 503으로 중단하고 기존에 완료된 동일 멱등 요청은 재사용합니다. 배치별 알림 보존 보류는 Commerce가 삭제와 직렬화하며 지급의 금융 보류를 바꾸지 않습니다.
+
 
 ### 실패 환불의 운영 종결
 

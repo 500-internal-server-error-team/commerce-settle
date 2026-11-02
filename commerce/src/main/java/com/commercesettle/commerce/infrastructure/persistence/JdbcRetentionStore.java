@@ -1,6 +1,7 @@
 package com.commercesettle.commerce.infrastructure.persistence;
 
 import com.commercesettle.commerce.application.port.RetentionStore;
+import com.commercesettle.commerce.application.port.SettlementRetentionGateway.Closure;
 import com.commercesettle.commerce.infrastructure.persistence.notification.NotificationRetentionGuard;
 import java.time.Duration;
 import java.time.Instant;
@@ -53,8 +54,9 @@ public class JdbcRetentionStore implements RetentionStore {
         LEFT JOIN commerce.retention_checks c ON c.target_kind='DELIVERY' AND c.target_id=d.id
         WHERE d.status IN ('SENT','REVIEW_REQUIRED')
           AND (c.next_run_at IS NULL OR c.next_run_at<=?)
-          AND EXISTS (SELECT 1 FROM commerce.notification_items i JOIN commerce.orders o
+          AND (EXISTS (SELECT 1 FROM commerce.notification_items i JOIN commerce.orders o
             ON o.id=CAST(i.payload->>'orderId' AS uuid) WHERE i.delivery_id=d.id AND o.closed_at<=?)
+            OR EXISTS (SELECT 1 FROM commerce.notification_items i WHERE i.delivery_id=d.id AND i.source_service='settlement'))
           AND NOT (d.id=ANY(?))
         ORDER BY coalesce(c.next_run_at,d.created_at),d.id FOR UPDATE OF d SKIP LOCKED LIMIT ?
         """,
@@ -119,16 +121,15 @@ public class JdbcRetentionStore implements RetentionStore {
         jdbc.query(
             """
         SELECT DISTINCT o.id FROM commerce.notification_items i JOIN commerce.orders o
-          ON o.id=CAST(i.payload->>'orderId' AS uuid) WHERE i.delivery_id=? ORDER BY o.id
+          ON o.id=CAST(i.payload->>'orderId' AS uuid) WHERE i.delivery_id=? AND i.source_service<>'settlement' ORDER BY o.id
         """,
             (row, index) -> row.getObject(1, UUID.class),
             id);
-    if (orderIds.isEmpty()) return null;
     var lockedOrders =
         jdbc.query(
             """
         SELECT o.id FROM commerce.orders o WHERE EXISTS (SELECT 1 FROM commerce.notification_items i
-          WHERE i.delivery_id=? AND o.id=CAST(i.payload->>'orderId' AS uuid))
+          WHERE i.delivery_id=? AND i.source_service<>'settlement' AND o.id=CAST(i.payload->>'orderId' AS uuid))
         ORDER BY o.id FOR UPDATE SKIP LOCKED
         """,
             (row, index) -> row.getObject(1, UUID.class),
@@ -141,6 +142,7 @@ public class JdbcRetentionStore implements RetentionStore {
         ORDER BY a.order_id FOR UPDATE
         """,
         id);
+    NotificationRetentionGuard.lockBatches(jdbc, id);
     var deliveries =
         jdbc.queryForList(
             "SELECT status,lease_token FROM commerce.notification_deliveries WHERE id=? FOR UPDATE SKIP LOCKED",
@@ -157,14 +159,20 @@ public class JdbcRetentionStore implements RetentionStore {
         SELECT EXISTS (SELECT 1 FROM commerce.notification_items i
           LEFT JOIN commerce.orders o ON o.id=CAST(i.payload->>'orderId' AS uuid)
           LEFT JOIN commerce.order_addresses a ON a.order_id=o.id
-          WHERE i.delivery_id=? AND (o.id IS NULL OR a.id IS NULL OR o.closed_at IS NULL OR o.closed_at>?
+          LEFT JOIN commerce.notification_retention_batches b
+            ON b.batch_id=CAST(i.payload->>'batchId' AS uuid) AND i.source_service='settlement'
+          WHERE i.delivery_id=? AND (
+            (i.source_service='settlement' AND (b.batch_id IS NULL OR b.closed_at IS NULL OR b.closed_at>?
+              OR b.hold_reason IS NOT NULL OR b.seller_id<>i.recipient_id OR i.recipient_kind<>'SELLER'))
+            OR (i.source_service<>'settlement' AND (o.id IS NULL OR a.id IS NULL OR o.closed_at IS NULL OR o.closed_at>?
             OR o.status NOT IN ('CANCELLED','REFUNDED','PURCHASE_CONFIRMED') OR a.hold_reason IS NOT NULL
             OR EXISTS (SELECT 1 FROM commerce.order_refund_requests r WHERE r.order_id=o.id
-              AND r.status IN ('PENDING_SELLER','APPROVED','REFUNDING','FAILED_REVIEW'))))
+              AND r.status IN ('PENDING_SELLER','APPROVED','REFUNDING','FAILED_REVIEW'))))))
         OR EXISTS (SELECT 1 FROM commerce.notification_attempts WHERE delivery_id=? AND status='RUNNING')
         """,
                 Boolean.class,
                 id,
+                time(now.minus(PERIOD)),
                 time(now.minus(PERIOD)),
                 id));
     if (!terminal || protectedItem) {
@@ -211,12 +219,16 @@ public class JdbcRetentionStore implements RetentionStore {
   }
 
   private void record(Target target, UUID id, String result, Instant now, Instant next) {
+    record(target.name(), id, result, now, next);
+  }
+
+  private void record(String target, UUID id, String result, Instant now, Instant next) {
     jdbc.update(
         """
         INSERT INTO commerce.retention_checks(target_kind,target_id,result,checked_at,next_run_at) VALUES (?,?,?,?,?)
         ON CONFLICT(target_kind,target_id) DO UPDATE SET result=EXCLUDED.result,checked_at=EXCLUDED.checked_at,next_run_at=EXCLUDED.next_run_at
         """,
-        target.name(),
+        target,
         id,
         result,
         time(now),
@@ -224,7 +236,7 @@ public class JdbcRetentionStore implements RetentionStore {
     jdbc.update(
         "INSERT INTO commerce.retention_history(id,target_kind,target_id,result,checked_at) VALUES (?,?,?,?,?)",
         UUID.randomUUID(),
-        target.name(),
+        target,
         id,
         result,
         time(now));
@@ -250,10 +262,96 @@ public class JdbcRetentionStore implements RetentionStore {
     jdbc.update(
         """
         UPDATE commerce.retention_checks SET next_run_at=? WHERE target_kind='DELIVERY' AND target_id IN
-          (SELECT delivery_id FROM commerce.notification_items WHERE payload->>'orderId'=?)
+          (SELECT delivery_id FROM commerce.notification_items WHERE CAST(payload->>'orderId' AS uuid)=?)
         """,
         time(now),
-        id.toString());
+        id);
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public List<Closure> sourceBatches(List<UUID> deliveries) {
+    TransactionLimits.apply(jdbc);
+    return jdbc.query(
+        """
+        SELECT DISTINCT b.batch_id,b.seller_id,b.closed_at FROM commerce.notification_retention_batches b
+        JOIN commerce.notification_items i ON i.source_service='settlement' AND b.batch_id=CAST(i.payload->>'batchId' AS uuid)
+        WHERE i.delivery_id=ANY(?) ORDER BY b.batch_id
+        """,
+        (row, index) ->
+            new Closure(
+                row.getObject(1, UUID.class),
+                row.getObject(2, UUID.class),
+                row.getObject(3, OffsetDateTime.class) == null
+                    ? null
+                    : row.getObject(3, OffsetDateTime.class).toInstant()),
+        new SqlArrayValue("uuid", deliveries.toArray()));
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void cacheClosures(List<Closure> closures, Instant now) {
+    TransactionLimits.apply(jdbc);
+    if (closures.isEmpty()) return;
+    var locked =
+        jdbc.query(
+            "SELECT batch_id,seller_id,closed_at FROM commerce.notification_retention_batches WHERE batch_id=ANY(?) ORDER BY batch_id FOR UPDATE",
+            (row, index) ->
+                new Closure(
+                    row.getObject(1, UUID.class),
+                    row.getObject(2, UUID.class),
+                    row.getObject(3, OffsetDateTime.class) == null
+                        ? null
+                        : row.getObject(3, OffsetDateTime.class).toInstant()),
+            new SqlArrayValue("uuid", closures.stream().map(Closure::batchId).toArray()));
+    var rows =
+        locked.stream()
+            .collect(
+                java.util.stream.Collectors.toMap(
+                    Closure::batchId, java.util.function.Function.identity()));
+    for (var closure : closures) {
+      var row = rows.get(closure.batchId());
+      if (row == null || !closure.sellerId().equals(row.sellerId()))
+        throw new IllegalArgumentException("Settlement closure recipient mismatch");
+      if (row.closedAt() != null
+          && closure.closedAt() != null
+          && !row.closedAt().equals(closure.closedAt()))
+        throw new IllegalArgumentException("Settlement closure changed");
+    }
+    jdbc.update(
+        """
+        UPDATE commerce.notification_retention_batches b SET closed_at=c.closed_at
+        FROM unnest(?::uuid[],?::timestamptz[]) AS c(batch_id,closed_at)
+        WHERE b.batch_id=c.batch_id AND b.closed_at IS NULL AND c.closed_at IS NOT NULL
+        """,
+        new SqlArrayValue("uuid", closures.stream().map(Closure::batchId).toArray()),
+        new SqlArrayValue(
+            "timestamptz",
+            closures.stream()
+                .map(c -> c.closedAt() == null ? null : c.closedAt().toString())
+                .toArray()));
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void holdSettlement(UUID id, String reason, Instant now) {
+    TransactionLimits.apply(jdbc);
+    if (jdbc.queryForList(
+            "SELECT batch_id FROM commerce.notification_retention_batches WHERE batch_id=? FOR UPDATE",
+            id)
+        .isEmpty()) throw new IllegalArgumentException("Settlement batch not found");
+    jdbc.update(
+        "UPDATE commerce.notification_retention_batches SET hold_reason=? WHERE batch_id=?",
+        reason,
+        id);
+    record("SETTLEMENT", id, reason == null ? "HOLD_RELEASED" : "HOLD_PLACED", now, now);
+    jdbc.update(
+        """
+        UPDATE commerce.retention_checks SET next_run_at=? WHERE target_kind='DELIVERY' AND target_id IN
+          (SELECT delivery_id FROM commerce.notification_items WHERE source_service='settlement' AND CAST(payload->>'batchId' AS uuid)=?)
+        """,
+        time(now),
+        id);
   }
 
   private static OffsetDateTime time(Instant value) {

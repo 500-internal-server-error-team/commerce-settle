@@ -44,6 +44,7 @@ public class NotificationService {
   private final OrderRepository orders;
   private final OrderRefundRepository refunds;
   private final TransactionTemplate transactions;
+  private final RetentionService retention;
 
   public NotificationService(
       NotificationStore store,
@@ -54,7 +55,8 @@ public class NotificationService {
       Clock clock,
       OrderRepository orders,
       OrderRefundRepository refunds,
-      PlatformTransactionManager manager) {
+      PlatformTransactionManager manager,
+      RetentionService retention) {
     this.store = store;
     this.gateway = gateway;
     this.accounts = accounts;
@@ -63,6 +65,7 @@ public class NotificationService {
     this.clock = clock;
     this.orders = orders;
     this.refunds = refunds;
+    this.retention = retention;
     transactions = new TransactionTemplate(manager);
     transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
   }
@@ -106,27 +109,45 @@ public class NotificationService {
     return receipt;
   }
 
-  @Transactional
+  @Transactional(propagation = Propagation.NEVER)
   public Notification replay(String operator, UUID id, String key, long expected, String reason) {
-    return keys.executePermanent(
+    var request =
         new IdempotentRequests.Request(
-            "OPERATOR", operator, "REPLAY_NOTIFICATION", key, List.of(id, expected, reason)),
-        id,
-        202,
-        ignored -> {
-          store.replay(id, expected, operator, reason, clock.instant());
-          var replayed = find(id);
-          afterCommit(
-              () ->
-                  LOGGER
-                      .atInfo()
-                      .addKeyValue("event", "notification.replay")
-                      .addKeyValue("deliveryId", id)
-                      .addKeyValue("result", replayed.status().name())
-                      .log("Notification replay committed"));
-          return replayed;
-        },
-        this::find);
+            "OPERATOR", operator, "REPLAY_NOTIFICATION", key, List.of(id, expected, reason));
+    var prior = transactions.execute(status -> keys.replayPermanent(request, this::find));
+    if (prior.isPresent()) return prior.get();
+    try {
+      var first = find(id);
+      if (first.version() != expected)
+        throw new com.commercesettle.commerce.domain.exception.VersionConflictException(
+            "notification", expected, first.version());
+      if (!first.replayable()) throw new Notification.StateConflictException();
+      retention.prepareReplay(id);
+    } catch (RuntimeException error) {
+      var completed = transactions.execute(status -> keys.replayPermanent(request, this::find));
+      if (completed.isPresent()) return completed.get();
+      throw error;
+    }
+    return transactions.execute(
+        status ->
+            keys.executePermanent(
+                request,
+                id,
+                202,
+                ignored -> {
+                  store.replay(id, expected, operator, reason, clock.instant());
+                  var replayed = find(id);
+                  afterCommit(
+                      () ->
+                          LOGGER
+                              .atInfo()
+                              .addKeyValue("event", "notification.replay")
+                              .addKeyValue("deliveryId", id)
+                              .addKeyValue("result", replayed.status().name())
+                              .log("Notification replay committed"));
+                  return replayed;
+                },
+                this::find));
   }
 
   @Transactional(propagation = Propagation.MANDATORY)

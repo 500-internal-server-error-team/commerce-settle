@@ -755,6 +755,7 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 | `policy_version` | `varchar(32)` | 업무 값 |
 | `status` | `varchar(24)` | 업무 값 |
 | `net_amount` | `bigint` | 업무 값 |
+| `closed_at` | `timestamptz?` | 실제 COMPLETED 전이 시각. 그 상태에만 필수이며 이후 고정 |
 | `created_at` | `timestamptz` | NOT NULL |
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
@@ -1370,10 +1371,12 @@ Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원
 
 `orders.closed_at`은 CANCELLED/REFUNDED/PURCHASE_CONFIRMED에서만 필수이며 `(closed_at,id)` 부분 인덱스로 도래 주문을 조회합니다. `order_addresses.masked_at`이 있으면 세 암호문은 복호화 불가능한 `00` 마커이고 조회 경계에서 평문을 만들지 않습니다. `hold_reason`은 분쟁을 포함한 보존 보류 사유입니다.
 
-- `retention_checks`: `(target_kind,target_id)` PK, `result`, `checked_at`, `next_run_at`. ORDER/DELIVERY별 재조회 지점입니다. 보류는 하루 뒤, 실패는 60초 뒤 재시도하며 보류 해제는 다음 실행에서 다시 검사합니다.
+- `retention_checks`: `(target_kind,target_id)` PK, `result`, `checked_at`, `next_run_at`. ORDER/DELIVERY별 재조회 지점이며 SETTLEMENT 보류·해제도 기록합니다. 보류는 하루 뒤, 실패는 60초 뒤 재시도하며 보류 해제는 다음 실행에서 다시 검사합니다.
 - `retention_history`: `id` PK, `target_kind`, `target_id`, `result`, `checked_at`. 마스킹·삭제·보류·보류 해제·실패를 추가 기록하며 `(target_kind,target_id,checked_at,id)` 인덱스로 조회합니다. 개인정보와 알림 본문을 기록하지 않습니다.
 - `notification_retired_keys`: `(source_service,kind,business_ref,recipient_kind,recipient_id)` PK, 32바이트 `payload_hash`, `retired_at`. 항목 본문 삭제 후에도 늦은 중복이 새 발송을 만들지 않게 하는 최소 업무 멱등 기록입니다. 자동 삭제하지 않습니다.
 
 발송 삭제는 모든 연결 주문·주소를 ID 순서로 잠근 뒤 발송 행을 잠그고 직전 조건을 재검사합니다. 항목·시도·모의 수신·발송 제거와 멱등키·보존 이력 저장은 같은 로컬 트랜잭션입니다. FK 없이 연결을 보호하며 미완료 Inbox·Outbox·금융 Job·audit와 쿠폰 사용 기록은 삭제하지 않습니다.
 
-정산·지급 알림의 원천 종결·보류 연결 정보는 아직 제공되지 않아 이 레코드는 삭제 대상에 넣지 않습니다. 같은 90일 정책의 구현을 끝내려면 해당 소유 계약과 저장·재검사 경로가 추가로 필요합니다.
+`settlement.settlement_batches.closed_at`은 실제 COMPLETED 전이에만 필수이며 마이크로초로 고정하고 다시 열지 않습니다. payout의 succeeded_at이나 batch의 cutoff_at·updated_at으로 대신하지 않습니다.
+
+`commerce.notification_retention_batches`는 batch_id PK, seller_id, nullable closed_at, nullable hold_reason을 저장합니다. closed_at은 원천의 불변 완료 사실 캐시이며, 알림 보존 보류는 Commerce가 소유합니다. 항목 payload의 batchId 인덱스로 연결을 찾고 배치 행→delivery 행→업무 멱등키 순서로 잠급니다. 보류와 삭제·재처리는 같은 행에서 직렬화합니다. SETTLEMENT 종류의 보류·해제 이력도 retention_history에 남기며 금융 배치·원장·Job은 지우지 않습니다.
