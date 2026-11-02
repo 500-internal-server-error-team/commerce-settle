@@ -21,6 +21,15 @@ public class GatewayRoutesConfiguration {
   }
 
   @Bean
+  UpstreamCredentials upstreamCredentials(
+      @Value("${gateway.internal-credentials.commerce}") String commerce,
+      @Value("${gateway.internal-credentials.payment}") String payment,
+      @Value("${gateway.internal-credentials.settlement}") String settlement) {
+    return new UpstreamCredentials(
+        Map.of("commerce", commerce, "payment", payment, "settlement", settlement));
+  }
+
+  @Bean
   RouteLocator apiRoutes(
       RouteLocatorBuilder builder,
       ApiOperations operations,

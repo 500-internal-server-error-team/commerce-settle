@@ -6,6 +6,7 @@ import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.mock;
 
 import com.commercesettle.gateway.config.ApiOperations;
+import com.commercesettle.gateway.config.UpstreamCredentials;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
@@ -22,7 +23,9 @@ class SessionAuthenticationFilterTest {
   void rejectsRouteOutsideContract() {
     final var verifier = mock(SessionVerifier.class);
     final var chain = mock(GatewayFilterChain.class);
-    final var filter = new SessionAuthenticationFilter(mock(ApiOperations.class), verifier);
+    final var filter =
+        new SessionAuthenticationFilter(
+            mock(ApiOperations.class), verifier, mock(UpstreamCredentials.class));
     final var exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/unregistered"));
     exchange
         .getAttributes()

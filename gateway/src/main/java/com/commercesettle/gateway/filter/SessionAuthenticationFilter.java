@@ -1,12 +1,13 @@
 package com.commercesettle.gateway.filter;
 
 import com.commercesettle.gateway.config.ApiOperations;
+import com.commercesettle.gateway.config.UpstreamCredentials;
 import com.commercesettle.gateway.exception.AuthenticationUnavailableException;
 import java.nio.charset.StandardCharsets;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
+import java.util.Map;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
 import org.springframework.cloud.gateway.route.Route;
@@ -22,8 +23,8 @@ import reactor.core.publisher.Mono;
 /**
  * 명세의 {@code x-actor}로 보호 작업을 가려 세션을 검증하고, 검증한 신원만 백엔드에 전달한다.
  *
- * <p>클라이언트가 보낸 {@code X-Authenticated-*}와 {@code Authorization}은 공개 작업을 포함한 모든 요청에서 제거한다. 백엔드용 내부
- * 호출 자격은 아직 넣지 않는다.
+ * <p>클라이언트가 보낸 {@code X-Authenticated-*}와 {@code Authorization}은 공개 작업을 포함한 모든 요청에서 제거하고, {@code
+ * Authorization}은 대상 서비스 전용 Gateway 자격(ADR 0010)으로 교체한다.
  */
 @Component
 public class SessionAuthenticationFilter implements GlobalFilter, Ordered {
@@ -32,24 +33,28 @@ public class SessionAuthenticationFilter implements GlobalFilter, Ordered {
   static final String SESSION_HASH = "X-Authenticated-Session-Hash";
   private static final String IDENTITY_PREFIX = "x-authenticated-";
   private static final String LOGOUT_ROUTE = "api-delete_api_sessions_current";
-  // application.yml의 서비스 명세 라우트. 그 밖의 라우트는 OpenAPI 작업이어야 한다.
-  private static final Set<String> DOCUMENT_ROUTES =
-      Set.of("commerce-docs", "payment-docs", "settlement-docs");
+  // application.yml의 서비스 명세 라우트와 대상 서비스. 그 밖의 라우트는 OpenAPI 작업이어야 한다.
+  private static final Map<String, String> DOCUMENT_ROUTES =
+      Map.of(
+          "commerce-docs", "commerce", "payment-docs", "payment", "settlement-docs", "settlement");
   private static final String BEARER = "bearer ";
 
   private final ApiOperations operations;
   private final SessionVerifier verifier;
+  private final UpstreamCredentials credentials;
 
-  public SessionAuthenticationFilter(ApiOperations operations, SessionVerifier verifier) {
+  public SessionAuthenticationFilter(
+      ApiOperations operations, SessionVerifier verifier, UpstreamCredentials credentials) {
     this.operations = operations;
     this.verifier = verifier;
+    this.credentials = credentials;
   }
 
   @Override
   public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
     final Route route = exchange.getAttribute(ServerWebExchangeUtils.GATEWAY_ROUTE_ATTR);
-    if (route != null && DOCUMENT_ROUTES.contains(route.getId())) {
-      return chain.filter(forward(exchange, null, null));
+    if (route != null && DOCUMENT_ROUTES.containsKey(route.getId())) {
+      return chain.filter(forward(exchange, DOCUMENT_ROUTES.get(route.getId()), null, null));
     }
     // 명세에 없는 라우트는 공개로 간주하지 않는다.
     final var operation = route == null ? null : operations.find(route.getId()).orElse(null);
@@ -57,7 +62,7 @@ public class SessionAuthenticationFilter implements GlobalFilter, Ordered {
       return Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND));
     }
     if (operation.isPublic()) {
-      return chain.filter(forward(exchange, null, null));
+      return chain.filter(forward(exchange, operation.owner(), null, null));
     }
     final var token = bearerToken(exchange.getRequest().getHeaders());
     if (token == null) {
@@ -79,6 +84,7 @@ public class SessionAuthenticationFilter implements GlobalFilter, Ordered {
                           ? chain.filter(
                               forward(
                                   exchange,
+                                  operation.owner(),
                                   result,
                                   LOGOUT_ROUTE.equals(operation.routeId()) ? sessionHash : null))
                           : Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN));
@@ -90,15 +96,19 @@ public class SessionAuthenticationFilter implements GlobalFilter, Ordered {
     return Ordered.HIGHEST_PRECEDENCE + 1000;
   }
 
-  private static ServerWebExchange forward(
-      ServerWebExchange exchange, SessionVerification identity, String sessionHash) {
+  private ServerWebExchange forward(
+      ServerWebExchange exchange,
+      String service,
+      SessionVerification identity,
+      String sessionHash) {
+    final var authorization = credentials.authorization(service);
     return exchange
         .mutate()
         .request(
             request ->
                 request.headers(
                     headers -> {
-                      headers.remove(HttpHeaders.AUTHORIZATION);
+                      headers.set(HttpHeaders.AUTHORIZATION, authorization);
                       List.copyOf(headers.keySet()).stream()
                           .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(IDENTITY_PREFIX))
                           .forEach(headers::remove);

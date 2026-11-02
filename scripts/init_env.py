@@ -29,7 +29,7 @@ def initialize(directory):
         existing = values.get(key)
         if existing and existing[1].strip():
             continue
-        if key.endswith(("PASSWORD", "KEY")):
+        if key.endswith(("PASSWORD", "KEY", "CREDENTIAL")):
             value = secrets.token_urlsafe(32)
         elif key.endswith("EPOCH"):
             value = str(uuid.uuid4())

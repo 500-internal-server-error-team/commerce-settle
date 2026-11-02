@@ -59,12 +59,24 @@ import reactor.netty.http.server.HttpServer;
     properties = {
       "management.server.port=0",
       "management.zipkin.tracing.export.enabled=false",
-      "gateway.auth.session-epoch=00000000-0000-4000-8000-0000000000aa"
+      "gateway.auth.session-epoch=00000000-0000-4000-8000-0000000000aa",
+      "gateway.internal-credentials.commerce=" + GatewayRoutingIntegrationTest.COMMERCE_CREDENTIAL,
+      "gateway.internal-credentials.payment=" + GatewayRoutingIntegrationTest.PAYMENT_CREDENTIAL,
+      "gateway.internal-credentials.settlement="
+          + GatewayRoutingIntegrationTest.SETTLEMENT_CREDENTIAL
     })
 @Import(GatewayRoutingIntegrationTest.FailureRoutes.class)
 @ExtendWith(OutputCaptureExtension.class)
 @AutoConfigureObservability(metrics = false)
 class GatewayRoutingIntegrationTest {
+  static final String COMMERCE_CREDENTIAL = "commerce-gateway-credential-0123456789abcdef";
+  static final String PAYMENT_CREDENTIAL = "payment-gateway-credential-0123456789abcdefgh";
+  static final String SETTLEMENT_CREDENTIAL = "settlement-gateway-credential-0123456789abcd";
+  private static final Map<String, String> CREDENTIALS =
+      Map.of(
+          "commerce", COMMERCE_CREDENTIAL,
+          "payment", PAYMENT_CREDENTIAL,
+          "settlement", SETTLEMENT_CREDENTIAL);
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private static final Map<String, Backend> BACKENDS =
       Map.of(
@@ -120,6 +132,9 @@ class GatewayRoutingIntegrationTest {
         .isEqualTo(owner)
         .jsonPath("$.path")
         .isEqualTo(concretePath(path));
+
+    assertThat(BACKENDS.get(owner).last().get().headers().get(HttpHeaders.AUTHORIZATION))
+        .isEqualTo("Bearer " + CREDENTIALS.get(owner));
   }
 
   @ParameterizedTest(name = "{0} {1}")
@@ -210,6 +225,9 @@ class GatewayRoutingIntegrationTest {
         .isEqualTo(service)
         .jsonPath("$.path")
         .isEqualTo("/v3/api-docs");
+
+    assertThat(BACKENDS.get(service).last().get().headers().get(HttpHeaders.AUTHORIZATION))
+        .isEqualTo("Bearer " + CREDENTIALS.get(service));
   }
 
   @Test
@@ -348,7 +366,7 @@ class GatewayRoutingIntegrationTest {
   }
 
   @Test
-  @DisplayName("보호 작업에는 위조 신원 헤더와 세션 토큰 대신 검증한 신원만 전달한다")
+  @DisplayName("보호 작업에는 위조 신원 헤더와 세션 토큰 대신 검증한 신원과 대상 자격만 전달한다")
   void forwardsVerifiedIdentityOnly() {
     client
         .get()
@@ -367,8 +385,9 @@ class GatewayRoutingIntegrationTest {
     assertThat(headers.get("X-Authenticated-Actor-Id")).isEqualTo(ACCOUNT_ID.toString());
     assertThat(headers.names())
         .noneMatch(name -> name.equalsIgnoreCase("X-Authenticated-Session-Hash"))
-        .noneMatch(name -> name.equalsIgnoreCase("X-Authenticated-Extra"))
-        .noneMatch(name -> name.equalsIgnoreCase(HttpHeaders.AUTHORIZATION));
+        .noneMatch(name -> name.equalsIgnoreCase("X-Authenticated-Extra"));
+    assertThat(headers.getAll(HttpHeaders.AUTHORIZATION))
+        .containsExactly("Bearer " + PAYMENT_CREDENTIAL);
     then(verifier).should().verify(TOKEN_HASH);
   }
 
@@ -388,7 +407,7 @@ class GatewayRoutingIntegrationTest {
   }
 
   @Test
-  @DisplayName("공개 작업은 세션을 확인하지 않고 클라이언트의 인증 헤더를 지운다")
+  @DisplayName("공개 작업은 세션을 확인하지 않고 클라이언트의 인증 헤더를 대상 자격으로 바꾼다")
   void stripsAuthenticationHeadersOnPublicOperation() {
     client
         .get()
@@ -399,9 +418,11 @@ class GatewayRoutingIntegrationTest {
         .expectStatus()
         .isOk();
 
-    assertThat(BACKENDS.get("commerce").last().get().headers().names())
-        .noneMatch(name -> name.equalsIgnoreCase("X-Authenticated-Actor-Kind"))
-        .noneMatch(name -> name.equalsIgnoreCase(HttpHeaders.AUTHORIZATION));
+    final var headers = BACKENDS.get("commerce").last().get().headers();
+    assertThat(headers.names())
+        .noneMatch(name -> name.equalsIgnoreCase("X-Authenticated-Actor-Kind"));
+    assertThat(headers.getAll(HttpHeaders.AUTHORIZATION))
+        .containsExactly("Bearer " + COMMERCE_CREDENTIAL);
     then(verifier).shouldHaveNoInteractions();
   }
 
