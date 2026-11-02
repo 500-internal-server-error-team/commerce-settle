@@ -62,6 +62,7 @@ CREATE TABLE settlement.settlement_batches (
     policy_version varchar(32) NOT NULL,
     status         varchar(24) NOT NULL,
     net_amount     bigint      NOT NULL,
+    closed_at      timestamptz,
     created_at     timestamptz NOT NULL,
     updated_at     timestamptz NOT NULL,
     version        bigint      NOT NULL,
@@ -73,7 +74,8 @@ CREATE TABLE settlement.settlement_batches (
     CONSTRAINT ck_settlement_batches_net_amount CHECK (net_amount >= 0),
     CONSTRAINT ck_settlement_batches_status
         CHECK (status IN ('CREATED', 'RESERVED', 'PROCESSING', 'COMPLETED', 'REVIEW_REQUIRED')),
-    CONSTRAINT ck_settlement_batches_version CHECK (version >= 0)
+    CONSTRAINT ck_settlement_batches_version CHECK (version >= 0),
+    CONSTRAINT ck_settlement_batches_closed CHECK ((closed_at IS NOT NULL) = (status = 'COMPLETED'))
 );
 
 CREATE INDEX ix_settlement_batches_status_created

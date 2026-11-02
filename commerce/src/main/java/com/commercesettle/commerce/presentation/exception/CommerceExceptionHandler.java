@@ -243,7 +243,12 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
         request);
   }
 
-  @ExceptionHandler({TransientDataAccessException.class, CannotCreateTransactionException.class})
+  @ExceptionHandler({
+    TransientDataAccessException.class,
+    CannotCreateTransactionException.class,
+    com.commercesettle.commerce.application.port.SettlementRetentionGateway.UnavailableException
+        .class
+  })
   ResponseEntity<Object> temporarilyUnavailable(RuntimeException e, WebRequest request) {
     String traceId = traceId();
     LOGGER

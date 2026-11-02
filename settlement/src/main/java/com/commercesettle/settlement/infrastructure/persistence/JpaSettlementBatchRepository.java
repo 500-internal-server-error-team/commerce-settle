@@ -3,7 +3,9 @@ package com.commercesettle.settlement.infrastructure.persistence;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.commercesettle.settlement.domain.repository.SettlementBatchRepository;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.stereotype.Repository;
 
@@ -23,6 +25,11 @@ class JpaSettlementBatchRepository implements SettlementBatchRepository {
   @Override
   public Optional<SettlementBatch> findById(UUID id) {
     return repository.findById(id);
+  }
+
+  @Override
+  public List<SettlementBatch> findAllById(Set<UUID> ids) {
+    return repository.findAllById(ids);
   }
 
   @Override

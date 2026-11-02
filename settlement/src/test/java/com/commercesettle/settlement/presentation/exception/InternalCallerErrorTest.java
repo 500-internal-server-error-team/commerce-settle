@@ -25,7 +25,8 @@ import org.springframework.web.bind.annotation.RestController;
     controllers = InternalCallerErrorTest.Endpoints.class,
     properties = {
       "app.internal-auth.service=settlement",
-      "app.internal-auth.senders.gateway.current=" + InternalCallerErrorTest.GATEWAY
+      "app.internal-auth.senders.gateway.current=" + InternalCallerErrorTest.GATEWAY,
+      "app.internal-auth.senders[service\\:commerce].current=test-commerce-retention-credential-0123456789abcdef",
     })
 @Import({InternalAuthAutoConfiguration.class, InternalCallerErrorTest.Endpoints.class})
 class InternalCallerErrorTest {

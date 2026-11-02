@@ -6,10 +6,19 @@ import unittest
 from unittest.mock import patch
 
 import smoke
+import smoke_retention
 from test_observability import integration_rules
 
 
 class CiHelpersTest(unittest.TestCase):
+    def test_retention_fixture_refuses_non_ci_or_another_project(self):
+        for environment in [{"CI": "false", "COMPOSE_PROJECT_NAME": "commerce-settle-ci"},
+                            {"CI": "true", "COMPOSE_PROJECT_NAME": "commerce-settle"}]:
+            with self.subTest(environment=environment), patch.dict("os.environ", environment), \
+                    patch.object(smoke_retention, "compose") as cli, self.assertRaises(RuntimeError):
+                smoke_retention.run()
+            cli.assert_not_called()
+
     def description(self):
         lines = []
         for owner in ["commerce", "payment", "settlement", "commerce-notifications"]:

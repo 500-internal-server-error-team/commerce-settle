@@ -245,17 +245,19 @@ Payment·Settlement notice를 받으려면 `APP_NOTIFICATIONS_CONSUMER_ENABLED=t
 
 ## 주문 주소·알림 보존 실행
 
-현재 구현은 주문 주소와 주문에 연결된 알림의 보존 처리입니다. 주문 연결이 없는 정산·지급 알림의 원천 종결·보존 보류 연동은 미구현이며 #150 전체 완료 조건으로 남습니다. 해당 계약과 보존 검증을 마치기 전에는 PR을 병합하거나 전체 알림 보존 처리를 완료했다고 판단하지 않습니다.
+주문 주소와 주문 연결 알림, Settlement 배치에 연결된 정산·지급 알림의 보존 처리를 제공합니다. 금융 상태·원장·작업을 삭제하지 않으며 실제 서비스 간 검증 범위는 해당 PR과 아래 CI 검사로 구분합니다.
 
-주문 연결 범위의 개발 검증에는 #117의 알림 스키마와 함께 새 빈 Commerce DB에서 `COMMERCE_RETENTION_ENABLED=true`를 사용합니다. 기존 DB·볼륨은 초기화하지 않으며 [DB 변경 경계](migrations.md)를 따릅니다. 기본값은 비활성입니다. 활성화하면 전용 단일 실행 스레드에서 기동 시 한 번과 매일 03:00 KST에 실행합니다. `COMMERCE_RETENTION_CRON`은 KST cron, `COMMERCE_RETENTION_BATCH_SIZE`는 1~1000(기본 100), `COMMERCE_RETENTION_MAX_BATCHES`는 1~100(기본 10)으로 종류별 실행량을 제한합니다.
+변경한 Commerce·Settlement 초기 스키마와 내부 호출 자격을 새 빈 개발 DB에 적용한 뒤 `COMMERCE_RETENTION_ENABLED=true`를 사용합니다. `python3 scripts/init_env.py`가 `SETTLEMENT_COMMERCE_CREDENTIAL`을 만들고 Compose가 두 서비스에 연결합니다. 기존 자격 교체 중에는 Settlement에 `_PREVIOUS`를 함께 설정합니다. 원천 URL은 `SETTLEMENT_URL`(기본 `http://settlement:8080`)입니다. 기존 DB·볼륨은 초기화하지 않으며 [DB 변경 경계](migrations.md)를 따릅니다. 기본값은 비활성입니다. 활성화하면 전용 단일 실행 스레드에서 기동 시 한 번과 매일 03:00 KST에 실행합니다. `COMMERCE_RETENTION_CRON`은 KST cron, `COMMERCE_RETENTION_BATCH_SIZE`는 1~1000(기본 100), `COMMERCE_RETENTION_MAX_BATCHES`는 1~100(기본 10)으로 종류별 실행량을 제한합니다.
 
 `RetentionService.run(batchSize,maxBatches)`은 내부 수동 재실행 경계이며 공개 HTTP API가 아닙니다. 대상마다 별도 트랜잭션으로 재검사하고, 주문/발송 잠금은 건너뛰며 주소 잠금 대기는 1초·SQL은 5초·대상 트랜잭션은 10초 상한을 적용합니다. 보류·실패의 다음 실행 시각과 이력은 DB에 남아 새 인스턴스도 이어갑니다. 한 실행의 한도에 도달한 대상과 실패한 대상은 다음 실행에서 재조회합니다. 보류 해제는 `RetentionService.hold(orderId,null)`, 분쟁 등 보존 보류는 같은 내부 운영 경계에서 이유를 전달합니다. 인증된 운영 진입점이 호출해야 하며 별도 공개 관리 API는 추가하지 않았습니다.
 
 잠금 등으로 건너뛰거나 처리에 실패한 대상은 현재 실행의 다음 묶음에서 제외해 뒤의 처리 가능한 대상이 진행하도록 합니다. 실패 이력을 저장하지 못해도 같은 대상을 반복 선택하지 않습니다. 제외 목록은 실행이 끝나면 버리므로 다음 실행에서 다시 조회합니다.
 
+정산·지급 알림은 묶음당 한 번의 Settlement 조회로 미확인 배치의 종결을 확인합니다. 이 HTTP 대기 중에는 DB 트랜잭션·커넥션을 유지하지 않습니다. 종결 캐시는 되돌릴 수 없는 완료 사실만 저장하고, 부재·미종결·장애·판매자 불일치는 삭제하지 않습니다. 보존 보류는 `RetentionService.holdSettlement(batchId,reason)`와 같은 내부 운영 경계에서 관리하며 null로 해제합니다. 운영 재처리도 스케줄 실행 전부터 원천을 확인하고, 원천 장애 중에는 기존에 완료된 같은 멱등 요청만 반환합니다.
+
 `retention_checks`·`retention_history`에서 결과와 재조회 시각을 확인합니다. 주소는 되돌릴 수 없는 마스킹이며 삭제된 알림 본문도 복구하지 않습니다. `HELD`는 보호 조건 유지, `FAILED`는 해당 대상 롤백입니다. 로그에는 대상 ID·종류·예외 종류만 남기며 본문·주소·보류 사유는 출력하지 않습니다. 정책과 제외 범위는 [보존과 삭제](policies.md#보존과-삭제)를 따릅니다.
 
-`./gradlew :commerce:test --tests '*RetentionIntegrationTest'`는 전용 PostgreSQL에서 90일 경계, 보류/반품·발송 임대 경합, 연결 알림 원자 삭제, 중단 뒤 재실행·중복·일부 실패 롤백을 확인합니다. 실제 DB·스케줄러 활성화 동작의 검증 결과는 해당 PR에 남기며 전체 금융 왕복의 판정은 #120에서 수행합니다.
+`./gradlew :commerce:test --tests '*RetentionIntegrationTest'`는 전용 PostgreSQL에서 90일 경계, 보류/반품·발송 임대 경합, 연결 알림 원자 삭제, 중단 뒤 재실행·중복·일부 실패 롤백을 확인합니다. 실제 DB·스케줄러 활성화 동작의 검증 결과는 해당 PR에 남기며 전체 금융 왕복의 판정은 #120에서 수행합니다. CI의 `scripts/smoke_retention.py`는 임시 `commerce-settle-ci` 프로젝트에서 실제 Commerce→Settlement HTTP 조회와 만료 알림 연결 기록 삭제, 미종결·보류 보호, 원천 금융 배치 보존을 검사합니다. 일반 로컬·운영 프로젝트에서 실행하지 않으며 기존 사용자 DB를 초기화하지 않습니다.
 
 ## 주문 API stub
 

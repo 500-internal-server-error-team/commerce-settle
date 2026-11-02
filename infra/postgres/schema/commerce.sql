@@ -599,8 +599,17 @@ CREATE TABLE commerce.notification_inbox_quarantines (
 );
 
 -- 보존 작업의 재조회 지점과 처리 이력. 개인정보·알림 본문은 기록하지 않습니다.
+CREATE TABLE commerce.notification_retention_batches (
+    batch_id uuid PRIMARY KEY,
+    seller_id uuid NOT NULL,
+    closed_at timestamptz,
+    hold_reason varchar(200)
+);
+
+CREATE INDEX ix_notification_items_retention_batch ON commerce.notification_items((CAST(payload->>'batchId' AS uuid)),delivery_id) WHERE source_service='settlement';
+
 CREATE TABLE commerce.retention_checks (
-    target_kind varchar(16) NOT NULL CHECK (target_kind IN ('ORDER','DELIVERY')),
+    target_kind varchar(16) NOT NULL CHECK (target_kind IN ('ORDER','DELIVERY','SETTLEMENT')),
     target_id uuid NOT NULL,
     result varchar(32) NOT NULL,
     checked_at timestamptz NOT NULL,
@@ -609,7 +618,7 @@ CREATE TABLE commerce.retention_checks (
 );
 CREATE TABLE commerce.retention_history (
     id uuid PRIMARY KEY,
-    target_kind varchar(16) NOT NULL CHECK (target_kind IN ('ORDER','DELIVERY')),
+    target_kind varchar(16) NOT NULL CHECK (target_kind IN ('ORDER','DELIVERY','SETTLEMENT')),
     target_id uuid NOT NULL,
     result varchar(32) NOT NULL,
     checked_at timestamptz NOT NULL
@@ -628,4 +637,4 @@ CREATE TABLE commerce.notification_retired_keys (
     PRIMARY KEY(source_service,kind,business_ref,recipient_kind,recipient_id)
 );
 
-CREATE INDEX ix_notification_items_retention_order ON commerce.notification_items((payload->>'orderId'),delivery_id);
+CREATE INDEX ix_notification_items_retention_order ON commerce.notification_items((CAST(payload->>'orderId' AS uuid)),delivery_id);

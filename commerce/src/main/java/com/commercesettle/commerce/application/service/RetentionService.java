@@ -2,15 +2,20 @@ package com.commercesettle.commerce.application.service;
 
 import com.commercesettle.commerce.application.port.RetentionStore;
 import com.commercesettle.commerce.application.port.RetentionStore.Target;
+import com.commercesettle.commerce.application.port.SettlementRetentionGateway;
 import java.time.Clock;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
@@ -19,16 +24,23 @@ public class RetentionService {
   private final RetentionStore store;
   private final Clock clock;
   private final TransactionTemplate transactions;
+  private final SettlementRetentionGateway settlement;
 
-  public RetentionService(RetentionStore store, Clock clock, PlatformTransactionManager manager) {
+  public RetentionService(
+      RetentionStore store,
+      Clock clock,
+      PlatformTransactionManager manager,
+      SettlementRetentionGateway settlement) {
     this.store = store;
     this.clock = clock;
+    this.settlement = settlement;
     transactions = new TransactionTemplate(manager);
     transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     transactions.setTimeout(10);
   }
 
   /** 한 대상의 실패는 그 대상만 롤백하며 나머지 묶음을 계속한다. */
+  @Transactional(propagation = Propagation.NEVER)
   public int run(int batchSize, int maxBatches) {
     if (batchSize < 1 || batchSize > 1000 || maxBatches < 1 || maxBatches > 100)
       throw new IllegalArgumentException("Invalid retention limits");
@@ -40,6 +52,16 @@ public class RetentionService {
         var now = clock.instant();
         var ids = transactions.execute(status -> store.due(target, now, batchSize, skipped));
         if (ids.isEmpty()) break;
+        if (target == Target.DELIVERY) {
+          try {
+            refresh(ids);
+          } catch (RuntimeException error) {
+            LOG.atWarn()
+                .addKeyValue("event", "retention.source-unavailable")
+                .log(
+                    "Settlement closure could not be verified; unverified notifications remain retained");
+          }
+        }
         for (UUID id : ids) {
           if (Thread.currentThread().isInterrupted()) return processed;
           try {
@@ -77,5 +99,41 @@ public class RetentionService {
     if (reason != null && (reason.isBlank() || reason.length() > 200))
       throw new IllegalArgumentException("Invalid retention hold reason");
     transactions.executeWithoutResult(status -> store.hold(orderId, reason, clock.instant()));
+  }
+
+  @Transactional(propagation = Propagation.NEVER)
+  public void prepareReplay(UUID delivery) {
+    refresh(List.of(delivery));
+  }
+
+  private void refresh(List<UUID> deliveries) {
+    var refs = transactions.execute(status -> store.sourceBatches(deliveries));
+    var pending =
+        refs.stream()
+            .filter(ref -> ref.closedAt() == null)
+            .collect(
+                Collectors.toMap(
+                    SettlementRetentionGateway.Closure::batchId,
+                    SettlementRetentionGateway.Closure::sellerId));
+    if (pending.isEmpty()) return;
+    var closures = settlement.lookup(pending.keySet());
+    Set<UUID> seen = new HashSet<>();
+    for (var closure : closures) {
+      if (closure == null
+          || !pending.containsKey(closure.batchId())
+          || !pending.get(closure.batchId()).equals(closure.sellerId())
+          || !seen.add(closure.batchId())
+          || closure.closedAt() != null && closure.closedAt().isAfter(clock.instant()))
+        throw new SettlementRetentionGateway.UnavailableException();
+    }
+    if (!seen.equals(pending.keySet())) throw new SettlementRetentionGateway.UnavailableException();
+    transactions.executeWithoutResult(status -> store.cacheClosures(closures, clock.instant()));
+  }
+
+  public void holdSettlement(UUID batchId, String reason) {
+    if (reason != null && (reason.isBlank() || reason.length() > 200))
+      throw new IllegalArgumentException("Invalid retention hold reason");
+    transactions.executeWithoutResult(
+        status -> store.holdSettlement(batchId, reason, clock.instant()));
   }
 }

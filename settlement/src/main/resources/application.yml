@@ -146,6 +146,9 @@ app:
     service: settlement
     # Gateway의 내부 호출 자격(ADR 0010). 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
     senders:
+      "[service:commerce]":
+        current: ${SETTLEMENT_COMMERCE_CREDENTIAL}
+        previous: ${SETTLEMENT_COMMERCE_CREDENTIAL_PREVIOUS:}
       gateway:
         current: ${SETTLEMENT_GATEWAY_CREDENTIAL}
         previous: ${SETTLEMENT_GATEWAY_CREDENTIAL_PREVIOUS:}

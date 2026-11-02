@@ -45,6 +45,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     properties = {
       "management.tracing.enabled=false",
       "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123",
+      "app.internal-auth.senders[service\\:commerce].current=test-commerce-retention-credential-0123456789abcdef",
       "settlement.payout.mock-credential=test-settlement-credential-0123456789abcdef0123",
       "spring.kafka.admin.auto-create=false",
       "settlement.daily-batch.schedule-enabled=false",

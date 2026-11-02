@@ -17,9 +17,15 @@ public interface RetentionStore {
 
   List<UUID> due(Target target, Instant now, int limit, Set<UUID> skipped);
 
+  List<SettlementRetentionGateway.Closure> sourceBatches(List<UUID> deliveries);
+
+  void cacheClosures(List<SettlementRetentionGateway.Closure> closures, Instant now);
+
   String process(Target target, UUID id, Instant now);
 
   void failed(Target target, UUID id, Instant now);
 
   void hold(UUID orderId, String reason, Instant now);
+
+  void holdSettlement(UUID batchId, String reason, Instant now);
 }

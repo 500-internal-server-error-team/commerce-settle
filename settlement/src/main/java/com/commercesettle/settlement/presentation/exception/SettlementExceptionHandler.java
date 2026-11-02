@@ -31,6 +31,23 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
     this.tracer = tracer;
   }
 
+  @ExceptionHandler(IllegalArgumentException.class)
+  ResponseEntity<Object> invalid(IllegalArgumentException error, WebRequest request) {
+    var status = org.springframework.http.HttpStatus.BAD_REQUEST;
+    return ResponseEntity.status(status)
+        .body(problem(status, ErrorCode.forStatus(status), request));
+  }
+
+  @ExceptionHandler({
+    org.springframework.dao.DataAccessException.class,
+    org.springframework.transaction.CannotCreateTransactionException.class
+  })
+  ResponseEntity<Object> unavailable(RuntimeException error, WebRequest request) {
+    var status = org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE;
+    return ResponseEntity.status(status)
+        .body(problem(status, ErrorCode.forStatus(status), request));
+  }
+
   @ExceptionHandler(Exception.class)
   ResponseEntity<Object> unexpected(Exception e, WebRequest request) {
     LOGGER
@@ -44,6 +61,24 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
   }
 
   /** 프레임워크 오류도 상태별 공통 코드와 고정 설명으로 바꿔 원문 메시지를 내보내지 않는다. */
+  @Override
+  protected ResponseEntity<Object> handleMethodArgumentNotValid(
+      org.springframework.web.bind.MethodArgumentNotValidException error,
+      HttpHeaders headers,
+      HttpStatusCode status,
+      WebRequest request) {
+    var body = problem(status, ErrorCode.forStatus(status), request);
+    body.setProperty(
+        "errors",
+        error.getBindingResult().getFieldErrors().stream()
+            .map(
+                field ->
+                    java.util.Map.of(
+                        "field", field.getField(), "reason", field.getDefaultMessage()))
+            .toList());
+    return ResponseEntity.status(status).headers(headers).body(body);
+  }
+
   @Override
   protected ResponseEntity<Object> handleExceptionInternal(
       Exception ex, Object body, HttpHeaders headers, HttpStatusCode status, WebRequest request) {

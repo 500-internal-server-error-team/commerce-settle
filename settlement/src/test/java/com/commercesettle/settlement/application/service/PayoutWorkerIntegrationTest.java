@@ -55,6 +55,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     properties = {
       "management.tracing.enabled=false",
       "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123",
+      "app.internal-auth.senders[service\\:commerce].current=test-commerce-retention-credential-0123456789abcdef",
       "settlement.payout.mock-credential=test-settlement-credential-0123456789abcdef0123",
       "spring.kafka.admin.auto-create=false",
       "settlement.daily-batch.schedule-enabled=false",
@@ -338,6 +339,12 @@ class PayoutWorkerIntegrationTest {
     assertThat(payout()).containsEntry("status", "SUCCEEDED");
     assertThat(job()).containsEntry("status", "REVIEW_REQUIRED");
     assertThat(batchStatus()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT closed_at FROM settlement.settlement_batches WHERE id=?",
+                java.time.OffsetDateTime.class,
+                batchId))
+        .isNull();
     assertThat(itemStatuses()).containsExactlyInAnyOrder("PAYOUT_RESERVED", "REFUND_RESERVED");
     assertThat(reservationStatuses()).containsOnly("ACTIVE");
     assertThat(notices(batchId)).containsExactly("SETTLEMENT_READY");
