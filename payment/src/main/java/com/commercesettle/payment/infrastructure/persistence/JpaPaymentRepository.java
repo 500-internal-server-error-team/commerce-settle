@@ -54,4 +54,9 @@ class JpaPaymentRepository implements PaymentRepository {
         ? repository.countByBuyerId(buyerId)
         : repository.countByBuyerIdAndOrderId(buyerId, orderId);
   }
+
+  @Override
+  public void lockOrder(UUID orderId) {
+    repository.lockOrder("payment-order:" + orderId);
+  }
 }

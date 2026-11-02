@@ -300,6 +300,35 @@ public class JdbcInboxStore implements InboxStore {
   }
 
   @Override
+  public Optional<OrderPaymentRequestedPayload> findPaymentRequest(
+      UUID orderId, UUID paymentCycleId) {
+    List<Original> rows =
+        jdbc.query(
+            """
+            SELECT id, raw_body FROM payment.inbox
+            WHERE consumer = :consumer AND event_type = 'OrderPaymentRequested'
+              AND aggregate_id = :orderId AND payload -> 'payload' ->> 'paymentCycleId' = :cycle
+            ORDER BY created_at, id
+            LIMIT 1
+            """,
+            new MapSqlParameterSource("consumer", consumer)
+                .addValue("orderId", orderId)
+                .addValue("cycle", paymentCycleId.toString()),
+            (rs, row) -> new Original(rs.getObject("id", UUID.class), rs.getBytes("raw_body")));
+    if (rows.isEmpty()) {
+      return Optional.empty();
+    }
+    Original row = rows.get(0);
+    try {
+      EventEnvelope<OrderPaymentRequestedPayload> event =
+          mapper.readValue(row.body(), new TypeReference<>() {});
+      return Optional.of(event.payload());
+    } catch (IOException exception) {
+      return Optional.empty();
+    }
+  }
+
+  @Override
   public void linkResult(UUID inboxId, UUID resultRef, Instant now) {
     int updated =
         jdbc.update(

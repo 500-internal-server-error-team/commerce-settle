@@ -18,6 +18,7 @@ import com.commercesettle.payment.domain.model.Payment;
 import com.commercesettle.payment.domain.model.PaymentAmounts;
 import com.commercesettle.payment.domain.model.PaymentJob;
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
+import com.commercesettle.payment.domain.model.PaymentStatus;
 import com.commercesettle.payment.domain.repository.MileageEntryRepository;
 import com.commercesettle.payment.domain.repository.MileageReservationRepository;
 import com.commercesettle.payment.domain.repository.MileageWalletRepository;
@@ -56,6 +57,7 @@ public class ApplyOrderPaymentRequestService {
   static final String PAYMENT_IN_PROGRESS = "PAYMENT_IN_PROGRESS";
   static final String PAYMENT_ALREADY_CONFIRMED = "PAYMENT_ALREADY_CONFIRMED";
   static final String PAYMENT_CYCLE_MISMATCH = "PAYMENT_CYCLE_MISMATCH";
+  static final String PAYMENT_CANCELLATION_REQUEST_INVALID = "PAYMENT_CANCELLATION_REQUEST_INVALID";
   private static final String PAYMENT_CANCELLED_JOB = "PAYMENT_CANCELLED";
 
   private static final Logger LOG = LoggerFactory.getLogger(ApplyOrderPaymentRequestService.class);
@@ -183,6 +185,8 @@ public class ApplyOrderPaymentRequestService {
       return false;
     }
     UUID inboxId = claimed.get().inboxId();
+    // 결제가 아직 없으면 잠글 행이 없다. 같은 주문의 결제 요청과 취소 요청이 서로의 커밋을 보고 처리하도록 주문 단위로 직렬화한다.
+    payments.lockOrder(claimed.get().event().aggregateId());
     if (claimed.get().event().payload()
         instanceof PaymentCancellationRequestedPayload cancellation) {
       return cancel(claimed.get(), cancellation, now);
@@ -202,6 +206,13 @@ public class ApplyOrderPaymentRequestService {
     }
 
     Optional<Payment> existing = payments.findByOrderId(payload.orderId());
+    if (existing.isPresent()
+        && existing.get().getStatus() == PaymentStatus.CANCELLED
+        && existing.get().getCurrentCycleId().equals(payload.paymentCycleId())) {
+      // 이 요청보다 먼저 처리한 취소가 이 원문으로 이미 취소된 결제를 만들었다.
+      inbox.markApplied(inboxId, existing.get().getId(), now);
+      return true;
+    }
     if (existing.isPresent()) {
       if (!isSameRequest(existing.get(), payload, amounts.get())) {
         return review(claimed.get(), "PAYMENT_REQUEST_ORDER_CONFLICT", now);
@@ -376,8 +387,7 @@ public class ApplyOrderPaymentRequestService {
       WaitingInboxEvent claimed, PaymentCancellationRequestedPayload request, Instant now) {
     Optional<Payment> found = payments.findByOrderId(request.orderId());
     if (found.isEmpty()) {
-      inbox.markApplied(claimed.inboxId(), null, now);
-      return true;
+      return cancelWithoutPayment(claimed, request, now);
     }
     Payment payment = found.get();
     // 저장된 결제는 항상 버전이 있다. 저장 전 결제는 처음 저장될 때 0이 된다.
@@ -410,6 +420,32 @@ public class ApplyOrderPaymentRequestService {
         case CONFIRMED -> reject(claimed, payment, PAYMENT_ALREADY_CONFIRMED, version, now);
       }
     }
+    inbox.markApplied(claimed.inboxId(), payment.getId(), now);
+    return true;
+  }
+
+  /**
+   * 결제가 아직 없는 주문의 취소. 같은 주문·회차의 결제 요청 원문을 이미 받았다면(처리 대기든 확인 대상이든) 그 원문으로 승인 작업·마일리지 예약 없이 취소된 결제를
+   * 만들고 결과를 남긴다. 원문이 확인 대상으로 끝나 다시 처리되지 않아도 취소가 확정된다. 원문이 아직 없으면 취소를 결과 참조 없이 APPLIED로 남기고, 늦게 온 결제
+   * 요청이 취소된 결제를 만든다. 원문 금액이 규칙에 맞지 않아 결제를 만들 수 없으면 취소도 확인 대상으로 남긴다.
+   */
+  private boolean cancelWithoutPayment(
+      WaitingInboxEvent claimed, PaymentCancellationRequestedPayload request, Instant now) {
+    Optional<OrderPaymentRequestedPayload> original =
+        inbox.findPaymentRequest(request.orderId(), request.paymentCycleId());
+    if (original.isEmpty()) {
+      inbox.markApplied(claimed.inboxId(), null, now);
+      return true;
+    }
+    Optional<PaymentAmounts> amounts = toAmounts(original.get());
+    if (amounts.isEmpty() || !matchesCommerceAmounts(original.get(), amounts.get())) {
+      return review(claimed, PAYMENT_CANCELLATION_REQUEST_INVALID, now);
+    }
+    Payment payment = payments.save(newPayment(original.get(), amounts.get(), now));
+    payment.cancel(now);
+    appendAccepted(payment, original.get(), now);
+    appendCancellationResult(
+        PAYMENT_CANCELLED, payment, CANCELLED_BEFORE_PAYMENT, cancelledEventId(payment), 0, now);
     inbox.markApplied(claimed.inboxId(), payment.getId(), now);
     return true;
   }
