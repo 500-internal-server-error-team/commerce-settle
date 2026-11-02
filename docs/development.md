@@ -303,6 +303,50 @@ Compose는 루프백에만 게시하므로 다른 장비에서 바로 접근할 
 
 `RATE`, `DURATION_SECONDS`, `PRE_ALLOCATED_VUS`, `MAX_VUS`는 양의 정수이며 VU 최대값은 사전 할당값 이상이어야 합니다. Compose에서는 `-e RATE=100 -e DURATION_SECONDS=30`처럼 `run` 옵션으로 덮어씁니다. checks·HTTP 실패·`dropped_iterations` 임계값을 확인합니다. 명세 조회 처리량은 결제 승인 완료 TPS가 아닙니다. 업무 시나리오·Synthetic Data·성능 목표 달성은 후속 검증입니다.
 
+### PG 승인·조회·전액 환불
+
+`APP_DEV_FIXTURES_ENABLED=true`는 기존 지급 fixture와 함께 네 대역에 아래 불변 버전을 준비합니다. 기존 계정 잔액·시나리오는 재기동 때 덮어쓰지 않습니다. 새 관리 API 없이 이 fixture로 시험하며 실제 PG나 사용자 계정을 사용하지 않습니다.
+
+| 금융 버전 | 승인 | 환불 | 조회 |
+| --- | --- | --- | --- |
+| `fixture-pg-normal-v1` | 성공 | 성공 | 정상 |
+| `fixture-pg-reject-v1` | 확정 거절 | 성공 | 정상 |
+| `fixture-pg-response-loss-v1` | 성공 후 504 | 성공 | 정상 |
+| `fixture-pg-refund-reject-v1` | 성공 | 확정 거절 | 정상 |
+| `fixture-pg-refund-loss-v1` | 성공 | 성공 후 504 | 정상 |
+| `fixture-pg-lookup-fail-v1` | 성공 | 성공 | 503 |
+
+이 fixture의 지연은 모두 0ms이고 지정한 장애 확률은 100%, 나머지는 0%입니다. 설계 문서의 초기 분포 제안과 구분합니다. seed는 20261102, 입금 지연은 PG_A/EASY_PAY 5·PG_B 6·PG_C 7영업일입니다. 정상 조회 버전을 따로 선택해 원금융 버전을 유지하면서 조회 장애를 해소합니다.
+
+PAYOUT 재원은 기존 `fixture-payout-funding`(기초잔액 1,000,000원), EASY_PAY 지갑은 `fixture-easy-wallet`(1,000,000원)을 사용합니다. 카드의 `accountRef`는 합성 참조를 사용하며 잔액을 차감하지 않습니다. 외부 수단은 CREDIT_CARD·DEBIT_CARD·EASY_PAY만 허용합니다. 서비스 자격 판정은 별도 구현이므로 루프백·컨테이너 내부의 로컬 시험만 허용하며 Gateway에는 공개하지 않습니다.
+
+기존 환경의 스키마가 현재 금융 Mock DDL과 일치하는지 먼저 확인합니다. 새 빈 전용 개발 DB가 준비된 환경에서 `./gradlew :finance-mock:bootJar` 후 다음으로 로컬 시험 인스턴스를 엽니다. 다른 작업의 포트·컨테이너와 겹치지 않는지 확인합니다.
+
+```bash
+docker compose build finance-mock
+docker compose run --rm --no-deps -p 127.0.0.1:18083:8080 -e APP_DEV_FIXTURES_ENABLED=true finance-mock
+```
+
+다른 터미널에서 승인하고, 응답의 `id`를 전액 환불 경로에 넣습니다. 아래 업무 키는 실행마다 새 UUID로 바꾸며 재요청 시험에서는 같은 값을 유지합니다.
+
+```bash
+curl -i http://localhost:18083/mock/providers/EASY_PAY/payments \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pg-approve-demo-001' \
+  -d '{"businessKey":"00000000-0000-4000-8000-000000000121","method":"EASY_PAY","accountRef":"fixture-easy-wallet","fundingAccountRef":"fixture-payout-funding","amount":30000,"scenarioVersion":"fixture-pg-normal-v1"}'
+
+curl 'http://localhost:18083/mock/providers/EASY_PAY/transactions/00000000-0000-4000-8000-000000000121?operation=APPROVE&scenarioVersion=fixture-pg-normal-v1'
+
+curl -i http://localhost:18083/mock/providers/EASY_PAY/payments/APPROVAL_ID/refunds \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: pg-refund-demo-001' \
+  -d '{"businessKey":"00000000-0000-4000-8000-000000000122","amount":30000}'
+```
+
+`202` 본문의 SUCCEEDED/DECLINED를 확인합니다. 반환한 `Location`으로 원결과를 조회할 수 있습니다. 같은 provider·작업·businessKey·본문은 헤더를 바꿔도 같은 결과이고 다른 본문은 409입니다. 504·503·거래 부재 404를 금융 실패나 예약 해제 근거로 바꾸지 않습니다. 지급 대역의 경로·키·계정 계약은 유지합니다.
+
+입금 작업은 매분 최대 100개 도래 원승인을 처리합니다. `PG_CALENDAR_VERSION`(기본 `weekdays-v1`)과 `PG_CALENDAR_HOLIDAYS`(쉼표로 구분한 ISO 날짜, 기본 공휴일 없음)를 승인 당시 사본·예정일로 저장합니다. `PG_RECEIPTS_ENABLED=false`는 수동 시험용으로 자동 입금을 끄며, 기본값은 true입니다. 입금 전 확정 환불은 예정 입금을 0으로 종결하고, 입금 후에는 같은 재원에서 원외부 결제액만 차감합니다.
+
+`./gradlew :finance-mock:build`는 실제 PostgreSQL·HTTP 시험에서 정상·거절·유실·조회 장애, 동시 멱등·지갑 잔액 경쟁·입금/환불 경합, 현금·잔액·롤백·잠금 상한과 지연 중 DB 커넥션 반환을 검사합니다. Payment 승인 Worker·환불 SAGA·실제 금융기관 정합성이나 전체 사용자 흐름의 완료를 뜻하지 않습니다.
+
 ## 개발·검증
 
 ```bash

@@ -10,6 +10,8 @@ public interface MockAccountRepository {
 
   Optional<MockAccount> findById(UUID id);
 
+  Optional<MockAccount> findForUpdate(UUID id);
+
   Optional<MockAccount> find(String providerId, String accountRef, AccountPurpose purpose);
 
   /** 잔액을 바꾸기 전에 계정 행을 잠근다. 잠금 대기는 상한을 넘으면 현재 트랜잭션을 롤백한다. */

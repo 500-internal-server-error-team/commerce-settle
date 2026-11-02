@@ -7,9 +7,15 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
+import java.time.DayOfWeek;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * 모의 금융 거래. PROCESSING에서 한 번만 SUCCEEDED 또는 DECLINED로 확정하며 최초 성공 시각은 바뀌지 않는다. 원거래·입금 컬럼은 PG 대역이 쓴다.
@@ -25,7 +31,17 @@ public class MockTransaction extends AuditableEntity {
 
   private UUID businessKey;
   private UUID originalId;
+  private UUID accountId;
+
+  @Enumerated(EnumType.STRING)
+  private MockPaymentMethod method;
+
   private UUID fundingAccountId;
+  private String pgCalendarVersion;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  private Calendar pgCalendar;
+
   private Instant pgReceiptDueAt;
   private Instant pgReceivedAt;
   private Long pgReceivedAmount;
@@ -91,6 +107,131 @@ public class MockTransaction extends AuditableEntity {
     this.status = MockTransactionStatus.SUCCEEDED;
     this.succeededAt = truncate(now);
     touch(now);
+  }
+
+  public static MockTransaction approve(
+      PaymentProvider provider,
+      UUID businessKey,
+      MockPaymentMethod method,
+      UUID accountId,
+      UUID fundingAccountId,
+      long amount,
+      String scenarioVersion,
+      long resultSeed,
+      Instant now) {
+    provider.requireMethod(method);
+    if ((method == MockPaymentMethod.EASY_PAY) != (accountId != null)) {
+      throw new IllegalArgumentException("wallet approval requires its original account");
+    }
+    MockTransaction transaction =
+        new MockTransaction(
+            UUID.randomUUID(),
+            provider.name(),
+            MockOperation.APPROVE,
+            businessKey,
+            fundingAccountId,
+            amount,
+            scenarioVersion,
+            resultSeed,
+            now);
+    transaction.method = method;
+    transaction.accountId = accountId;
+    return transaction;
+  }
+
+  public void scheduleReceipt(int businessDays, String calendarVersion, List<LocalDate> holidays) {
+    if (operation != MockOperation.APPROVE
+        || status != MockTransactionStatus.SUCCEEDED
+        || pgReceiptDueAt != null
+        || businessDays < 0
+        || businessDays > 365) {
+      throw new InvalidMockTransitionException(
+          "receipt can only be scheduled once for an approval");
+    }
+    pgCalendarVersion = Objects.requireNonNull(calendarVersion);
+    pgCalendar = new Calendar("Asia/Seoul", holidays);
+    var due = succeededAt.atZone(ZoneId.of(pgCalendar.timeZone()));
+    int remaining = businessDays;
+    while (remaining > 0) {
+      due = due.plusDays(1);
+      if (due.getDayOfWeek() != DayOfWeek.SATURDAY
+          && due.getDayOfWeek() != DayOfWeek.SUNDAY
+          && !pgCalendar.holidays().contains(due.toLocalDate())) remaining--;
+    }
+    pgReceiptDueAt = due.toInstant();
+  }
+
+  public MockTransaction refund(
+      PaymentProvider provider, UUID businessKey, long refundAmount, long resultSeed, Instant now) {
+    requireRefundable(provider, refundAmount);
+    MockTransaction refund =
+        new MockTransaction(
+            UUID.randomUUID(),
+            providerId,
+            MockOperation.REFUND,
+            businessKey,
+            fundingAccountId,
+            amount,
+            scenarioVersion,
+            resultSeed,
+            now);
+    refund.originalId = id;
+    refund.accountId = accountId;
+    refund.method = method;
+    return refund;
+  }
+
+  public void requireRefundable(PaymentProvider provider, long refundAmount) {
+    if (operation != MockOperation.APPROVE
+        || status != MockTransactionStatus.SUCCEEDED
+        || !provider.name().equals(providerId)
+        || refundAmount != amount
+        || pgReceiptDueAt == null) {
+      throw new InvalidMockTransitionException(
+          "refund requires the original successful full approval");
+    }
+  }
+
+  public boolean receiptDue(Instant now) {
+    return operation == MockOperation.APPROVE
+        && status == MockTransactionStatus.SUCCEEDED
+        && pgReceiptDueAt != null
+        && !pgReceiptDueAt.isAfter(now)
+        && pgReceivedAt == null;
+  }
+
+  public void receive(long receivedAmount, Instant now) {
+    if (operation != MockOperation.APPROVE
+        || status != MockTransactionStatus.SUCCEEDED
+        || pgReceivedAt != null
+        || (receivedAmount != 0 && receivedAmount != amount)) {
+      throw new InvalidMockTransitionException("receipt is already settled or invalid");
+    }
+    pgReceivedAt = truncate(now);
+    pgReceivedAmount = receivedAmount;
+    touch(now);
+  }
+
+  public UUID getAccountId() {
+    return accountId;
+  }
+
+  public MockPaymentMethod getMethod() {
+    return method;
+  }
+
+  public String getPgCalendarVersion() {
+    return pgCalendarVersion;
+  }
+
+  public Calendar getPgCalendar() {
+    return pgCalendar;
+  }
+
+  public record Calendar(String timeZone, List<LocalDate> holidays) {
+    public Calendar {
+      holidays = List.copyOf(holidays);
+    }
   }
 
   public void decline(Instant now) {

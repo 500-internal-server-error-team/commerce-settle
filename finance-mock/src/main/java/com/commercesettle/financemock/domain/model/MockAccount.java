@@ -80,6 +80,12 @@ public class MockAccount extends AuditableEntity {
     touch(now);
   }
 
+  public void credit(long amount, Instant now) {
+    requirePositive(amount);
+    balance = Math.addExact(balance, amount);
+    touch(now);
+  }
+
   private void requireReserved(long amount) {
     requirePositive(amount);
     if (reservedAmount < amount) {

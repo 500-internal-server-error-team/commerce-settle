@@ -25,6 +25,7 @@ class MockScenarioTest {
         .isEqualTo(resultSeed);
     assertThat(scenario.payoutOutcome(resultSeed)).isEqualTo(scenario.payoutOutcome(resultSeed));
     assertThat(scenario.payoutOutcome(resultSeed).delayMs()).isBetween(10, 20);
+    assertThat(scenario.payoutOutcome(resultSeed).delayMs()).isEqualTo(13);
   }
 
   @Test
