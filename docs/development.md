@@ -92,7 +92,7 @@ docker compose up -d --build --wait --wait-timeout 300
 
 | 영역 | 기본 적재 | 시나리오 옵션을 켠 처리 결과 |
 | --- | --- | --- |
-| Payment | 구매자 1·11·41·61 지갑(100,000·0·0·500점)과 양수 지갑 SEED 2행. 결제 6개 상태 스냅샷과 정산 대응 CONFIRMED 스냅샷 8개 | 외부 39,000원·혼합 23,000원(M 1,000)·전액 마일리지 10,000원·0점 지갑 잔액 부족 요청. APPLIED 3·REVIEW_REQUIRED 1, 결제 3·승인 작업 2·예약 2·RESERVE 2·DEBIT 1. 구매자 A 잔액 90,000·예약 1,000점 |
+| Payment | 구매자 1·11·41·61 지갑(100,000·0·0·500점)과 양수 지갑 SEED 2행. 결제 6개 상태 스냅샷과 정산 대응 CONFIRMED 스냅샷 8개. 스냅샷마다 그 결제를 만든 카드 결제 요청 원문을 APPLIED Inbox(출처 `commerce-settle.fixture.snapshot`)로 남겨 결제 조회의 `method`를 채움 | 외부 39,000원·혼합 23,000원(M 1,000)·전액 마일리지 10,000원·0점 지갑 잔액 부족 요청. APPLIED 3·REVIEW_REQUIRED 1, 결제 3·승인 작업 2·예약 2·RESERVE 2·DEBIT 1. 구매자 A 잔액 90,000·예약 1,000점 |
 | Settlement | 항목 8개: 판매자 A의 마감 직전 2·정각 1·직후 1·환불 예약 1·환불 완료 1, 판매자 B의 직전 1·구매확정 대기 1 | `2026-09-01` 실제 일배치를 fixture 항목으로 제한해 배치·지급·작업 각 2행, 지급 예약 3행 생성. 판매자 A 39,100원·B 33,150원. 정각·직후는 다음 배치 대상으로 남음 |
 | Finance Mock | 기존 기본 지급 설정과 별개인 `fixture-payout-funding`(1,000,000원), `fixture-normal-v1`·`fixture-reject-v1`·`fixture-response-loss-v1`·`fixture-lookup-failure-v1` | 시나리오별 19,550원 실제 모의 지급. 성공 3·거절 1, 자금 예약 4·현금 차감 3·멱등 기록 4. 잔액 941,350원·예약액 0원 |
 
