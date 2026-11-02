@@ -655,6 +655,8 @@ Job 식별자는 targetMonth+runId다. 정상 재시작은 같은 값을 사용�
 
 **제약:** UNIQUE(refund_id). 금융 성공/마일리지 복원/원장 상쇄/주문 복구를 별도 추적. 완료 ack 전 전체 완료 금지.
 
+현재 `step`은 RESERVATION_REQUESTED → EXTERNAL_REFUND_PENDING → MILEAGE_RESTORE_PENDING → LEDGER_REVERSAL_PENDING → ORDER_RESTORE_PENDING → COMPLETED이며, 외부 확정 거절은 RELEASE_PENDING → FAILED, 예약 거절은 RESERVATION_REQUESTED → FAILED입니다. 원장 상쇄 확인 때 `RefundCompleted`를 저장하고, `RefundOrderRestored`를 반영해야 환불이 COMPLETED가 됩니다. Settlement 응답(예약 결과·원장 상쇄·예약 해제)은 `RefundSettlementReplyService`가 반영하며, Settlement 연동 전에는 개발용 stub(`app.refund.settlement-stub.enabled`, 기본 `true`)이 즉시 성공 응답을 넣습니다. 연동하면 Settlement 토픽 수신기가 같은 서비스를 호출하게 하고 stub을 끕니다.
+
 **인덱스:** (step,updated_at,id).
 
 ### refunds
@@ -678,6 +680,8 @@ Job 식별자는 targetMonth+runId다. 정상 재시작은 같은 값을 사용�
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(order_refund_request_id), UNIQUE(business_key). 부분 UNIQUE(payment_id) WHERE status IN (RESERVING,EXTERNAL_PENDING,RESTORING,INTERNAL_PENDING,COMPLETED,UNKNOWN,COMPENSATING). 원결제 E/M을 복사해 불변.
+
+현재 Payment가 환불 SAGA에 이 테이블을 사용합니다. `RefundApproved`를 받으면 확정 결제의 E/M을 복사해 RESERVING으로 접수하고 `RefundAccepted`·`RefundReservationRequested`(판매자 순액 N)를 같은 트랜잭션에 저장합니다. 같은 취소·반품 요청의 재전달은 기존 환불로 연결하고, 같은 원결제의 다른 요청은 Inbox의 `REVIEW_REQUIRED`로 남깁니다. 정산금 예약 뒤 환불 작업(`payment_jobs` REFUND, 업무 키는 `business_key`)이 원승인 시도의 provider·원외부 거래·시나리오 버전으로 E만 환불합니다. `external_status`는 NOT_REQUIRED(E=0, 호출 생략)/PENDING/REQUESTED(호출했을 수 있어 조회부터 재개)/SUCCEEDED/DECLINED/UNKNOWN입니다. 외부 성공 확인과 같은 트랜잭션에 M 복원·RESTORE 원장·INTERNAL_PENDING·`RefundFinancialCompleted`를 저장합니다. 확정 거절은 복원 없이 COMPENSATING과 `RefundReleaseRequested`, 미확정은 예약을 유지한 UNKNOWN으로 원거래를 다시 조회합니다. 외부 환불은 즉시 성공하는 개발용 stub(`app.refund.gateway=stub`)뿐이며 finance-mock 환불 연동은 아직 없습니다.
 
 **인덱스:** (payment_id,created_at,id); (status,updated_at,id).
 
