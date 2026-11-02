@@ -6,6 +6,7 @@ import com.commercesettle.commerce.presentation.dto.OrderResponse;
 import com.commercesettle.commerce.presentation.dto.OrderWorkflowRequests;
 import com.commercesettle.commerce.presentation.dto.OrderWorkflowResponses;
 import com.commercesettle.commerce.presentation.dto.ProblemResponse;
+import com.commercesettle.internalauth.InternalCallerFilter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.headers.Header;
@@ -291,7 +292,8 @@ public class OrderWorkflowController {
       operationId = "post_internal_refund_requests_requestId_closure",
       summary = "확정 실패·미복원·예약 해제·고객확인 뒤 운영 종결")
   public OrderWorkflowResponses.Refund close(
-      @Parameter(hidden = true) @RequestAttribute("verifiedInternalCaller") String operator,
+      @Parameter(hidden = true) @RequestAttribute(InternalCallerFilter.VERIFIED_CALLER)
+          String operator,
       @PathVariable UUID requestId,
       @RequestHeader("Idempotency-Key") @Size(min = 8, max = 128) String key,
       @Valid @RequestBody OrderWorkflowRequests.Closure r) {

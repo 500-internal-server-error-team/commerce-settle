@@ -1,4 +1,4 @@
-package com.commercesettle.commerce.infrastructure.security;
+package com.commercesettle.internalauth;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;

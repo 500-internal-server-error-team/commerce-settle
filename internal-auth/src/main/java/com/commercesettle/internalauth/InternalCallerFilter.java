@@ -1,4 +1,4 @@
-package com.commercesettle.commerce.infrastructure.security;
+package com.commercesettle.internalauth;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.servlet.FilterChain;
@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -25,21 +26,23 @@ import org.springframework.web.util.pattern.PathPatternParser;
  *
  * <p>판정 순서: 자격 없음·불일치 401 → 명세에 없는 메서드·경로 404 → 다른 서비스 소유 작업이나 발신자와 맞지 않는 {@code x-actor} 403 →
  * Gateway가 아닌 발신자의 신원 헤더 403. 통과한 요청의 {@code X-Authenticated-*}는 Gateway가 보낸 값이다. 계정 종류·ID·세션 해시의
- * 유무와 작업 역할 대조는 이후 MVC 경계가 맡는다.
+ * 유무와 작업 역할 대조는 이후 MVC 경계가 맡는다. 제외 경로(기본은 Gateway가 모으는 서비스 명세)의 GET은 판정하지 않는다.
  *
  * <p>오류는 MVC 예외 처리기로 넘겨 공통 오류 형식으로 응답한다. 자격 원문·해시는 로그·응답·지표에 넣지 않는다.
  */
 public class InternalCallerFilter extends OncePerRequestFilter {
+  /** 판정을 통과한 요청에 확인한 발신자 ID를 담는 요청 속성. 운영자 처리자 기록처럼 발신자 ID가 필요한 컨트롤러가 읽는다. */
+  public static final String VERIFIED_CALLER = "verifiedInternalCaller";
+
   static final String GATEWAY = "gateway";
   private static final Logger LOGGER = LoggerFactory.getLogger(InternalCallerFilter.class);
   private static final String BEARER = "bearer ";
   private static final String IDENTITY_PREFIX = "x-authenticated-";
   private static final String UNKNOWN = "unknown";
   private static final Set<String> GATEWAY_ACTORS = Set.of("PUBLIC", "BUYER", "SELLER");
-  // Gateway의 서비스 명세 경로. 공개 계약 문서이므로 자격 판정에서 제외한다.
-  private static final PathPattern DOCUMENTS = new PathPatternParser().parse("/v3/api-docs/**");
 
   private final String service;
+  private final List<PathPattern> excluded;
   private final InternalCredentials credentials;
   private final InternalOperations operations;
   private final HandlerExceptionResolver errors;
@@ -47,11 +50,14 @@ public class InternalCallerFilter extends OncePerRequestFilter {
 
   public InternalCallerFilter(
       String service,
+      List<String> excludedPaths,
       InternalCredentials credentials,
       InternalOperations operations,
       HandlerExceptionResolver errors,
       MeterRegistry meters) {
     this.service = service;
+    final var parser = new PathPatternParser();
+    this.excluded = excludedPaths.stream().map(parser::parse).toList();
     this.credentials = credentials;
     this.operations = operations;
     this.errors = errors;
@@ -65,7 +71,8 @@ public class InternalCallerFilter extends OncePerRequestFilter {
     final var path =
         RequestPath.parse(request.getRequestURI(), request.getContextPath())
             .pathWithinApplication();
-    if ("GET".equals(request.getMethod()) && DOCUMENTS.matches(path)) {
+    if ("GET".equals(request.getMethod())
+        && excluded.stream().anyMatch(pattern -> pattern.matches(path))) {
       chain.doFilter(request, response);
       return;
     }
@@ -85,7 +92,7 @@ public class InternalCallerFilter extends OncePerRequestFilter {
       reject(request, response, sender, HttpStatus.FORBIDDEN);
       return;
     }
-    request.setAttribute("verifiedInternalCaller", sender);
+    request.setAttribute(VERIFIED_CALLER, sender);
     chain.doFilter(request, response);
   }
 
@@ -130,7 +137,7 @@ public class InternalCallerFilter extends OncePerRequestFilter {
         .increment();
     LOGGER
         .atWarn()
-        .addKeyValue("event", "commerce.internal-auth")
+        .addKeyValue("event", service + ".internal-auth")
         .addKeyValue("sender", sender)
         .addKeyValue("method", request.getMethod())
         .addKeyValue("httpStatus", status.value())

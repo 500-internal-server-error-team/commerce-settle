@@ -1,4 +1,4 @@
-package com.commercesettle.commerce.infrastructure.security;
+package com.commercesettle.internalauth;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -7,7 +7,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.commercesettle.commerce.infrastructure.config.InternalAuthConfiguration;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
@@ -31,10 +30,13 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 @WebMvcTest(
     controllers = InternalCallerFilterTest.Endpoints.class,
     properties = {
+      "app.internal-auth.service=commerce",
       "app.internal-auth.senders.gateway.current=" + InternalCallerFilterTest.GATEWAY,
       "app.internal-auth.senders.gateway.previous=" + InternalCallerFilterTest.GATEWAY_PREVIOUS,
       // 인라인 속성은 ':'도 구분자로 읽으므로 발신자 ID의 ':'를 이스케이프한다.
@@ -42,8 +44,9 @@ import org.springframework.web.bind.annotation.RestController;
       "app.internal-auth.senders[operator\\:ops-1].current=" + InternalCallerFilterTest.OPERATOR
     })
 @Import({
-  InternalAuthConfiguration.class,
+  InternalAuthAutoConfiguration.class,
   InternalCallerFilterTest.Endpoints.class,
+  InternalCallerFilterTest.Errors.class,
   InternalCallerFilterTest.Meters.class
 })
 @ExtendWith(OutputCaptureExtension.class)
@@ -110,8 +113,7 @@ class InternalCallerFilterTest {
     mvc.perform(request)
         .andExpect(status().isUnauthorized())
         .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
-        .andExpect(jsonPath("$.code").value("COMMON_AUTHENTICATION_REQUIRED"))
-        .andExpect(jsonPath("$.instance").value("/api/products"));
+        .andExpect(jsonPath("$.status").value(401));
 
     assertThat(output).doesNotContain(OTHER_TARGET).doesNotContain(GATEWAY);
   }
@@ -131,9 +133,7 @@ class InternalCallerFilterTest {
   void rejectsOperationOutsideContract(String method, String path) throws Exception {
     final var request = "POST".equals(method) ? post(path) : get(path);
 
-    mvc.perform(gateway(request))
-        .andExpect(status().isNotFound())
-        .andExpect(jsonPath("$.code").value("COMMON_RESOURCE_NOT_FOUND"));
+    mvc.perform(gateway(request)).andExpect(status().isNotFound());
   }
 
   @ParameterizedTest(name = "{1} {2}")
@@ -155,8 +155,7 @@ class InternalCallerFilterTest {
         };
 
     mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, "Bearer " + credential))
-        .andExpect(status().isForbidden())
-        .andExpect(jsonPath("$.code").value("COMMON_ROLE_FORBIDDEN"));
+        .andExpect(status().isForbidden());
   }
 
   @Test
@@ -166,8 +165,7 @@ class InternalCallerFilterTest {
             get(ORDER_CONTEXT)
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + PAYMENT)
                 .header("x-authenticated-actor-id", "00000000-0000-4000-8000-000000000001"))
-        .andExpect(status().isForbidden())
-        .andExpect(jsonPath("$.code").value("COMMON_ROLE_FORBIDDEN"));
+        .andExpect(status().isForbidden());
   }
 
   @Test
@@ -231,6 +229,10 @@ class InternalCallerFilterTest {
       return "unregistered";
     }
   }
+
+  /** 오류 형식은 각 서비스의 예외 처리기가 정한다. 여기서는 판정 결과가 MVC 예외 처리로 넘어가는지만 본다. */
+  @RestControllerAdvice
+  static class Errors extends ResponseEntityExceptionHandler {}
 
   @TestConfiguration(proxyBeanMethods = false)
   static class Meters {

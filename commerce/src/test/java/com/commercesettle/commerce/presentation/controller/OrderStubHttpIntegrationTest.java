@@ -7,6 +7,7 @@ import com.commercesettle.commerce.infrastructure.config.HttpJsonConfiguration;
 import com.commercesettle.commerce.infrastructure.config.OpenApiConfiguration;
 import com.commercesettle.commerce.infrastructure.config.OrderStubConfiguration;
 import com.commercesettle.commerce.presentation.exception.CommerceExceptionHandler;
+import com.commercesettle.internalauth.InternalAuthAutoConfiguration;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -854,6 +855,7 @@ class OrderStubHttpIntegrationTest {
       exclude = {
         DataSourceAutoConfiguration.class,
         HibernateJpaAutoConfiguration.class,
+        InternalAuthAutoConfiguration.class,
         KafkaAutoConfiguration.class,
         RedisAutoConfiguration.class,
         RedisRepositoriesAutoConfiguration.class

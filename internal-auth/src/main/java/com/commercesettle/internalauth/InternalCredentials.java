@@ -1,4 +1,4 @@
-package com.commercesettle.commerce.infrastructure.security;
+package com.commercesettle.internalauth;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
