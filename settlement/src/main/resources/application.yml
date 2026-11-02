@@ -127,6 +127,13 @@ app:
     settlement-events:
       # PaymentConfirmed·PurchaseConfirmed 수신. 개발용 초기 SQL 적용과 신규 그룹 offset 초기화 후에만 활성화한다.
       enabled: ${APP_KAFKA_SETTLEMENT_EVENTS_ENABLED:false}
+  internal-auth:
+    service: settlement
+    # Gateway의 내부 호출 자격(ADR 0010). 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
+    senders:
+      gateway:
+        current: ${SETTLEMENT_GATEWAY_CREDENTIAL}
+        previous: ${SETTLEMENT_GATEWAY_CREDENTIAL_PREVIOUS:}
   dev-fixtures:
     enabled: ${APP_DEV_FIXTURES_ENABLED:false}
     run-scenarios: ${APP_DEV_FIXTURE_SCENARIOS_ENABLED:false}
