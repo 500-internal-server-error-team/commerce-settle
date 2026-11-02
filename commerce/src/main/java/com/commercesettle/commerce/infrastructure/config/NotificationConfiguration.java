@@ -4,10 +4,14 @@ import com.commercesettle.commerce.application.port.NotificationGateway;
 import com.commercesettle.commerce.application.port.NotificationStore;
 import com.commercesettle.commerce.application.service.NotificationDeliveryService;
 import com.commercesettle.commerce.application.service.NotificationService;
+import com.commercesettle.commerce.infrastructure.client.kakao.KakaoSelfMessageClient;
+import com.commercesettle.commerce.infrastructure.client.kakao.KakaoSelfNotificationGateway;
 import com.commercesettle.commerce.infrastructure.messaging.NotificationListener;
 import com.commercesettle.commerce.infrastructure.mock.MockNotificationGateway;
+import com.commercesettle.commerce.infrastructure.observability.NotificationMetrics;
 import com.commercesettle.commerce.infrastructure.persistence.notification.NotificationReceiptStore;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
@@ -15,6 +19,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import javax.sql.DataSource;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -28,12 +34,25 @@ public class NotificationConfiguration {
   NotificationGateway notificationGateway(
       NotificationReceiptStore receipts,
       Clock clock,
+      ObjectProvider<KakaoSelfMessageClient> self,
+      ObjectProvider<KakaoSelfProperties> properties,
       @Value("${app.notifications.mock.seed:67}") long seed,
       @Value("${app.notifications.mock.delay-ms:0}") long delay,
       @Value("${app.notifications.mock.temporary-failure-permille:0}") int temporary,
       @Value("${app.notifications.mock.permanent-failure-permille:0}") int permanent,
       @Value("${app.notifications.mock.response-loss-permille:0}") int loss) {
-    return new MockNotificationGateway(receipts, clock, seed, delay, temporary, permanent, loss);
+    var mock =
+        new MockNotificationGateway(receipts, clock, seed, delay, temporary, permanent, loss);
+    var client = self.getIfAvailable();
+    return client == null
+        ? mock
+        : new KakaoSelfNotificationGateway(mock, client, properties.getObject(), clock);
+  }
+
+  @Bean(destroyMethod = "close")
+  @ConditionalOnProperty(name = "app.notifications.metrics.enabled", havingValue = "true")
+  NotificationMetrics notificationMetrics(DataSource dataSource, MeterRegistry registry) {
+    return new NotificationMetrics(dataSource, registry);
   }
 
   @Bean(defaultCandidate = false, destroyMethod = "shutdownNow")

@@ -33,4 +33,16 @@ public record KakaoSelfProperties(
       throw new IllegalArgumentException("카카오 시연 자격 파일·본인 계정·앱·링크·시험 계정을 설정해 주세요.");
     }
   }
+
+  public String accountRef() {
+    try {
+      return java.util.HexFormat.of()
+          .formatHex(
+              java.security.MessageDigest.getInstance("SHA-256")
+                  .digest(
+                      (appId + ":" + userId).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    } catch (java.security.NoSuchAlgorithmException impossible) {
+      throw new IllegalStateException(impossible);
+    }
+  }
 }

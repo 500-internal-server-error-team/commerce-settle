@@ -99,6 +99,8 @@ public class NotificationService {
   }
 
   public NotificationGateway.Receipt receipt(UUID id) {
+    if (store.find(id).filter(n -> n.channel() != Notification.Channel.MOCK_KAKAO).isPresent())
+      throw OrderWorkflowService.notFound();
     var receipt = gateway.lookup(id, 0);
     if (receipt == null) throw OrderWorkflowService.notFound();
     return receipt;
@@ -133,6 +135,8 @@ public class NotificationService {
         mapper
             .createObjectNode()
             .put("orderId", order.getId().toString())
+            .put("productId", order.getProductId().toString())
+            .put("productName", order.getProductName())
             .put("totalAmount", order.getAmounts().totalAmount());
     var source = eventId == null ? UUID.randomUUID() : eventId;
     if (kind == Kind.SALE_COMPLETED)
@@ -151,12 +155,15 @@ public class NotificationService {
         mapper
             .createObjectNode()
             .put("orderId", order.getId().toString())
+            .put("productId", order.getProductId().toString())
+            .put("productName", order.getProductName())
+            .put("totalAmount", order.getAmounts().totalAmount())
             .put("requestId", request.getId().toString())
             .put("decision", request.getStatus().name());
     UUID business = kind == Kind.REFUND_ACTION_REQUIRED ? request.getRefundId() : request.getId();
     UUID source = eventId == null ? UUID.randomUUID() : eventId;
     append(order, kind, business, ActorKind.BUYER, source, occurredAt, payload);
-    if (kind != Kind.RETURN_DECIDED)
+    if (kind != Kind.RETURN_DECIDED && kind != Kind.RETURN_RECEIVED)
       append(order, kind, business, ActorKind.SELLER, source, occurredAt, payload);
   }
 
@@ -256,7 +263,10 @@ public class NotificationService {
       }
       occurredAt =
           java.time.OffsetDateTime.parse(p.required("processedAt").textValue()).toInstant();
-      store.append(
+      var enriched = (com.fasterxml.jackson.databind.node.ObjectNode) p.deepCopy();
+      enriched.put("productId", order.getProductId().toString());
+      enriched.put("productName", order.getProductName());
+      append(
           new Draft(
               source,
               event.eventId(),
@@ -265,12 +275,12 @@ public class NotificationService {
               ActorKind.BUYER,
               uuid(p, "buyerId"),
               occurredAt,
-              p));
+              enriched));
       if (kind == Kind.REFUND_COMPLETED) {
-        var seller = p.deepCopy();
+        var seller = enriched.deepCopy();
         ((com.fasterxml.jackson.databind.node.ObjectNode) seller)
             .remove(List.of("mileageBalanceAfter", "walletVersion"));
-        store.append(
+        append(
             new Draft(
                 source,
                 event.eventId(),
@@ -285,7 +295,7 @@ public class NotificationService {
       if (kind == Kind.PAYOUT_COMPLETED)
         occurredAt =
             java.time.OffsetDateTime.parse(p.required("succeededAt").textValue()).toInstant();
-      store.append(
+      append(
           new Draft(
               source,
               event.eventId(),
@@ -351,7 +361,7 @@ public class NotificationService {
       UUID eventId,
       Instant at,
       com.fasterxml.jackson.databind.JsonNode payload) {
-    store.append(
+    append(
         new Draft(
             "commerce",
             eventId,
@@ -361,6 +371,20 @@ public class NotificationService {
             recipient == ActorKind.BUYER ? order.getBuyerId() : order.getSellerId(),
             at,
             payload));
+  }
+
+  private void append(Draft draft) {
+    store.append(
+        new Draft(
+            draft.source(),
+            draft.eventId(),
+            draft.kind(),
+            draft.businessRef(),
+            draft.recipientKind(),
+            draft.recipientId(),
+            draft.occurredAt(),
+            draft.payload(),
+            gateway.destination(draft.recipientKind(), draft.recipientId())));
   }
 
   private void requireAccount(ActorKind kind, UUID id) {

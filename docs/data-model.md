@@ -1024,7 +1024,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 | `recipient_kind` | `varchar(16)` | BUYER/SELLER |
 | `recipient_id` | `uuid` | 종류에 맞는 계정 ID; 논리 참조 |
 | `channel` | `varchar(24)` | 기본 MOCK_KAKAO; 지정한 본인 시연은 KAKAO_SELF. 생성 뒤 불변 |
-| `channel_account_ref` | `varchar(64)?` | KAKAO_SELF는 앱 ID·카카오 사용자 ID 조합의 SHA-256. 생성 뒤 불변이며 현재 설정과 다르면 발송 차단; MOCK_KAKAO는 NULL |
+| `channel_account_ref` | `char(64)?` | KAKAO_SELF는 앱 ID·카카오 사용자 ID 조합의 SHA-256. 생성 뒤 불변이며 현재 설정과 다르면 발송 차단; MOCK_KAKAO는 NULL |
 | `dedup_key` | `varchar(200)` | 단건=원업무 ID, 판매 묶음=KST 구간 시작 |
 | `item_count` | `integer` | 중복 제외 항목 수; 1 이상 |
 | `first_occurred_at` | `timestamptz` | 항목 중 가장 이른 발생 시각 |
@@ -1046,7 +1046,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 | `updated_at` | `timestamptz` | 갱신 |
 | `version` | `bigint` | 낙관적 버전 |
 
-**제약:** UNIQUE(channel,kind,recipient_kind,recipient_id,dedup_key). recipient_kind에 맞는 계정을 검증하며 수신처는 mock:<종류>:<ID>로 계산한다. SALE_COMPLETED만 COLLECTING과 1분 구간을 사용한다. 마감 시 행 잠금 아래 항목 추가를 차단하고 본문·템플릿·합계를 고정한다. 같은 계정의 동일 구간에 열린 묶음 하나만 존재한다. 그 외 종류의 bucket 값은 NULL이다. SENT에는 sent_at 필수. lease_token과 lease_until은 함께 설정/해제한다. attempt_count/retry_count>=0, retry_count<=10.
+**제약:** UNIQUE NULLS NOT DISTINCT(channel,channel_account_ref,kind,recipient_kind,recipient_id,dedup_key). MOCK_KAKAO의 계정 참조는 NULL, KAKAO_SELF는 소문자 SHA-256 64자리 필수다. recipient_kind에 맞는 계정을 검증한다. 모의 수신처는 mock:<종류>:<ID>, 실제 수신 참조는 kakao-self:<계정 해시>:<종류>:<ID>다. SALE_COMPLETED만 COLLECTING과 1분 구간을 사용한다. 마감 시 행 잠금 아래 항목 추가를 차단하고 본문·템플릿·합계를 고정한다. 같은 채널·물리 계정·논리 수신자의 동일 구간에 열린 묶음 하나만 존재한다. 그 외 종류의 bucket 값은 NULL이다. SENT에는 sent_at 필수. lease_token과 lease_until은 함께 설정/해제한다. attempt_count/retry_count>=0, retry_count<=10.
 
 **인덱스:** (status,next_run_at,lease_until,id); (recipient_kind,recipient_id,created_at DESC,id DESC).
 

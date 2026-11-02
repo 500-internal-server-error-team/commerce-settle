@@ -51,6 +51,8 @@ public final class MockNotificationGateway implements NotificationGateway {
   @Override
   public Receipt send(Notification notification, int attempt) {
     requireOutsideTransaction();
+    if (notification.channel() != Notification.Channel.MOCK_KAKAO)
+      throw new Failure("KAKAO_SELF_DISABLED", true, false);
     var existing = receipts.find(notification.id());
     String hash = requestHash(notification);
     if (existing != null) {
@@ -83,7 +85,7 @@ public final class MockNotificationGateway implements NotificationGateway {
               .writeValueAsBytes(
                   Map.of(
                       "channel",
-                      "MOCK_KAKAO",
+                      notification.channel().name(),
                       "recipient",
                       notification.recipient(),
                       "kind",

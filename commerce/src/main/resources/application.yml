@@ -105,7 +105,7 @@ app:
       response-loss-permille: ${APP_NOTIFICATIONS_MOCK_RESPONSE_LOSS_PERMILLE:0}
   kafka:
     payment-accepted:
-      enabled: false
+      enabled: ${APP_KAFKA_PAYMENT_ACCEPTED_ENABLED:false}
   order-workflow:
     enabled: ${APP_ORDER_WORKFLOW_ENABLED:false}
     interval-ms: 60000
@@ -113,7 +113,7 @@ app:
     enabled: ${APP_ORDER_RESULT_PROCESSOR_ENABLED:false}
     interval-ms: 1000
   payment-accepted-processor:
-    enabled: false
+    enabled: ${APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED:false}
     interval-ms: 1000
     batch-size: 100
   dev-fixtures:
@@ -128,7 +128,7 @@ app:
     schedule-interval-ms: 60000
     batch-size: 100
   outbox:
-    enabled: false
+    enabled: ${APP_OUTBOX_ENABLED:false}
     recovery-interval-ms: 1000
     max-in-flight: 8
     lease-ms: 240000

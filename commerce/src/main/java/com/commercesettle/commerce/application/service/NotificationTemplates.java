@@ -6,10 +6,25 @@ import com.commercesettle.commerce.domain.model.ActorKind;
 /** 고정 템플릿. 판매자 렌더링에는 구매자 지갑 정보를 사용하지 않는다. */
 public final class NotificationTemplates {
   public static final String VERSION = "transaction-v1";
+  public static final String SELF_VERSION = "transaction-self-v1";
 
   private NotificationTemplates() {}
 
   public static Rendered render(Draft draft, int count, long total) {
+    return draft.destination().channel()
+            == com.commercesettle.commerce.domain.model.Notification.Channel.KAKAO_SELF
+        ? renderSelf(draft, count, total)
+        : renderMock(draft, count, total);
+  }
+
+  public static String version(Draft draft) {
+    return draft.destination().channel()
+            == com.commercesettle.commerce.domain.model.Notification.Channel.KAKAO_SELF
+        ? SELF_VERSION
+        : VERSION;
+  }
+
+  private static Rendered renderMock(Draft draft, int count, long total) {
     var p = draft.payload();
     String reference = draft.businessRef().toString();
     var rendered =
@@ -43,6 +58,8 @@ public final class NotificationTemplates {
                       + balance(draft));
           case SHIPMENT_STARTED ->
               new Rendered("발송 시작", "주문 " + reference + "의 발송이 처리됐습니다. 배송 완료는 주문 내역에서 확인해 주세요.");
+          case SHIPMENT_DELIVERED ->
+              new Rendered("배송 완료", "주문 " + reference + "이 배송 완료됐습니다. 주문 내역과 반품 기한을 확인해 주세요.");
           case PURCHASE_CONFIRMED ->
               new Rendered("구매확정", "주문 " + reference + "의 환불 기한이 지나 자동 구매확정됐습니다.");
           case CANCELLATION_COMPLETED ->
@@ -57,6 +74,8 @@ public final class NotificationTemplates {
                       + ("APPROVED".equals(p.path("decision").asText())
                           ? "이 승인됐습니다. 환불 완료는 별도로 안내합니다."
                           : "이 거절됐습니다. 요청 내역을 확인해 주세요."));
+          case RETURN_RECEIVED ->
+              new Rendered("반품 입고 확인", "요청 " + reference + "의 반품이 입고됐습니다. 환불 완료 여부는 별도로 안내합니다.");
           case REFUND_ACTION_REQUIRED ->
               new Rendered(
                   "환불 확인 필요",
@@ -97,6 +116,82 @@ public final class NotificationTemplates {
                 : " 거래 발생 시각 ")
             + kst(draft.occurredAt().atOffset(java.time.ZoneOffset.UTC).toString())
             + ".");
+  }
+
+  private static Rendered renderSelf(Draft draft, int count, long total) {
+    var p = draft.payload();
+    var standard = renderMock(draft, count, total);
+    boolean buyer = draft.recipientKind() == ActorKind.BUYER;
+    String context =
+        switch (draft.kind()) {
+          case SETTLEMENT_READY, PAYOUT_COMPLETED, PAYOUT_ACTION_REQUIRED ->
+              "배치 " + p.path("batchDate").asText() + " / " + draft.businessRef();
+          default ->
+              "주문 "
+                  + p.path("orderId").asText(draft.businessRef().toString())
+                  + "\n상품 "
+                  + shortName(p.path("productName").asText("주문 내역 참조"));
+        };
+    String amount =
+        switch (draft.kind()) {
+          case PAYMENT_COMPLETED ->
+              "외부 "
+                  + p.path("externalAmount").asLong()
+                  + "원 · 마일리지 "
+                  + p.path("mileageAmount").asLong()
+                  + "원"
+                  + shortBalance(draft);
+          case REFUND_COMPLETED ->
+              "환불 "
+                  + p.path("totalAmount").asLong()
+                  + "원"
+                  + (buyer
+                      ? "\n외부 "
+                          + p.path("externalAmount").asLong()
+                          + "원 · 마일리지 "
+                          + p.path("mileageAmount").asLong()
+                          + "원"
+                          + shortBalance(draft)
+                      : "");
+          case SALE_COMPLETED -> "판매 " + count + "건 · 합계 " + total + "원 (1분 묶음·첫 주문)";
+          case SETTLEMENT_READY, PAYOUT_COMPLETED -> "금액 " + p.path("amount").asLong() + "원";
+          case PAYOUT_ACTION_REQUIRED -> "지급 미완료 " + p.path("amount").asLong() + "원 · 문의 필요";
+          case REFUND_ACTION_REQUIRED -> "환불 미완료 " + p.path("totalAmount").asLong() + "원 · 문의 필요";
+          case RETURN_DECIDED ->
+              ("APPROVED".equals(p.path("decision").asText()) ? "승인" : "거절")
+                  + " · 주문액 "
+                  + p.path("totalAmount").asLong()
+                  + "원";
+          default -> "주문액 " + p.path("totalAmount").asLong() + "원";
+        };
+    String occurred =
+        java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm 'KST'")
+            .withZone(java.time.ZoneId.of("Asia/Seoul"))
+            .format(draft.occurredAt());
+    return new Rendered(
+        standard.title(),
+        (buyer ? "[구매자] " : "[판매자] ")
+            + standard.title()
+            + "\n"
+            + context
+            + "\n"
+            + amount
+            + "\n시각 "
+            + occurred);
+  }
+
+  private static String shortBalance(Draft draft) {
+    var balance = draft.payload().path("mileageBalanceAfter");
+    return draft.recipientKind() == ActorKind.BUYER && balance.isIntegralNumber()
+        ? " · 잔액 " + balance.asLong() + "원"
+        : "";
+  }
+
+  private static String shortName(String value) {
+    String clean = value.replaceAll("\\p{Cntrl}", " ").strip();
+    if (clean.length() <= 24) return clean;
+    int end = Character.isHighSurrogate(clean.charAt(22)) ? 22 : 23;
+    return clean.substring(0, end) + "…";
   }
 
   private static String balance(Draft draft) {

@@ -476,10 +476,11 @@ CREATE INDEX inbox_conflicts_event ON commerce.inbox_conflicts(consumer, event_i
 -- MOCK_KAKAO 거래 알림. 금융 상태와 수신자별 항목의 원자 저장을 위한 Commerce 소유 기록.
 CREATE TABLE commerce.notification_deliveries (
     id uuid PRIMARY KEY,
-    kind varchar(40) NOT NULL CHECK (kind IN ('PAYMENT_COMPLETED','SHIPMENT_STARTED','PURCHASE_CONFIRMED','CANCELLATION_COMPLETED','RETURN_REQUESTED','RETURN_DECIDED','REFUND_COMPLETED','REFUND_ACTION_REQUIRED','SALE_COMPLETED','SETTLEMENT_READY','PAYOUT_COMPLETED','PAYOUT_ACTION_REQUIRED')),
+    kind varchar(40) NOT NULL CHECK (kind IN ('PAYMENT_COMPLETED','SHIPMENT_STARTED','SHIPMENT_DELIVERED','PURCHASE_CONFIRMED','CANCELLATION_COMPLETED','RETURN_REQUESTED','RETURN_DECIDED','RETURN_RECEIVED','REFUND_COMPLETED','REFUND_ACTION_REQUIRED','SALE_COMPLETED','SETTLEMENT_READY','PAYOUT_COMPLETED','PAYOUT_ACTION_REQUIRED')),
     recipient_kind varchar(16) NOT NULL CHECK (recipient_kind IN ('BUYER','SELLER')),
     recipient_id uuid NOT NULL,
-    channel varchar(24) NOT NULL CHECK (channel='MOCK_KAKAO'),
+    channel varchar(24) NOT NULL CHECK (channel IN ('MOCK_KAKAO','KAKAO_SELF')),
+    channel_account_ref char(64),
     dedup_key varchar(200) NOT NULL,
     item_count integer NOT NULL CHECK (item_count>=1),
     first_occurred_at timestamptz NOT NULL,
@@ -500,7 +501,8 @@ CREATE TABLE commerce.notification_deliveries (
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
     version bigint NOT NULL DEFAULT 0 CHECK (version>=0),
-    UNIQUE(channel,kind,recipient_kind,recipient_id,dedup_key),
+    UNIQUE NULLS NOT DISTINCT(channel,channel_account_ref,kind,recipient_kind,recipient_id,dedup_key),
+    CHECK ((channel='MOCK_KAKAO' AND channel_account_ref IS NULL) OR (channel='KAKAO_SELF' AND channel_account_ref IS NOT NULL AND channel_account_ref ~ '^[0-9a-f]{64}$')),
     CHECK ((kind='SALE_COMPLETED')=(bucket_start IS NOT NULL AND bucket_end IS NOT NULL)),
     CHECK (bucket_start IS NULL OR bucket_end=bucket_start+interval '1 minute'),
     CHECK (kind='SALE_COMPLETED' OR (bucket_start IS NULL AND bucket_end IS NULL AND item_count=1 AND total_amount=0)),

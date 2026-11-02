@@ -61,6 +61,8 @@ public class JdbcNotificationStore implements NotificationStore {
             .addValue("business", draft.businessRef())
             .addValue("recipientKind", draft.recipientKind().name())
             .addValue("recipient", draft.recipientId())
+            .addValue("channel", draft.destination().channel().name())
+            .addValue("account", draft.destination().accountRef())
             .addValue("occurred", time(draft.occurredAt()))
             .addValue("payload", draft.payload().toString())
             .addValue("received", time(received));
@@ -97,7 +99,7 @@ public class JdbcNotificationStore implements NotificationStore {
               : draft.businessRef().toString();
       args.addValue("dedup", key)
           .addValue("total", total)
-          .addValue("template", sale ? "" : NotificationTemplates.VERSION)
+          .addValue("template", sale ? "" : NotificationTemplates.version(draft))
           .addValue("title", rendered.title())
           .addValue("body", sale ? "" : rendered.body())
           .addValue("status", sale ? "COLLECTING" : "PENDING")
@@ -119,9 +121,9 @@ public class JdbcNotificationStore implements NotificationStore {
           named
               .query(
                   """
-          INSERT INTO commerce.notification_deliveries(id,kind,recipient_kind,recipient_id,channel,dedup_key,item_count,first_occurred_at,total_amount,template_version,title,body,status,bucket_start,bucket_end,next_run_at,created_at,updated_at)
-          VALUES (:delivery,:kind,:recipientKind,:recipient,'MOCK_KAKAO',:dedup,1,:occurred,:total,:template,:title,:body,:status,:bucket,:end,:next,:received,:received)
-          ON CONFLICT(channel,kind,recipient_kind,recipient_id,dedup_key)
+          INSERT INTO commerce.notification_deliveries(id,kind,recipient_kind,recipient_id,channel,channel_account_ref,dedup_key,item_count,first_occurred_at,total_amount,template_version,title,body,status,bucket_start,bucket_end,next_run_at,created_at,updated_at)
+          VALUES (:delivery,:kind,:recipientKind,:recipient,:channel,:account,:dedup,1,:occurred,:total,:template,:title,:body,:status,:bucket,:end,:next,:received,:received)
+          ON CONFLICT(channel,channel_account_ref,kind,recipient_kind,recipient_id,dedup_key)
           """
                       + conflict
                       + " RETURNING id",
@@ -146,7 +148,12 @@ public class JdbcNotificationStore implements NotificationStore {
       throw new Notification.ContentConflictException("Invalid notification payload");
     boolean allowed =
         switch (draft.kind()) {
-          case PAYMENT_COMPLETED, SHIPMENT_STARTED, PURCHASE_CONFIRMED, RETURN_DECIDED ->
+          case PAYMENT_COMPLETED,
+              SHIPMENT_STARTED,
+              SHIPMENT_DELIVERED,
+              PURCHASE_CONFIRMED,
+              RETURN_DECIDED,
+              RETURN_RECEIVED ->
               draft.recipientKind() == ActorKind.BUYER;
           case SALE_COMPLETED, SETTLEMENT_READY, PAYOUT_COMPLETED, PAYOUT_ACTION_REQUIRED ->
               draft.recipientKind() == ActorKind.SELLER;
@@ -256,6 +263,13 @@ public class JdbcNotificationStore implements NotificationStore {
           time(now),
           n.id());
     }
+    if (lookup && n.channel() == Notification.Channel.KAKAO_SELF) {
+      jdbc.update(
+          "UPDATE commerce.notification_deliveries SET status='REVIEW_REQUIRED',lease_token=NULL,lease_until=NULL,last_error_code='KAKAO_RESPONSE_UNKNOWN',updated_at=?,version=version+1 WHERE id=?",
+          time(now),
+          n.id());
+      return new Claim(find(n.id()).orElseThrow(), null, expired);
+    }
     if (n.retryCount() >= 10) {
       jdbc.update(
           "UPDATE commerce.notification_deliveries SET status='REVIEW_REQUIRED',lease_token=NULL,lease_until=NULL,last_error_code='NOTIFICATION_ATTEMPTS_EXHAUSTED',updated_at=?,version=version+1 WHERE id=?",
@@ -273,11 +287,14 @@ public class JdbcNotificationStore implements NotificationStore {
               ActorKind.SELLER,
               n.recipientId(),
               n.occurredAt(),
-              mapper.createObjectNode());
+              n.channel() == Notification.Channel.KAKAO_SELF
+                  ? firstItem(n.id())
+                  : mapper.createObjectNode(),
+              new Notification.Destination(n.channel(), n.channelAccountRef()));
       var rendered = NotificationTemplates.render(draft, n.itemCount(), n.totalAmount());
       jdbc.update(
           "UPDATE commerce.notification_deliveries SET status='PENDING',template_version=?,title=?,body=? WHERE id=?",
-          NotificationTemplates.VERSION,
+          NotificationTemplates.version(draft),
           rendered.title(),
           rendered.body(),
           n.id());
@@ -313,7 +330,10 @@ public class JdbcNotificationStore implements NotificationStore {
       Instant now) {
     TransactionLimits.apply(jdbc);
     var n = lease.notification();
-    Status status = requested;
+    Status status =
+        requested == Status.UNKNOWN && n.channel() == Notification.Channel.KAKAO_SELF
+            ? Status.REVIEW_REQUIRED
+            : requested;
     if (n.retryCount() >= 10 && status != Status.SENT && status != Status.REVIEW_REQUIRED)
       status = Status.REVIEW_REQUIRED;
     int updated =
@@ -368,7 +388,7 @@ public class JdbcNotificationStore implements NotificationStore {
         n.status() == Status.UNKNOWN || (!last.isEmpty() && last.getFirst().equals("UNKNOWN"));
     jdbc.update(
         "UPDATE commerce.notification_deliveries SET status=?,retry_count=0,attempt_count=attempt_count+1,next_run_at=?,lease_token=NULL,lease_until=NULL,last_error_code=NULL,updated_at=?,version=version+1 WHERE id=?",
-        unknown ? "UNKNOWN" : "PENDING",
+        unknown && n.channel() == Notification.Channel.MOCK_KAKAO ? "UNKNOWN" : "PENDING",
         time(now),
         time(now),
         id);
@@ -539,6 +559,8 @@ public class JdbcNotificationStore implements NotificationStore {
         Kind.valueOf(row.getString("kind")),
         ActorKind.valueOf(row.getString("recipient_kind")),
         row.getObject("recipient_id", UUID.class),
+        Notification.Channel.valueOf(row.getString("channel")),
+        row.getString("channel_account_ref"),
         row.getString("dedup_key"),
         row.getInt("item_count"),
         instant(row, "first_occurred_at"),
@@ -556,6 +578,19 @@ public class JdbcNotificationStore implements NotificationStore {
         instant(row, "created_at"),
         instant(row, "sent_at"),
         row.getLong("version"));
+  }
+
+  private JsonNode firstItem(UUID delivery) {
+    String body =
+        jdbc.queryForObject(
+            "SELECT payload::text FROM commerce.notification_items WHERE delivery_id=? ORDER BY occurred_at,id LIMIT 1",
+            String.class,
+            delivery);
+    try {
+      return mapper.readTree(body);
+    } catch (java.io.IOException e) {
+      throw new Notification.ContentConflictException("Invalid notification item", e);
+    }
   }
 
   private EventEnvelope<JsonNode> event(String text) {

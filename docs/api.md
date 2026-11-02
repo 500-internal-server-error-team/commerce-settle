@@ -230,13 +230,13 @@ PG A/B/C의 카드와 EASY_PAY의 시험 지갑에 승인·전액 환불을 제�
 
 ## 거래 알림 사용 순서
 
-Commerce의 MOCK_KAKAO 저장·조회·발송·복구를 구현했습니다. 실제 카카오 발송은 없으며 Payment·Settlement의 notice 생산부 연결과 전체 금융 왕복은 [#120](https://github.com/500-internal-server-error-team/commerce-settle/issues/120)에서 추적합니다. 소비·발송 활성화와 격리 복구는 [실행 안내](development.md#모의-거래-알림)를 따릅니다.
+Commerce의 기본 MOCK_KAKAO 저장·조회·발송·복구와 명시적 [본인 카카오 시연](development.md#본인-카카오톡-시연)을 구현했습니다. Payment·Settlement의 notice 생산부 연결과 전체 금융 왕복은 [#120](https://github.com/500-internal-server-error-team/commerce-settle/issues/120)에서 추적합니다. 소비·발송 활성화와 격리 복구는 [실행 안내](development.md#모의-거래-알림)를 따릅니다.
 
 1. 결제·환불은 Payment의 `PaymentNoticeRequested`, 정산·지급은 Settlement의 `SettlementNoticeRequested`를 기존 생산자 토픽에서 받습니다. 알림 소비 그룹은 `commerce-notifications.v1`이며 기존 금융 소비 그룹과 offset을 공유하지 않습니다. 알림 실패가 금융 이벤트 소비를 막지 않습니다.
-2. 커머스의 발송·자동 구매확정·취소·반품 전이는 같은 DB 트랜잭션에 알림 항목을 만듭니다. 외부 요청 이벤트는 Inbox에 저장하고 주문/원환불의 선행 반영이 없으면 영속 대기합니다. 새 알림 요청은 기존 금융 v1 이벤트의 payload를 바꾸지 않습니다.
-3. 구매자·판매자는 같은 `/api/notifications`를 사용하지만 서버는 세션의 계정 종류와 ID로 범위를 제한합니다. `Notification`의 `SENT`는 모의 수신 확인입니다. 조회는 createdAt DESC,id DESC 정렬이며 COLLECTING 본문은 마감 전 빈 값입니다.
+2. 커머스의 발송·배송완료·자동 구매확정·취소·반품 접수/결정/입고 전이는 같은 DB 트랜잭션에 알림 항목을 만듭니다. 외부 요청 이벤트는 Inbox에 저장하고 주문/원환불의 선행 반영이 없으면 영속 대기합니다. 새 알림 요청은 기존 금융 v1 이벤트의 payload를 바꾸지 않습니다.
+3. 구매자·판매자는 같은 `/api/notifications`를 사용하지만 서버는 세션의 계정 종류와 ID로 범위를 제한합니다. `Notification`의 `SENT`는 MOCK_KAKAO 수신 기록 또는 KAKAO_SELF API 성공 응답 확인이며 읽음 확인이 아닙니다. channel·isMock으로 구분합니다. 조회는 createdAt DESC,id DESC 정렬이며 COLLECTING 본문은 마감 전 빈 값입니다.
 4. 운영자는 내부 발송 조회·시도 이력·원키 재처리만 사용합니다. 사용자용 임의 발송·수신자 지정·본문 수정 API는 없습니다. 재처리의 expectedVersion·Idempotency-Key·사유를 검증하고 `Location`으로 같은 발송을 조회합니다.
-5. 모의 수신 조회는 기록 없음 404, 원결과 존재 200입니다. 확정 거절도 원결과로 보존하며 재요청으로 성공을 만들지 않습니다. 알림 발송은 인프로세스 어댑터이며 별도 공개 Mock HTTP 서버를 만들지 않습니다. [알림 정책](policies.md#거래-알림)과 [저장 구조](data-model.md#거래-알림)가 복구·중복·묶음 기준입니다.
+5. 모의 수신 조회는 기록 없음 또는 실제 채널 발송이면 404, 모의 원결과 존재 시 200입니다. 확정 거절도 원결과로 보존하며 재요청으로 성공을 만들지 않습니다. 알림 발송은 인프로세스 어댑터이며 별도 공개 Mock HTTP 서버를 만들지 않습니다. [알림 정책](policies.md#거래-알림)과 [저장 구조](data-model.md#거래-알림)가 복구·중복·묶음 기준입니다.
 
 ## 오류와 완료 기준
 

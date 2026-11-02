@@ -4,6 +4,13 @@ services:
     user: "${KAKAO_SELF_UID:?Set the demo host uid}:${KAKAO_SELF_GID:?Set the demo host gid}"
     environment:
       KAKAO_SELF_DEMO_ENABLED: "true"
+      APP_NOTIFICATIONS_CONSUMER_ENABLED: "true"
+      APP_NOTIFICATIONS_WORKER_ENABLED: "true"
+      APP_ORDER_WORKFLOW_ENABLED: "true"
+      APP_ORDER_RESULT_PROCESSOR_ENABLED: "true"
+      APP_KAFKA_PAYMENT_ACCEPTED_ENABLED: "true"
+      APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED: "true"
+      APP_OUTBOX_ENABLED: "true"
       APP_NOTIFICATION_METRICS_ENABLED: "true"
       KAKAO_SELF_CREDENTIALS_FILE: /run/kakao/credentials.json
       KAKAO_SELF_USER_ID: ${KAKAO_SELF_USER_ID:?Set your Kakao user id}
