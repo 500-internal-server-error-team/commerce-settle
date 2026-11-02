@@ -7,6 +7,7 @@ dependencies {
     runtimeOnly 'org.postgresql:postgresql'
     implementation "org.springdoc:springdoc-openapi-starter-webmvc-api:${rootProject.springdocVersion}"
     testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'com.networknt:json-schema-validator:2.0.4'
     testImplementation 'org.testcontainers:junit-jupiter'
     testImplementation 'org.testcontainers:postgresql'
     testImplementation 'org.testcontainers:kafka'
