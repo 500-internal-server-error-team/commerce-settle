@@ -222,10 +222,12 @@ docker compose build commerce
 docker compose run --rm --no-deps -p 127.0.0.1:18080:8080 -e APP_ORDER_STUB_ENABLED=true commerce
 ```
 
-다른 터미널에서 호출합니다. 직접 전달하는 신원 헤더는 로컬 시험용입니다. 백엔드의 Gateway 호출 자격 검사는 아직 없어 운영 인증을 대신하지 못합니다.
+다른 터미널에서 호출합니다. 커머스는 Gateway 자격이 없는 직접 호출을 `401`로 거절하므로 `.env`의 `COMMERCE_GATEWAY_CREDENTIAL`을 붙입니다. 이 자격으로 직접 전달하는 신원 헤더는 로컬 시험용이며 Gateway의 세션 검증을 거치지 않습니다.
 
 ```bash
+COMMERCE_GATEWAY_CREDENTIAL=$(grep '^COMMERCE_GATEWAY_CREDENTIAL=' .env | cut -d= -f2-)
 curl http://localhost:18080/api/orders \
+  -H "Authorization: Bearer $COMMERCE_GATEWAY_CREDENTIAL" \
   -H 'X-Authenticated-Actor-Kind: BUYER' \
   -H 'X-Authenticated-Actor-Id: 00000000-0000-4000-8000-000000000001'
 
@@ -313,7 +315,7 @@ python3 scripts/smoke.py
 
 운영·테스트 Java 코드의 포맷·Checkstyle, 단위·통합·ArchUnit 테스트와 패키징을 검사합니다. `spotlessApply`는 로컬 수정용이며 CI는 `spotlessCheck`로 위반을 차단합니다. 테스트 추가 기준은 [테스트 작성](../CONTRIBUTING.md#테스트-작성)을 따릅니다.
 
-Python 테스트는 환경 초기화가 기존 설정을 보존하는지 확인합니다. smoke는 각 실행의 DB·Redis 연결·메트릭, Gateway 문서 라우팅·관리 경로 차단, Gateway 자격이 없는 커머스 직접 호출의 `401`, DB 간 접근 거부, 앱별 Redis ACL(커머스의 인증 키 쓰기·스크립트 실행과 `SCRIPT`·`FUNCTION`·키 목록·DB 전환 거절, Gateway의 `EVALSHA_RO` 검증과 쓰기·`EVAL`·`SCRIPT` 거절, 나머지 앱의 인증 키 거절), Kafka·Redis 왕복과 Zipkin의 Gateway→Commerce 추적 전파를 검사합니다. 임시 Kafka 토픽·Redis 키는 삭제합니다. CI는 낮은 부하의 k6 실행도 확인합니다. 결제·SAGA의 정합성과 성능은 업무 시나리오로 검증합니다.
+Python 테스트는 환경 초기화가 기존 설정을 보존하는지 확인합니다. smoke는 각 실행의 DB·Redis 연결·메트릭, Gateway 문서 라우팅·관리 경로 차단, 자격 없는 커머스·Payment·Settlement·Finance Mock 직접 호출과 Gateway 자격의 Finance Mock 호출의 `401`, Settlement 자격의 Finance Mock 원지급 조회, DB 간 접근 거부, 앱별 Redis ACL(커머스의 인증 키 쓰기·스크립트 실행과 `SCRIPT`·`FUNCTION`·키 목록·DB 전환 거절, Gateway의 `EVALSHA_RO` 검증과 쓰기·`EVAL`·`SCRIPT` 거절, 나머지 앱의 인증 키 거절), Kafka·Redis 왕복과 Zipkin의 Gateway→Commerce 추적 전파를 검사합니다. 임시 Kafka 토픽·Redis 키는 삭제합니다. CI는 낮은 부하의 k6 실행도 확인합니다. 결제·SAGA의 정합성과 성능은 업무 시나리오로 검증합니다.
 
 정적 검사만 실행할 때는 `./gradlew spotlessCheck checkstyleMain checkstyleTest`, 테스트만 실행할 때는 `./gradlew test`를 사용합니다. `build`는 이 검사들을 포함하므로 별도 실행이 필수는 아닙니다.
 
@@ -388,11 +390,30 @@ docker compose -f compose.yml -f compose.alertmanager-slack.yml --profile observ
 
 ### Gateway 라우팅과 오류
 
-Gateway의 서비스 주소는 기존 `COMMERCE_URL`·`PAYMENT_URL`·`SETTLEMENT_URL`로 재정의합니다. 업무 경로를 별도로 나열하지 않고 빌드 때 `docs/openapi.json`을 `contracts/openapi.json` 리소스로 포함합니다. 명세의 `/api/` 작업을 추가·변경하면 Gateway도 다시 빌드해야 합니다. `/internal`·`/mock`·관리 경로는 대상에서 제외합니다. 같은 명세의 `x-actor`로 보호 작업의 세션을 검증하며, 백엔드의 호출 자격 확인 전까지는 로컬 개발 전용입니다.
+Gateway의 서비스 주소는 기존 `COMMERCE_URL`·`PAYMENT_URL`·`SETTLEMENT_URL`로 재정의합니다. 업무 경로를 별도로 나열하지 않고 빌드 때 `docs/openapi.json`을 `contracts/openapi.json` 리소스로 포함합니다. 명세의 `/api/` 작업을 추가·변경하면 Gateway도 다시 빌드해야 합니다. `/internal`·`/mock`·관리 경로는 대상에서 제외합니다. 같은 명세의 `x-actor`로 보호 작업의 세션을 검증하고, 상류 요청에는 대상별 Gateway 자격을 붙입니다.
 
 `./gradlew :gateway:build`의 HTTP 통합 시험은 임시 로컬 HTTP 서버 세 개로 외부 API의 소유 서비스·메서드·경로, 내부 경로 차단, 본문·쿼리·멱등 키 전달, 명세·Swagger UI, 오류 계약과 연결 단절 시 재전송하지 않는 동작을 확인합니다. 세션 판정을 대역으로 바꿔 인증 헤더 제거·신원 전달과 401·403·503 거절도 확인합니다. 판정 스크립트는 `SessionVerifierIntegrationTest`가 Testcontainers Redis와 Gateway ACL 사용자로 검증합니다. 업무 컨트롤러·실제 백엔드의 업무 성공을 검증하는 시험은 아닙니다.
 
 Gateway 자체 오류는 `application/problem+json`과 실제 추적의 `traceId`로 응답하며 쿼리·원래 예외 메시지·내부 주소를 본문에 넣지 않습니다. 미등록 경로·메서드는 `404 COMMON_RESOURCE_NOT_FOUND`, 상류 연결 실패·시간 초과는 `503 COMMON_TEMPORARILY_UNAVAILABLE`, 예상 밖 오류는 `500 COMMON_INTERNAL_ERROR`입니다. 전송 계층이 요청을 자동 재전송하지 않으므로 503·응답 유실 뒤에는 원업무 키로 결과를 확인합니다. 백엔드가 보낸 상태·오류 본문·추적 ID는 그대로 전달합니다.
+
+### 내부 호출 자격
+
+[ADR 0010](decisions/0010-internal-service-credentials.md)의 판정은 `internal-auth` 라이브러리의 자동 구성이 서블릿 앱의 모든 요청에서 컨트롤러 전에 수행합니다. 각 앱은 `docs/openapi.json`을 `contracts/openapi.json` 리소스로 포함하고 `app.internal-auth`에 소유 서비스(`service`), 필수 발신자(`required-sender`, 기본 `gateway`), 발신자별 현재·이전 자격(`senders`)을 둡니다. 명세 문서(`GET /v3/api-docs/**`)와 관리 포트는 판정하지 않습니다. 명세의 작업·권한을 바꾸면 Gateway와 해당 백엔드를 함께 다시 빌드합니다.
+
+| 발신자 → 대상 | 받는 쪽 변수 | 보내는 쪽 |
+| --- | --- | --- |
+| `gateway` → 커머스·Payment·Settlement | `<대상>_GATEWAY_CREDENTIAL`(`_PREVIOUS`) | Gateway가 대상별 값을 붙임 |
+| `service:settlement` → Finance Mock | `FINANCE_MOCK_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 지급 Worker의 `HttpPayoutGateway` |
+
+변수 이름은 `<대상>_<발신자>_CREDENTIAL`이며 `init_env.py`가 `.env.example`의 빈 값을 256비트 URL-safe 값으로 채웁니다. `_PREVIOUS`는 교체 중에만 받는 쪽에 둡니다. 값이 없거나 43자 미만이면 받는 쪽과 보내는 쪽 모두 기동하지 않습니다. 거절은 `internal_auth_rejections_total{sender,status}` 지표와 `<서비스>.internal-auth` 경고 로그로 확인하며, 자격 원문은 남기지 않습니다.
+
+남은 서비스·운영자 쌍(Payment→커머스·Finance Mock, Settlement→커머스·Payment, 운영자→전체)은 호출을 구현하는 PR에서 다음을 함께 추가합니다.
+
+1. 받는 쪽: `application.yml`의 `app.internal-auth.senders`에 발신자를 추가합니다. `:`가 있는 키는 `"[service:payment]"`처럼 대괄호로 감쌉니다.
+2. 보내는 쪽: 해당 클라이언트의 모든 요청에 `Authorization: Bearer <자격>`을 붙이고 `InternalCredentials.requireFormat`으로 기동 때 형식을 확인합니다. 자격 거절 `401`·`403`은 업무 결과로 확정하지 않습니다.
+3. 환경: `.env.example`에 `<대상>_<발신자>_CREDENTIAL`·`_PREVIOUS`를 추가하고, Compose에서 받는 쪽에 두 값, 보내는 쪽에 현재 값을 전달합니다. smoke에 실제 호출 경로가 `401`·`403`이 아닌지 추가합니다.
+
+운영자 자격은 첫 운영 API를 구현할 때 운영자 식별자와 배포 방식을 함께 정합니다.
 
 컨테이너 상태·로그는 아래처럼 확인합니다.
 
