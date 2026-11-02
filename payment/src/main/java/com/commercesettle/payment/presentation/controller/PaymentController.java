@@ -65,8 +65,11 @@ public class PaymentController {
   @GetMapping
   public PaymentPageResponse list(
       @Parameter(hidden = true) AuthenticatedBuyer buyer,
-      @RequestParam(defaultValue = "0") @Min(0) int page,
-      @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size,
+      @RequestParam(defaultValue = "0") @Min(value = 0, message = "0 이상이어야 합니다.") int page,
+      @RequestParam(defaultValue = "20")
+          @Min(value = 1, message = "1 이상이어야 합니다.")
+          @Max(value = 100, message = "100 이하여야 합니다.")
+          int size,
       @Parameter(description = "본인 주문의 결제만 조회") @RequestParam(required = false) UUID orderId) {
     return PaymentPageResponse.from(payments.list(buyer.id(), orderId, page, size));
   }
