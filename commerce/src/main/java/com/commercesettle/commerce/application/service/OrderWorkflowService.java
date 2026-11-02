@@ -270,6 +270,13 @@ public class OrderWorkflowService {
     boolean confirmed = o.confirmPurchaseIfDue(now);
     if (!delivered && !confirmed) return;
     orders.save(o);
+    if (delivered) {
+      notifications.order(
+          o,
+          com.commercesettle.commerce.domain.model.Notification.Kind.SHIPMENT_DELIVERED,
+          null,
+          o.getDeliveredAt());
+    }
     changed(
         o,
         before,

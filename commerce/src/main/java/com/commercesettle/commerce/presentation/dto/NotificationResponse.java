@@ -20,7 +20,8 @@ import java.util.UUID;
 public record NotificationResponse(
     @JsonProperty(required = true) UUID id,
     @JsonProperty(required = true) Notification.Kind kind,
-    @Schema(allowableValues = "MOCK_KAKAO") @JsonProperty(required = true) String channel,
+    @Schema(allowableValues = {"MOCK_KAKAO", "KAKAO_SELF"}) @JsonProperty(required = true)
+        String channel,
     @JsonProperty(value = "isMock", required = true) boolean isMock,
     @JsonProperty(required = true) Notification.Status status,
     @Schema(maxLength = 120) @JsonProperty(required = true) String title,
@@ -33,8 +34,8 @@ public record NotificationResponse(
     return new NotificationResponse(
         n.id(),
         n.kind(),
-        "MOCK_KAKAO",
-        true,
+        n.channel().name(),
+        n.channel() == Notification.Channel.MOCK_KAKAO,
         n.status(),
         n.title(),
         n.body(),

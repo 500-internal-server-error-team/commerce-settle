@@ -4,13 +4,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.commercesettle.commerce.application.event.EventEnvelope;
+import com.commercesettle.commerce.application.port.NotificationGateway;
+import com.commercesettle.commerce.application.port.NotificationStore;
 import com.commercesettle.commerce.application.port.OrderBenefits;
 import com.commercesettle.commerce.application.port.PaymentAcceptanceInbox;
 import com.commercesettle.commerce.application.port.RefundClosureEvidence;
+import com.commercesettle.commerce.domain.model.Notification;
 import com.commercesettle.commerce.domain.model.Order;
 import com.commercesettle.commerce.domain.model.ProductStatus;
 import com.commercesettle.commerce.domain.model.ShippingAddress;
 import com.commercesettle.commerce.infrastructure.messaging.PaymentAcceptedListener;
+import com.commercesettle.commerce.support.KakaoDemoFixture;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -18,6 +22,7 @@ import com.networknt.schema.InputFormat;
 import com.networknt.schema.SchemaLocation;
 import com.networknt.schema.SchemaRegistry;
 import com.networknt.schema.SpecificationVersion;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -28,7 +33,9 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.client.TestRestTemplate;
@@ -42,6 +49,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -87,6 +95,14 @@ class OrderWorkflowIntegrationTest {
   @Autowired TestClock clock;
   @Autowired ClosureDouble closure;
   @Autowired NotificationService notifications;
+  @Autowired NotificationStore notificationStore;
+  @MockitoSpyBean NotificationGateway notificationGateway;
+
+  @Autowired
+  @Qualifier("notificationCalls")
+  java.util.concurrent.ExecutorService notificationCalls;
+
+  @TempDir Path demoDirectory;
 
   @BeforeEach
   void reset() {
@@ -312,7 +328,8 @@ class OrderWorkflowIntegrationTest {
                 "select count(*) from commerce.outbox where aggregate_id=? and event_type='PurchaseConfirmed'",
                 id))
         .isEqualTo(1);
-    for (String kind : List.of("SALE_COMPLETED", "SHIPMENT_STARTED", "PURCHASE_CONFIRMED"))
+    for (String kind :
+        List.of("SALE_COMPLETED", "SHIPMENT_STARTED", "SHIPMENT_DELIVERED", "PURCHASE_CONFIRMED"))
       assertThat(
               jdbc.queryForObject(
                   "SELECT count(*) FROM commerce.notification_items WHERE kind=? AND business_ref=?",
@@ -951,6 +968,207 @@ class OrderWorkflowIntegrationTest {
         .isEqualTo(auditBefore + 1);
   }
 
+  @Test
+  @DisplayName("금융 notice 대역과 실제 발송·배송 전이가 역할별 본문을 HTTP 카카오 대역까지 자동 전달한다")
+  void sendsTransactionTransitionsThroughSelfHttp() throws Exception {
+    var f = fixture();
+    try (var demo = demo(f)) {
+      var order = create(f);
+      UUID id = uuid(order, "id"), payment = UUID.randomUUID();
+      var ctx = context(id);
+      receive("PaymentConfirmed", confirmed(order, ctx).put("paymentId", payment.toString()), true);
+      receiveNotice(paymentNotice(order, ctx, payment, "PAYMENT_COMPLETED", null));
+      deliverDue();
+      var shipped = ship(f, id);
+      deliverDue();
+      var due = java.time.OffsetDateTime.parse(shipped.path("deliveryDueAt").asText()).toInstant();
+      clock.now.set(due.plusSeconds(168 * 3600 + 1));
+      workflow.advance(id);
+      workflow.advance(id);
+      deliverDue();
+
+      assertThat(buyer(f, id).path("status").asText()).isEqualTo("PURCHASE_CONFIRMED");
+      for (String kind : List.of("SHIPMENT_DELIVERED", "PURCHASE_CONFIRMED"))
+        assertThat(
+                number(
+                    "SELECT count(*) FROM commerce.notification_items WHERE kind=? AND business_ref=?",
+                    kind,
+                    id))
+            .isEqualTo(1);
+      var sale =
+          jdbc.queryForMap(
+              "SELECT id,status,extract(epoch FROM bucket_end-bucket_start) AS duration FROM commerce.notification_deliveries WHERE kind='SALE_COMPLETED' AND recipient_id=?",
+              f.seller());
+      assertThat(sale.get("status")).isEqualTo("COLLECTING");
+      assertThat(((Number) sale.get("duration")).intValue()).isEqualTo(60);
+      assertThat(demo.messages()).noneMatch(body -> body.startsWith("[판매자]"));
+      Instant previous =
+          Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MINUTES).minusSeconds(60);
+      jdbc.update(
+          "UPDATE commerce.notification_deliveries SET bucket_start=?,bucket_end=?,next_run_at=? WHERE id=?",
+          previous.atOffset(java.time.ZoneOffset.UTC),
+          previous.plusSeconds(60).atOffset(java.time.ZoneOffset.UTC),
+          previous.plusSeconds(60).atOffset(java.time.ZoneOffset.UTC),
+          sale.get("id"));
+      deliverDue();
+
+      assertThat(demo.messages())
+          .hasSize(5)
+          .allSatisfy(
+              body -> {
+                assertThat(body).contains(id.toString(), "흐름 시험 상품");
+                assertThat(body.length()).isLessThanOrEqualTo(200);
+              });
+      assertThat(demo.messages())
+          .anySatisfy(body -> assertThat(body).startsWith("[구매자]").contains("결제 완료", "외부 10000원"));
+      assertThat(demo.messages())
+          .anySatisfy(body -> assertThat(body).startsWith("[구매자]").contains("배송 완료"));
+      assertThat(demo.messages())
+          .filteredOn(body -> body.startsWith("[판매자]"))
+          .singleElement()
+          .satisfies(
+              body -> assertThat(body).contains("판매 1건", "합계 10000원").doesNotContain("잔액", "마일리지"));
+      assertThat(number("SELECT count(*) FROM commerce.notification_mock_receipts")).isZero();
+      assertThat(
+              number("SELECT count(*) FROM commerce.notification_deliveries WHERE status='SENT'"))
+          .isEqualTo(5);
+    }
+  }
+
+  @Test
+  @DisplayName("카카오 응답 유실은 완료된 발송 API와 주문 상태를 되돌리지 않는다")
+  void keepsTransactionCommittedWhenSelfSendIsUnknown() throws Exception {
+    var f = fixture();
+    try (var demo = demo(f)) {
+      var order = create(f);
+      UUID id = uuid(order, "id");
+      receive("PaymentConfirmed", confirmed(order, context(id)), true);
+      var shipped = ship(f, id);
+      demo.loseResponse(true);
+
+      deliverDue();
+      deliverDue();
+
+      var current = buyer(f, id);
+      assertThat(current.path("status").asText()).isEqualTo("PAID");
+      assertThat(current.path("fulfillmentStatus").asText()).isEqualTo("SHIPPED");
+      assertThat(current.path("version")).isEqualTo(shipped.path("version"));
+      assertThat(demo.messages()).hasSize(1);
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT status FROM commerce.notification_deliveries WHERE kind='SHIPMENT_STARTED'",
+                  String.class))
+          .isEqualTo("REVIEW_REQUIRED");
+      assertThat(
+              number(
+                  "SELECT count(*) FROM commerce.notification_attempts WHERE operation='LOOKUP'"))
+          .isZero();
+    }
+  }
+
+  @Test
+  @DisplayName("반품 요청 중 도래한 배송과 판매자 입고 API를 각각 한 번 구매자에게 안내한다")
+  void sendsDeliveryAndReturnReceiptFromRealTransitions() throws Exception {
+    var f = fixture();
+    try (var demo = demo(f)) {
+      var order = create(f);
+      UUID id = uuid(order, "id");
+      receive("PaymentConfirmed", confirmed(order, context(id)), true);
+      var shipped = ship(f, id);
+      clock.now.set(
+          java.time.OffsetDateTime.parse(shipped.path("deliveryDueAt").asText())
+              .toInstant()
+              .plusSeconds(1));
+      var request = refund(f, id, "RETURN");
+      UUID rid = uuid(request, "id");
+      var approved =
+          call(
+              "SELLER",
+              f.seller(),
+              "/api/sellers/me/refund-requests/" + rid + "/decision",
+              version(request).put("decision", "APPROVE").put("reason", "확인"),
+              202);
+      String key = UUID.randomUUID().toString();
+      var received =
+          call(
+              "SELLER",
+              f.seller(),
+              "/api/sellers/me/refund-requests/" + rid + "/receipt",
+              version(approved),
+              200,
+              key);
+      call(
+          "SELLER",
+          f.seller(),
+          "/api/sellers/me/refund-requests/" + rid + "/receipt",
+          version(approved),
+          200,
+          key);
+      call(
+          "SELLER",
+          f.seller(),
+          "/api/sellers/me/refund-requests/" + rid + "/receipt",
+          version(received),
+          200);
+      deliverDue();
+
+      assertThat(demo.messages())
+          .filteredOn(body -> body.contains("반품 입고 확인"))
+          .singleElement()
+          .satisfies(
+              body -> assertThat(body).startsWith("[구매자]").contains(id.toString(), "흐름 시험 상품"));
+      assertThat(
+              number(
+                  "SELECT count(*) FROM commerce.notification_items WHERE kind='SHIPMENT_DELIVERED' AND business_ref=?",
+                  id))
+          .isEqualTo(1);
+      assertThat(
+              number(
+                  "SELECT count(*) FROM commerce.notification_items WHERE kind='RETURN_RECEIVED' AND business_ref=? AND recipient_kind='BUYER'",
+                  rid))
+          .isEqualTo(1);
+      assertThat(
+              number(
+                  "SELECT count(*) FROM commerce.notification_items WHERE kind='RETURN_RECEIVED' AND recipient_kind='SELLER'"))
+          .isZero();
+      assertThat(buyer(f, id).path("fulfillmentStatus").asText()).isEqualTo("RETURN_RECEIVED");
+    }
+  }
+
+  private KakaoDemoFixture demo(Fixture f) throws Exception {
+    var demo =
+        new KakaoDemoFixture(
+            notificationGateway,
+            mapper,
+            clock,
+            demoDirectory,
+            java.util.Set.of(f.buyer()),
+            java.util.Set.of(f.seller()));
+    org.mockito.Mockito.doAnswer(
+            call -> demo.gateway().destination(call.getArgument(0), call.getArgument(1)))
+        .when(notificationGateway)
+        .destination(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    org.mockito.Mockito.doAnswer(
+            call -> demo.gateway().send(call.getArgument(0), call.getArgument(1)))
+        .when(notificationGateway)
+        .send(
+            org.mockito.ArgumentMatchers.argThat(
+                n -> n.channel() == Notification.Channel.KAKAO_SELF),
+            org.mockito.ArgumentMatchers.anyInt());
+    return demo;
+  }
+
+  private void deliverDue() {
+    var worker =
+        new NotificationDeliveryService(
+            notificationStore,
+            notificationGateway,
+            notificationCalls,
+            Clock.offset(Clock.systemUTC(), java.time.Duration.ofSeconds(1)),
+            manager);
+    for (int count = 0; count < 20 && worker.processNext(); count++) {}
+  }
+
   private Fixture fixture() {
     UUID buyer = UUID.randomUUID(), seller = UUID.randomUUID();
     jdbc.update(
@@ -1186,8 +1404,8 @@ class OrderWorkflowIntegrationTest {
     assertThat(((Number) row.get("sold_qty")).longValue()).isEqualTo(sold);
   }
 
-  private long number(String sql, UUID id) {
-    return jdbc.queryForObject(sql, Long.class, id);
+  private long number(String sql, Object... args) {
+    return jdbc.queryForObject(sql, Long.class, args);
   }
 
   private static UUID uuid(JsonNode n, String field) {

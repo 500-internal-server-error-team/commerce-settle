@@ -7,20 +7,30 @@ import com.commercesettle.commerce.application.port.NotificationGateway;
 import com.commercesettle.commerce.application.port.NotificationStore;
 import com.commercesettle.commerce.domain.model.ActorKind;
 import com.commercesettle.commerce.domain.model.Notification;
+import com.commercesettle.commerce.infrastructure.client.kakao.KakaoSelfNotificationGateway;
+import com.commercesettle.commerce.infrastructure.config.KakaoSelfProperties;
 import com.commercesettle.commerce.infrastructure.mock.MockNotificationGateway;
+import com.commercesettle.commerce.infrastructure.observability.NotificationMetrics;
 import com.commercesettle.commerce.infrastructure.persistence.notification.NotificationReceiptStore;
+import com.commercesettle.commerce.support.KakaoDemoFixture;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -67,6 +77,8 @@ class NotificationIntegrationTest {
   @Autowired NotificationService service;
   @Autowired NotificationReceiptStore receipts;
   @Autowired PlatformTransactionManager manager;
+  @Autowired DataSource dataSource;
+  @TempDir Path demoDirectory;
 
   @Autowired
   @Qualifier("notificationCalls")
@@ -823,6 +835,326 @@ class NotificationIntegrationTest {
                 event.eventId()))
         .isEqualTo(raw);
     assertThat(number("notification_inbox_quarantines")).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("실제 채널의 응답 유실은 수동 확인으로 멈추고 명시적 replay만 원본문을 다시 보낸다")
+  void stopsSelfSendUnknownUntilExplicitReplay() throws Exception {
+    UUID buyer = buyer();
+    try (var demo =
+        new KakaoDemoFixture(
+            gateway,
+            mapper,
+            Clock.systemUTC(),
+            demoDirectory,
+            java.util.Set.of(buyer),
+            java.util.Set.of())) {
+      UUID id =
+          appendSelf(
+              buyer, Notification.Kind.SHIPMENT_STARTED, UUID.randomUUID(), demo.properties());
+      var original = store.find(id).orElseThrow();
+      demo.loseResponse(true);
+
+      assertThat(worker(demo.gateway(), Instant.now().plusSeconds(1)).processNext()).isTrue();
+
+      var unknown = store.find(id).orElseThrow();
+      assertThat(unknown.status()).isEqualTo(Notification.Status.REVIEW_REQUIRED);
+      assertThat(store.attempts(id, 0, 20).items())
+          .singleElement()
+          .satisfies(
+              a -> {
+                assertThat(a.operation()).isEqualTo("SEND");
+                assertThat(a.status()).isEqualTo("UNKNOWN");
+              });
+      assertThat(worker(demo.gateway(), Instant.now().plusSeconds(60)).processNext()).isFalse();
+      assertThat(demo.messages()).containsExactly(original.body());
+      assertThat(number("notification_mock_receipts")).isZero();
+      assertThat(
+              internal("/internal/notification-mock/receipts/" + id, null, null)
+                  .getStatusCode()
+                  .value())
+          .isEqualTo(404);
+      var own = get(buyer, "/api/notifications/" + id);
+      assertThat(own.getBody().path("channel").asText()).isEqualTo("KAKAO_SELF");
+      assertThat(own.getBody().path("isMock").asBoolean()).isFalse();
+      matches("Notification", own.getBody());
+      demo.loseResponse(false);
+      service.replay(
+          "operator:test",
+          id,
+          UUID.randomUUID().toString(),
+          unknown.version(),
+          "수신 미확정과 중복 가능성을 확인하고 재발송");
+
+      assertThat(worker(demo.gateway(), Instant.now().plusSeconds(1)).processNext()).isTrue();
+
+      var sent = store.find(id).orElseThrow();
+      assertThat(sent.status()).isEqualTo(Notification.Status.SENT);
+      assertThat(sent.body()).isEqualTo(original.body());
+      assertThat(sent.channelAccountRef()).isEqualTo(original.channelAccountRef());
+      assertThat(demo.messages()).containsExactly(original.body(), original.body());
+      assertThat(store.attempts(id, 0, 20).items())
+          .anySatisfy(
+              a -> {
+                assertThat(a.operation()).isEqualTo("REPLAY");
+                assertThat(a.reason()).contains("중복 가능성");
+              });
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  @DisplayName("계정 변경·시연 해제는 기존 실제 발송을 새 계정이나 모의 채널로 돌리지 않는다")
+  void preservesPendingSelfDestinationWhenConfigurationChanges(boolean changedOwner)
+      throws Exception {
+    UUID buyer = buyer();
+    try (var demo =
+        new KakaoDemoFixture(
+            gateway,
+            mapper,
+            Clock.systemUTC(),
+            demoDirectory,
+            java.util.Set.of(buyer),
+            java.util.Set.of())) {
+      UUID id =
+          appendSelf(
+              buyer, Notification.Kind.SHIPMENT_STARTED, UUID.randomUUID(), demo.properties());
+      var original = store.find(id).orElseThrow();
+      var old = demo.properties();
+      var changed =
+          new KakaoSelfProperties(
+              old.credentialsFile(),
+              "999",
+              old.appId(),
+              old.messageLink(),
+              old.buyerIds(),
+              old.sellerIds());
+      NotificationGateway current =
+          changedOwner
+              ? new KakaoSelfNotificationGateway(gateway, demo.client(), changed, Clock.systemUTC())
+              : gateway;
+
+      assertThat(worker(current, Instant.now().plusSeconds(1)).processNext()).isTrue();
+
+      var stored = store.find(id).orElseThrow();
+      assertThat(stored.status()).isEqualTo(Notification.Status.REVIEW_REQUIRED);
+      assertThat(stored.channel()).isEqualTo(Notification.Channel.KAKAO_SELF);
+      assertThat(stored.channelAccountRef()).isEqualTo(original.channelAccountRef());
+      assertThat(stored.body()).isEqualTo(original.body());
+      assertThat(stored.lastErrorCode())
+          .isEqualTo(changedOwner ? "KAKAO_DESTINATION_CHANGED" : "KAKAO_SELF_DISABLED");
+      assertThat(demo.messages()).isEmpty();
+      assertThat(number("notification_mock_receipts")).isZero();
+    }
+  }
+
+  @Test
+  @DisplayName("실제 발송의 만료 임대는 조회·재발송 없이 확인 대상으로 보존한다")
+  void movesExpiredSelfLeaseToReviewWithoutLookup() throws Exception {
+    UUID buyer = buyer();
+    try (var demo =
+        new KakaoDemoFixture(
+            gateway,
+            mapper,
+            Clock.systemUTC(),
+            demoDirectory,
+            java.util.Set.of(buyer),
+            java.util.Set.of())) {
+      UUID id =
+          appendSelf(
+              buyer, Notification.Kind.SHIPMENT_STARTED, UUID.randomUUID(), demo.properties());
+      Instant now = Instant.now().plusSeconds(1);
+      var claim = tx.execute(status -> store.claim(now));
+
+      assertThat(worker(demo.gateway(), now.plusSeconds(31)).processNext()).isTrue();
+
+      var reviewed = store.find(id).orElseThrow();
+      assertThat(reviewed.status()).isEqualTo(Notification.Status.REVIEW_REQUIRED);
+      assertThat(reviewed.leaseToken()).isNull();
+      assertThat(reviewed.lastErrorCode()).isEqualTo("KAKAO_RESPONSE_UNKNOWN");
+      assertThat(store.attempts(id, 0, 20).items())
+          .singleElement()
+          .satisfies(a -> assertThat(a.status()).isEqualTo("UNKNOWN"));
+      assertThat(demo.messages()).isEmpty();
+      var stale =
+          tx.execute(
+              status ->
+                  store.finish(
+                      claim.lease(),
+                      Notification.Status.SENT,
+                      null,
+                      now,
+                      "SUCCEEDED",
+                      now.plusSeconds(32)));
+      assertThat(stale).isNull();
+      assertThat(store.find(id).orElseThrow()).isEqualTo(reviewed);
+    }
+  }
+
+  @Test
+  @DisplayName("실제 스키마에서 확인 대상·소진·확정 실패와 도래 작업 지연을 관측한다")
+  void observesCanonicalNotificationSchemaWithoutCountingFutureWork() {
+    UUID buyer = buyer();
+    UUID exhausted = append(buyer, Notification.Kind.SHIPMENT_STARTED, UUID.randomUUID());
+    UUID action = append(buyer, Notification.Kind.REFUND_ACTION_REQUIRED, UUID.randomUUID());
+    UUID due = append(buyer, Notification.Kind.SHIPMENT_STARTED, UUID.randomUUID());
+    UUID future = append(buyer, Notification.Kind.SHIPMENT_STARTED, UUID.randomUUID());
+    UUID active = append(buyer, Notification.Kind.SHIPMENT_STARTED, UUID.randomUUID());
+    jdbc.update(
+        "UPDATE commerce.notification_deliveries SET status='REVIEW_REQUIRED',retry_count=10 WHERE id=?",
+        exhausted);
+    jdbc.update(
+        "UPDATE commerce.notification_deliveries SET status='REVIEW_REQUIRED' WHERE id=?", action);
+    jdbc.update(
+        "UPDATE commerce.notification_deliveries SET created_at=statement_timestamp()-interval '301 seconds' WHERE id=?",
+        due);
+    jdbc.update(
+        "UPDATE commerce.notification_deliveries SET status='RETRY',created_at=statement_timestamp()-interval '999 seconds',next_run_at=statement_timestamp()+interval '10 minutes' WHERE id=?",
+        future);
+    jdbc.update(
+        "UPDATE commerce.notification_deliveries SET status='SENDING',created_at=statement_timestamp()-interval '999 seconds',lease_token=?,lease_until=statement_timestamp()+interval '10 minutes' WHERE id=?",
+        UUID.randomUUID(),
+        active);
+    var registry = new SimpleMeterRegistry();
+    try (var metrics = new NotificationMetrics(dataSource, registry)) {
+      org.awaitility.Awaitility.await()
+          .atMost(java.time.Duration.ofSeconds(5))
+          .untilAsserted(
+              () -> {
+                assertThat(registry.get("commerce.notification.collection.success").gauge().value())
+                    .isEqualTo(1);
+                assertThat(registry.get("commerce.notification.review.required").gauge().value())
+                    .isEqualTo(2);
+                assertThat(registry.get("commerce.notification.retry.exhausted").gauge().value())
+                    .isEqualTo(1);
+                assertThat(
+                        registry
+                            .get("commerce.notification.financial.action.recent")
+                            .gauge()
+                            .value())
+                    .isEqualTo(1);
+                assertThat(registry.get("commerce.notification.overdue.seconds").gauge().value())
+                    .isBetween(300.0, 310.0);
+              });
+    } finally {
+      registry.close();
+    }
+  }
+
+  @Test
+  @DisplayName("실제 판매 알림도 1분 집계를 유지하며 계정 변경이 기존 묶음과 중복 항목을 옮기지 않는다")
+  void aggregatesSelfSalesWithinFrozenAccount() throws Exception {
+    UUID seller = UUID.randomUUID();
+    seller(seller);
+    try (var demo =
+        new KakaoDemoFixture(
+            gateway,
+            mapper,
+            Clock.systemUTC(),
+            demoDirectory,
+            java.util.Set.of(),
+            java.util.Set.of(seller))) {
+      org.awaitility.Awaitility.await()
+          .atMost(java.time.Duration.ofSeconds(8))
+          .until(() -> Instant.now().atOffset(ZoneOffset.UTC).getSecond() < 53);
+      UUID first = UUID.randomUUID(), second = UUID.randomUUID(), third = UUID.randomUUID();
+      var original =
+          new Notification.Destination(
+              Notification.Channel.KAKAO_SELF, demo.properties().accountRef());
+      var changed = new Notification.Destination(Notification.Channel.KAKAO_SELF, "b".repeat(64));
+      selfSale(seller, first, 10000, original);
+      selfSale(seller, second, 20000, original);
+      selfSale(seller, third, 30000, changed);
+      selfSale(seller, first, 10000, changed);
+
+      var all = store.page(ActorKind.SELLER, seller, null, 0, 20).items();
+      assertThat(all)
+          .hasSize(2)
+          .allSatisfy(n -> assertThat(n.status()).isEqualTo(Notification.Status.COLLECTING));
+      var bucket =
+          all.stream()
+              .filter(n -> n.channelAccountRef().equals(original.accountRef()))
+              .findFirst()
+              .orElseThrow();
+      assertThat(bucket.itemCount()).isEqualTo(2);
+      assertThat(bucket.totalAmount()).isEqualTo(30000);
+      assertThat(bucket.body()).isEmpty();
+      assertThat(number("notification_items")).isEqualTo(3);
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT delivery_id FROM commerce.notification_items WHERE business_ref=?",
+                  UUID.class,
+                  first))
+          .isEqualTo(bucket.id());
+      assertThat(worker(demo.gateway(), Instant.now()).processNext()).isFalse();
+      assertThat(demo.messages()).isEmpty();
+      Instant previous =
+          Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MINUTES).minusSeconds(60);
+      jdbc.update(
+          "UPDATE commerce.notification_deliveries SET bucket_start=?,bucket_end=?,next_run_at=? WHERE id=?",
+          previous.atOffset(ZoneOffset.UTC),
+          previous.plusSeconds(60).atOffset(ZoneOffset.UTC),
+          previous.plusSeconds(60).atOffset(ZoneOffset.UTC),
+          bucket.id());
+      assertThat(worker(demo.gateway(), Instant.now().plusSeconds(1)).processNext()).isTrue();
+      var sent = store.find(bucket.id()).orElseThrow();
+      assertThat(sent.status()).isEqualTo(Notification.Status.SENT);
+      assertThat(sent.channelAccountRef()).isEqualTo(original.accountRef());
+      assertThat(sent.templateVersion()).isEqualTo(NotificationTemplates.SELF_VERSION);
+      assertThat(demo.messages())
+          .singleElement()
+          .satisfies(
+              body ->
+                  assertThat(body)
+                      .contains("[판매자]", "판매 2건", "합계 30000원", "집계 상품")
+                      .doesNotContain("잔액", "마일리지"));
+      assertThat(number("notification_mock_receipts")).isZero();
+    }
+  }
+
+  private void selfSale(
+      UUID seller, UUID business, long amount, Notification.Destination destination) {
+    var draft =
+        new NotificationStore.Draft(
+            "commerce",
+            UUID.randomUUID(),
+            Notification.Kind.SALE_COMPLETED,
+            business,
+            ActorKind.SELLER,
+            seller,
+            Instant.parse("2026-11-02T00:00:00Z"),
+            mapper
+                .createObjectNode()
+                .put("orderId", business.toString())
+                .put("productName", "집계 상품")
+                .put("totalAmount", amount),
+            destination);
+    tx.executeWithoutResult(status -> store.append(draft));
+  }
+
+  private UUID appendSelf(
+      UUID buyer, Notification.Kind kind, UUID business, KakaoSelfProperties properties) {
+    var draft =
+        new NotificationStore.Draft(
+            "commerce",
+            UUID.randomUUID(),
+            kind,
+            business,
+            ActorKind.BUYER,
+            buyer,
+            Instant.now(),
+            mapper
+                .createObjectNode()
+                .put("orderId", business.toString())
+                .put("productName", "시연 상품")
+                .put("totalAmount", 10000),
+            new Notification.Destination(Notification.Channel.KAKAO_SELF, properties.accountRef()));
+    tx.executeWithoutResult(status -> store.append(draft));
+    return jdbc.queryForObject(
+        "SELECT delivery_id FROM commerce.notification_items WHERE kind=? AND business_ref=?",
+        UUID.class,
+        kind.name(),
+        business);
   }
 
   private List<JsonNode> logEntries(CapturedOutput output, String event, UUID deliveryId) {

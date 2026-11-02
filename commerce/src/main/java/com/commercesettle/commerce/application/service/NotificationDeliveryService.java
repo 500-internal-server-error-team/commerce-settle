@@ -57,7 +57,9 @@ public final class NotificationDeliveryService {
     if (lease == null) {
       log(
           claim.notification(),
-          "notification.exhausted",
+          claim.notification().retryCount() >= 10
+              ? "notification.exhausted"
+              : "notification.review.required",
           "REVIEW_REQUIRED",
           claim.notification().lastErrorCode(),
           started);
@@ -71,6 +73,8 @@ public final class NotificationDeliveryService {
     Instant sentAt = null;
     Future<NotificationGateway.Receipt> pending = null;
     try {
+      if (n.channel() == Notification.Channel.KAKAO_SELF && lease.operation().equals("LOOKUP"))
+        throw new NotificationGateway.Failure("KAKAO_LOOKUP_UNAVAILABLE", true, false);
       pending =
           calls.submit(
               () ->
@@ -99,16 +103,16 @@ public final class NotificationDeliveryService {
       if (e instanceof InterruptedException) Thread.currentThread().interrupt();
       if (cause instanceof NotificationGateway.Failure failure) {
         result =
-            failure.permanent()
-                ? Status.REVIEW_REQUIRED
-                : failure.unknown() ? Status.UNKNOWN : Status.RETRY;
+            failure.unknown()
+                ? unknownStatus(n)
+                : failure.permanent() ? Status.REVIEW_REQUIRED : Status.RETRY;
         code = failure.code();
         attemptStatus =
-            failure.permanent()
-                ? "PERMANENT_FAILURE"
-                : failure.unknown() ? "UNKNOWN" : "RETRYABLE_FAILURE";
+            failure.unknown()
+                ? "UNKNOWN"
+                : failure.permanent() ? "PERMANENT_FAILURE" : "RETRYABLE_FAILURE";
       } else {
-        result = Status.UNKNOWN;
+        result = unknownStatus(n);
         code = "NOTIFICATION_RESPONSE_UNKNOWN";
         attemptStatus = "UNKNOWN";
       }
@@ -130,6 +134,10 @@ public final class NotificationDeliveryService {
           committed.lastErrorCode(),
           started);
     return true;
+  }
+
+  private static Status unknownStatus(Notification n) {
+    return n.channel() == Notification.Channel.KAKAO_SELF ? Status.REVIEW_REQUIRED : Status.UNKNOWN;
   }
 
   private static void log(

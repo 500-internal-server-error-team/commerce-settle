@@ -80,8 +80,15 @@ public class OrderRefundService {
           var order = workflow.ownedLocked(ActorKind.BUYER, buyer, orderId);
           order.requireVersion(expected);
           var before = order.getStatus();
+          var deliveredBefore = order.getDeliveredAt();
           order.beginRefund(kind == OrderRefundRequest.Kind.CANCEL, clock.instant());
           orders.save(order);
+          if (deliveredBefore == null && order.getDeliveredAt() != null)
+            notifications.order(
+                order,
+                com.commercesettle.commerce.domain.model.Notification.Kind.SHIPMENT_DELIVERED,
+                null,
+                order.getDeliveredAt());
           var r =
               requests.save(OrderRefundRequest.create(id, order, kind, reason, clock.instant()));
           workflow.changed(order, before, "BUYER", buyer.toString(), "REFUND_REQUESTED", null);
@@ -179,6 +186,12 @@ public class OrderRefundService {
             order.receiveReturn(clock.instant());
             if (order.getEventId() == null) inventory.restoreForReturn(order.getId(), r.getId());
             else benefits.receiveReturn(order, r.getId(), clock.instant());
+            notifications.refund(
+                order,
+                r,
+                com.commercesettle.commerce.domain.model.Notification.Kind.RETURN_RECEIVED,
+                null,
+                r.getReceivedAt());
           }
           return received;
         });

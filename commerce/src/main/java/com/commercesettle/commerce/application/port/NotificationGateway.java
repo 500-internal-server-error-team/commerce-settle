@@ -1,11 +1,16 @@
 package com.commercesettle.commerce.application.port;
 
+import com.commercesettle.commerce.domain.model.ActorKind;
 import com.commercesettle.commerce.domain.model.Notification;
 import java.time.Instant;
 import java.util.UUID;
 
 /** 호출자는 DB 트랜잭션 밖에서 실행한다. null 조회 결과는 원수신 기록 없음이다. */
 public interface NotificationGateway {
+  default Notification.Destination destination(ActorKind kind, UUID recipient) {
+    return Notification.Destination.mock();
+  }
+
   Receipt send(Notification notification, int attempt);
 
   Receipt lookup(UUID deliveryId, int attempt);

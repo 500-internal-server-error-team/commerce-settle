@@ -50,7 +50,29 @@ public interface NotificationStore {
       ActorKind recipientKind,
       UUID recipientId,
       Instant occurredAt,
-      JsonNode payload) {}
+      JsonNode payload,
+      Notification.Destination destination) {
+    public Draft(
+        String source,
+        UUID eventId,
+        Kind kind,
+        UUID businessRef,
+        ActorKind recipientKind,
+        UUID recipientId,
+        Instant occurredAt,
+        JsonNode payload) {
+      this(
+          source,
+          eventId,
+          kind,
+          businessRef,
+          recipientKind,
+          recipientId,
+          occurredAt,
+          payload,
+          Notification.Destination.mock());
+    }
+  }
 
   record Lease(Notification notification, String operation, UUID attemptId) {}
 
