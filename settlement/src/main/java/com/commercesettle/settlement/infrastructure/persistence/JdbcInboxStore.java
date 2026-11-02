@@ -166,6 +166,26 @@ class JdbcInboxStore implements InboxStore {
     return "WAITING".equals(statuses.get(0));
   }
 
+  @Override
+  public List<UUID> reviveExhaustedPurchases(UUID paymentId, int maxAttempts, Instant now) {
+    // 시도 상한 조건은 대기 중 결제가 도착한 뒤 다른 사유로 운영 확인에 남은 행(마지막 사유가 그대로 남음)을 거른다.
+    return jdbc.query(
+        """
+        UPDATE settlement.inbox
+        SET status = 'WAITING', attempts = 0, last_error_code = 'PAYMENT_ARRIVED_LATE',
+            next_run_at = clock_timestamp(), updated_at = :now, version = version + 1
+        WHERE consumer = :consumer AND event_type = 'PurchaseConfirmed'
+          AND status = 'REVIEW_REQUIRED' AND last_error_code = 'PAYMENT_NOT_ARRIVED'
+          AND attempts >= :max AND payload->'payload'->>'paymentId' = :paymentId
+        RETURNING id
+        """,
+        new MapSqlParameterSource("consumer", consumer)
+            .addValue("paymentId", paymentId.toString())
+            .addValue("max", maxAttempts)
+            .addValue("now", now.atOffset(ZoneOffset.UTC)),
+        (rs, row) -> rs.getObject(1, UUID.class));
+  }
+
   private void finish(UUID inboxId, String status, UUID resultRef, Instant now) {
     int updated =
         jdbc.update(

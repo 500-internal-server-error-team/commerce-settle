@@ -289,6 +289,61 @@ class SettlementEventServiceIntegrationTest {
   }
 
   @Test
+  @DisplayName("대기를 소진한 구매확정도 결제확정이 늦게 오면 다시 대기해, 처리기가 PAYABLE로 반영한다")
+  void exhaustedPurchaseIsRevivedByLatePayment() {
+    var purchase = exhaustedPurchase();
+
+    var payment = payment(UUID.randomUUID(), 10_000, 0, 0, 10_000, 0);
+    service.receivePaymentConfirmed(payment, source("commerce-settle.payment.v1", payment));
+
+    assertInbox(purchase.eventId(), "WAITING", null);
+    assertThat(attempts(purchase.eventId())).isZero();
+    assertThat(lastErrorCode(purchase.eventId())).isEqualTo("PAYMENT_ARRIVED_LATE");
+    assertThat(service.processNextWaiting()).isTrue();
+    Map<String, Object> item = item();
+    assertThat(item.get("status")).isEqualTo("PAYABLE");
+    assertInbox(purchase.eventId(), "APPLIED", item.get("id"));
+  }
+
+  @Test
+  @DisplayName("계약 위반으로 운영 확인에 남은 구매확정과 다른 결제의 소진 구매확정은 결제확정이 와도 그대로다")
+  void lateRevivalLeavesOtherReviewsAlone() {
+    var violation = purchase(UUID.randomUUID(), orderId, DELIVERED_AT.plusHours(168));
+    service.receivePurchaseConfirmed(violation, source("commerce-settle.commerce.v1", violation));
+    UUID samePayment = paymentId;
+    paymentId = UUID.randomUUID();
+    var otherPayment = exhaustedPurchase();
+    paymentId = samePayment;
+    long violationVersion = inboxVersion(violation.eventId());
+    long otherVersion = inboxVersion(otherPayment.eventId());
+
+    var payment = payment(UUID.randomUUID(), 10_000, 0, 0, 10_000, 0);
+    service.receivePaymentConfirmed(payment, source("commerce-settle.payment.v1", payment));
+
+    assertInbox(violation.eventId(), "REVIEW_REQUIRED", null);
+    assertInbox(otherPayment.eventId(), "REVIEW_REQUIRED", null);
+    assertThat(inboxVersion(violation.eventId())).isEqualTo(violationVersion);
+    assertThat(inboxVersion(otherPayment.eventId())).isEqualTo(otherVersion);
+    assertThat(service.processNextWaiting()).isFalse();
+  }
+
+  @Test
+  @DisplayName("결제확정 재전달과 같은 사실의 다른 eventId는 소진 구매확정을 다시 되돌리지 않는다")
+  void duplicatePaymentDoesNotReviveAgain() {
+    var purchase = exhaustedPurchase();
+    var payment = payment(UUID.randomUUID(), 10_000, 0, 0, 10_000, 0);
+    service.receivePaymentConfirmed(payment, source("commerce-settle.payment.v1", payment));
+    long revivedVersion = inboxVersion(purchase.eventId());
+
+    service.receivePaymentConfirmed(payment, source("commerce-settle.payment.v1", payment));
+    var sameFact = payment(UUID.randomUUID(), 10_000, 0, 0, 10_000, 0);
+    service.receivePaymentConfirmed(sameFact, source("commerce-settle.payment.v1", sameFact));
+
+    assertThat(inboxVersion(purchase.eventId())).isEqualTo(revivedVersion);
+    assertThat(attempts(purchase.eventId())).isZero();
+  }
+
+  @Test
   @DisplayName("대기 간격은 기준 1초에서 두 배씩 늘어 60초에서 멈춘다")
   void waitingDelayGrowsExponentially() {
     var purchase = purchase(UUID.randomUUID(), orderId, CONFIRMED_AT);
@@ -465,6 +520,26 @@ class SettlementEventServiceIntegrationTest {
             "SELECT status, result_ref FROM settlement.inbox WHERE event_id = ?", eventId);
     assertThat(row.get("status")).isEqualTo(status);
     assertThat(row.get("result_ref")).isEqualTo(resultRef);
+  }
+
+  /** 결제확정 없이 10번 판정해 운영 확인으로 남은 구매확정. */
+  private EventEnvelope<PurchaseConfirmedPayload> exhaustedPurchase() {
+    var purchase = purchase(UUID.randomUUID(), orderId, CONFIRMED_AT);
+    service.receivePurchaseConfirmed(purchase, source("commerce-settle.commerce.v1", purchase));
+    while (service.processNextWaiting()) {}
+    assertInbox(purchase.eventId(), "REVIEW_REQUIRED", null);
+    assertThat(lastErrorCode(purchase.eventId())).isEqualTo("PAYMENT_NOT_ARRIVED");
+    return purchase;
+  }
+
+  private String lastErrorCode(UUID eventId) {
+    return jdbc.queryForObject(
+        "SELECT last_error_code FROM settlement.inbox WHERE event_id = ?", String.class, eventId);
+  }
+
+  private long inboxVersion(UUID eventId) {
+    return jdbc.queryForObject(
+        "SELECT version FROM settlement.inbox WHERE event_id = ?", Long.class, eventId);
   }
 
   private int attempts(UUID eventId) {
