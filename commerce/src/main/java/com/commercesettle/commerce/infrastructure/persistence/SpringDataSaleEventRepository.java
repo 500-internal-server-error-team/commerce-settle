@@ -29,11 +29,12 @@ interface SpringDataSaleEventRepository extends JpaRepository<SaleEvent, UUID> {
           """
           UPDATE commerce.sale_events
           SET reserved_count = reserved_count + 1
-          WHERE id = :eventId AND status = 'OPEN' AND starts_at <= :now AND ends_at > :now
+          WHERE id = :eventId AND status IN ('SCHEDULED', 'OPEN')
+            AND starts_at <= :now AND ends_at > :now
             AND sold_count + reserved_count < quota
           """,
       nativeQuery = true)
-  int incrementReservedIfOpen(UUID eventId, Instant now);
+  int incrementReservedIfAdmitting(UUID eventId, Instant now);
 
   boolean existsByProductIdAndStatusIn(UUID productId, Collection<SaleEventStatus> statuses);
 

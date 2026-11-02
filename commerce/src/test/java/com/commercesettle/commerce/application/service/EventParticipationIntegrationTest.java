@@ -7,22 +7,28 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.commercesettle.commerce.domain.exception.EventAdmissionClosedException;
 import com.commercesettle.commerce.domain.exception.EventAdmissionClosedException.Reason;
 import com.commercesettle.commerce.domain.exception.SaleEventNotFoundException;
+import com.commercesettle.commerce.domain.model.EventAdmission;
 import com.commercesettle.commerce.domain.model.InventoryReservation.Outcome;
 import com.commercesettle.commerce.domain.model.ProductStatus;
 import com.commercesettle.commerce.domain.model.SaleEvent;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.convention.TestBean;
 import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -43,6 +49,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     })
 @Testcontainers
 class EventParticipationIntegrationTest {
+  private static final ShiftedClock CLOCK = new ShiftedClock();
+
   @Container @ServiceConnection
   static final PostgreSQLContainer<?> POSTGRES =
       new PostgreSQLContainer<>("postgres:18.3").withInitScript("db/commerce.sql");
@@ -52,6 +60,16 @@ class EventParticipationIntegrationTest {
   @Autowired ProductCatalogService catalog;
   @Autowired JdbcTemplate jdbc;
   @Autowired TransactionTemplate tx;
+  @TestBean Clock clock;
+
+  static Clock clock() {
+    return CLOCK;
+  }
+
+  @AfterEach
+  void resetClock() {
+    CLOCK.shift(Duration.ZERO);
+  }
 
   @Test
   @DisplayName("주문 트랜잭션 밖에서 호출하면 거절하고, 주문이 롤백되면 이벤트 수량·참여·예약도 남지 않는다")
@@ -285,6 +303,39 @@ class EventParticipationIntegrationTest {
         .isZero();
   }
 
+  @Test
+  @DisplayName("스케줄러가 열기 전에도 시작 시각이 지나면 게이지·신규 참여·재시도가 같이 받고, 저장 상태·버전은 바꾸지 않는다")
+  void admitsStartedEventBeforeSchedulerOpensIt() {
+    UUID seller = UUID.randomUUID();
+    UUID product = stockedProduct(seller, 10);
+    SaleEvent scheduled =
+        events.publish(
+            seller,
+            register(seller, product, 3, hoursFromNow(1), hoursFromNow(2)).getId(),
+            key(),
+            0);
+    Fixture fixture = new Fixture(seller, product, scheduled.getId());
+    UUID orderId = UUID.randomUUID();
+    UUID firstCycle = UUID.randomUUID();
+    long publishedVersion = version(fixture);
+    CLOCK.shift(Duration.ofHours(1));
+
+    EventAdmission admission = events.gauge(fixture.eventId()).gauge().admission();
+    Outcome reserved = inOrder(() -> reserve(fixture, orderId, firstCycle));
+    inOrder(() -> reservations.release(orderId, firstCycle));
+    Outcome retried =
+        inOrder(() -> reservations.reserveAgain(orderId, UUID.randomUUID(), expires()));
+
+    assertThat(admission).isEqualTo(EventAdmission.OPEN);
+    assertThat(List.of(reserved, retried)).containsExactly(Outcome.APPLIED, Outcome.APPLIED);
+    assertSlots(fixture, 0, 1);
+    assertThat(
+            jdbc.queryForMap(
+                "select status, version from commerce.sale_events where id = ?", fixture.eventId()))
+        .containsEntry("status", "SCHEDULED")
+        .containsEntry("version", publishedVersion);
+  }
+
   private Outcome reserve(Fixture fixture, UUID orderId, UUID cycle) {
     return reservations.reserveForEvent(
         orderId, fixture.eventId(), UUID.randomUUID(), cycle, expires());
@@ -351,7 +402,7 @@ class EventParticipationIntegrationTest {
   }
 
   private static Instant expires() {
-    return Instant.now().plus(Duration.ofMinutes(10));
+    return CLOCK.instant().plus(Duration.ofMinutes(10));
   }
 
   private static Instant hoursFromNow(long hours) {
@@ -363,4 +414,28 @@ class EventParticipationIntegrationTest {
   }
 
   private record Fixture(UUID sellerId, UUID productId, UUID eventId) {}
+
+  // 시스템 시각에 테스트가 정한 만큼 더한 시각을 돌려준다. 스케줄러는 꺼져 있어 시각만 옮긴다.
+  private static final class ShiftedClock extends Clock {
+    private volatile Duration offset = Duration.ZERO;
+
+    void shift(Duration offset) {
+      this.offset = offset;
+    }
+
+    @Override
+    public ZoneId getZone() {
+      return ZoneOffset.UTC;
+    }
+
+    @Override
+    public Clock withZone(ZoneId zone) {
+      return Clock.offset(Clock.system(zone), offset);
+    }
+
+    @Override
+    public Instant instant() {
+      return Instant.now().plus(offset);
+    }
+  }
 }
