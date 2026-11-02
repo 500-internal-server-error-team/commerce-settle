@@ -709,9 +709,9 @@ Job 식별자는 targetMonth+runId다. 정상 재시작은 같은 값을 사용�
 
 **제약:** UNIQUE(operation,business_key). 작업 저장 뒤 메시지 ack. status=PENDING/RUNNING/RETRY/REVIEW_REQUIRED/DONE.
 
-임대 소유자·token·만료는 함께 설정/해제하며 선점·회수 때 버전을 증가합니다. 결과 반영은 유효한 token·실행자·Job/금융 상태·회차·예상 버전을 같은 트랜잭션에서 검사합니다. 만료 RUNNING도 회수하며 원대역 조회부터 재개합니다. [금융 Worker 정책](policies.md#금융-worker-임대와-결과-반영)을 따릅니다.
+임대 소유자·token·만료는 함께 설정/해제하며 선점·회수 때 버전을 증가합니다. 결과 반영은 유효한 token·실행자·Job/금융 상태·회차·예상 버전을 같은 트랜잭션에서 검사합니다. 만료 RUNNING도 회수하며 원대역 조회부터 재개합니다. [금융 Worker 정책](policies.md#금융-worker-임대와-결과-반영)을 따릅니다. 운영 재처리는 같은 행의 원업무 키를 유지한 채 상태를 PENDING으로, `attempts`를 0으로 바꾸고 버전을 올립니다. DONE이거나 유효한 임대 중인 행은 바꾸지 않으며, 이 변경과 `idempotency_records`·`audit_logs`(`PAYMENT_JOB_REPLAYED`) 행을 같은 트랜잭션에 저장합니다.
 
-**인덱스:** (status,next_run_at,lease_until,id).
+**인덱스:** (status,next_run_at,lease_until,id); (created_at,id).
 
 ### payment_attempts
 
@@ -1333,6 +1333,8 @@ Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(actor_kind,actor_id,operation,key_hash). PENDING/COMPLETED; 본문 불일치409. 금융/주문 보존, 일반 관리24h. 민감 응답 원문은 보존하지 않음.
+
+Payment는 운영 작업 재처리에 `actor_kind=OPERATOR`, `actor_id`=확인한 운영자 발신자 ID, `operation=REPLAY_PAYMENT_JOB`, `resource_id`=작업 ID, `response_status`=202로 만료 없이 저장합니다. `request_hash`는 작업 ID·예상 버전·사유 코드의 SHA-256입니다.
 
 구매자 가입은 서버가 `actor_kind=PUBLIC`, `actor_id=BUYER_REGISTRATION`, `operation=REGISTER`로 고정해 계정 생성 전에도 같은 키를 찾습니다. 기존 테이블을 사용하며 `request_hash`는 가입 본문의 서버 키 기반 HMAC-SHA256, `resource_id`는 생성한 구매자 계정 ID, `response_status`는 201입니다. 계정·웰컴 발급·이 기록의 COMPLETED 전이는 같은 트랜잭션이며 별도 가입 테이블을 만들지 않습니다. 재요청·충돌·만료의 기준은 [구매자 가입 재시도](policies.md#구매자-가입-재시도)를 따릅니다.
 
