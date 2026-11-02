@@ -285,9 +285,21 @@ services:
     profiles: [observability]
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/quarantine.rules.yml:/etc/prometheus/quarantine.rules.yml:ro
       - prometheus-data:/prometheus
     ports:
       - 127.0.0.1:${PROMETHEUS_PORT:-9090}:9090
+    networks: [backend]
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    profiles: [observability]
+    command: [--config.file=/etc/alertmanager/alertmanager.yml, --storage.path=/alertmanager]
+    volumes:
+      - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - 127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093
     networks: [backend]
 
   grafana:
@@ -327,4 +339,5 @@ volumes:
   postgres-data:
   kafka-data:
   prometheus-data:
+  alertmanager-data:
   grafana-data:

@@ -41,6 +41,8 @@ jobs:
         run: ./gradlew --stop
       - name: Initialize local settings
         run: python3 scripts/init_env.py
+      - name: Verify quarantine monitoring and alert delivery
+        run: python3 scripts/test_observability.py
       - name: Start the stack from empty volumes
         run: docker compose up -d --build --wait --wait-timeout 300
       - name: Verify service, database and messaging boundaries

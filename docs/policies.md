@@ -369,21 +369,21 @@ Commerce의 각 인스턴스가 기존 내부 Prometheus에서 필요한 관측�
 
 ## 운영 알람
 
-조치가 필요한 장애는 `Prometheus → Alertmanager → Slack`으로 전달하도록 설계합니다. Grafana는 원인 확인에 사용하고 알람 규칙은 Prometheus에서 관리합니다. **현재 Compose에는 Alertmanager·자원 수집기·Slack 연결·아래 업무 지표가 없습니다.** 다음은 구현·시험할 초기 기준입니다.
+조치가 필요한 장애는 `Prometheus → Alertmanager`로 전달하며 Grafana는 원인 확인에 사용합니다. 현재 Payment 격리·DLT/REPLAY 작업의 지표·규칙·대시보드와 Alertmanager를 연결했습니다. 기본은 화면 확인이고 Slack은 비밀 파일 overlay를 명시적으로 적용해야 합니다. 아래 기준 중 격리 관련 항목만 구현했으며 금융 업무·자원 수집기와 다른 소비자 관측은 구현 전입니다.
 
 | 조건 | 초기 기준 | 등급·조치 |
 | --- | --- | --- |
 | 금융 미확정 | 결제·환불·지급 `UNKNOWN` 최장 나이 5분/15분 초과 | WARNING/CRITICAL. 원거래 조회·대조; 새 금융 거래 금지 |
 | 환불 지연 | 미완료 환불 최장 나이 10분/30분 초과 | WARNING/CRITICAL. 외부 환불·복원·원장·주문 단계 확인 |
 | 지급 지연 | 확정 배치가 회차 마감 후 30분/60분 동안 미지급 | WARNING/CRITICAL. 정상적인 다음 회차 이월 제외 |
-| 수동 확인 | 새 `REVIEW_REQUIRED`, 신규 DLT | CRITICAL. 원업무·재처리 사유 확인 |
+| 수동 확인 | 새 `REVIEW_REQUIRED`, 신규 격리·DLT | CRITICAL. 원업무·재처리 사유 확인 |
 | 작업 적체 | 미발행 Outbox·미처리 Inbox·실행 작업 최장 나이 5분/15분 초과 | WARNING/CRITICAL. Kafka lag·소비율·작업자 확인 |
 | 알림 지연 | 준비된 발송 최장 대기 5분/15분 초과, 새 발송 수동 확인 건 | WARNING/CRITICAL. 원수신 기록 조회·재처리 |
 | 서비스 장애 | 수집 대상 `up=0` 1분, OOM/컨테이너 비정상 종료 | CRITICAL. 기동·메모리·의존 서비스 확인 |
 | HTTP 장애 | 5분간 요청 100건 이상에서 5xx 비율 5% 초과가 5분 지속 | WARNING. 서비스·경로 템플릿별 오류·trace 확인 |
 | 자원 부족 | 메모리 제한 90% 초과 5분, 디스크 가용 10% 미만 5분, CPU 할당량 90% 초과 10분 | WARNING. 부하 중단·자원 조정 판단; 여유 메모리 5% 미만/OOM은 CRITICAL |
 
-최장 나이·상태별 건수는 각 소유 서비스가 DB에서 계산해 `/actuator/prometheus`로 노출할 계획입니다. 계정/주문 ID를 메트릭 label로 사용하지 않습니다. 무작업이면 나이·건수는 0이며 정상 대기·완료 건을 적체에서 제외합니다. Kafka lag는 메시지 수, 대기 나이는 초 단위입니다.
+Payment 격리는 소유 DB에서 상태별 건수·도래 후 최장 나이를 계산해 `/actuator/prometheus`로 노출합니다. 최근 5분 신규 원문과 소진 작업을 경보하며 발행 완료를 금융 업무 성공으로 간주하지 않습니다. 다른 업무의 건수·나이 지표는 구현 전입니다. 계정/주문 ID를 메트릭 label로 사용하지 않습니다. 무작업이면 나이·건수는 0이며 정상 대기·완료 건을 적체에서 제외합니다. Kafka lag는 메시지 수, 대기 나이는 초 단위입니다.
 
 Alertmanager는 환경·서비스·알람 이름으로 묶고 최초 30초 대기·그룹 갱신 5분·반복 1시간을 기본으로 합니다. 같은 장애의 CRITICAL이 WARNING을 억제하고 복구도 안내합니다. Slack에는 등급·발생/지속 시각·영향·대시보드/조치 문서 링크를 보내고 개인정보·알림 본문·비밀값은 보내지 않습니다. 부하 시험 채널은 운영 채널과 분리합니다. [Alertmanager의 묶음·중복 억제](https://prometheus.io/docs/alerting/latest/alertmanager/)를 사용합니다.
 

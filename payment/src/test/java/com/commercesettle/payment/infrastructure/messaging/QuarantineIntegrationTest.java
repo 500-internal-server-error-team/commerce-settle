@@ -11,6 +11,8 @@ import static org.mockito.Mockito.when;
 
 import com.commercesettle.payment.application.port.QuarantineStore.Source;
 import com.commercesettle.payment.application.service.QuarantineService;
+import com.commercesettle.payment.infrastructure.observability.QuarantineMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -48,7 +50,9 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -62,6 +66,7 @@ import org.testcontainers.kafka.KafkaContainer;
       "app.dev-fixtures.enabled=false",
       "app.dev-fixtures.run-scenarios=false",
       "app.kafka.quarantine.interval-ms=3600000",
+      "app.kafka.quarantine.metrics.interval-ms=3600000",
       "spring.kafka.listener.auto-startup=false",
       "spring.task.scheduling.pool.size=1",
       "spring.threads.virtual.enabled=false",
@@ -109,6 +114,84 @@ class QuarantineIntegrationTest {
   @Autowired private KafkaListenerEndpointRegistry listeners;
   @Autowired private DataSource dataSource;
   @Autowired private TaskScheduler scheduler;
+  @Autowired private QuarantineMetrics metrics;
+  @Autowired private MeterRegistry meters;
+  @Autowired private PlatformTransactionManager transactions;
+
+  @Test
+  @DisplayName("관측은 롤백된 격리를 세지 않고 실제 DB 조회 실패에도 마지막 표본을 보존한다")
+  void retainsCommittedSnapshotDuringDatabaseFailure() {
+    quarantine.capture(new Source(GROUP, TOPIC, 0, 9001, "key", new byte[] {1}));
+    new TransactionTemplate(transactions)
+        .executeWithoutResult(
+            status -> {
+              quarantine.capture(new Source(GROUP, TOPIC, 0, 9002, "key", new byte[] {2}));
+              status.setRollbackOnly();
+            });
+    metrics.refresh();
+    assertThat(meters.get("payment.quarantine.originals").gauge().value()).isEqualTo(1);
+    double observed = meters.get("payment.quarantine.observed.timestamp.seconds").gauge().value();
+    jdbc.execute("ALTER TABLE payment.inbox_quarantines RENAME TO quarantines_observation_test");
+    try {
+      metrics.refresh();
+      assertThat(meters.get("payment.quarantine.collection.success").gauge().value()).isZero();
+      assertThat(meters.get("payment.quarantine.originals").gauge().value()).isEqualTo(1);
+      assertThat(meters.get("payment.quarantine.observed.timestamp.seconds").gauge().value())
+          .isEqualTo(observed);
+    } finally {
+      jdbc.execute("ALTER TABLE payment.quarantines_observation_test RENAME TO inbox_quarantines");
+    }
+    metrics.refresh();
+    assertThat(meters.get("payment.quarantine.collection.success").gauge().value()).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("격리 관측은 미래 재시도와 유효 임대를 지연에서 제외하고 소비자별 상태를 집계한다")
+  void observesDueWorkWithoutCountingScheduledWaitAsDelay() {
+    var id = quarantine.capture(new Source(GROUP, TOPIC, 0, 9000, "key", new byte[] {1}));
+    quarantine.requestReplay(id, 0, "test-operator", "TEST_REPLAY");
+    jdbc.update(
+        "UPDATE payment.inbox_quarantine_deliveries SET status='RETRY', next_run_at=clock_timestamp()+interval '10 minutes' WHERE kind='DLT'");
+    jdbc.update(
+        "UPDATE payment.inbox_quarantine_deliveries SET next_run_at=clock_timestamp()-interval '6 minutes' WHERE kind='REPLAY'");
+    metrics.refresh();
+    assertThat(meters.get("payment.quarantine.originals").gauge().value()).isEqualTo(1);
+    assertThat(meters.get("payment.quarantine.captured.recent").gauge().value()).isEqualTo(1);
+    assertThat(
+            meters
+                .get("payment.quarantine.delivery.overdue.seconds")
+                .tag("kind", "DLT")
+                .gauge()
+                .value())
+        .isZero();
+    assertThat(
+            meters
+                .get("payment.quarantine.delivery.overdue.seconds")
+                .tag("kind", "REPLAY")
+                .gauge()
+                .value())
+        .isGreaterThanOrEqualTo(360);
+    jdbc.update(
+        "UPDATE payment.inbox_quarantine_deliveries SET status='RUNNING',lease_until=clock_timestamp()+interval '1 minute' WHERE kind='REPLAY'");
+    metrics.refresh();
+    assertThat(
+            meters
+                .get("payment.quarantine.delivery.overdue.seconds")
+                .tag("kind", "REPLAY")
+                .gauge()
+                .value())
+        .isZero();
+    jdbc.update(
+        "UPDATE payment.inbox_quarantine_deliveries SET lease_until=clock_timestamp()-interval '16 minutes' WHERE kind='REPLAY'");
+    metrics.refresh();
+    assertThat(
+            meters
+                .get("payment.quarantine.delivery.overdue.seconds")
+                .tag("kind", "REPLAY")
+                .gauge()
+                .value())
+        .isGreaterThanOrEqualTo(960);
+  }
 
   @BeforeEach
   void reset() throws Exception {
@@ -130,15 +213,27 @@ class QuarantineIntegrationTest {
             .all()
             .get(10, TimeUnit.SECONDS);
       }
-      long end =
-          admin
-              .listOffsets(Map.of(PARTITION, OffsetSpec.latest()))
-              .all()
-              .get(10, TimeUnit.SECONDS)
-              .get(PARTITION)
-              .offset();
+      var end = new AtomicReference<Long>();
+      await()
+          .atMost(Duration.ofSeconds(30))
+          .untilAsserted(
+              () -> {
+                try {
+                  long latest =
+                      admin
+                          .listOffsets(Map.of(PARTITION, OffsetSpec.latest()))
+                          .all()
+                          .get(10, TimeUnit.SECONDS)
+                          .get(PARTITION)
+                          .offset();
+                  assertThat(latest).isNotNegative();
+                  end.set(latest);
+                } catch (java.util.concurrent.ExecutionException exception) {
+                  throw new AssertionError("Kafka topic metadata is not ready", exception);
+                }
+              });
       admin
-          .alterConsumerGroupOffsets(GROUP, Map.of(PARTITION, new OffsetAndMetadata(end)))
+          .alterConsumerGroupOffsets(GROUP, Map.of(PARTITION, new OffsetAndMetadata(end.get())))
           .all()
           .get(10, TimeUnit.SECONDS);
     }

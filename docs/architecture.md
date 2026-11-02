@@ -265,7 +265,7 @@ Gateway는 빌드에 포함한 [OpenAPI](openapi.json)의 `/api/` 작업을 HTTP
 
 서비스 관리 포트 9091은 컨테이너 내부 전용입니다. Gateway 업무 포트와 분리해 `/actuator/**`·`finance-mock`·내부 API를 외부 경로에 연결하지 않습니다. 기본 호스트 포트는 Gateway `127.0.0.1:8080`과 Zipkin `127.0.0.1:9411`입니다. 선택 `observability` 프로필은 Prometheus·Grafana·Kafka-UI 포트를 루프백에 추가합니다.
 
-Prometheus는 6개 실행의 JVM·프로세스·HTTP 메트릭을 수집합니다. Grafana 초기 대시보드는 대상 생존·CPU·힙·HTTP 요청률을 보여줍니다. 업무 관측은 승인 완료 TPS·정산 지연·Outbox/Job/DLT 지표를 기준으로 설계합니다.
+Prometheus는 6개 실행의 JVM·프로세스·HTTP 메트릭과 명시적으로 켠 Payment의 격리 DB 표본을 수집합니다. Grafana는 기본 실행 지표와 격리·발행 적체·관측 신선도를 보여줍니다. 격리 경보는 Alertmanager로 전달하며 기본은 화면 확인, Slack은 비밀 파일을 사용하는 별도 overlay로 연결합니다. Kafka lag·금융 Inbox/Outbox/Job·승인 완료 TPS·정산 지연·저장소 관측은 별도 구현 대상입니다. 격리 지표와 조치는 [DLT 관측](development.md#dlt-관측과-조치)을 따릅니다.
 
 ### 로그 수집
 
