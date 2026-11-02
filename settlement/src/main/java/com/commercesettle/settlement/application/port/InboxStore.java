@@ -40,8 +40,17 @@ public interface InboxStore {
    */
   List<UUID> reviveExhaustedPurchases(UUID paymentId, int maxAttempts, Instant now);
 
+  /**
+   * {@code inboxId}보다 먼저 받은 같은 환불의 예약 요청 중 가장 오래된 것. 결과(예약·거절)와 상관없이 같은 환불의 원요청을 찾는다. 이미 커밋된 행만
+   * 보인다.
+   */
+  Optional<EarlierRefundRequest> findEarlierRefundRequest(UUID refundId, UUID inboxId);
+
   /** 수신 위치와 최초 bytes. */
   record Source(String topic, int partition, long offset, byte[] body) {}
+
+  /** 같은 환불의 원요청과 그 판정. 대기 중이면 {@code resultRef}가 없다. */
+  record EarlierRefundRequest(String status, UUID paymentId, long netAmount, UUID resultRef) {}
 
   /** 이벤트 종류별로 원문을 다시 읽은 대기 건. */
   sealed interface Waiting {

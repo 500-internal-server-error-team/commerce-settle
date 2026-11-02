@@ -87,6 +87,13 @@ public class RefundEventService {
       UUID inboxId, EventEnvelope<RefundReservationRequestedPayload> event, boolean firstReceipt) {
     Instant now = clock.instant();
     RefundReservationRequestedPayload request = event.payload();
+    // 같은 환불은 원요청 하나만 판정한다. 거절은 예약을 남기지 않고 대기 중인 원요청은 아직 예약 전이라, 예약이 아니라 원요청과 대조한다.
+    Optional<InboxStore.EarlierRefundRequest> original =
+        inbox.findEarlierRefundRequest(request.refundId(), inboxId);
+    if (original.isPresent()) {
+      repeat(inboxId, event, original.get(), now);
+      return;
+    }
     Optional<ItemState> found = reservations.findItem(request.paymentId());
     if (found.isEmpty()) {
       // 결제 원장이 아직 없다. 처음 대기할 때만 WAITING을 알리고, 상한을 소진하면 결과 없이 운영 확인으로 남긴다.
@@ -99,30 +106,63 @@ public class RefundEventService {
     }
     ItemState item = found.get();
     Optional<Reservation> same = reservations.find(item.id(), request.refundId());
-    if (same.isPresent()) {
-      if (same.get().amount() == request.netAmount()) {
-        inbox.markApplied(inboxId, same.get().id(), now);
-      } else {
-        review(inboxId, event, "REFUND_ALREADY_RESERVED_WITH_DIFFERENT_VALUES", now);
+    if (same.isEmpty()) {
+      Optional<String> rejection = rejection(item, request);
+      if (rejection.isEmpty()) {
+        Optional<Reservation> reserved = reservations.reserve(item.id(), request.refundId(), now);
+        if (reserved.isPresent()) {
+          inbox.markApplied(inboxId, reserved.get().id(), now);
+          publish(
+              request,
+              Result.RESERVED,
+              reserved.get().id(),
+              null,
+              reserved.get().itemVersion(),
+              now);
+          return;
+        }
+        // 읽은 뒤 다른 트랜잭션이 먼저 바꿨다. 같은 환불의 예약이면 그 결과를 따르고, 아니면 지금 상태로 사유를 다시 정한다.
+        same = reservations.find(item.id(), request.refundId());
+        item = reservations.findItem(request.paymentId()).orElseThrow();
+        rejection = rejection(item, request);
       }
-      return;
-    }
-    Optional<String> rejection = rejection(item, request);
-    if (rejection.isEmpty()) {
-      Optional<Reservation> reserved = reservations.reserve(item.id(), request.refundId(), now);
-      if (reserved.isPresent()) {
-        inbox.markApplied(inboxId, reserved.get().id(), now);
+      if (same.isEmpty()) {
+        inbox.markApplied(inboxId, item.id(), now);
         publish(
-            request, Result.RESERVED, reserved.get().id(), null, reserved.get().itemVersion(), now);
+            request,
+            Result.REJECTED,
+            null,
+            rejection.orElse(ALREADY_REFUNDED),
+            item.version(),
+            now);
         return;
       }
-      // 읽은 뒤 지급 선점이 먼저 바꿨다. 지금 상태로 사유를 다시 정한다.
-      item = reservations.findItem(request.paymentId()).orElseThrow();
-      rejection = rejection(item, request);
     }
-    inbox.markApplied(inboxId, item.id(), now);
-    publish(
-        request, Result.REJECTED, null, rejection.orElse(ALREADY_REFUNDED), item.version(), now);
+    if (same.get().amount() == request.netAmount()) {
+      inbox.markApplied(inboxId, same.get().id(), now);
+    } else {
+      review(inboxId, event, "REFUND_ALREADY_RESERVED_WITH_DIFFERENT_VALUES", now);
+    }
+  }
+
+  /**
+   * 같은 환불의 원요청이 이미 있다. 값이 다르면 운영 확인으로 남기고, 같으면 결과를 다시 쓰지 않는다. 결과는 원요청이 이미 냈거나(예약·거절) 대기를 마치면 낸다.
+   * 원요청이 운영 확인 중이면 이 요청도 같이 남긴다.
+   */
+  private void repeat(
+      UUID inboxId,
+      EventEnvelope<RefundReservationRequestedPayload> event,
+      InboxStore.EarlierRefundRequest original,
+      Instant now) {
+    RefundReservationRequestedPayload request = event.payload();
+    if (!original.paymentId().equals(request.paymentId())
+        || original.netAmount() != request.netAmount()) {
+      review(inboxId, event, "REFUND_ALREADY_REQUESTED_WITH_DIFFERENT_VALUES", now);
+    } else if ("REVIEW_REQUIRED".equals(original.status())) {
+      review(inboxId, event, "REFUND_REQUEST_UNDER_REVIEW", now);
+    } else {
+      inbox.markApplied(inboxId, original.resultRef(), now);
+    }
   }
 
   /**

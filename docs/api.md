@@ -209,7 +209,7 @@ Settlement는 환불 요청을 Inbox와 같은 트랜잭션에 반영하고 결�
 3. 결제 항목이 아직 없으면 Inbox를 WAITING으로 두고 처음 한 번만 `WAITING`으로 답합니다. 구매확정 대기와 같이 1~60초 간격 10회까지 다시 판정해 `RESERVED`·`REJECTED`로 답하고, 소진하면 결과 없이 `REVIEW_REQUIRED`로 남깁니다.
 4. `RefundFinancialCompleted`: 같은 환불의 ACTIVE 예약이 있고 외부·마일리지 금액이 원거래와 같으면 최초 원장 5 leg마다 반대 부호 줄(0원 포함)을 만들고 항목 `REFUNDED`, 예약 CONSUMED로 바꾼 뒤 `RefundLedgerReversed`로 답합니다. 예약이 없거나 금액이 다르면 결과 없이 `REVIEW_REQUIRED`입니다.
 5. `RefundReleaseRequested`: 같은 결제·같은 환불의 ACTIVE 예약을 풀고 항목을 직전 상태로 되돌린 뒤 `RefundReservationReleased`로 답합니다. 상쇄가 끝났거나 맞는 예약이 없으면 `REVIEW_REQUIRED`입니다.
-6. 같은 환불의 재요청(다른 eventId)은 이미 처리한 사실과 같으면 결과를 다시 보내지 않고, 다르면 `REVIEW_REQUIRED`입니다. 원래 결과는 Outbox가 전달합니다.
+6. 같은 환불의 재요청(다른 eventId)은 결과(예약·거절)나 대기 여부와 상관없이 먼저 받은 원요청의 결제·순액과 대조합니다. 같으면 결과를 다시 보내지 않고(원요청이 `REVIEW_REQUIRED`면 함께 `REVIEW_REQUIRED`), 다르면 `REVIEW_REQUIRED`입니다. 원래 결과는 Outbox가 전달하며, 원요청이 대기 중이면 대기를 마친 원요청이 냅니다.
 
 판매자 알림 요청 `SettlementNoticeRequested`(key·aggregateId=batchId)도 같은 Outbox로 보냅니다. 일배치 확정 때 `SETTLEMENT_READY`, 지급 성공 반영 때 `PAYOUT_COMPLETED`, 확정 거절 반영 때 `PAYOUT_ACTION_REQUIRED`(`PROVIDER_DECLINED`)이며 업무 변경과 같은 트랜잭션에 저장합니다.
 
