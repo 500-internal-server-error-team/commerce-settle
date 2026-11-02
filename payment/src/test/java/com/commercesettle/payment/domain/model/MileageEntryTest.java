@@ -94,4 +94,35 @@ class MileageEntryTest {
             NOW);
     return MileageReservation.forPayment(wallet, payment, NOW);
   }
+
+  @Test
+  @DisplayName("복원 기록은 원결제 ID를 업무 키로 쓰고 환불과 복원 뒤 잔액을 남긴다")
+  void recordsRestoreKeyedByPayment() {
+    MileageWallet wallet = MileageWallet.open(UUID.randomUUID(), 500, NOW);
+    Refund refund =
+        Refund.accept(
+            RefundTest.confirmed(new PaymentAmounts(10_000, 0, 0, 2_000)), UUID.randomUUID(), NOW);
+    wallet.restore(refund.getMileageAmount(), NOW);
+
+    MileageEntry entry = MileageEntry.restore(wallet, refund, NOW);
+
+    assertThat(entry.getKind()).isEqualTo(MileageEntryKind.RESTORE);
+    assertThat(entry.getBusinessRef()).isEqualTo(refund.getPaymentId());
+    assertThat(entry.getPaymentId()).isEqualTo(refund.getPaymentId());
+    assertThat(entry.getRefundId()).isEqualTo(refund.getId());
+    assertThat(entry.getAmount()).isEqualTo(2_000);
+    assertThat(entry.getBalanceAfter()).isEqualTo(2_500);
+  }
+
+  @Test
+  @DisplayName("사용 마일리지가 없는 환불은 복원 원장을 만들지 않는다")
+  void rejectsRestoreWithoutMileage() {
+    MileageWallet wallet = MileageWallet.open(UUID.randomUUID(), 500, NOW);
+    Refund refund =
+        Refund.accept(
+            RefundTest.confirmed(new PaymentAmounts(10_000, 0, 0, 0)), UUID.randomUUID(), NOW);
+
+    assertThatThrownBy(() -> MileageEntry.restore(wallet, refund, NOW))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
 }
