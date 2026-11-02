@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
 import com.commercesettle.settlement.application.service.QuarantineService;
+import com.commercesettle.settlement.application.service.RefundEventService;
 import com.commercesettle.settlement.application.service.SettlementEventService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -33,10 +34,11 @@ class SettlementEventListenerTest {
           .build();
 
   private final SettlementEventService service = mock(SettlementEventService.class);
+  private final RefundEventService refunds = mock(RefundEventService.class);
   private final QuarantineService quarantine = mock(QuarantineService.class);
   private final Acknowledgment acknowledgment = mock(Acknowledgment.class);
   private final SettlementEventListener listener =
-      new SettlementEventListener(MAPPER, service, quarantine, "settlement.v1");
+      new SettlementEventListener(MAPPER, service, refunds, quarantine, "settlement.v1");
 
   @Test
   @DisplayName("해석 실패 원문을 격리하면 ack한다")
