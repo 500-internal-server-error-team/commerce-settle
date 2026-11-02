@@ -95,6 +95,7 @@ CREATE TABLE settlement.payouts (
     funding_account_ref       varchar(100) NOT NULL,
     scenario_version          varchar(32)  NOT NULL,
     succeeded_at              timestamptz,
+    unknown_since             timestamptz,
     amount                    bigint       NOT NULL,
     business_key              uuid         NOT NULL,
     external_ref              uuid,

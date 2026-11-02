@@ -21,7 +21,11 @@ public final class CommerceQueueMetrics implements MultiCollector, AutoCloseable
       List.of(
           "commerce_settle_financial_queue_records",
           "commerce_settle_financial_queue_due_delay_seconds",
-          "commerce_settle_admission_observed_timestamp_seconds");
+          "commerce_settle_admission_observed_timestamp_seconds",
+          "commerce_settle_kafka_group_lag_records",
+          "commerce_settle_financial_queue_review_required_records",
+          "commerce_settle_financial_operation_age_seconds",
+          "commerce_settle_financial_operation_observed_timestamp_seconds");
   private static final String SQL =
       """
       SELECT 'commerce.outbox' AS queue, count(*) AS records,
@@ -30,7 +34,8 @@ public final class CommerceQueueMetrics implements MultiCollector, AutoCloseable
             THEN next_run_at
           WHEN status = 'RUNNING' AND lease_until <= statement_timestamp() THEN lease_until
         END))), 0)::double precision AS age,
-        extract(epoch FROM statement_timestamp())::double precision AS observed
+        extract(epoch FROM statement_timestamp())::double precision AS observed,
+        count(*) FILTER (WHERE status = 'REVIEW_REQUIRED') AS review
       FROM commerce.outbox WHERE status <> 'PUBLISHED'
         AND event_type NOT IN ('PaymentNoticeRequested','SettlementNoticeRequested')
       UNION ALL
@@ -39,17 +44,31 @@ public final class CommerceQueueMetrics implements MultiCollector, AutoCloseable
           WHEN status = 'RECEIVED' THEN created_at
           WHEN status = 'WAITING' AND next_run_at <= statement_timestamp() THEN next_run_at
         END))), 0)::double precision,
-        extract(epoch FROM statement_timestamp())::double precision
+        extract(epoch FROM statement_timestamp())::double precision,
+        count(*) FILTER (WHERE status = 'REVIEW_REQUIRED')
       FROM commerce.inbox WHERE consumer = 'commerce.v1' AND status <> 'APPLIED'
+      UNION ALL
+      SELECT 'commerce.refund', count(*),
+        coalesce(extract(epoch FROM (statement_timestamp() - min(accepted_at))),0)::double precision,
+        extract(epoch FROM statement_timestamp())::double precision, 0
+      FROM commerce.order_refund_requests
+      WHERE status IN ('PENDING_SELLER','APPROVED','REFUNDING','FAILED_REVIEW')
       """;
   private final JdbcTemplate jdbc;
   private final PrometheusRegistry registry;
+  private final KafkaLagMetrics kafka;
   private final AtomicReference<Map<String, Values>> snapshot = new AtomicReference<>(Map.of());
 
   public CommerceQueueMetrics(DataSource dataSource, PrometheusRegistry registry) {
+    this(dataSource, registry, null);
+  }
+
+  public CommerceQueueMetrics(
+      DataSource dataSource, PrometheusRegistry registry, KafkaLagMetrics kafka) {
     jdbc = new JdbcTemplate(dataSource);
     jdbc.setQueryTimeout(2);
     this.registry = registry;
+    this.kafka = kafka;
     if (registry != null) registry.register(this);
   }
 
@@ -59,16 +78,29 @@ public final class CommerceQueueMetrics implements MultiCollector, AutoCloseable
     var records = new ArrayList<GaugeDataPointSnapshot>();
     var ages = new ArrayList<GaugeDataPointSnapshot>();
     var observed = new ArrayList<GaugeDataPointSnapshot>();
+    var review = new ArrayList<GaugeDataPointSnapshot>();
+    var lags = new ArrayList<GaugeDataPointSnapshot>();
     for (String queue : new String[] {"commerce.outbox", "commerce.inbox"}) {
-      Values values = current.getOrDefault(queue, new Values(0, 0, 0));
+      Values values = current.getOrDefault(queue, new Values(0, 0, 0, 0));
       records.add(new GaugeDataPointSnapshot(values.records(), Labels.of("queue", queue), null));
       ages.add(new GaugeDataPointSnapshot(values.age(), Labels.of("queue", queue), null));
+      review.add(new GaugeDataPointSnapshot(values.review(), Labels.of("queue", queue), null));
       for (String signal : new String[] {"QUEUE_SIZE", "DUE_AGE"}) {
         observed.add(
             new GaugeDataPointSnapshot(
                 values.observed(), Labels.of("signal", signal, "resource", queue), null));
       }
     }
+    var kafkaSnapshot = kafka == null ? Map.<String, KafkaLagMetrics.Lag>of() : kafka.snapshot();
+    if (kafka != null)
+      for (String group : KafkaLagMetrics.SUBSCRIPTIONS.keySet()) {
+        var value = kafkaSnapshot.getOrDefault(group, new KafkaLagMetrics.Lag(0, 0));
+        lags.add(new GaugeDataPointSnapshot(value.records(), Labels.of("group", group), null));
+        observed.add(
+            new GaugeDataPointSnapshot(
+                value.observed(), Labels.of("signal", "LAG", "resource", group), null));
+      }
+    var refund = current.getOrDefault("commerce.refund", new Values(0, 0, 0, 0));
     return MetricSnapshots.of(
         new GaugeSnapshot(
             new MetricMetadata(NAMES.get(0), "Unfinished financial queue records"), records),
@@ -77,7 +109,20 @@ public final class CommerceQueueMetrics implements MultiCollector, AutoCloseable
         new GaugeSnapshot(
             new MetricMetadata(
                 NAMES.get(2), "Original observation epoch seconds; zero when unavailable"),
-            observed));
+            observed),
+        new GaugeSnapshot(new MetricMetadata(NAMES.get(3), "All subscribed partition lag"), lags),
+        new GaugeSnapshot(
+            new MetricMetadata(NAMES.get(4), "Financial manual review records"), review),
+        new GaugeSnapshot(
+            new MetricMetadata(NAMES.get(5), "Unfinished refund age in seconds"),
+            List.of(
+                new GaugeDataPointSnapshot(
+                    refund.age(), Labels.of("operation", "commerce.refund"), null))),
+        new GaugeSnapshot(
+            new MetricMetadata(NAMES.get(6), "Original financial observation epoch seconds"),
+            List.of(
+                new GaugeDataPointSnapshot(
+                    refund.observed(), Labels.of("operation", "commerce.refund"), null))));
   }
 
   @Override
@@ -95,7 +140,8 @@ public final class CommerceQueueMetrics implements MultiCollector, AutoCloseable
             new Values(
                 ((Number) row.get("records")).doubleValue(),
                 ((Number) row.get("age")).doubleValue(),
-                ((Number) row.get("observed")).doubleValue()));
+                ((Number) row.get("observed")).doubleValue(),
+                ((Number) row.get("review")).doubleValue()));
       }
       snapshot.set(Map.copyOf(current));
     } catch (DataAccessException e) {
@@ -109,5 +155,5 @@ public final class CommerceQueueMetrics implements MultiCollector, AutoCloseable
     if (registry != null) registry.unregister(this);
   }
 
-  private record Values(double records, double age, double observed) {}
+  private record Values(double records, double age, double observed, double review) {}
 }

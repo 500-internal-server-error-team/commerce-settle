@@ -551,6 +551,10 @@ class OrderWorkflowIntegrationTest {
     var order =
         call("BUYER", f.buyer(), "/api/orders", orderBody(f).put("mileageAmount", mileage), 201);
     var id = uuid(order, "id");
+    org.mockito.Mockito.doThrow(
+            new com.commercesettle.commerce.application.exception.OrderCapacityExceededException())
+        .when(admission)
+        .requireAdmission();
     var ctx = context(id);
     var payment = UUID.randomUUID();
     receive("PaymentConfirmed", confirmed(order, ctx).put("paymentId", payment.toString()), true);

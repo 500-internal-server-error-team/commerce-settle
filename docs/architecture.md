@@ -64,11 +64,11 @@ Payment·Settlement는 확정 상태와 알림 요청 Outbox를 함께 저장하
 
 [Prometheus 설정](../infra/prometheus/prometheus.yml)은 Gateway·Commerce·Payment API·Payment Worker·Settlement·Finance Mock의 `/actuator/prometheus`를 15초마다 수집합니다. Grafana는 [내부 Prometheus 주소](../infra/grafana/provisioning/datasources/prometheus.yml)를 조회합니다.
 
-k6는 브라우저를 조작하지 않는 HTTP 부하 도구입니다. 현재는 Gateway의 Commerce 명세를 반복 조회하며 결제 업무를 실행하지 않습니다. Prometheus·Grafana·Kafka UI는 `observability`, k6는 `tools` 프로필에서 실행합니다.
+k6는 브라우저를 조작하지 않는 HTTP 부하 도구입니다. 현재는 Gateway의 Commerce 명세를 반복 조회하며 결제 업무를 실행하지 않습니다. Prometheus와 데이터 파일시스템 수집기는 신규 접수 판단에 필요하므로 기본 Compose에서 실행합니다. Grafana·Alertmanager·Kafka UI는 `observability`, k6는 `tools` 프로필에서 실행합니다.
 
 Prometheus·Grafana는 각각 `prometheus-data`·`grafana-data` 볼륨을 사용하고, Zipkin 추적은 재시작하면 사라집니다. 관측 도구의 호스트 포트는 [네트워크와 관측](#네트워크와-관측)을 따르며 모두 루프백에 바인딩됩니다. 앱 관리 포트 9091·DB·Kafka·Redis는 호스트에 게시하지 않습니다.
 
-목표 관측 구조에서는 Prometheus가 경보를 평가하고 Alertmanager가 묶음·중복 억제·복구 통지를 Slack으로 전달합니다. Linux node_exporter·cAdvisor는 자원 수집 후보이며 Mac 호스트 관측과 구분합니다. 현재 Compose에는 이 추가 구성이 없습니다. [운영 알람 정책](policies.md#운영-알람)이 임계값·등급·조치 기준입니다.
+Prometheus가 금융·격리 경보를 평가하고 Alertmanager가 묶음·중복 억제·복구 통지를 처리합니다. Slack 전송은 비밀 파일 overlay를 적용할 때만 활성화합니다. Commerce·Payment·Settlement는 자기 DB만 2초 제한의 단일 SQL로 관측하고, 요청·scrape 경로에서 DB를 조회하지 않습니다. Kafka Admin은 Commerce의 별도 단일 실행기에서 5초 전체 예산으로 세 금융 그룹의 계약 토픽 전체 파티션을 확인합니다. `data-storage-metrics`는 Kafka·PostgreSQL과 같은 named volume을 읽기 전용으로 마운트해 `statvfs`로 실제 파일시스템을 관측하며 Docker 소켓·DB 자격을 사용하지 않습니다. 여러 데이터 경로를 설정하면 하나의 실패도 그 종류 전체를 무효로 하고 최대 사용률·가장 오래된 수집 시각을 제공합니다. Linux node_exporter·cAdvisor는 자원 수집 후보이며 Mac 호스트 관측과 구분합니다. 현재 Compose에는 이 추가 구성이 없습니다. [운영 알람 정책](policies.md#운영-알람)이 임계값·등급·조치 기준입니다.
 
 다이어그램의 [SVG와 로고 출처](diagrams/README.md)를 함께 관리합니다.
 
@@ -217,6 +217,7 @@ ArchUnit이 계층 경계와 다른 서비스 구현의 직접 import를 검사�
 | `infrastructure/client` | HTTP PG 구현 `HttpPgClient`, 외부 전용 요청·응답 |
 | `infrastructure/cache` | Redis 세션·인증 가드·캐시·잠금 어댑터 |
 | `infrastructure/config` | Spring 설정·클라이언트 구성·OpenAPI |
+| `infrastructure/observability` | 자기 저장소·Kafka의 읽기 전용 관측과 불변 메트릭 snapshot |
 
 **엔티티는 `domain/model`에 둡니다.** 단순 CRUD까지 별도 JPA 엔티티와 도메인 모델로 이중화하지 않고 JPA 매핑을 함께 사용합니다. 엔티티의 상태 변경은 의미 있는 메서드로 제한하고 public setter·HTTP DTO·직렬화 책임을 넣지 않습니다. 식별자 참조와 DB 제약은 [FK·데이터 정책](migrations.md#데이터-보존과-제약-조건)을 따릅니다. 복잡한 영속 구조 때문에 분리가 필요해지면 이유·변환 비용과 함께 검토합니다.
 
@@ -269,9 +270,9 @@ Gateway는 빌드에 포함한 [OpenAPI](openapi.json)의 `/api/` 작업을 HTTP
 
 `v3`는 Springdoc의 OpenAPI 3 문서 경로이며 서비스 API의 세 번째 버전을 뜻하지 않습니다.
 
-서비스 관리 포트 9091은 컨테이너 내부 전용입니다. Gateway 업무 포트와 분리해 `/actuator/**`·`finance-mock`·내부 API를 외부 경로에 연결하지 않습니다. 기본 호스트 포트는 Gateway `127.0.0.1:8080`과 Zipkin `127.0.0.1:9411`입니다. 선택 `observability` 프로필은 Prometheus·Grafana·Kafka-UI 포트를 루프백에 추가합니다.
+서비스 관리 포트 9091은 컨테이너 내부 전용입니다. Gateway 업무 포트와 분리해 `/actuator/**`·`finance-mock`·내부 API를 외부 경로에 연결하지 않습니다. 기본 호스트 포트는 Gateway `127.0.0.1:8080`, Zipkin `127.0.0.1:9411`, Prometheus `127.0.0.1:9090`입니다. 선택 `observability` 프로필은 Alertmanager·Grafana·Kafka-UI 포트를 루프백에 추가합니다. 데이터 파일시스템 수집기는 호스트 포트를 게시하지 않습니다.
 
-Prometheus는 6개 실행의 JVM·프로세스·HTTP 메트릭과 명시적으로 켠 Payment의 격리 DB 표본을 수집합니다. Grafana는 기본 실행 지표와 격리·발행 적체·관측 신선도를 보여줍니다. 격리 경보는 Alertmanager로 전달하며 기본은 화면 확인, Slack은 비밀 파일을 사용하는 별도 overlay로 연결합니다. Kafka lag·금융 Inbox/Outbox/Job·승인 완료 TPS·정산 지연·저장소 관측은 별도 구현 대상입니다. 격리 지표와 조치는 [DLT 관측](development.md#dlt-관측과-조치)을 따릅니다.
+Prometheus는 6개 실행의 JVM·프로세스·HTTP 메트릭, 활성화한 격리 DB 표본, 세 서비스 금융 Inbox·Outbox·Job과 금융 상태, 세 금융 그룹 Kafka lag와 실제 데이터 파일시스템을 수집합니다. Grafana는 기본 실행 지표와 격리·발행 적체·관측 신선도를 보여줍니다. 금융·격리 경보는 Alertmanager로 전달하며 기본은 화면 확인, Slack은 비밀 파일을 사용하는 별도 overlay로 연결합니다. 승인 완료 TPS와 정산 전체 지연 관측은 별도 구현 대상입니다. 금융 지표와 복구는 [금융 관측](development.md#금융-관측과-접수-복구), 격리 지표와 조치는 [DLT 관측](development.md#dlt-관측과-조치)을 따릅니다.
 
 ### 로그 수집
 

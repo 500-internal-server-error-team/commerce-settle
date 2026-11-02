@@ -25,7 +25,7 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 
 ### 용량 부족 시 신규 접수
 
-`POST /api/orders`와 `POST /api/orders/{orderId}/payment-retries`는 [접수 제한·재개 기준](policies.md#신규-접수-제한과-재개)에 따라 신규 작업만 `503 COMMON_CAPACITY_EXCEEDED`와 `Retry-After: 30`으로 거절합니다. 기존 멱등 결과·본문 충돌 판정이 먼저이며 신규 예약·업무 저장 전 검사합니다. 거절을 멱등 완료로 캐시하지 않고 같은 키·본문의 재시도를 허용합니다. 기존 거래의 취소·환불·지급·재처리·조회는 이 gate의 대상이 아닙니다. DB 주문 경로에 적용하며, 기본 환경은 필수 외부 관측이 아직 없어 신규 접수가 닫힙니다. 관측 연결·운영 중단 설정은 [개발 환경](development.md#신규-주문-접수-제한)을 따릅니다.
+`POST /api/orders`와 `POST /api/orders/{orderId}/payment-retries`는 [접수 제한·재개 기준](policies.md#신규-접수-제한과-재개)에 따라 신규 작업만 `503 COMMON_CAPACITY_EXCEEDED`와 `Retry-After: 30`으로 거절합니다. 기존 멱등 결과·본문 충돌 판정이 먼저이며 신규 예약·업무 저장 전 검사합니다. 거절을 멱등 완료로 캐시하지 않고 같은 키·본문의 재시도를 허용합니다. 기존 거래의 취소·환불·지급·재처리·조회는 이 gate의 대상이 아닙니다. DB 주문 경로에 적용하며, 기본 Compose의 실제 수집기·필수 그룹 offset을 준비한 뒤 60초 회복 조건을 충족하면 접수를 엽니다. 관측 연결·운영 중단 설정은 [개발 환경](development.md#신규-주문-접수-제한)을 따릅니다.
 
 ## 기능 목록
 

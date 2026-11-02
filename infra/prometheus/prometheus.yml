@@ -6,6 +6,7 @@ global:
 rule_files:
   - /etc/prometheus/quarantine.rules.yml
   - /etc/prometheus/notification.rules.yml
+  - /etc/prometheus/financial.rules.yml
 alerting:
   alertmanagers:
     - static_configs:
@@ -21,3 +22,6 @@ scrape_configs:
           - payment-worker:9091
           - settlement:9091
           - finance-mock:9091
+  - job_name: data-storage
+    static_configs:
+      - targets: [data-storage-metrics:9108]
