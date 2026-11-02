@@ -76,11 +76,15 @@ CREATE TABLE payment.inbox (
     status varchar(24) NOT NULL CHECK (status IN ('RECEIVED', 'WAITING', 'APPLIED', 'REVIEW_REQUIRED')),
     next_run_at timestamptz,
     result_ref uuid,
+    -- 롤백된 처리 시도 횟수와 마지막 실패·업무 거절 사유. 처리에 성공해도 지우지 않는다.
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    last_error_code varchar(80),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
     UNIQUE (consumer, event_id),
     CHECK (status <> 'WAITING' OR next_run_at IS NOT NULL),
+    CHECK (status <> 'REVIEW_REQUIRED' OR last_error_code IS NOT NULL),
     CHECK (payload = convert_from(raw_body, 'UTF8')::jsonb),
     CHECK (jsonb_typeof(payload) = 'object' AND payload ?& ARRAY[
         'eventId','eventType','eventVersion','occurredAt','aggregateId','aggregateVersion','payload']),

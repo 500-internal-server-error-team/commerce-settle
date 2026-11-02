@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
@@ -31,6 +32,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -92,20 +94,144 @@ class InboxClaimIntegrationTest {
   }
 
   @Test
-  @DisplayName("업무상 거절은 결과 참조 없이 REVIEW_REQUIRED로 남긴다")
+  @DisplayName("업무상 거절은 결과 참조 없이 거절 사유와 함께 REVIEW_REQUIRED로 남긴다")
   void marksReviewRequiredWithoutResult() {
     saveWaiting();
 
     inTransaction(
         () -> {
-          inbox.markReviewRequired(inbox.claimNextWaiting(LATER).orElseThrow().inboxId(), LATER);
+          inbox.markReviewRequired(
+              inbox.claimNextWaiting(LATER).orElseThrow().inboxId(),
+              "PAYMENT_REQUEST_AMOUNT_MISMATCH",
+              LATER);
           return null;
         });
 
-    assertThat(jdbc.queryForObject("SELECT status FROM payment.inbox", String.class))
-        .isEqualTo("REVIEW_REQUIRED");
-    assertThat(jdbc.queryForObject("SELECT result_ref IS NULL FROM payment.inbox", Boolean.class))
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT status, last_error_code, attempts, result_ref FROM payment.inbox"))
+        .containsEntry("status", "REVIEW_REQUIRED")
+        .containsEntry("last_error_code", "PAYMENT_REQUEST_AMOUNT_MISMATCH")
+        .containsEntry("attempts", 0)
+        .containsEntry("result_ref", null);
+  }
+
+  @Test
+  @DisplayName("실패를 기록하면 시도 횟수·사유·다음 처리 시각을 저장하고 그 시각 전에는 꺼내지 않는다")
+  void recordsFailureAndDelaysNextRun() {
+    saveWaiting();
+    WaitingInboxEvent claimed = inTransaction(() -> inbox.claimNextWaiting(LATER)).orElseThrow();
+    Instant retryAt = LATER.plusSeconds(2);
+
+    assertThat(
+            inTransaction(
+                () ->
+                    inbox.recordFailure(
+                        claimed.inboxId(), claimed.version(), "FAILED", retryAt, LATER)))
         .isTrue();
+
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT status, attempts, last_error_code, next_run_at = ? AS due"
+                    + " FROM payment.inbox",
+                Timestamp.from(retryAt)))
+        .containsEntry("status", "WAITING")
+        .containsEntry("attempts", 1)
+        .containsEntry("last_error_code", "FAILED")
+        .containsEntry("due", true);
+    assertThat(inTransaction(() -> inbox.claimNextWaiting(LATER.plusSeconds(1)))).isEmpty();
+    assertThat(inTransaction(() -> inbox.claimNextWaiting(retryAt)))
+        .get()
+        .satisfies(
+            next -> {
+              assertThat(next.attempts()).isEqualTo(1);
+              assertThat(next.version()).isEqualTo(claimed.version() + 1);
+            });
+  }
+
+  @Test
+  @DisplayName("재시도 시각 없이 실패를 기록하면 REVIEW_REQUIRED로 남긴다")
+  void recordsFailureWithoutRetryAsReview() {
+    saveWaiting();
+    WaitingInboxEvent claimed = inTransaction(() -> inbox.claimNextWaiting(LATER)).orElseThrow();
+
+    inTransaction(
+        () -> inbox.recordFailure(claimed.inboxId(), claimed.version(), "FAILED", null, LATER));
+
+    assertThat(jdbc.queryForMap("SELECT status, next_run_at, attempts FROM payment.inbox"))
+        .containsEntry("status", "REVIEW_REQUIRED")
+        .containsEntry("next_run_at", null)
+        .containsEntry("attempts", 1);
+  }
+
+  @Test
+  @DisplayName("선점 뒤 버전이 바뀐 행에는 실패를 기록하지 않는다")
+  void skipsFailureForChangedVersion() {
+    saveWaiting();
+    WaitingInboxEvent claimed = inTransaction(() -> inbox.claimNextWaiting(LATER)).orElseThrow();
+    inTransaction(
+        () -> inbox.recordFailure(claimed.inboxId(), claimed.version(), "FIRST", LATER, LATER));
+
+    assertThat(
+            inTransaction(
+                () ->
+                    inbox.recordFailure(
+                        claimed.inboxId(), claimed.version(), "SECOND", LATER, LATER)))
+        .isFalse();
+    assertThat(jdbc.queryForMap("SELECT attempts, last_error_code FROM payment.inbox"))
+        .containsEntry("attempts", 1)
+        .containsEntry("last_error_code", "FIRST");
+  }
+
+  @Test
+  @DisplayName("다른 처리기가 잠근 행에는 기다리지 않고 실패를 기록하지 않는다")
+  void skipsFailureForRowLockedByAnotherProcessor() throws Exception {
+    saveWaiting();
+    WaitingInboxEvent claimed = inTransaction(() -> inbox.claimNextWaiting(LATER)).orElseThrow();
+    var locked = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<?> holder =
+          executor.submit(
+              () ->
+                  inTransaction(
+                      () -> {
+                        inbox.claimNextWaiting(LATER).orElseThrow();
+                        locked.countDown();
+                        await(release);
+                        return null;
+                      }));
+      assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+
+      long started = System.nanoTime();
+      boolean recorded =
+          inTransaction(
+              () ->
+                  inbox.recordFailure(
+                      claimed.inboxId(), claimed.version(), "FAILED", LATER, LATER));
+      long waitedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+      release.countDown();
+      holder.get(10, TimeUnit.SECONDS);
+
+      assertThat(recorded).isFalse();
+      assertThat(waitedMs).isLessThan(1_000);
+      assertThat(jdbc.queryForObject("SELECT attempts FROM payment.inbox", Integer.class)).isZero();
+    } finally {
+      release.countDown();
+      executor.shutdownNow();
+    }
+  }
+
+  @Test
+  @DisplayName("사유 없는 REVIEW_REQUIRED는 DB가 거절한다")
+  void rejectsReviewRequiredWithoutErrorCode() {
+    saveWaiting();
+
+    assertThatThrownBy(
+            () ->
+                jdbc.update("UPDATE payment.inbox SET status='REVIEW_REQUIRED', next_run_at=NULL"))
+        .isInstanceOf(DataIntegrityViolationException.class);
   }
 
   @Test
@@ -164,7 +290,7 @@ class InboxClaimIntegrationTest {
             () ->
                 inTransaction(
                     () -> {
-                      inbox.markReviewRequired(inboxId, LATER);
+                      inbox.markReviewRequired(inboxId, "FAILED", LATER);
                       return null;
                     }))
         .isInstanceOf(IllegalStateException.class);
