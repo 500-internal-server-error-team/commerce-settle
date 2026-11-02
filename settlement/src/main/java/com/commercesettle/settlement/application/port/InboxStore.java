@@ -22,8 +22,11 @@ public interface InboxStore {
 
   void markReviewRequired(UUID inboxId, Instant now);
 
-  /** 선행 결제가 아직 없어 {@code delay} 뒤 다시 판정한다. */
-  void markWaiting(UUID inboxId, Duration delay, Instant now);
+  /**
+   * 선행 결제가 아직 없어 시도 횟수를 늘리고 {@code baseDelay}부터 두 배씩, 최대 60초 뒤 다시 판정한다. 이번이 {@code maxAttempts}번째면
+   * REVIEW_REQUIRED로 남기고 false를 돌려준다.
+   */
+  boolean markWaiting(UUID inboxId, Duration baseDelay, int maxAttempts, Instant now);
 
   /** 수신 위치와 최초 bytes. */
   record Source(String topic, int partition, long offset, byte[] body) {}
