@@ -49,7 +49,7 @@ class OrderPaymentRequestedListenerTest {
           input.replace("T00:00:00Z", "T09:00:00+09:00").replace("T00:10:00Z", "T09:10:00+09:00");
     }
     var body = input.getBytes(StandardCharsets.UTF_8);
-    var listener = new OrderPaymentRequestedListener(mapper, acceptor);
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1");
 
     listener.receive(new ConsumerRecord<>(TOPIC, 2, 73L, KEY, body), acknowledgment);
 
@@ -74,7 +74,7 @@ class OrderPaymentRequestedListenerTest {
   void doesNotAcknowledgeFailedAcceptance() {
     var failure = new IllegalStateException("database unavailable");
     doThrow(failure).when(acceptor).accept(any(), any());
-    var listener = new OrderPaymentRequestedListener(mapper, acceptor);
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1");
 
     assertThatThrownBy(() -> listener.receive(record(EVENT_JSON, KEY), acknowledgment))
         .isSameAs(failure);
@@ -136,7 +136,7 @@ class OrderPaymentRequestedListenerTest {
       case "timeWhitespace" -> json.put("occurredAt", " 2026-01-01T00:00:00Z ");
       default -> throw new IllegalArgumentException(scenario);
     }
-    var listener = new OrderPaymentRequestedListener(mapper, acceptor);
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1");
     var record = record(mapper.writeValueAsString(json), key);
 
     assertThatThrownBy(() -> listener.receive(record, acknowledgment))

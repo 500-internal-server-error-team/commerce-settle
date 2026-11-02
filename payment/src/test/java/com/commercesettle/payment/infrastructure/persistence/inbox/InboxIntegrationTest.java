@@ -74,7 +74,7 @@ class InboxIntegrationTest {
   void acknowledgesCommittedWaitingWorkWithOriginalNanoseconds() {
     byte[] body = body();
     var acknowledged = new AtomicBoolean();
-    var listener = new OrderPaymentRequestedListener(mapper, acceptor);
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1");
 
     listener.receive(
         new ConsumerRecord<>(TOPIC, 0, 0L, KEY, body),
@@ -107,7 +107,7 @@ class InboxIntegrationTest {
             .getBytes(StandardCharsets.UTF_8);
     var acknowledged = new AtomicBoolean();
 
-    new OrderPaymentRequestedListener(mapper, acceptor)
+    new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1")
         .receive(new ConsumerRecord<>(TOPIC, 0, 0L, KEY, uppercase), () -> acknowledged.set(true));
 
     assertThat(acknowledged).isTrue();
@@ -174,7 +174,7 @@ class InboxIntegrationTest {
         .put("policyVersion", "test-v2");
     byte[] conflicting = mapper.writeValueAsBytes(json);
     var acknowledged = new AtomicBoolean();
-    var listener = new OrderPaymentRequestedListener(mapper, acceptor);
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1");
 
     listener.receive(
         new ConsumerRecord<>(TOPIC, 0, 1L, KEY, conflicting),
@@ -207,7 +207,7 @@ class InboxIntegrationTest {
         .put("policyVersion", "test-v2");
     byte[] conflicting = mapper.writeValueAsBytes(json);
     var acknowledged = new AtomicBoolean();
-    var listener = new OrderPaymentRequestedListener(mapper, acceptor);
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1");
     jdbc.execute(
         "ALTER TABLE payment.inbox_conflicts ADD CONSTRAINT test_reject_conflict CHECK(false) NOT VALID");
     try {
@@ -259,7 +259,7 @@ class InboxIntegrationTest {
         var duplicate =
             executor.submit(
                 () -> {
-                  new OrderPaymentRequestedListener(mapper, acceptor)
+                  new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1")
                       .receive(
                           new ConsumerRecord<>(TOPIC, 0, 1L, KEY, body),
                           () -> acknowledged.set(true));
@@ -277,7 +277,7 @@ class InboxIntegrationTest {
     assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.inbox", Long.class)).isEqualTo(1);
     assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.inbox_conflicts", Long.class))
         .isZero();
-    new OrderPaymentRequestedListener(mapper, acceptor)
+    new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1")
         .receive(new ConsumerRecord<>(TOPIC, 0, 1L, KEY, body), () -> acknowledged.set(true));
     assertThat(acknowledged).isTrue();
     assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.inbox", Long.class)).isEqualTo(1);

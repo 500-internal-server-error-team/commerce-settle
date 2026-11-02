@@ -241,3 +241,52 @@ CREATE TABLE payment.outbox (
 CREATE INDEX outbox_due ON payment.outbox(status, next_run_at, lease_until, id);
 CREATE INDEX outbox_occurred ON payment.outbox(occurred_at, created_at, id);
 CREATE INDEX outbox_aggregate ON payment.outbox(aggregate_id, aggregate_version, sequence_no);
+
+-- 유효한 Envelope로 해석할 수 없는 bytes도 보존한다. null과 빈 bytes를 구분한다.
+CREATE TABLE payment.inbox_quarantines (
+    id uuid PRIMARY KEY,
+    consumer varchar(100) NOT NULL,
+    source_topic varchar(249) NOT NULL,
+    source_partition integer NOT NULL CHECK (source_partition >= 0),
+    source_offset bigint NOT NULL CHECK (source_offset >= 0),
+    message_key bytea,
+    raw_body bytea,
+    error_code varchar(80) NOT NULL,
+    created_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
+    UNIQUE (consumer, source_topic, source_partition, source_offset)
+);
+
+CREATE TABLE payment.inbox_quarantine_deliveries (
+    id uuid PRIMARY KEY,
+    quarantine_id uuid NOT NULL,
+    kind varchar(8) NOT NULL CHECK (kind IN ('DLT', 'REPLAY')),
+    topic varchar(249) NOT NULL,
+    status varchar(20) NOT NULL CHECK (status IN ('PENDING', 'RUNNING', 'RETRY', 'PUBLISHED', 'REVIEW_REQUIRED')),
+    operator_id varchar(100),
+    reason_code varchar(80),
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_run_at timestamptz NOT NULL,
+    lease_until timestamptz,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
+    CHECK ((status = 'RUNNING') = (lease_until IS NOT NULL)),
+    CHECK ((kind = 'DLT' AND operator_id IS NULL AND reason_code IS NULL)
+        OR (kind = 'REPLAY' AND operator_id IS NOT NULL AND reason_code IS NOT NULL))
+);
+CREATE UNIQUE INDEX uk_quarantine_dlt ON payment.inbox_quarantine_deliveries (quarantine_id) WHERE kind = 'DLT';
+CREATE UNIQUE INDEX uk_quarantine_replay_active ON payment.inbox_quarantine_deliveries (quarantine_id)
+    WHERE kind = 'REPLAY' AND status IN ('PENDING', 'RUNNING', 'RETRY');
+CREATE INDEX ix_quarantine_delivery_due ON payment.inbox_quarantine_deliveries (status, next_run_at, lease_until, id);
+
+CREATE TABLE payment.inbox_quarantine_resumes (
+    id uuid PRIMARY KEY,
+    delivery_id uuid NOT NULL,
+    expected_version bigint NOT NULL CHECK (expected_version >= 0),
+    previous_attempts integer NOT NULL CHECK (previous_attempts >= 0),
+    operator_id varchar(100) NOT NULL,
+    reason_code varchar(80) NOT NULL,
+    created_at timestamptz NOT NULL,
+    UNIQUE (delivery_id, expected_version)
+);
