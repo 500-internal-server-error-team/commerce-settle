@@ -3,6 +3,8 @@ package com.commercesettle.settlement.application.service;
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.RefundFinancialCompletedPayload;
 import com.commercesettle.settlement.application.event.RefundLedgerReversedPayload;
+import com.commercesettle.settlement.application.event.RefundReleaseRequestedPayload;
+import com.commercesettle.settlement.application.event.RefundReservationReleasedPayload;
 import com.commercesettle.settlement.application.event.RefundReservationRequestedPayload;
 import com.commercesettle.settlement.application.event.RefundReservationResultPayload;
 import com.commercesettle.settlement.application.event.RefundReservationResultPayload.Result;
@@ -177,6 +179,52 @@ public class RefundEventService {
       // 같은 환불을 이미 상쇄했다. 원래 결과는 Outbox가 전달한다.
       case "CONSUMED" -> inbox.markApplied(inboxId.get(), reservation.get().id(), now);
       default -> review(inboxId.get(), event, "REFUND_RESERVATION_RELEASED", now);
+    }
+  }
+
+  /**
+   * 실패한 환불의 예약을 풀고 항목을 예약 직전 상태로 되돌린다. 같은 결제·같은 환불의 ACTIVE 예약만 푼다. 이미 푼 예약은 무변경이고, 상쇄까지 끝났거나 맞는 예약이
+   * 없거나 되돌릴 수 없으면 운영 확인으로 남긴다.
+   */
+  @Transactional
+  public void receiveReleaseRequested(
+      EventEnvelope<RefundReleaseRequestedPayload> event, Source source) {
+    Optional<UUID> inboxId = inbox.receive(event, source);
+    if (inboxId.isEmpty()) {
+      return;
+    }
+    Instant now = clock.instant();
+    RefundReleaseRequestedPayload release = event.payload();
+    Optional<UUID> itemId = reservations.findItem(release.paymentId()).map(ItemState::id);
+    Optional<Reservation> reservation =
+        reservations
+            .findById(release.reservationId())
+            .filter(found -> "REFUND".equals(found.kind()))
+            .filter(found -> found.refundId().equals(release.refundId()))
+            .filter(found -> itemId.filter(found.itemId()::equals).isPresent());
+    if (reservation.isEmpty()) {
+      review(inboxId.get(), event, "REFUND_RESERVATION_NOT_FOUND", now);
+      return;
+    }
+    switch (reservation.get().status()) {
+      case "ACTIVE" -> {
+        Optional<Long> version = reservations.release(reservation.get(), now);
+        if (version.isEmpty()) {
+          review(inboxId.get(), event, "REFUND_RELEASE_NOT_ALLOWED", now);
+          return;
+        }
+        inbox.markApplied(inboxId.get(), reservation.get().id(), now);
+        publish(
+            "RefundReservationReleased",
+            release.paymentId(),
+            version.get(),
+            new RefundReservationReleasedPayload(
+                release.refundId(), release.paymentId(), reservation.get().id()),
+            now);
+      }
+      // 같은 예약을 이미 풀었다. 원래 결과는 Outbox가 전달한다.
+      case "RELEASED" -> inbox.markApplied(inboxId.get(), reservation.get().id(), now);
+      default -> review(inboxId.get(), event, "REFUND_ALREADY_REVERSED", now);
     }
   }
 

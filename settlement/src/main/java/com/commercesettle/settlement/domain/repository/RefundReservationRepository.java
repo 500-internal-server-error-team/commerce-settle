@@ -31,6 +31,15 @@ public interface RefundReservationRepository {
    */
   Optional<Long> consume(UUID reservationId, Instant now);
 
+  /** 예약 ID로 찾는다. 상태와 관계없이 찾는다. */
+  Optional<Reservation> findById(UUID reservationId);
+
+  /**
+   * ACTIVE 환불 예약을 RELEASED로 두고 항목을 예약 직전 상태로 되돌린 뒤 바뀐 항목 버전을 돌려준다. 항목이 REFUND_RESERVED가 아니거나, 직전
+   * 상태가 PAYABLE인데 지급 준비 시각이 없으면 아무것도 바꾸지 않고 빈 값이다.
+   */
+  Optional<Long> release(Reservation reservation, Instant now);
+
   record ItemState(
       UUID id,
       SettlementItemStatus status,

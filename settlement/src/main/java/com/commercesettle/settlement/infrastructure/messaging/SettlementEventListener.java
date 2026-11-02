@@ -4,6 +4,7 @@ import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PaymentConfirmedPayload;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
 import com.commercesettle.settlement.application.event.RefundFinancialCompletedPayload;
+import com.commercesettle.settlement.application.event.RefundReleaseRequestedPayload;
 import com.commercesettle.settlement.application.event.RefundReservationRequestedPayload;
 import com.commercesettle.settlement.application.port.InboxStore.Source;
 import com.commercesettle.settlement.application.port.QuarantineStore;
@@ -40,6 +41,7 @@ public class SettlementEventListener {
   private static final String PURCHASE_CONFIRMED = "PurchaseConfirmed";
   private static final String REFUND_RESERVATION_REQUESTED = "RefundReservationRequested";
   private static final String REFUND_FINANCIAL_COMPLETED = "RefundFinancialCompleted";
+  private static final String REFUND_RELEASE_REQUESTED = "RefundReleaseRequested";
   private static final long MAX_AMOUNT = 10_000_000L;
   private static final Pattern UUID_PATTERN =
       Pattern.compile(
@@ -62,6 +64,7 @@ public class SettlementEventListener {
   private final ObjectReader purchaseReader;
   private final ObjectReader refundReservationReader;
   private final ObjectReader refundCompletedReader;
+  private final ObjectReader refundReleaseReader;
   private final SettlementEventService service;
   private final RefundEventService refunds;
   private final QuarantineService quarantine;
@@ -97,6 +100,8 @@ public class SettlementEventListener {
         mapper.readerFor(new TypeReference<EventEnvelope<RefundReservationRequestedPayload>>() {});
     this.refundCompletedReader =
         mapper.readerFor(new TypeReference<EventEnvelope<RefundFinancialCompletedPayload>>() {});
+    this.refundReleaseReader =
+        mapper.readerFor(new TypeReference<EventEnvelope<RefundReleaseRequestedPayload>>() {});
     this.service = service;
     this.refunds = refunds;
     this.quarantine = quarantine;
@@ -119,6 +124,8 @@ public class SettlementEventListener {
         refunds.receiveReservationRequested(decodeRefundReservation(record), source);
       } else if (REFUND_FINANCIAL_COMPLETED.equals(eventType)) {
         refunds.receiveFinancialCompleted(decodeRefundCompleted(record), source);
+      } else if (REFUND_RELEASE_REQUESTED.equals(eventType)) {
+        refunds.receiveReleaseRequested(decodeRefundRelease(record), source);
       }
     } catch (InvalidRecordException exception) {
       if (quarantine == null) {
@@ -237,6 +244,22 @@ public class SettlementEventListener {
       return event;
     } catch (IOException | RuntimeException exception) {
       throw new InvalidRecordException("Invalid RefundFinancialCompleted record");
+    }
+  }
+
+  private EventEnvelope<RefundReleaseRequestedPayload> decodeRefundRelease(
+      ConsumerRecord<String, byte[]> record) {
+    try {
+      JsonNode json = envelope(record, PAYMENT_TOPIC);
+      JsonNode payload = json.path("payload");
+      for (String field : List.of("refundId", "paymentId", "reservationId")) {
+        requireUuid(payload.path(field));
+      }
+      EventEnvelope<RefundReleaseRequestedPayload> event = refundReleaseReader.readValue(json);
+      requireKey(record, event.payload().paymentId().toString());
+      return event;
+    } catch (IOException | RuntimeException exception) {
+      throw new InvalidRecordException("Invalid RefundReleaseRequested record");
     }
   }
 
