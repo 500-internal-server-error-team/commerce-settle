@@ -910,7 +910,7 @@
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
         "x-implemented": true,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "Gateway가 검증한 판매자 본인의 표시명·상태·버전·시험 수취 계정을 반환한다. 정지·삭제한 판매자는 401이다.",
         "security": [
           {
             "accountSession": []
@@ -1009,7 +1009,7 @@
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
         "x-implemented": true,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "description": "표시명·시험 수취 계정만 바꾸며 판매 상태와 인증 버전은 바꾸지 않는다. expectedVersion이 현재 버전과 다르면 409이고, 정지·삭제한 판매자는 401이다. 같은 Idempotency-Key·본문의 재요청은 다시 변경하지 않고 현재 프로필을 반환한다. 이미 만든 지급의 수취 계정 사본은 바뀌지 않는다.",
         "security": [
           {
             "accountSession": []
