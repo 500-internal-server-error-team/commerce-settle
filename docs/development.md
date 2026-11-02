@@ -209,13 +209,31 @@ SELLER: POST /api/sellers/me/refund-requests/{requestId}/receipt
 
 Payment 내부 조회와 운영 종결은 ADR 0010의 `service:payment`·`operator:<식별자>` 자격을 인스턴스의 `app.internal-auth.senders`에 설정해야 합니다. 사용자 토큰이나 Gateway 자격으로 호출할 수 없습니다. 운영 종결은 외부 확정 거절·마일리지 미복원·정산 예약 해제·고객 확인을 모두 검증한 `RefundClosureEvidence`가 필요합니다. 기본 미연결 구현은 503이며 금융 실패만으로 주문을 PAID로 되돌리거나 자동 구매확정을 진행하지 않습니다.
 
-`OrderBenefitsService`가 선착순 이벤트의 견적·예약·재시도·확정·해제·환불 복원·반품 입고를 주문 트랜잭션 안에서 처리하며 `EventOrderIntegrationTest`가 HTTP 경로로 검증합니다. 쿠폰은 구현 전이라 쿠폰을 쓴 주문은 503으로 중단합니다. `OrderWorkflowIntegrationTest`의 DB 기록 대역은 해당 호출·금액 사본·로컬 롤백만 검증하며 실제 쿠폰 예산 구현의 완료가 아닙니다. Payment/Settlement의 실제 회차 재접수·마일리지 재예약·승인 차단·원환불/예약 해제 조회·환불 복구 확인 왕복은 각 소유 서비스와 통합 검증해야 합니다. 금융 성공을 임의로 반환하는 기본 어댑터는 없습니다. 거래 알림과 신규 접수 용량 gate는 별도 미구현 경계입니다.
+`OrderBenefitsService`가 선착순 이벤트의 견적·예약·재시도·확정·해제·환불 복원·반품 입고를 주문 트랜잭션 안에서 처리하며 `EventOrderIntegrationTest`가 HTTP 경로로 검증합니다. 쿠폰은 구현 전이라 쿠폰을 쓴 주문은 503으로 중단합니다. `OrderWorkflowIntegrationTest`의 DB 기록 대역은 해당 호출·금액 사본·로컬 롤백만 검증하며 실제 쿠폰 예산 구현의 완료가 아닙니다. Payment/Settlement의 실제 회차 재접수·마일리지 재예약·승인 차단·원환불/예약 해제 조회·환불 복구 확인 왕복은 각 소유 서비스와 통합 검증해야 합니다. 금융 성공을 임의로 반환하는 기본 어댑터는 없습니다. 거래 알림은 [모의 거래 알림](#모의-거래-알림) 범위를 구현했습니다. 신규 접수 용량 gate는 별도 [PR #125](https://github.com/500-internal-server-error-team/commerce-settle/pull/125)에서 구현했으며 이 알림 변경의 일부가 아닙니다.
 
 ```bash
 ./gradlew :commerce:test --tests '*OrderWorkflow*' --tests '*OrderIntegrationTest' --tests '*PaymentAcceptedIntegrationTest'
 ```
 
 이 명령은 전용 PostgreSQL·Kafka와 명시적 계약 결과 대역으로 구매자/판매자 HTTP 흐름, 중복·역순·기한 경합·잠금 상한·롤백을 확인합니다. 실제 PG·마일리지·정산 금융 정합성 완료를 뜻하지 않습니다.
+
+## 모의 거래 알림
+
+Commerce가 주문 전이와 같은 트랜잭션으로 알림 항목을 저장합니다. 발송은 금융 트랜잭션 밖의 인프로세스 MOCK_KAKAO 어댑터에서 실행하고 수신 원결과만 별도 트랜잭션에 저장합니다. 실제 카카오·전화번호·별도 Mock HTTP 서버는 사용하지 않습니다. 공개 조회는 구매자·판매자의 계정 종류와 ID로 제한하며 모의 수신 확인만 SENT로 표시합니다.
+
+알림 상태·미확정·복구 로그는 실제 DB 커밋 후 기록합니다. Commerce의 기존 텍스트 콘솔에 event·업무 ID·result·attempt·errorCode를 key-value로 출력하며 본문·수신자·재처리 사유는 기록하지 않습니다. JSON 출력과 중앙 로그 수집은 별도 미구현 범위입니다.
+
+`.env`의 `APP_NOTIFICATIONS_WORKER_ENABLED=true`로 설정해 Commerce를 재기동하면 1초 주기로 선행 반영 대기와 발송을 처리합니다. 스케줄 작업은 별도 풀에서 실행하고 발송 작업·외부 호출은 각각 최대 2개입니다. 외부 호출 대기열은 8개, 호출 상한 5초·임대 30초이며 응답 유실/임대 만료는 같은 deliveryId 조회부터 재개합니다. 기본값 false에서는 기록·조회 API만 제공하고 자동 발송하지 않습니다.
+
+Payment·Settlement notice를 받으려면 `APP_NOTIFICATIONS_CONSUMER_ENABLED=true`도 설정합니다. 그룹은 `commerce-notifications.v1`, 구독은 `commerce-settle.payment.v1`·`commerce-settle.settlement.v1`입니다. 기존 금융 그룹 offset과 분리하며 [초기 offset 준비](#kafka-전달-기반)는 두 구독 토픽 각각에 적용합니다. `auto.offset.reset=none`을 유지하고 이미 데이터나 offset이 있는 토픽을 임의 초기화하지 않습니다. 같은 토픽의 다른 금융 이벤트는 알림 그룹에서만 건너뜁니다. 정상 notice는 Inbox·알림 항목을 함께 저장하며 주문/원환불 복구가 앞서지 않았으면 원문을 영속 대기시킨 뒤 ACK합니다. 일반 선행 대기는 실패 횟수를 소진하지 않습니다.
+
+`GET /api/notifications`와 단건 조회는 본인 기록만 반환합니다. 내부 운영자는 `/internal/notification-deliveries`의 목록·단건·`attempts`, `/internal/notification-mock/receipts/{deliveryId}`를 조회합니다. 재처리는 `POST /internal/notification-deliveries/{deliveryId}/replays`에 최신 expectedVersion·reason과 Idempotency-Key를 보내며 같은 키/본문은 같은 발송으로 연결합니다. 원키·수신자·본문은 변경하지 않고 retryCount만 0으로 다시 엽니다. SENT·COLLECTING·PENDING·임대 중 발송은 409이고 모의 수신 기록 없음은 404입니다. 모의 확정 거절은 설정 변경이나 재처리로 성공으로 바꾸지 않습니다.
+
+모의 오류는 seed 기본 67, 지연 0ms·오류 없음이 기본입니다. `APP_NOTIFICATIONS_MOCK_DELAY_MS`는 0..60000, `APP_NOTIFICATIONS_MOCK_TEMPORARY_FAILURE_PERMILLE`·`PERMANENT_FAILURE_PERMILLE`·`RESPONSE_LOSS_PERMILLE`(모두 APP_NOTIFICATIONS_MOCK_ 접두사)는 0..1000입니다. deliveryId·시도 번호·고정 seed로 결과를 재현하며 확정 수신 결과는 최초 값으로 유지합니다. 지연 중 DB 커넥션을 보유하지 않고 임대 token·version이 맞는 결과만 반영합니다. 발송·조회를 합쳐 라운드 10회, 1초부터 최대 60초 재시도이며 소진·확정 거절·본문 충돌은 REVIEW_REQUIRED입니다.
+
+해석 불가·계약 위반 원문은 `notification_inbox_quarantines`에 bytes·키·위치·사유를 커밋한 뒤 ACK합니다. 같은 eventId의 다른 본문도 격리하며 원본 Inbox/항목을 덮어쓰지 않습니다. DB 인계/격리 실패는 알림 Listener만 중단하고 offset을 보존합니다. 저장 결과와 원인을 확인한 뒤 재기동하면 같은 원문을 재개합니다. 격리 원문의 자동 재처리/DLT 발행은 제공하지 않습니다. 생산자 오류를 고쳐 같은 원업무 ID·원결과로 정정 알림을 발행하고 격리 출처와 대조하는 소유 서비스의 복구가 필요하며 #120에서 통합 확인합니다. 원금융 거래 재실행·원문 삭제·임의 offset 이동으로 복구하지 않습니다.
+
+신규 테이블은 초기 Commerce SQL에 있으므로 새 빈 개발 DB에서 검증합니다. 기존 볼륨의 앱 재시작으로 테이블이 생기지 않으며 [DB 적용 정책](migrations.md)을 따릅니다. 전체 금융 생산부·실제 외부 카카오 연동이나 처리량 목표의 완료를 이 구현의 테스트 통과로 주장하지 않습니다.
 
 ## 주문 API stub
 

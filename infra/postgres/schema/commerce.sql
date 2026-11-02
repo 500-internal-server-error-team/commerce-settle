@@ -472,3 +472,99 @@ CREATE TABLE commerce.inbox_conflicts (
     UNIQUE (consumer, event_id, source_topic, source_partition, source_offset)
 );
 CREATE INDEX inbox_conflicts_event ON commerce.inbox_conflicts(consumer, event_id, created_at);
+
+-- MOCK_KAKAO 거래 알림. 금융 상태와 수신자별 항목의 원자 저장을 위한 Commerce 소유 기록.
+CREATE TABLE commerce.notification_deliveries (
+    id uuid PRIMARY KEY,
+    kind varchar(40) NOT NULL CHECK (kind IN ('PAYMENT_COMPLETED','SHIPMENT_STARTED','PURCHASE_CONFIRMED','CANCELLATION_COMPLETED','RETURN_REQUESTED','RETURN_DECIDED','REFUND_COMPLETED','REFUND_ACTION_REQUIRED','SALE_COMPLETED','SETTLEMENT_READY','PAYOUT_COMPLETED','PAYOUT_ACTION_REQUIRED')),
+    recipient_kind varchar(16) NOT NULL CHECK (recipient_kind IN ('BUYER','SELLER')),
+    recipient_id uuid NOT NULL,
+    channel varchar(24) NOT NULL CHECK (channel='MOCK_KAKAO'),
+    dedup_key varchar(200) NOT NULL,
+    item_count integer NOT NULL CHECK (item_count>=1),
+    first_occurred_at timestamptz NOT NULL,
+    total_amount bigint NOT NULL CHECK (total_amount>=0),
+    template_version varchar(32) NOT NULL,
+    title varchar(120) NOT NULL,
+    body varchar(1000) NOT NULL,
+    status varchar(24) NOT NULL CHECK (status IN ('COLLECTING','PENDING','SENDING','UNKNOWN','RETRY','SENT','REVIEW_REQUIRED')),
+    bucket_start timestamptz,
+    bucket_end timestamptz,
+    attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count>=0),
+    retry_count integer NOT NULL DEFAULT 0 CHECK (retry_count BETWEEN 0 AND 10),
+    next_run_at timestamptz NOT NULL,
+    lease_token uuid,
+    lease_until timestamptz,
+    last_error_code varchar(80),
+    sent_at timestamptz,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0 CHECK (version>=0),
+    UNIQUE(channel,kind,recipient_kind,recipient_id,dedup_key),
+    CHECK ((kind='SALE_COMPLETED')=(bucket_start IS NOT NULL AND bucket_end IS NOT NULL)),
+    CHECK (bucket_start IS NULL OR bucket_end=bucket_start+interval '1 minute'),
+    CHECK (kind='SALE_COMPLETED' OR (bucket_start IS NULL AND bucket_end IS NULL AND item_count=1 AND total_amount=0)),
+    CHECK (status<>'COLLECTING' OR (kind='SALE_COMPLETED' AND body='')),
+    CHECK ((lease_token IS NULL)=(lease_until IS NULL)),
+    CHECK ((status='SENDING')=(lease_token IS NOT NULL)),
+    CHECK (status<>'SENT' OR sent_at IS NOT NULL)
+);
+CREATE INDEX notification_deliveries_due ON commerce.notification_deliveries(status,next_run_at,lease_until,id);
+CREATE INDEX notification_deliveries_recipient ON commerce.notification_deliveries(recipient_kind,recipient_id,created_at DESC,id DESC);
+
+CREATE TABLE commerce.notification_items (
+    id uuid PRIMARY KEY,
+    delivery_id uuid NOT NULL,
+    source_service varchar(16) NOT NULL CHECK (source_service IN ('commerce','payment','settlement')),
+    source_event_id uuid NOT NULL,
+    kind varchar(40) NOT NULL,
+    business_ref uuid NOT NULL,
+    recipient_kind varchar(16) NOT NULL CHECK (recipient_kind IN ('BUYER','SELLER')),
+    recipient_id uuid NOT NULL,
+    occurred_at timestamptz NOT NULL,
+    payload jsonb NOT NULL CHECK (jsonb_typeof(payload)='object'),
+    created_at timestamptz NOT NULL,
+    UNIQUE(source_service,kind,business_ref,recipient_kind,recipient_id),
+    CHECK (recipient_kind<>'SELLER' OR NOT (payload ?| ARRAY['mileageBalanceAfter','walletVersion']))
+);
+CREATE INDEX notification_items_delivery ON commerce.notification_items(delivery_id,occurred_at,id);
+CREATE INDEX notification_items_event ON commerce.notification_items(source_event_id);
+
+CREATE TABLE commerce.notification_attempts (
+    id uuid PRIMARY KEY,
+    delivery_id uuid NOT NULL,
+    attempt_no integer NOT NULL CHECK (attempt_no>=1),
+    operation varchar(16) NOT NULL CHECK (operation IN ('SEND','LOOKUP','REPLAY')),
+    status varchar(24) NOT NULL CHECK (status IN ('RUNNING','SUCCEEDED','RETRYABLE_FAILURE','PERMANENT_FAILURE','UNKNOWN')),
+    started_at timestamptz NOT NULL,
+    finished_at timestamptz,
+    error_code varchar(80),
+    operator_ref varchar(100),
+    reason varchar(200),
+    UNIQUE(delivery_id,attempt_no),
+    CHECK ((status='RUNNING')=(finished_at IS NULL)),
+    CHECK (operation<>'REPLAY' OR (operator_ref IS NOT NULL AND reason IS NOT NULL))
+);
+CREATE INDEX notification_attempts_delivery ON commerce.notification_attempts(delivery_id,attempt_no);
+CREATE INDEX notification_attempts_status ON commerce.notification_attempts(status,started_at);
+
+CREATE TABLE commerce.notification_mock_receipts (
+    id uuid PRIMARY KEY,
+    delivery_id uuid NOT NULL UNIQUE,
+    request_hash char(64) NOT NULL,
+    result varchar(16) NOT NULL CHECK (result IN ('ACCEPTED','REJECTED')),
+    processed_at timestamptz NOT NULL
+);
+
+CREATE TABLE commerce.notification_inbox_quarantines (
+    id uuid PRIMARY KEY,
+    consumer varchar(100) NOT NULL CHECK (consumer='commerce-notifications.v1'),
+    source_topic varchar(249) NOT NULL,
+    source_partition integer NOT NULL CHECK (source_partition>=0),
+    source_offset bigint NOT NULL CHECK (source_offset>=0),
+    message_key text,
+    raw_body bytea,
+    error_code varchar(80) NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE(consumer,source_topic,source_partition,source_offset)
+);

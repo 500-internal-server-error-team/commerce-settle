@@ -554,6 +554,12 @@ class PaymentAcceptedIntegrationTest {
     assertThat(get(f).path("status").asText()).isEqualTo("PAID");
     assertThat(
             jdbc.queryForObject(
+                "SELECT count(*) FROM commerce.notification_items WHERE source_event_id=? AND kind='SALE_COMPLETED'",
+                Long.class,
+                event.eventId()))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
                 "select status from commerce.inventory_reservations where order_id=?",
                 String.class,
                 f.id()))
@@ -577,6 +583,10 @@ class PaymentAcceptedIntegrationTest {
                 true)
             .id();
     UUID seller = UUID.randomUUID();
+    jdbc.update(
+        "insert into commerce.seller_accounts(id,email_normalized,password_hash,display_name,status,payout_account_ref,created_at,updated_at,version) values (?,?,'hash','판매자','ACTIVE','test-account',now(),now(),0)",
+        seller,
+        seller + "@example.com");
     var product =
         products.register(
             seller, UUID.randomUUID().toString(), "접수 시험 상품", 10_000, ProductStatus.ON_SALE);
