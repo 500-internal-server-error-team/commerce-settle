@@ -58,6 +58,11 @@ class JpaAccountRepository implements AccountRepository {
   }
 
   @Override
+  public Optional<SellerAccount> findSellerIncludingDeleted(UUID id) {
+    return sellers.findById(id);
+  }
+
+  @Override
   public boolean existsByEmail(ActorKind kind, String emailNormalized) {
     return switch (kind) {
       case BUYER -> buyers.existsByEmailNormalized(emailNormalized);

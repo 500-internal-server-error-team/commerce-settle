@@ -57,6 +57,10 @@ public abstract class Account extends AuditableEntity {
     touch(now);
   }
 
+  protected void changeDisplayName(String displayName) {
+    this.displayName = Objects.requireNonNull(displayName, "displayName");
+  }
+
   public UUID getId() {
     return id;
   }
