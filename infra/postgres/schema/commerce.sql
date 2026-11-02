@@ -313,6 +313,160 @@ CREATE INDEX ix_event_participations_event_status
 CREATE INDEX ix_event_participations_buyer_created
     ON commerce.event_participations (buyer_id, created_at, id);
 
+CREATE TABLE commerce.coupon_templates (
+    id uuid PRIMARY KEY,
+    kind varchar(16) NOT NULL,
+    funder varchar(16) NOT NULL,
+    seller_id uuid,
+    product_id uuid,
+    grade varchar(16),
+    target_month date,
+    name varchar(80) NOT NULL,
+    discount_amount bigint NOT NULL,
+    min_order_amount bigint NOT NULL,
+    min_seller_net_amount bigint NOT NULL,
+    allowed_methods varchar(24)[] NOT NULL,
+    pg_cost_ceiling_bps integer NOT NULL,
+    other_cost_allowance bigint NOT NULL,
+    issuance_limit integer,
+    issued_count integer NOT NULL,
+    total_budget bigint,
+    committed_budget bigint NOT NULL,
+    consumed_budget bigint NOT NULL,
+    valid_from timestamptz NOT NULL,
+    valid_until timestamptz,
+    status varchar(16) NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0,
+    CONSTRAINT ck_coupon_templates_kind CHECK (kind IN ('WELCOME', 'GRADE', 'SELLER')),
+    CONSTRAINT ck_coupon_templates_status CHECK (status IN ('ACTIVE', 'CLOSED')),
+    CONSTRAINT ck_coupon_templates_name CHECK (char_length(name) BETWEEN 1 AND 80),
+    CONSTRAINT ck_coupon_templates_amounts CHECK (
+        discount_amount > 0 AND discount_amount < min_order_amount
+        AND min_order_amount <= 10000000 AND min_seller_net_amount >= 0
+    ),
+    CONSTRAINT ck_coupon_templates_methods CHECK (
+        cardinality(allowed_methods) BETWEEN 1 AND 3
+        AND allowed_methods <@ ARRAY['CREDIT_CARD', 'DEBIT_CARD', 'EASY_PAY']::varchar(24)[]
+    ),
+    CONSTRAINT ck_coupon_templates_costs CHECK (
+        pg_cost_ceiling_bps >= 0 AND other_cost_allowance >= 0
+    ),
+    CONSTRAINT ck_coupon_templates_totals CHECK (
+        issued_count >= 0 AND committed_budget >= 0 AND consumed_budget >= 0
+    ),
+    CONSTRAINT ck_coupon_templates_funder CHECK (
+        (kind = 'SELLER' AND funder = 'SELLER' AND seller_id IS NOT NULL)
+        OR (kind <> 'SELLER' AND funder = 'PLATFORM' AND seller_id IS NULL AND product_id IS NULL)
+    ),
+    CONSTRAINT ck_coupon_templates_grade CHECK (
+        (kind = 'GRADE') = (grade IS NOT NULL)
+        AND (kind = 'GRADE') = (target_month IS NOT NULL)
+        AND (grade IS NULL OR grade IN ('BRONZE', 'SILVER', 'GOLD'))
+        AND (target_month IS NULL OR target_month = date_trunc('month', target_month)::date)
+    ),
+    CONSTRAINT ck_coupon_templates_seller_limits CHECK (
+        CASE WHEN kind = 'SELLER' THEN
+            issuance_limit IS NOT NULL AND total_budget IS NOT NULL AND valid_until IS NOT NULL
+            AND issuance_limit > 0 AND total_budget > 0
+            AND issued_count <= issuance_limit
+            AND committed_budget + consumed_budget <= total_budget
+        ELSE issuance_limit IS NULL AND total_budget IS NULL END
+    ),
+    CONSTRAINT ck_coupon_templates_period CHECK (valid_until IS NULL OR valid_from < valid_until),
+    CONSTRAINT ck_coupon_templates_welcome_period CHECK (kind <> 'WELCOME' OR valid_until IS NULL)
+);
+CREATE INDEX ix_coupon_templates_seller_status_created
+    ON commerce.coupon_templates (seller_id, status, created_at, id);
+CREATE INDEX ix_coupon_templates_kind_month_status
+    ON commerce.coupon_templates (kind, target_month, status);
+-- 활성 WELCOME 캠페인은 전체 하나, GRADE는 등급·혜택 월마다 하나다.
+CREATE UNIQUE INDEX uq_coupon_templates_active_welcome
+    ON commerce.coupon_templates (kind) WHERE kind = 'WELCOME' AND status = 'ACTIVE';
+CREATE UNIQUE INDEX uq_coupon_templates_grade_month
+    ON commerce.coupon_templates (grade, target_month) WHERE kind = 'GRADE';
+
+CREATE TABLE commerce.buyer_coupons (
+    id uuid PRIMARY KEY,
+    template_id uuid NOT NULL,
+    buyer_id uuid NOT NULL,
+    kind varchar(16) NOT NULL,
+    funder varchar(16) NOT NULL,
+    seller_id uuid,
+    product_id uuid,
+    target_month date,
+    discount_amount bigint NOT NULL,
+    min_order_amount bigint NOT NULL,
+    allowed_methods varchar(24)[] NOT NULL,
+    valid_from timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    status varchar(16) NOT NULL,
+    reserved_order_id uuid,
+    used_order_id uuid,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0,
+    CONSTRAINT uq_buyer_coupons_template_buyer UNIQUE (template_id, buyer_id),
+    CONSTRAINT ck_buyer_coupons_kind CHECK (kind IN ('WELCOME', 'GRADE', 'SELLER')),
+    CONSTRAINT ck_buyer_coupons_status CHECK (status IN ('ISSUED', 'RESERVED', 'USED', 'EXPIRED')),
+    CONSTRAINT ck_buyer_coupons_amounts CHECK (
+        discount_amount > 0 AND discount_amount < min_order_amount
+        AND min_order_amount <= 10000000
+    ),
+    CONSTRAINT ck_buyer_coupons_methods CHECK (
+        cardinality(allowed_methods) BETWEEN 1 AND 3
+        AND allowed_methods <@ ARRAY['CREDIT_CARD', 'DEBIT_CARD', 'EASY_PAY']::varchar(24)[]
+    ),
+    CONSTRAINT ck_buyer_coupons_funder CHECK (
+        (kind = 'SELLER' AND funder = 'SELLER' AND seller_id IS NOT NULL)
+        OR (kind <> 'SELLER' AND funder = 'PLATFORM' AND seller_id IS NULL AND product_id IS NULL)
+    ),
+    CONSTRAINT ck_buyer_coupons_month CHECK ((kind = 'GRADE') = (target_month IS NOT NULL)),
+    CONSTRAINT ck_buyer_coupons_period CHECK (valid_from < expires_at),
+    CONSTRAINT ck_buyer_coupons_orders CHECK (
+        (status = 'RESERVED') = (reserved_order_id IS NOT NULL)
+        AND (status = 'USED') = (used_order_id IS NOT NULL)
+    )
+);
+-- WELCOME는 계정당 한 번, GRADE는 혜택 월마다 한 장이다. SELLER는 캠페인별 유일성만 둔다.
+CREATE UNIQUE INDEX uq_buyer_coupons_welcome
+    ON commerce.buyer_coupons (buyer_id) WHERE kind = 'WELCOME';
+CREATE UNIQUE INDEX uq_buyer_coupons_grade_month
+    ON commerce.buyer_coupons (buyer_id, target_month) WHERE kind = 'GRADE';
+CREATE UNIQUE INDEX uq_buyer_coupons_reserved_order
+    ON commerce.buyer_coupons (reserved_order_id) WHERE reserved_order_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_buyer_coupons_used_order
+    ON commerce.buyer_coupons (used_order_id) WHERE used_order_id IS NOT NULL;
+CREATE INDEX ix_buyer_coupons_buyer_status_expires
+    ON commerce.buyer_coupons (buyer_id, status, expires_at, id);
+
+CREATE TABLE commerce.coupon_history (
+    id uuid PRIMARY KEY,
+    buyer_coupon_id uuid NOT NULL,
+    order_id uuid,
+    operation varchar(16) NOT NULL,
+    business_ref uuid NOT NULL,
+    from_status varchar(16),
+    to_status varchar(16) NOT NULL,
+    committed_delta bigint NOT NULL,
+    consumed_delta bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    CONSTRAINT uq_coupon_history_operation UNIQUE (buyer_coupon_id, operation, business_ref),
+    CONSTRAINT ck_coupon_history_operation
+        CHECK (operation IN ('ISSUE', 'RESERVE', 'USE', 'RELEASE', 'RESTORE', 'EXPIRE')),
+    CONSTRAINT ck_coupon_history_status CHECK (
+        to_status IN ('ISSUED', 'RESERVED', 'USED', 'EXPIRED')
+        AND (from_status IS NULL OR from_status IN ('ISSUED', 'RESERVED', 'USED', 'EXPIRED'))
+        AND (operation = 'ISSUE') = (from_status IS NULL)
+    ),
+    CONSTRAINT ck_coupon_history_order CHECK (
+        (operation IN ('RESERVE', 'USE', 'RELEASE', 'RESTORE')) = (order_id IS NOT NULL)
+    )
+);
+CREATE INDEX ix_coupon_history_coupon_created
+    ON commerce.coupon_history (buyer_coupon_id, created_at, id);
+
 CREATE TABLE commerce.idempotency_records (
     id uuid PRIMARY KEY,
     actor_kind varchar(24) NOT NULL,
