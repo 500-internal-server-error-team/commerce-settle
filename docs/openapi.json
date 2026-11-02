@@ -9816,8 +9816,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER|SELLER",
-        "x-implemented": false,
-        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "x-implemented": true,
+        "description": "MOCK_KAKAO 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
         "security": [
           {
             "accountSession": []
@@ -9937,8 +9937,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER|SELLER",
-        "x-implemented": false,
-        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "x-implemented": true,
+        "description": "MOCK_KAKAO 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
         "security": [
           {
             "accountSession": []
@@ -10048,8 +10048,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
-        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "x-implemented": true,
+        "description": "MOCK_KAKAO 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
         "security": [
           {
             "serviceCredential": []
@@ -10185,8 +10185,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
-        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "x-implemented": true,
+        "description": "MOCK_KAKAO 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
         "security": [
           {
             "serviceCredential": []
@@ -10296,8 +10296,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
-        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "x-implemented": true,
+        "description": "MOCK_KAKAO 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
         "security": [
           {
             "serviceCredential": []
@@ -10426,8 +10426,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
-        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "x-implemented": true,
+        "description": "MOCK_KAKAO 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
         "security": [
           {
             "serviceCredential": []
@@ -10567,8 +10567,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
-        "description": "구현 예정 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
+        "x-implemented": true,
+        "description": "MOCK_KAKAO 거래 알림 계약. 공개 조회는 인증된 계정 종류+ID로 소유권 제한, 타인 알림 404. 내부 경로는 운영자별 서비스 자격만 허용. 실제 카카오·Slack 발송 없음.",
         "security": [
           {
             "serviceCredential": []

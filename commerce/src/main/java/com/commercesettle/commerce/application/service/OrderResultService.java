@@ -32,6 +32,7 @@ public class OrderResultService {
   private final Clock clock;
   private final AuditLog audit;
   private final TransactionTemplate transactions;
+  private final NotificationService notifications;
 
   public OrderResultService(
       PaymentAcceptanceInbox inbox,
@@ -42,7 +43,8 @@ public class OrderResultService {
       OrderWorkflowService workflow,
       Clock clock,
       AuditLog audit,
-      PlatformTransactionManager manager) {
+      PlatformTransactionManager manager,
+      NotificationService notifications) {
     this.inbox = inbox;
     this.orders = orders;
     this.refunds = refunds;
@@ -51,6 +53,7 @@ public class OrderResultService {
     this.workflow = workflow;
     this.clock = clock;
     this.audit = audit;
+    this.notifications = notifications;
     transactions = new TransactionTemplate(manager);
     transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
   }
@@ -142,6 +145,18 @@ public class OrderResultService {
         }
         orders.save(o);
         workflow.changed(o, before, "SERVICE", "payment", event.eventType(), event.eventId());
+        if (result == Order.Status.PAID)
+          notifications.order(
+              o,
+              com.commercesettle.commerce.domain.model.Notification.Kind.SALE_COMPLETED,
+              event.eventId(),
+              o.getPaymentConfirmedAt());
+        if (result == Order.Status.CANCELLED)
+          notifications.order(
+              o,
+              com.commercesettle.commerce.domain.model.Notification.Kind.CANCELLATION_COMPLETED,
+              event.eventId(),
+              event.occurredAt().toInstant());
       }
       return true;
     }
@@ -170,6 +185,12 @@ public class OrderResultService {
       if (r.fail(now)) {
         refunds.save(r);
         auditRefund(r, before, event);
+        notifications.refund(
+            o,
+            r,
+            com.commercesettle.commerce.domain.model.Notification.Kind.REFUND_ACTION_REQUIRED,
+            event.eventId(),
+            event.occurredAt().toInstant());
       }
       return true;
     }

@@ -44,6 +44,7 @@ public class OrderWorkflowService {
   private final AuditLog audit;
   private final Clock clock;
   private final OrderAdmissionService admission;
+  private final NotificationService notifications;
 
   public OrderWorkflowService(
       OrderRepository orders,
@@ -56,7 +57,8 @@ public class OrderWorkflowService {
       OrderEventOutbox outbox,
       AuditLog audit,
       Clock clock,
-      OrderAdmissionService admission) {
+      OrderAdmissionService admission,
+      NotificationService notifications) {
     this.orders = orders;
     this.accounts = accounts;
     this.products = products;
@@ -68,6 +70,7 @@ public class OrderWorkflowService {
     this.audit = audit;
     this.clock = clock;
     this.admission = admission;
+    this.notifications = notifications;
   }
 
   @Transactional(readOnly = true)
@@ -238,6 +241,11 @@ public class OrderWorkflowService {
           o.ship(clock.instant());
           orders.save(o);
           changed(o, before, "SELLER", seller.toString(), "SHIPMENT_STARTED", null);
+          notifications.order(
+              o,
+              com.commercesettle.commerce.domain.model.Notification.Kind.SHIPMENT_STARTED,
+              null,
+              o.getShippedAt());
           return OrderView.from(o);
         },
         replay -> OrderView.from(ownedLocked(ActorKind.SELLER, seller, replay)));
@@ -269,7 +277,12 @@ public class OrderWorkflowService {
         "order-clock",
         confirmed ? "PURCHASE_CONFIRMED" : "DELIVERY_COMPLETED",
         null);
-    if (confirmed)
+    if (confirmed) {
+      notifications.order(
+          o,
+          com.commercesettle.commerce.domain.model.Notification.Kind.PURCHASE_CONFIRMED,
+          null,
+          o.getPurchaseConfirmedAt());
       emit(
           o,
           "PurchaseConfirmed",
@@ -281,6 +294,7 @@ public class OrderWorkflowService {
               time(now),
               time(o.getDeliveredAt()),
               time(o.getRefundDeadlineAt())));
+    }
   }
 
   void cancellation(Order o, UUID requestId, String actor, String ref) {

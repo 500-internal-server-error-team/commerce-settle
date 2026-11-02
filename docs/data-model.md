@@ -1108,6 +1108,24 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 **인덱스:** UNIQUE(delivery_id).
 
+### notification_inbox_quarantines
+
+소유: `commerce`. 알림 소비자가 해석할 수 없는 원문의 보조 격리 기록입니다. 정상 Inbox는 eventId·집계·JSON envelope가 필수라서 해석 불가 bytes를 가짜 ID로 넣지 않습니다. 위 네 알림 테이블과 별도로 원문·출처를 먼저 커밋한 뒤 알림 그룹만 ACK합니다. DLT 발행 작업이나 정상 발송 항목으로 간주하지 않습니다.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id` | `uuid` | PK |
+| `consumer` | `varchar(100)` | commerce-notifications.v1 고정 |
+| `source_topic` | `varchar(249)` | 원본 토픽 |
+| `source_partition` | `integer` | 원본 파티션; 0 이상 |
+| `source_offset` | `bigint` | 원본 offset; 0 이상 |
+| `message_key` | `text?` | 원본 키; null 보존 |
+| `raw_body` | `bytea?` | 원본 bytes; tombstone이면 null |
+| `error_code` | `varchar(80)` | 원문을 포함하지 않는 격리 코드 |
+| `created_at` | `timestamptz` | 최초 격리 시각 |
+
+UNIQUE(consumer,source_topic,source_partition,source_offset)로 재전달 중복을 막습니다. 원문은 자동 삭제하지 않으며 [알림 복구 절차](development.md#모의-거래-알림)로 소유 생산자의 정정 요청과 대조합니다.
+
 ## 메시지·멱등성·감사
 
 ![메시지·멱등성·감사 ERD](diagrams/erd-integration.svg)

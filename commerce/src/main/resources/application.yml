@@ -78,11 +78,21 @@ management:
 logging:
   pattern:
     dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Seoul"
+    level: "%5p %kvp"
 
 app:
   order-admission:
     prometheus-url: ${APP_ORDER_ADMISSION_PROMETHEUS_URL:http://prometheus:9090}
     paused: ${APP_ORDER_ADMISSION_PAUSED:false}
+  notifications:
+    consumer-enabled: ${APP_NOTIFICATIONS_CONSUMER_ENABLED:false}
+    worker-enabled: ${APP_NOTIFICATIONS_WORKER_ENABLED:false}
+    mock:
+      seed: ${APP_NOTIFICATIONS_MOCK_SEED:67}
+      delay-ms: ${APP_NOTIFICATIONS_MOCK_DELAY_MS:0}
+      temporary-failure-permille: ${APP_NOTIFICATIONS_MOCK_TEMPORARY_FAILURE_PERMILLE:0}
+      permanent-failure-permille: ${APP_NOTIFICATIONS_MOCK_PERMANENT_FAILURE_PERMILLE:0}
+      response-loss-permille: ${APP_NOTIFICATIONS_MOCK_RESPONSE_LOSS_PERMILLE:0}
   kafka:
     payment-accepted:
       enabled: false

@@ -34,6 +34,7 @@ public class OrderRefundService {
   private final OrderBenefits benefits;
   private final TransactionTemplate transactions;
   private final Clock clock;
+  private final NotificationService notifications;
 
   public OrderRefundService(
       OrderRepository orders,
@@ -45,7 +46,8 @@ public class OrderRefundService {
       RefundClosureEvidence closure,
       OrderBenefits benefits,
       PlatformTransactionManager manager,
-      Clock clock) {
+      Clock clock,
+      NotificationService notifications) {
     this.orders = orders;
     this.requests = requests;
     this.workflow = workflow;
@@ -55,6 +57,7 @@ public class OrderRefundService {
     this.closure = closure;
     this.benefits = benefits;
     this.clock = clock;
+    this.notifications = notifications;
     transactions = new TransactionTemplate(manager);
   }
 
@@ -83,6 +86,12 @@ public class OrderRefundService {
               requests.save(OrderRefundRequest.create(id, order, kind, reason, clock.instant()));
           workflow.changed(order, before, "BUYER", buyer.toString(), "REFUND_REQUESTED", null);
           audit(r, null, "BUYER", buyer.toString(), "REFUND_REQUESTED");
+          notifications.refund(
+              order,
+              r,
+              com.commercesettle.commerce.domain.model.Notification.Kind.RETURN_REQUESTED,
+              null,
+              r.getAcceptedAt());
           if (kind == OrderRefundRequest.Kind.CANCEL) approved(order, r);
           return OrderRefundView.from(r);
         },
@@ -142,6 +151,12 @@ public class OrderRefundService {
         List.of(approve, reason),
         (order, r) -> {
           r.decide(approve, clock.instant());
+          notifications.refund(
+              order,
+              r,
+              com.commercesettle.commerce.domain.model.Notification.Kind.RETURN_DECIDED,
+              null,
+              r.getDecisionAt());
           if (approve) approved(order, r);
           else order.resumeAfterRefund(clock.instant());
           return true;

@@ -86,11 +86,20 @@ class OrderWorkflowIntegrationTest {
   @Autowired org.springframework.transaction.PlatformTransactionManager manager;
   @Autowired TestClock clock;
   @Autowired ClosureDouble closure;
+  @Autowired NotificationService notifications;
 
   @BeforeEach
   void reset() {
     clock.now.set(NOW);
     closure.safe = false;
+    for (String table :
+        List.of(
+            "notification_attempts",
+            "notification_items",
+            "notification_deliveries",
+            "notification_mock_receipts",
+            "notification_inbox_quarantines")) jdbc.update("DELETE FROM commerce." + table);
+    jdbc.update("DELETE FROM commerce.inbox WHERE consumer='commerce-notifications.v1'");
     jdbc.execute(
         "CREATE TABLE IF NOT EXISTS commerce.test_benefit_calls (order_id uuid, operation varchar(20))");
   }
@@ -303,6 +312,110 @@ class OrderWorkflowIntegrationTest {
                 "select count(*) from commerce.outbox where aggregate_id=? and event_type='PurchaseConfirmed'",
                 id))
         .isEqualTo(1);
+    for (String kind : List.of("SALE_COMPLETED", "SHIPMENT_STARTED", "PURCHASE_CONFIRMED"))
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT count(*) FROM commerce.notification_items WHERE kind=? AND business_ref=?",
+                  Long.class,
+                  kind,
+                  id))
+          .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("결제 notice는 주문 반영을 기다리고 뒤늦은 알림도 원래 잔액 사본과 발생 시각을 보존한다")
+  void waitsForPaymentAndPreservesHistoricalSnapshot() throws Exception {
+    var f = fixture();
+    var order =
+        call("BUYER", f.buyer(), "/api/orders", orderBody(f).put("mileageAmount", 1000), 201);
+    UUID id = uuid(order, "id"), payment = UUID.randomUUID();
+    var ctx = context(id);
+    var notice = paymentNotice(order, ctx, payment, "PAYMENT_COMPLETED", null);
+    UUID event = receiveNotice(notice);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM commerce.inbox WHERE event_id=?", String.class, event))
+        .isEqualTo("WAITING");
+    assertThat(
+            number(
+                "SELECT count(*) FROM commerce.notification_items WHERE source_event_id=?", event))
+        .isZero();
+    receive("PaymentConfirmed", confirmed(order, ctx).put("paymentId", payment.toString()), true);
+    var shipped = ship(f, id);
+    clock.now.set(
+        java.time.OffsetDateTime.parse(shipped.path("deliveryDueAt").asText())
+            .toInstant()
+            .plusSeconds(1));
+    workflow.advance(id);
+    clock.now.set(
+        java.time.OffsetDateTime.parse(buyer(f, id).path("refundDeadlineAt").asText())
+            .toInstant()
+            .plusSeconds(1));
+    workflow.advance(id);
+    assertThat(buyer(f, id).path("status").asText()).isEqualTo("PURCHASE_CONFIRMED");
+    assertThat(notifications.processNextNotice()).isTrue();
+    var row =
+        jdbc.queryForMap(
+            "SELECT d.body,i.payload::text AS payload,d.first_occurred_at FROM commerce.notification_items i JOIN commerce.notification_deliveries d ON d.id=i.delivery_id WHERE i.source_event_id=?",
+            event);
+    assertThat(row.get("body").toString()).contains("4321원");
+    assertThat(mapper.readTree(row.get("payload").toString()).path("walletVersion").asLong())
+        .isEqualTo(2);
+    assertThat(((java.sql.Timestamp) row.get("first_occurred_at")).toInstant()).isEqualTo(NOW);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM commerce.notification_items WHERE kind='SALE_COMPLETED' AND business_ref=? AND (jsonb_exists(payload, 'mileageBalanceAfter') OR jsonb_exists(payload, 'walletVersion'))",
+                Long.class,
+                id))
+        .isZero();
+    receiveNotice(notice);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM commerce.notification_items WHERE kind='PAYMENT_COMPLETED' AND business_ref=?",
+                Long.class,
+                payment))
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("발송 알림 저장 실패는 주문 이행·감사·멱등 기록까지 롤백하고 같은 키로 재개한다")
+  void rollsBackShipmentWhenNotificationCannotBeStored() throws Exception {
+    var f = fixture();
+    var order = create(f);
+    UUID id = uuid(order, "id");
+    receive("PaymentConfirmed", confirmed(order, context(id)), true);
+    var before = buyer(f, id);
+    long audit = number("SELECT count(*) FROM commerce.audit_logs WHERE aggregate_id=?", id);
+    String key = UUID.randomUUID().toString();
+    var body = version(before).put("shipmentReference", "test-notice-rollback");
+    String path = "/api/sellers/me/orders/" + id + "/shipments";
+    jdbc.execute(
+        "CREATE FUNCTION commerce.reject_shipment_notice() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='SHIPMENT_STARTED' THEN RAISE EXCEPTION 'injected'; END IF; RETURN NEW; END $$");
+    jdbc.execute(
+        "CREATE TRIGGER reject_shipment_notice BEFORE INSERT ON commerce.notification_items FOR EACH ROW EXECUTE FUNCTION commerce.reject_shipment_notice()");
+    try {
+      call("SELLER", f.seller(), path, body, 500, key);
+    } finally {
+      jdbc.execute("DROP TRIGGER reject_shipment_notice ON commerce.notification_items");
+      jdbc.execute("DROP FUNCTION commerce.reject_shipment_notice()");
+    }
+    assertThat(buyer(f, id)).isEqualTo(before);
+    assertThat(number("SELECT count(*) FROM commerce.audit_logs WHERE aggregate_id=?", id))
+        .isEqualTo(audit);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM commerce.notification_items WHERE kind='SHIPMENT_STARTED' AND business_ref=?",
+                Long.class,
+                id))
+        .isZero();
+    call("SELLER", f.seller(), path, body, 200, key);
+    assertThat(buyer(f, id).path("fulfillmentStatus").asText()).isEqualTo("SHIPPED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM commerce.notification_items WHERE kind='SHIPMENT_STARTED' AND business_ref=?",
+                Long.class,
+                id))
+        .isEqualTo(1);
   }
 
   @Test
@@ -402,11 +515,13 @@ class OrderWorkflowIntegrationTest {
         .isEqualTo(1);
   }
 
-  @Test
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(ints = {0, 2000})
   @DisplayName("미발송 환불 복구는 선행 접수를 기다리고 재전달에도 재고와 확인 이벤트를 한 번만 저장한다")
-  void restoresUnshippedRefundAfterAcceptedPredecessor() throws Exception {
+  void restoresUnshippedRefundAfterAcceptedPredecessor(int mileage) throws Exception {
     var f = fixture();
-    var order = create(f);
+    var order =
+        call("BUYER", f.buyer(), "/api/orders", orderBody(f).put("mileageAmount", mileage), 201);
     var id = uuid(order, "id");
     var ctx = context(id);
     var payment = UUID.randomUUID();
@@ -421,6 +536,13 @@ class OrderWorkflowIntegrationTest {
             .put("paymentId", payment.toString())
             .put("refundId", refundId.toString());
     var early = receive("RefundCompleted", complete, false);
+    var notice = paymentNotice(order, ctx, payment, "REFUND_COMPLETED", refundId);
+    UUID noticeId = receiveNotice(notice);
+    assertThat(
+            number(
+                "SELECT count(*) FROM commerce.notification_items WHERE source_event_id=?",
+                noticeId))
+        .isZero();
     assertStock(f, 1, 0, 1);
     receive(
         "RefundAccepted", complete.deepCopy().put("requestId", request.path("id").asText()), true);
@@ -429,6 +551,32 @@ class OrderWorkflowIntegrationTest {
     receive("RefundCompleted", complete, true);
     assertStock(f, 2, 0, 0);
     assertThat(buyer(f, id).path("status").asText()).isEqualTo("REFUNDED");
+    assertThat(notifications.processNextNotice()).isTrue();
+    String buyerBody =
+        jdbc.queryForObject(
+            "SELECT d.body FROM commerce.notification_items i JOIN commerce.notification_deliveries d ON d.id=i.delivery_id WHERE i.source_event_id=? AND i.recipient_kind='BUYER'",
+            String.class,
+            noticeId);
+    assertThat(buyerBody).contains("외부 환불 " + (10000 - mileage) + "원", "복원 마일리지 " + mileage + "원");
+    if (mileage > 0) assertThat(buyerBody).contains("잔액은 4321원");
+    else assertThat(buyerBody).doesNotContain("잔액");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT d.body FROM commerce.notification_items i JOIN commerce.notification_deliveries d ON d.id=i.delivery_id WHERE i.source_event_id=? AND i.recipient_kind='SELLER'",
+                String.class,
+                noticeId))
+        .doesNotContain("마일리지", "4321원");
+    assertThat(
+            number(
+                "SELECT count(*) FROM commerce.notification_items WHERE source_event_id=?",
+                noticeId))
+        .isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM commerce.notification_items WHERE source_event_id=? AND recipient_kind='SELLER' AND (jsonb_exists(payload, 'mileageBalanceAfter') OR jsonb_exists(payload, 'walletVersion'))",
+                Long.class,
+                noticeId))
+        .isZero();
     assertThat(
             number(
                 "select count(*) from commerce.outbox where aggregate_id=? and event_type='RefundOrderRestored'",
@@ -977,6 +1125,55 @@ class OrderWorkflowIntegrationTest {
                 "select status from commerce.inbox where event_id=?", String.class, e.eventId()))
         .isEqualTo(applied ? "APPLIED" : "WAITING");
     return e.eventId();
+  }
+
+  private ObjectNode paymentNotice(
+      JsonNode order, JsonNode ctx, UUID payment, String kind, UUID refund) {
+    var p =
+        mapper
+            .createObjectNode()
+            .put("kind", kind)
+            .put("businessRef", (refund == null ? payment : refund).toString())
+            .put("paymentId", payment.toString())
+            .put("paymentCycleId", ctx.path("paymentCycleId").asText())
+            .put("orderId", order.path("id").asText())
+            .put("buyerId", order.path("buyerId").asText())
+            .put("sellerId", order.path("sellerId").asText())
+            .put("totalAmount", order.path("totalAmount").asLong())
+            .put("externalAmount", order.path("externalAmount").asLong())
+            .put("mileageAmount", order.path("mileageAmount").asLong())
+            .put("processedAt", NOW.atOffset(java.time.ZoneOffset.UTC).toString());
+    if (refund == null) p.putNull("refundId");
+    else p.put("refundId", refund.toString());
+    if (order.path("mileageAmount").asLong() > 0)
+      p.put("mileageBalanceAfter", 4321).put("walletVersion", 2);
+    else p.putNull("mileageBalanceAfter").putNull("walletVersion");
+    return p;
+  }
+
+  private UUID receiveNotice(ObjectNode payload) throws Exception {
+    var event =
+        new EventEnvelope<JsonNode>(
+            UUID.randomUUID(),
+            "PaymentNoticeRequested",
+            1,
+            clock.instant().atOffset(java.time.ZoneOffset.UTC),
+            UUID.randomUUID(),
+            0,
+            payload);
+    var ack = new java.util.concurrent.atomic.AtomicBoolean();
+    new com.commercesettle.commerce.infrastructure.messaging.NotificationListener(
+            mapper, notifications)
+        .receive(
+            new ConsumerRecord<>(
+                "commerce-settle.payment.v1",
+                0,
+                System.nanoTime(),
+                payload.path("paymentId").asText(),
+                mapper.writeValueAsBytes(event)),
+            () -> ack.set(true));
+    assertThat(ack).isTrue();
+    return event.eventId();
   }
 
   private void assertStock(Fixture f, long available, long reserved, long sold) {

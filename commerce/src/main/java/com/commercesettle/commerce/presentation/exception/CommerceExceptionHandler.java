@@ -73,6 +73,12 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
     this.tracer = tracer;
   }
 
+  @ExceptionHandler(
+      com.commercesettle.commerce.domain.model.Notification.StateConflictException.class)
+  ResponseEntity<Object> notificationState(WebRequest request) {
+    return respond(ErrorCode.NOTIFICATION_REPLAY_CONFLICT, request);
+  }
+
   @ExceptionHandler(com.commercesettle.commerce.domain.exception.OrderStateException.class)
   ResponseEntity<Object> orderState(
       com.commercesettle.commerce.domain.exception.OrderStateException e, WebRequest request) {
@@ -253,6 +259,14 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
         "일시적으로 처리할 수 없습니다. 멱등키를 보낸 요청은 같은 키로 결과를 다시 확인해 주세요.",
         null,
         request);
+  }
+
+  @ExceptionHandler(org.springframework.jdbc.UncategorizedSQLException.class)
+  ResponseEntity<Object> uncategorizedStorage(
+      org.springframework.jdbc.UncategorizedSQLException e, WebRequest request) {
+    String state = e.getSQLException().getSQLState();
+    if ("55P03".equals(state) || "57014".equals(state)) return temporarilyUnavailable(e, request);
+    return unexpected(e, request);
   }
 
   @ExceptionHandler(Exception.class)
