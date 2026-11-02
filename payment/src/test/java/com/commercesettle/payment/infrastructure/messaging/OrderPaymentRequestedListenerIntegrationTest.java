@@ -236,7 +236,7 @@ class OrderPaymentRequestedListenerIntegrationTest {
             "app.kafka.order-payment-requested.enabled=true");
   }
 
-  /** 결제 요청과 취소 요청을 같은 처리로 받는 시험용 접수기. */
+  /** 결제 요청·취소 요청·환불 이벤트를 같은 처리로 받는 시험용 접수기. */
   private static OrderPaymentRequestAcceptor acceptor(
       Consumer<OrderPaymentRequestAcceptor.Source> handle) {
     return new OrderPaymentRequestAcceptor() {
@@ -248,6 +248,11 @@ class OrderPaymentRequestedListenerIntegrationTest {
       @Override
       public void acceptCancellation(
           EventEnvelope<PaymentCancellationRequestedPayload> event, Source source) {
+        handle.accept(source);
+      }
+
+      @Override
+      public void acceptRefundEvent(EventEnvelope<?> event, Source source) {
         handle.accept(source);
       }
     };
