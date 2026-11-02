@@ -169,6 +169,57 @@ class JdbcRefundReservationRepository implements RefundReservationRepository {
         .findFirst();
   }
 
+  @Override
+  public Optional<Reservation> findById(UUID reservationId) {
+    return jdbc
+        .query(
+            "SELECT "
+                + RESERVATION_COLUMNS
+                + " FROM settlement.settlement_reservations r"
+                + " JOIN settlement.settlement_items i ON i.id = r.item_id"
+                + " WHERE r.id = :reservationId",
+            new MapSqlParameterSource("reservationId", reservationId),
+            JdbcRefundReservationRepository::reservation)
+        .stream()
+        .findFirst();
+  }
+
+  @Override
+  public Optional<Long> release(Reservation reservation, Instant now) {
+    MapSqlParameterSource params =
+        new MapSqlParameterSource("reservationId", reservation.id())
+            .addValue("itemId", reservation.itemId())
+            .addValue("previous", reservation.previousStatus().name())
+            .addValue("now", time(now));
+    // 항목을 먼저 조건부로 되돌린다. 되돌릴 수 없으면 예약도 그대로 두고 호출자가 운영 확인으로 남긴다.
+    Optional<Long> version =
+        jdbc
+            .queryForList(
+                "UPDATE settlement.settlement_items"
+                    + " SET status = :previous, updated_at = :now, version = version + 1"
+                    + " WHERE id = :itemId AND status = 'REFUND_RESERVED'"
+                    + " AND :previous IN ('WAITING_CONFIRMATION', 'PAYABLE')"
+                    + " AND (:previous <> 'PAYABLE' OR ready_at IS NOT NULL)"
+                    + " RETURNING version",
+                params,
+                Long.class)
+            .stream()
+            .findFirst();
+    if (version.isEmpty()) {
+      return Optional.empty();
+    }
+    int released =
+        jdbc.update(
+            "UPDATE settlement.settlement_reservations"
+                + " SET status = 'RELEASED', updated_at = :now, version = version + 1"
+                + " WHERE id = :reservationId AND kind = 'REFUND' AND status = 'ACTIVE'",
+            params);
+    if (released != 1) {
+      throw new IllegalStateException("Refund reservation changed while releasing");
+    }
+    return version;
+  }
+
   private static Reservation reservation(ResultSet rs, int row) throws SQLException {
     return new Reservation(
         rs.getObject("id", UUID.class),

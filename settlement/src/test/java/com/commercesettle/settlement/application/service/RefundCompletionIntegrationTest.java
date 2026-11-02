@@ -5,11 +5,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PaymentConfirmedPayload;
 import com.commercesettle.settlement.application.event.RefundFinancialCompletedPayload;
+import com.commercesettle.settlement.application.event.RefundReleaseRequestedPayload;
 import com.commercesettle.settlement.application.event.RefundReservationRequestedPayload;
 import com.commercesettle.settlement.application.port.InboxStore.Source;
+import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
 import com.commercesettle.settlement.support.EventContract;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -52,6 +55,7 @@ class RefundCompletionIntegrationTest {
 
   @Autowired RefundEventService refunds;
   @Autowired SettlementEventService events;
+  @Autowired SettlementItemRepository items;
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper mapper;
 
@@ -178,16 +182,99 @@ class RefundCompletionIntegrationTest {
     assertThat(count("settlement_entries")).isEqualTo(10);
   }
 
+  @Test
+  @DisplayName("예약 해제 요청이면 항목을 구매확정 전 상태로 되돌리고 예약 RELEASED와 해제 결과를 발행하며, 재전달은 무변경이다")
+  void releasesToWaitingConfirmation() throws Exception {
+    UUID refundId = UUID.randomUUID();
+    receive(reservation(refundId));
+    UUID reservationId = reservationId();
+    var release = release(refundId, reservationId);
+
+    receive(release);
+    long published = count("outbox");
+    receive(release);
+    receive(release(refundId, reservationId));
+
+    assertThat(itemStatus()).isEqualTo("WAITING_CONFIRMATION");
+    assertThat(reservationStatus()).isEqualTo("RELEASED");
+    assertThat(count("outbox")).isEqualTo(published);
+    JsonNode released = lastEvent("RefundReservationReleased");
+    assertThat(released.path("payload").path("reservationId").asText())
+        .isEqualTo(reservationId.toString());
+    assertThat(released.path("aggregateVersion").asLong()).isEqualTo(itemVersion());
+  }
+
+  @Test
+  @DisplayName("지급 가능 항목의 예약을 풀면 PAYABLE로 돌아가고, 같은 항목에 지급 선점과 새 환불 예약이 다시 가능하다")
+  void releasedPayableItemCanBeReservedAgain() {
+    jdbc.update(
+        "UPDATE settlement.settlement_items SET status = 'PAYABLE',"
+            + " purchase_confirmed_at = now() - interval '2 days',"
+            + " eligible_received_at = now() - interval '2 days',"
+            + " ready_at = now() - interval '2 days' WHERE payment_id = ?",
+        paymentId);
+    UUID refundId = UUID.randomUUID();
+    receive(reservation(refundId));
+    receive(release(refundId, reservationId()));
+    assertThat(itemStatus()).isEqualTo("PAYABLE");
+
+    UUID next = UUID.randomUUID();
+    receive(reservation(next));
+    assertThat(itemStatus()).isEqualTo("REFUND_RESERVED");
+    receive(release(next, activeReservationId()));
+
+    assertThat(items.reserveForPayout(sellerId, Instant.now(), UUID.randomUUID(), Instant.now()))
+        .hasSize(1);
+    assertThat(itemStatus()).isEqualTo("PAYOUT_RESERVED");
+  }
+
+  @Test
+  @DisplayName("상쇄가 끝난 예약과 다른 환불·다른 결제의 해제 요청은 운영 확인으로 남기고 상태를 바꾸지 않는다")
+  void unexpectedReleaseRequiresReview() {
+    UUID refundId = UUID.randomUUID();
+    receive(reservation(refundId));
+    UUID reservationId = reservationId();
+    var otherRefund = release(UUID.randomUUID(), reservationId);
+    receive(otherRefund);
+    assertInbox(otherRefund, "REVIEW_REQUIRED");
+    assertThat(reservationStatus()).isEqualTo("ACTIVE");
+
+    receive(completed(refundId, EXTERNAL, MILEAGE));
+    var afterReversal = release(refundId, reservationId);
+    receive(afterReversal);
+
+    assertInbox(afterReversal, "REVIEW_REQUIRED");
+    assertThat(itemStatus()).isEqualTo("REFUNDED");
+    assertThat(reservationStatus()).isEqualTo("CONSUMED");
+  }
+
   private void receive(EventEnvelope<?> event) {
-    if (event.payload() instanceof RefundReservationRequestedPayload) {
-      @SuppressWarnings("unchecked")
-      var request = (EventEnvelope<RefundReservationRequestedPayload>) event;
-      refunds.receiveReservationRequested(request, source(event));
-    } else {
-      @SuppressWarnings("unchecked")
-      var completed = (EventEnvelope<RefundFinancialCompletedPayload>) event;
-      refunds.receiveFinancialCompleted(completed, source(event));
+    switch (event.payload()) {
+      case RefundReservationRequestedPayload request ->
+          refunds.receiveReservationRequested(cast(event), source(event));
+      case RefundFinancialCompletedPayload completed ->
+          refunds.receiveFinancialCompleted(cast(event), source(event));
+      case RefundReleaseRequestedPayload release ->
+          refunds.receiveReleaseRequested(cast(event), source(event));
+      default -> throw new IllegalArgumentException("unexpected event");
     }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <T> EventEnvelope<T> cast(EventEnvelope<?> event) {
+    return (EventEnvelope<T>) event;
+  }
+
+  private EventEnvelope<RefundReleaseRequestedPayload> release(UUID refundId, UUID reservationId) {
+    return envelope(
+        "RefundReleaseRequested",
+        refundId,
+        new RefundReleaseRequestedPayload(refundId, paymentId, reservationId));
+  }
+
+  private UUID activeReservationId() {
+    return jdbc.queryForObject(
+        "SELECT id FROM settlement.settlement_reservations WHERE status = 'ACTIVE'", UUID.class);
   }
 
   private EventEnvelope<RefundReservationRequestedPayload> reservation(UUID refundId) {
