@@ -21,6 +21,7 @@ import uuid
 
 from init_env import initialize
 from smoke import gateway_json
+from sync_redis_run_id import PLACEHOLDER, approve
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,6 +72,12 @@ def stack():
             environment[name] = "0"
         environment.update({"COMPOSE_PROFILES": "", "APP_ORDER_STUB_ENABLED": "false"})
         attempted = True
+        environment["AUTH_REDIS_RUN_ID"] = PLACEHOLDER
+        compose("up", "-d", "--wait", "redis")
+        info = compose("exec", "-T", "redis", "sh", "-c", 'REDISCLI_AUTH="$REDIS_PASSWORD" exec redis-cli INFO server')
+        run_id = next((line.split(":", 1)[1].strip() for line in info.splitlines() if line.startswith("run_id:")), None)
+        approve(directory, run_id)
+        environment.pop("AUTH_REDIS_RUN_ID")
         compose("up", "-d", "--build", "--wait", "--wait-timeout", "300", timeout=600)
         compose("up", "-d", "alertmanager")
         yield compose
