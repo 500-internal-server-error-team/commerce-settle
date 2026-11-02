@@ -25,8 +25,20 @@ public interface RefundReservationRepository {
    */
   Optional<Reservation> reserve(UUID itemId, UUID refundId, Instant now);
 
+  /**
+   * ACTIVE 환불 예약을 CONSUMED로, 그 항목을 REFUND_RESERVED에서 REFUNDED로 바꾸고 바뀐 항목 버전을 돌려준다. 둘 중 하나라도 조건이 맞지
+   * 않으면 빈 값이며, 호출자는 트랜잭션을 롤백해야 한다.
+   */
+  Optional<Long> consume(UUID reservationId, Instant now);
+
   record ItemState(
-      UUID id, SettlementItemStatus status, long netAmount, UUID payoutId, long version) {}
+      UUID id,
+      SettlementItemStatus status,
+      long externalAmount,
+      long mileageAmount,
+      long netAmount,
+      UUID payoutId,
+      long version) {}
 
   /** {@code itemVersion}은 조회·변경 시점 항목 버전이다. 발행 이벤트의 집계 버전으로 쓴다. */
   record Reservation(
