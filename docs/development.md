@@ -520,6 +520,8 @@ Gateway 자체 오류는 `application/problem+json`과 실제 추적의 `traceId
 
 운영자 자격은 첫 운영 API를 구현할 때 운영자 식별자와 배포 방식을 함께 정합니다.
 
+Settlement의 운영 API(`/internal/payout-jobs`·`/internal/settlement-batches`)는 `operator:<식별자>` 자격만 받습니다. Payment 운영 종결과 같이 인스턴스의 `app.internal-auth.senders`에 `"[operator:<식별자>]"` 키로 설정하며 Compose와 `.env.example`에는 넣지 않았습니다. 재처리·배치 생성은 `Idempotency-Key`(8~128자)가 필요하고, 감사는 `settlement.audit_logs`, 재처리 사유는 `settlement.payout_job_replays`에 남습니다.
+
 컨테이너 상태·로그는 아래처럼 확인합니다.
 
 ```bash
