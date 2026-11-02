@@ -324,6 +324,35 @@ DELETE FROM commerce.buyer_accounts WHERE id = :'buyer';
 """)
 
 
+def check_kafka_topics():
+    description = compose(
+        "exec", "-T", "kafka", "/opt/kafka/bin/kafka-topics.sh",
+        "--bootstrap-server", "kafka:9092", "--describe", "--exclude-internal",
+    ).stdout
+    summaries = {}
+    for line in description.splitlines():
+        if "Configs:" not in line:
+            continue
+        match = re.search(r"Topic:\s*(\S+)", line)
+        assert match, line
+        name = match.group(1)
+        assert name not in summaries, f"Duplicate topic summary: {name}"
+        summaries[name] = line
+    for owner in ["commerce", "payment", "settlement", "commerce-notifications"]:
+        topics = [(f"commerce-settle.{owner}.v1.dlt", "604800000")]
+        if owner != "commerce-notifications":
+            topics.append((f"commerce-settle.{owner}.v1", "86400000"))
+        for name, retention in topics:
+            assert name in summaries, f"Missing topic: {name}"
+            summary = summaries[name]
+            assert re.search(r"PartitionCount:\s*3\b", summary), summary
+            assert re.search(r"ReplicationFactor:\s*1\b", summary), summary
+            configs = dict(item.split("=", 1) for item in summary.split("Configs:", 1)[1].strip().split(","))
+            assert configs.get("cleanup.policy") == "delete", summary
+            assert configs.get("retention.ms") == retention, summary
+            assert configs.get("retention.bytes") == "-1", summary
+
+
 def main():
     # Reading the resolved port supports overrides in .env and COMPOSE_FILE.
     config = json.loads(compose("config", "--format", "json").stdout)
@@ -474,22 +503,7 @@ SELECT occurred_at = '2026-11-01T00:00:00.123456+09:00'::timestamptz FROM time_s
 
     kafka = ["exec", "-T", "kafka"]
     tool = "/opt/kafka/bin/"
-    for owner in ["commerce", "payment", "settlement", "commerce-notifications"]:
-        topics = [(f"commerce-settle.{owner}.v1.dlt", "604800000")]
-        if owner != "commerce-notifications":
-            topics.append((f"commerce-settle.{owner}.v1", "86400000"))
-        for name, retention in topics:
-            description = compose(
-                *kafka, tool + "kafka-topics.sh", "--bootstrap-server", "kafka:9092",
-                "--describe", "--topic", name,
-            ).stdout
-            summary = next(line for line in description.splitlines() if "Configs:" in line)
-            assert re.search(r"PartitionCount:\s*3\b", summary), description
-            assert re.search(r"ReplicationFactor:\s*1\b", summary), description
-            configs = dict(item.split("=", 1) for item in summary.split("Configs:", 1)[1].strip().split(","))
-            assert configs.get("cleanup.policy") == "delete", description
-            assert configs.get("retention.ms") == retention, description
-            assert configs.get("retention.bytes") == "-1", description
+    check_kafka_topics()
     print("PASS Kafka: three original and four consumer DLT topic settings")
     topic = "bootstrap.smoke." + uuid.uuid4().hex
     compose(*kafka, tool + "kafka-topics.sh", "--bootstrap-server", "kafka:9092",
