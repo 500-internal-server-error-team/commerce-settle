@@ -91,6 +91,24 @@ class EventOrderIntegrationTest {
   }
 
   @Test
+  @DisplayName("시작 전에 조회한 이벤트 버전으로 주문하면 스케줄러가 이벤트를 연 뒤에도 버전 충돌 없이 주문된다")
+  void keepsPreStartVersionAcrossScheduledOpen() {
+    Sale sale = openSale(5);
+    // 시작 전에 공개해 아직 스케줄러가 열지 않은 상태를 만든다. 신청은 서버 시각으로 받는다.
+    jdbc.update(
+        "update commerce.sale_events set status = 'SCHEDULED' where id = ?", sale.eventId());
+
+    order(sale, buyer(), 201);
+    assertThat(events.openStarted(Instant.now(), 100)).isEqualTo(1);
+    order(sale, buyer(), 201);
+
+    JsonNode event = publicEvent(sale);
+    assertThat(event.path("status").asText()).isEqualTo("OPEN");
+    assertThat(event.path("version").asLong()).isEqualTo(sale.version());
+    assertSlots(sale, 0, 2);
+  }
+
+  @Test
   @DisplayName("결제가 거절되면 수량을 풀고 재시도에서 다시 잡으며, 같은 구매자의 다른 주문은 참여 중이라 거절한다")
   void releasesOnDeclineAndRetakesOnRetry() throws Exception {
     Sale sale = openSale(5);
