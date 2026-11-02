@@ -11451,6 +11451,16 @@
           },
           "201": {
             "description": "고객 확인 생성",
+            "headers": {
+              "Location": {
+                "description": "생성한 확인 기록의 식별 URI: /api/refund-requests/{requestId}/closure-confirmations/{confirmationId}. 같은 멱등키는 같은 URI를 반환한다. 별도 GET API는 제공하지 않는다.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "format": "uri-reference"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
