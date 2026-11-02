@@ -297,6 +297,17 @@ CREATE UNIQUE INDEX uk_quarantine_replay_active ON settlement.inbox_quarantine_d
     WHERE kind = 'REPLAY' AND status IN ('PENDING', 'RUNNING', 'RETRY');
 CREATE INDEX ix_quarantine_delivery_due ON settlement.inbox_quarantine_deliveries (status, next_run_at, lease_until, id);
 
+CREATE TABLE settlement.inbox_quarantine_resumes (
+    id uuid PRIMARY KEY,
+    delivery_id uuid NOT NULL,
+    expected_version bigint NOT NULL CHECK (expected_version >= 0),
+    previous_attempts integer NOT NULL CHECK (previous_attempts >= 0),
+    operator_id varchar(100) NOT NULL,
+    reason_code varchar(80) NOT NULL,
+    created_at timestamptz NOT NULL,
+    UNIQUE (delivery_id, expected_version)
+);
+
 -- Spring Batch 5.2 메타데이터. 라이브러리의 schema-postgresql.sql에서 서비스 내부 FK만 뺐다(ADR 0006).
 -- Spring Batch가 시각을 LocalDateTime으로 쓰므로 원본의 timestamp를 유지한다.
 CREATE TABLE settlement.BATCH_JOB_INSTANCE (

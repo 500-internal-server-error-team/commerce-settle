@@ -43,6 +43,7 @@ class QuarantineServiceIntegrationTest {
 
   @AfterEach
   void deleteRows() {
+    jdbc.update("DELETE FROM settlement.inbox_quarantine_resumes");
     jdbc.update("DELETE FROM settlement.inbox_quarantine_deliveries");
     jdbc.update("DELETE FROM settlement.inbox_quarantines");
   }
@@ -90,6 +91,87 @@ class QuarantineServiceIntegrationTest {
     assertThat(status()).isEqualTo("PUBLISHED");
     assertThat(service.published(delivery)).isFalse();
     assertThat(service.claim(1, LEASE_MS, 10)).isEmpty();
+  }
+
+  @Test
+  @DisplayName("재처리는 원문 버전이 같고 진행 중인 재처리가 없을 때만 원래 토픽으로 요청자·사유와 함께 만든다")
+  void replayRequiresExpectedVersionAndNoActiveReplay() {
+    UUID quarantineId = service.capture(source(3, "key", "body"));
+
+    assertThatThrownBy(() -> service.requestReplay(quarantineId, 1, "ops@team", "FIXED"))
+        .isInstanceOf(IllegalStateException.class);
+    assertThatThrownBy(() -> service.requestReplay(quarantineId, 0, "ops team", "FIXED"))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> service.requestReplay(quarantineId, 0, "ops@team", "fixed"))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    UUID replay = service.requestReplay(quarantineId, 0, "ops@team", "PARSER_FIXED");
+
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT kind, topic, status, operator_id, reason_code"
+                    + " FROM settlement.inbox_quarantine_deliveries WHERE id = ?",
+                replay))
+        .containsEntry("kind", "REPLAY")
+        .containsEntry("topic", "commerce-settle.payment.v1")
+        .containsEntry("status", "PENDING")
+        .containsEntry("operator_id", "ops@team")
+        .containsEntry("reason_code", "PARSER_FIXED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT version FROM settlement.inbox_quarantines WHERE id = ?",
+                Long.class,
+                quarantineId))
+        .isEqualTo(1);
+    assertThatThrownBy(() -> service.requestReplay(quarantineId, 1, "ops@team", "AGAIN"))
+        .isInstanceOf(IllegalStateException.class);
+    assertThat(
+            service.claim(10, LEASE_MS, 10).stream()
+                .filter(delivery -> delivery.id().equals(replay))
+                .findFirst()
+                .orElseThrow())
+        .satisfies(
+            delivery -> {
+              assertThat(delivery.topic()).isEqualTo("commerce-settle.payment.v1");
+              assertThat(delivery.key()).isEqualTo("key");
+              assertThat(delivery.body()).isEqualTo("body".getBytes(StandardCharsets.UTF_8));
+            });
+  }
+
+  @Test
+  @DisplayName("소진된 발행 작업만 같은 버전으로 한 번 재개하고, 이전 시도 수와 요청자·사유를 이력에 남긴다")
+  void resumeOnlyExhaustedDeliveryOnce() {
+    service.capture(source(4, "key", "body"));
+    UUID delivery =
+        jdbc.queryForObject("SELECT id FROM settlement.inbox_quarantine_deliveries", UUID.class);
+    assertThatThrownBy(() -> service.resumeDelivery(delivery, 0, "ops@team", "DLT_RECOVERED"))
+        .isInstanceOf(IllegalStateException.class);
+    jdbc.update(
+        "UPDATE settlement.inbox_quarantine_deliveries"
+            + " SET status = 'REVIEW_REQUIRED', attempts = 10, version = 7");
+
+    assertThatThrownBy(() -> service.resumeDelivery(delivery, 6, "ops@team", "DLT_RECOVERED"))
+        .isInstanceOf(IllegalStateException.class);
+    service.resumeDelivery(delivery, 7, "ops@team", "DLT_RECOVERED");
+
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT status, attempts, version FROM settlement.inbox_quarantine_deliveries"))
+        .containsEntry("status", "PENDING")
+        .containsEntry("attempts", 0)
+        .containsEntry("version", 8L);
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT delivery_id, expected_version, previous_attempts, operator_id, reason_code"
+                    + " FROM settlement.inbox_quarantine_resumes"))
+        .containsEntry("delivery_id", delivery)
+        .containsEntry("expected_version", 7L)
+        .containsEntry("previous_attempts", 10)
+        .containsEntry("operator_id", "ops@team")
+        .containsEntry("reason_code", "DLT_RECOVERED");
+    assertThatThrownBy(() -> service.resumeDelivery(delivery, 7, "ops@team", "DLT_RECOVERED"))
+        .isInstanceOf(IllegalStateException.class);
+    assertThat(count("inbox_quarantine_resumes")).isEqualTo(1);
   }
 
   private static Source source(long offset, String key, String body) {
