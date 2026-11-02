@@ -290,12 +290,12 @@ public class JdbcRetentionStore implements RetentionStore {
 
   @Override
   @Transactional(propagation = Propagation.MANDATORY)
-  public void cacheClosures(List<Closure> closures, Instant now) {
+  public Set<UUID> cacheClosures(List<Closure> closures, Instant now) {
     TransactionLimits.apply(jdbc);
-    if (closures.isEmpty()) return;
+    if (closures.isEmpty()) return Set.of();
     var locked =
         jdbc.query(
-            "SELECT batch_id,seller_id,closed_at FROM commerce.notification_retention_batches WHERE batch_id=ANY(?) ORDER BY batch_id FOR UPDATE",
+            "SELECT batch_id,seller_id,closed_at FROM commerce.notification_retention_batches WHERE batch_id=ANY(?) ORDER BY batch_id FOR UPDATE SKIP LOCKED",
             (row, index) ->
                 new Closure(
                     row.getObject(1, UUID.class),
@@ -309,7 +309,9 @@ public class JdbcRetentionStore implements RetentionStore {
             .collect(
                 java.util.stream.Collectors.toMap(
                     Closure::batchId, java.util.function.Function.identity()));
-    for (var closure : closures) {
+    var available = closures.stream().filter(c -> rows.containsKey(c.batchId())).toList();
+    Set<UUID> cached = new java.util.HashSet<>();
+    for (var closure : available) {
       var row = rows.get(closure.batchId());
       if (row == null || !closure.sellerId().equals(row.sellerId()))
         throw new IllegalArgumentException("Settlement closure recipient mismatch");
@@ -317,19 +319,22 @@ public class JdbcRetentionStore implements RetentionStore {
           && closure.closedAt() != null
           && !row.closedAt().equals(closure.closedAt()))
         throw new IllegalArgumentException("Settlement closure changed");
+      if (row.closedAt() != null || closure.closedAt() != null) cached.add(closure.batchId());
     }
+    if (available.isEmpty()) return Set.of();
     jdbc.update(
         """
         UPDATE commerce.notification_retention_batches b SET closed_at=c.closed_at
         FROM unnest(?::uuid[],?::timestamptz[]) AS c(batch_id,closed_at)
         WHERE b.batch_id=c.batch_id AND b.closed_at IS NULL AND c.closed_at IS NOT NULL
         """,
-        new SqlArrayValue("uuid", closures.stream().map(Closure::batchId).toArray()),
+        new SqlArrayValue("uuid", available.stream().map(Closure::batchId).toArray()),
         new SqlArrayValue(
             "timestamptz",
-            closures.stream()
+            available.stream()
                 .map(c -> c.closedAt() == null ? null : c.closedAt().toString())
                 .toArray()));
+    return Set.copyOf(cached);
   }
 
   @Override
