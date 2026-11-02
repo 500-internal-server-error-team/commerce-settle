@@ -82,13 +82,11 @@ class SellerCouponIntegrationTest {
   void registersAndListsCampaigns() throws Exception {
     Shop shop = shop();
     String key = key();
+    // 재요청은 같은 본문이어야 하므로 시각이 든 등록 조건을 한 번만 만든다.
+    ObjectNode terms = terms(shop, 10, 30_000);
 
-    JsonNode created =
-        seller(
-            shop.seller(), "/api/sellers/me/coupon-templates", terms(shop, 10, 30_000), 201, key);
-    JsonNode replay =
-        seller(
-            shop.seller(), "/api/sellers/me/coupon-templates", terms(shop, 10, 30_000), 201, key);
+    JsonNode created = seller(shop.seller(), "/api/sellers/me/coupon-templates", terms, 201, key);
+    JsonNode replay = seller(shop.seller(), "/api/sellers/me/coupon-templates", terms, 201, key);
     JsonNode list = seller(shop.seller(), "/api/sellers/me/coupon-templates", null, 200, key());
     String path = "/api/sellers/me/coupon-templates/" + created.path("id").asText();
 
