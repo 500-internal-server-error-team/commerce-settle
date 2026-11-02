@@ -187,6 +187,35 @@ public class Order extends AuditableEntity {
     return id;
   }
 
+  /** 접수된 결제 ID만 연결한다. 결제 상태·금액·예약을 전이시키지 않는다. */
+  public PaymentLinkResult linkPayment(
+      UUID acceptedPaymentId, UUID cycleId, long requestedVersion, Instant now) {
+    Objects.requireNonNull(acceptedPaymentId, "acceptedPaymentId");
+    Objects.requireNonNull(cycleId, "cycleId");
+    if (requestedVersion < 0) throw new IllegalArgumentException("Invalid order version");
+    if (!paymentCycleId.equals(cycleId)) return PaymentLinkResult.STALE_CYCLE;
+    if (paymentId != null) {
+      if (!paymentId.equals(acceptedPaymentId)) return PaymentLinkResult.PAYMENT_ID_CONFLICT;
+      return requestedVersion <= getVersion()
+          ? PaymentLinkResult.ALREADY_LINKED
+          : PaymentLinkResult.VERSION_CONFLICT;
+    }
+    if (requestedVersion != getVersion()) return PaymentLinkResult.VERSION_CONFLICT;
+    if (status != Status.PAYMENT_PENDING) return PaymentLinkResult.STATE_CONFLICT;
+    paymentId = acceptedPaymentId;
+    touch(now);
+    return PaymentLinkResult.LINKED;
+  }
+
+  public enum PaymentLinkResult {
+    LINKED,
+    ALREADY_LINKED,
+    STALE_CYCLE,
+    VERSION_CONFLICT,
+    PAYMENT_ID_CONFLICT,
+    STATE_CONFLICT
+  }
+
   public UUID getBuyerId() {
     return buyerId;
   }

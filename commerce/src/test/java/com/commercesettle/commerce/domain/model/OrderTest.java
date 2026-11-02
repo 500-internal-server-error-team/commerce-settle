@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -132,6 +133,47 @@ class OrderTest {
 
     assertThat(address.getSealed().recipient()).containsExactly((byte) 1);
     assertThat(address.getSealed().phone()).containsExactly((byte) 2);
+  }
+
+  @Test
+  @DisplayName("결제 접수 ID는 상태·금액·배송 사본을 유지하며 한 번만 연결한다")
+  void linksAcceptedPaymentWithoutConfirmingOrder() {
+    Order order = order(product(10_000), 2, 1_000, Order.ExternalMethod.CREDIT_CARD, "test-card");
+    var amounts = order.getAmounts();
+    var delivery = order.getDelivery();
+    UUID payment = UUID.randomUUID();
+
+    assertThat(order.linkPayment(payment, order.getPaymentCycleId(), 0, NOW.plusSeconds(1)))
+        .isEqualTo(Order.PaymentLinkResult.LINKED);
+    assertThat(order.linkPayment(payment, order.getPaymentCycleId(), 0, NOW.plusSeconds(2)))
+        .isEqualTo(Order.PaymentLinkResult.ALREADY_LINKED);
+
+    assertThat(order.getPaymentId()).isEqualTo(payment);
+    assertThat(order.getStatus()).isEqualTo(Order.Status.PAYMENT_PENDING);
+    assertThat(order.getAmounts()).isSameAs(amounts);
+    assertThat(order.getDelivery()).isSameAs(delivery);
+    assertThat(order.getUpdatedAt()).isEqualTo(NOW.plusSeconds(1).truncatedTo(ChronoUnit.MICROS));
+    assertThat(order.getPaymentConfirmedAt()).isNull();
+  }
+
+  @Test
+  @DisplayName("이전 회차·잘못된 버전·다른 결제 ID는 연결과 수정 시각을 바꾸지 않는다")
+  void rejectsConflictingPaymentLinks() {
+    Order order = order(product(10_000), 1, 0, Order.ExternalMethod.CREDIT_CARD, "test-card");
+    UUID payment = UUID.randomUUID();
+    assertThat(order.linkPayment(payment, UUID.randomUUID(), 0, NOW.plusSeconds(1)))
+        .isEqualTo(Order.PaymentLinkResult.STALE_CYCLE);
+    assertThat(order.linkPayment(payment, order.getPaymentCycleId(), 1, NOW.plusSeconds(1)))
+        .isEqualTo(Order.PaymentLinkResult.VERSION_CONFLICT);
+    assertThat(order.getPaymentId()).isNull();
+    assertThat(order.getUpdatedAt()).isEqualTo(NOW.truncatedTo(ChronoUnit.MICROS));
+    order.linkPayment(payment, order.getPaymentCycleId(), 0, NOW.plusSeconds(2));
+
+    assertThat(
+            order.linkPayment(UUID.randomUUID(), order.getPaymentCycleId(), 0, NOW.plusSeconds(3)))
+        .isEqualTo(Order.PaymentLinkResult.PAYMENT_ID_CONFLICT);
+    assertThat(order.getPaymentId()).isEqualTo(payment);
+    assertThat(order.getUpdatedAt()).isEqualTo(NOW.plusSeconds(2).truncatedTo(ChronoUnit.MICROS));
   }
 
   private static Order order(
