@@ -1,0 +1,71 @@
+package com.commercesettle.commerce.infrastructure.batch;
+
+import com.commercesettle.commerce.application.service.GradeCouponService;
+import com.commercesettle.commerce.domain.model.CouponIssueRun;
+import com.commercesettle.commerce.domain.model.CouponIssueRunStatus;
+import java.time.LocalDate;
+import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.batch.core.Job;
+import org.springframework.batch.core.JobParameters;
+import org.springframework.batch.core.JobParametersBuilder;
+import org.springframework.batch.core.JobParametersInvalidException;
+import org.springframework.batch.core.launch.JobLauncher;
+import org.springframework.batch.core.repository.JobExecutionAlreadyRunningException;
+import org.springframework.batch.core.repository.JobInstanceAlreadyCompleteException;
+import org.springframework.batch.core.repository.JobRestartException;
+import org.springframework.stereotype.Component;
+
+/**
+ * 혜택 월의 회차를 targetMonth+runId 식별 파라미터로 실행한다. 실패·중단된 실행은 Spring Batch가 같은 JobInstance로 재시작하고,
+ * 완료·만료·취소된 회차는 실행하지 않는다. 다른 실행이 진행 중이면 시작하지 않는다. 진행 중으로 남은 강제 종료 실행의 복구는 운영 절차(후속)다.
+ */
+@Component
+public class GradeCouponLauncher {
+  private static final Logger LOGGER = LoggerFactory.getLogger(GradeCouponLauncher.class);
+
+  private final JobLauncher jobLauncher;
+  private final Job gradeCouponJob;
+  private final GradeCouponService grades;
+
+  GradeCouponLauncher(JobLauncher jobLauncher, Job gradeCouponJob, GradeCouponService grades) {
+    this.jobLauncher = jobLauncher;
+    this.gradeCouponJob = gradeCouponJob;
+    this.grades = grades;
+  }
+
+  /** 회차 상태를 돌려준다. 혜택 월이 아직 마감되지 않았으면 비어 있다. */
+  public Optional<CouponIssueRunStatus> run(LocalDate targetMonth) {
+    Optional<CouponIssueRun> current = grades.currentRun(targetMonth);
+    if (current.isEmpty()) {
+      return Optional.empty();
+    }
+    CouponIssueRun run = current.get();
+    if (run.getStatus() != CouponIssueRunStatus.PREPARING
+        && run.getStatus() != CouponIssueRunStatus.ISSUING) {
+      return Optional.of(run.getStatus());
+    }
+    JobParameters parameters =
+        new JobParametersBuilder()
+            .addLocalDate(GradeCouponJobConfiguration.TARGET_MONTH, run.getTargetMonth())
+            .addString(GradeCouponJobConfiguration.RUN_ID, run.getId().toString())
+            .toJobParameters();
+    try {
+      jobLauncher.run(gradeCouponJob, parameters);
+    } catch (JobInstanceAlreadyCompleteException e) {
+      // Job은 끝났지만 업무 종결이 남았을 수 있어 같은 회차를 다시 확인한다.
+      grades.finish(run.getId());
+    } catch (JobExecutionAlreadyRunningException e) {
+      LOGGER
+          .atWarn()
+          .addKeyValue("event", "coupon.grade-job")
+          .addKeyValue("targetMonth", run.getTargetMonth())
+          .addKeyValue("result", "ALREADY_RUNNING")
+          .log("Grade coupon job is already running");
+    } catch (JobRestartException | JobParametersInvalidException e) {
+      throw new IllegalStateException("grade coupon job cannot be started", e);
+    }
+    return grades.currentRun(targetMonth).map(CouponIssueRun::getStatus);
+  }
+}

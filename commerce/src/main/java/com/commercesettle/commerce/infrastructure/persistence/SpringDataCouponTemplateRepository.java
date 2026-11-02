@@ -4,6 +4,7 @@ import com.commercesettle.commerce.domain.model.CouponKind;
 import com.commercesettle.commerce.domain.model.CouponTemplate;
 import com.commercesettle.commerce.domain.model.CouponTemplateStatus;
 import jakarta.persistence.LockModeType;
+import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -18,6 +19,9 @@ interface SpringDataCouponTemplateRepository extends JpaRepository<CouponTemplat
   Optional<CouponTemplate> findByKindAndStatus(CouponKind kind, CouponTemplateStatus status);
 
   List<CouponTemplate> findByIdIn(Collection<UUID> ids);
+
+  Optional<CouponTemplate> findByKindAndGradeAndTargetMonth(
+      CouponKind kind, String grade, LocalDate targetMonth);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select t from CouponTemplate t where t.id = :templateId")

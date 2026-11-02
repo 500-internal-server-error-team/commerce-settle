@@ -6,6 +6,7 @@ import com.commercesettle.commerce.domain.model.CouponKind;
 import com.commercesettle.commerce.domain.repository.BuyerCouponRepository;
 import com.commercesettle.commerce.domain.repository.PageResult;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -54,6 +55,11 @@ class JpaBuyerCouponRepository implements BuyerCouponRepository {
   @Override
   public List<UUID> findExpiredIssuedIds(Instant now, int limit) {
     return coupons.findIdsExpiredBefore(BuyerCouponStatus.ISSUED, now, PageRequest.ofSize(limit));
+  }
+
+  @Override
+  public Optional<BuyerCoupon> findGrade(UUID buyerId, LocalDate targetMonth) {
+    return coupons.findByBuyerIdAndKindAndTargetMonth(buyerId, CouponKind.GRADE, targetMonth);
   }
 
   @Override
