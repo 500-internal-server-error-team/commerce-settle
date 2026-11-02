@@ -1,4 +1,4 @@
-"""검증 목록을 검사한 뒤 gh로 PR 본문을 게시한다."""
+"""검증 목록과 연결 이슈를 검사한 뒤 gh로 PR 본문을 게시한다."""
 
 import argparse
 import json
@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 
-def without_comments(body):
+def without_comments(body, replacement=" "):
     token = re.compile(
         r"(?P<fence>^ {0,3}(?P<marker>`{3,}|~{3,})[^\n]*$)"
         r"|(?P<code>(?<!`)(?P<ticks>`+)(?!`)[^\n]*?(?<!`)(?P=ticks)(?!`))"
@@ -27,13 +27,16 @@ def without_comments(body):
             end = close.end() if close else len(body)
         if match.group("comment") is None:
             result.append(body[match.start():end])
+        else:
+            result.append(replacement)
         cursor = end
     result.append(body[cursor:])
     return "".join(result)
 
 
 def validate(body):
-    lines = without_comments(body.replace("\r\n", "\n").replace("\r", "\n")).splitlines()
+    body = body.replace("\r\n", "\n").replace("\r", "\n")
+    lines = without_comments(body).splitlines()
     headings = []
     fence = None
     for number, line in enumerate(lines):
@@ -47,22 +50,34 @@ def validate(body):
             continue
         if fence is None and re.match(r"^#{1,2}\s+", line):
             headings.append((number, line))
-    starts = [i for i, (_, title) in enumerate(headings) if title.strip() == "## 검증"]
-    if len(starts) != 1:
-        raise ValueError("'## 검증' 제목은 정확히 한 번 필요합니다.")
-    start = starts[0]
-    begin = headings[start][0] + 1
-    end = headings[start + 1][0] if start + 1 < len(headings) else len(lines)
-    content = lines[begin:end]
-    while content and not content[0].strip():
-        content.pop(0)
-    while content and not content[-1].strip():
-        content.pop()
+    def section_content(title, source_lines=lines):
+        starts = [i for i, (_, heading) in enumerate(headings) if heading.strip() == title]
+        if len(starts) != 1:
+            raise ValueError(f"'{title}' 제목은 정확히 한 번 필요합니다.")
+        start = starts[0]
+        begin = headings[start][0] + 1
+        end = headings[start + 1][0] if start + 1 < len(headings) else len(lines)
+        content = source_lines[begin:end]
+        while content and not content[0].strip():
+            content.pop(0)
+        while content and not content[-1].strip():
+            content.pop()
+        return content
+
+    content = section_content("## 검증")
     if not content or any(not re.fullmatch(r"- \[[ xX]\] \S.*", line) for line in content):
         raise ValueError(
             "검증은 빈 줄 없는 단일 체크리스트로 작성하세요. "
             "결과와 미실행 이유를 각 항목에 쓰고 별도 결과 목록을 중복 추가하지 마세요."
         )
+    # Keep inline comment boundaries so replacement cannot synthesize a closing keyword.
+    issue_lines = without_comments(body, replacement="<!-- -->").splitlines()
+    issues = [
+        line for line in section_content("## 연결 이슈", issue_lines)
+        if line.replace("<!-- -->", "").strip()
+    ]
+    if not issues or any(not re.fullmatch(r"Closes #[1-9][0-9]*", line) for line in issues):
+        raise ValueError("연결 이슈는 'Closes #번호' 형식으로 한 줄에 하나씩 작성하세요. Refs는 허용하지 않습니다.")
 
 
 def check_account(account, body_file):
@@ -131,7 +146,7 @@ def main():
     except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         print(str(error), file=sys.stderr)
         return 1
-    print("PASS PR verification list: one compact checklist")
+    print("PASS PR body: compact verification checklist and Closes issue links")
     return 0
 
 
