@@ -67,6 +67,7 @@ public class Order extends AuditableEntity {
   private Instant paymentConfirmedAt;
   private Instant refundDeadlineAt;
   private Instant purchaseConfirmedAt;
+  private Instant closedAt;
   private Instant paymentWaitUntil;
 
   @Column(length = 32)
@@ -266,6 +267,7 @@ public class Order extends AuditableEntity {
     }
     paymentId = Objects.requireNonNull(id);
     status = result;
+    if (result == Status.CANCELLED) closedAt = truncate(now);
     touch(now);
     return true;
   }
@@ -345,6 +347,7 @@ public class Order extends AuditableEntity {
   public void restoreRefund(Instant now) {
     if (status != Status.REFUND_PENDING) throw conflict();
     status = Status.REFUNDED;
+    closedAt = truncate(now);
     touch(now);
   }
 
@@ -354,6 +357,7 @@ public class Order extends AuditableEntity {
         || !now.isAfter(refundDeadlineAt)) return false;
     status = Status.PURCHASE_CONFIRMED;
     purchaseConfirmedAt = truncate(now);
+    closedAt = truncate(now);
     touch(now);
     return true;
   }
@@ -409,6 +413,10 @@ public class Order extends AuditableEntity {
 
   public UUID getPaymentId() {
     return paymentId;
+  }
+
+  public Instant getClosedAt() {
+    return closedAt;
   }
 
   public Instant getPaymentConfirmedAt() {

@@ -180,6 +180,10 @@ services:
         MODULE: commerce
     environment:
       <<: *app-env
+      COMMERCE_RETENTION_ENABLED: ${COMMERCE_RETENTION_ENABLED:-false}
+      COMMERCE_RETENTION_BATCH_SIZE: ${COMMERCE_RETENTION_BATCH_SIZE:-100}
+      COMMERCE_RETENTION_MAX_BATCHES: ${COMMERCE_RETENTION_MAX_BATCHES:-10}
+      COMMERCE_RETENTION_CRON: ${COMMERCE_RETENTION_CRON:-0 0 3 * * *}
       DB_URL: jdbc:postgresql://postgres:5432/commerce
       DB_USERNAME: commerce
       DB_PASSWORD: ${COMMERCE_DB_PASSWORD:?Run python3 scripts/init_env.py}

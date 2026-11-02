@@ -40,6 +40,7 @@ CREATE TABLE commerce.orders (
     payment_confirmed_at timestamptz,
     refund_deadline_at timestamptz,
     purchase_confirmed_at timestamptz,
+    closed_at timestamptz,
     payment_wait_until timestamptz NOT NULL,
     policy_version varchar(32) NOT NULL,
     created_at timestamptz NOT NULL,
@@ -67,8 +68,10 @@ CREATE TABLE commerce.orders (
     CHECK ((delivered_at IS NULL AND refund_deadline_at IS NULL)
         OR (delivered_at IS NOT NULL AND refund_deadline_at IS NOT NULL
             AND refund_deadline_at = delivered_at + interval '168 hours')),
+    CHECK ((closed_at IS NOT NULL) = (status IN ('CANCELLED','REFUNDED','PURCHASE_CONFIRMED'))),
     CHECK (payment_wait_until > created_at)
 );
+CREATE INDEX ix_orders_retention ON commerce.orders(closed_at,id) WHERE closed_at IS NOT NULL;
 CREATE INDEX ix_orders_buyer_created ON commerce.orders (buyer_id, created_at, id);
 CREATE INDEX ix_orders_seller_created ON commerce.orders (seller_id, created_at, id);
 CREATE INDEX ix_orders_delivery_due ON commerce.orders (fulfillment_status, delivery_due_at, id);
@@ -134,7 +137,9 @@ CREATE TABLE commerce.order_addresses (
     hold_reason varchar(200),
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
-    version bigint NOT NULL DEFAULT 0 CHECK (version >= 0)
+    version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
+    CHECK (masked_at IS NULL OR (recipient_ciphertext=decode('00','hex')
+        AND phone_ciphertext=decode('00','hex') AND address_ciphertext=decode('00','hex')))
 );
 
 CREATE TABLE commerce.outbox (
@@ -592,3 +597,35 @@ CREATE TABLE commerce.notification_inbox_quarantines (
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     UNIQUE(consumer,source_topic,source_partition,source_offset)
 );
+
+-- 보존 작업의 재조회 지점과 처리 이력. 개인정보·알림 본문은 기록하지 않습니다.
+CREATE TABLE commerce.retention_checks (
+    target_kind varchar(16) NOT NULL CHECK (target_kind IN ('ORDER','DELIVERY')),
+    target_id uuid NOT NULL,
+    result varchar(32) NOT NULL,
+    checked_at timestamptz NOT NULL,
+    next_run_at timestamptz NOT NULL,
+    PRIMARY KEY(target_kind,target_id)
+);
+CREATE TABLE commerce.retention_history (
+    id uuid PRIMARY KEY,
+    target_kind varchar(16) NOT NULL CHECK (target_kind IN ('ORDER','DELIVERY')),
+    target_id uuid NOT NULL,
+    result varchar(32) NOT NULL,
+    checked_at timestamptz NOT NULL
+);
+CREATE INDEX ix_retention_history_target ON commerce.retention_history(target_kind,target_id,checked_at,id);
+
+-- 삭제된 본문을 다시 만들지 않기 위한 최소 업무 멱등 기록.
+CREATE TABLE commerce.notification_retired_keys (
+    source_service varchar(16) NOT NULL,
+    kind varchar(40) NOT NULL,
+    business_ref uuid NOT NULL,
+    recipient_kind varchar(16) NOT NULL,
+    recipient_id uuid NOT NULL,
+    payload_hash bytea NOT NULL CHECK (octet_length(payload_hash)=32),
+    retired_at timestamptz NOT NULL,
+    PRIMARY KEY(source_service,kind,business_ref,recipient_kind,recipient_id)
+);
+
+CREATE INDEX ix_notification_items_retention_order ON commerce.notification_items((payload->>'orderId'),delivery_id);

@@ -24,6 +24,9 @@ public class NotificationReceiptStore {
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public Receipt save(UUID delivery, String hash, String result, Instant now) {
     TransactionLimits.apply(jdbc);
+    if (jdbc.queryForList(
+            "SELECT id FROM commerce.notification_deliveries WHERE id=? FOR KEY SHARE", delivery)
+        .isEmpty()) throw new Failure("NOTIFICATION_RETENTION_EXPIRED", true, false);
     jdbc.update(
         "INSERT INTO commerce.notification_mock_receipts(id,delivery_id,request_hash,result,processed_at) VALUES (?,?,?,?,?) ON CONFLICT(delivery_id) DO NOTHING",
         UUID.randomUUID(),
