@@ -20,6 +20,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.regex.Pattern;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 
@@ -98,7 +99,7 @@ public class SettlementEventListener {
       if (PAYMENT_CONFIRMED.equals(eventType)) {
         service.receivePaymentConfirmed(decodePayment(record), source);
       } else if (PURCHASE_CONFIRMED.equals(eventType)) {
-        service.receivePurchaseConfirmed(decodePurchase(record), source);
+        receivePurchase(decodePurchase(record), source);
       }
     } catch (InvalidRecordException exception) {
       if (quarantine == null) {
@@ -115,6 +116,15 @@ public class SettlementEventListener {
               record.value()));
     }
     acknowledgment.acknowledge();
+  }
+
+  private void receivePurchase(EventEnvelope<PurchaseConfirmedPayload> event, Source source) {
+    try {
+      service.receivePurchaseConfirmed(event, source);
+    } catch (OptimisticLockingFailureException exception) {
+      // 대기 처리기가 같은 항목을 먼저 바꿨다. 이번 수신은 Inbox까지 롤백됐으므로 새 트랜잭션으로 한 번 다시 판정한다.
+      service.receivePurchaseConfirmed(event, source);
+    }
   }
 
   private String eventType(ConsumerRecord<String, byte[]> record) {
