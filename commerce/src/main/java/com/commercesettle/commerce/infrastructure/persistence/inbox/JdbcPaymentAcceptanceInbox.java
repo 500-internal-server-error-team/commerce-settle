@@ -216,6 +216,7 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
   }
 
   private void finish(UUID id, String status, UUID resultRef, String errorCode, Instant now) {
+    TransactionLimits.apply(jdbc.getJdbcOperations());
     int updated =
         jdbc.update(
             """

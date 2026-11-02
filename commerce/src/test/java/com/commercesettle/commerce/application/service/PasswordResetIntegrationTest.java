@@ -192,7 +192,8 @@ class PasswordResetIntegrationTest {
         .containsEntry("aggregate_id", seller.getId())
         .containsEntry("before_status", "ACTIVE")
         .containsEntry("after_status", "ACTIVE")
-        .containsEntry("reason_code", "PASSWORD_RESET");
+        .containsEntry("reason_code", "PASSWORD_RESET")
+        .containsEntry("event_id", null);
     assertThat(UUID.fromString((String) audit.get("correlation_id"))).isNotNull();
 
     assertThatThrownBy(() -> sessions.login(ActorKind.SELLER, EMAIL, OLD_PASSWORD))

@@ -163,6 +163,7 @@ public class PasswordResetService {
             beforeStatus,
             account.getStatus().name(),
             REASON,
+            null,
             changeId.toString(),
             now));
     return new Confirmed(account.getAuthVersion(), true);

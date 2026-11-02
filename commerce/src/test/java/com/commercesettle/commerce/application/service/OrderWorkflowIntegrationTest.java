@@ -1,9 +1,11 @@
 package com.commercesettle.commerce.application.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.commercesettle.commerce.application.event.EventEnvelope;
 import com.commercesettle.commerce.application.port.OrderBenefits;
+import com.commercesettle.commerce.application.port.PaymentAcceptanceInbox;
 import com.commercesettle.commerce.application.port.RefundClosureEvidence;
 import com.commercesettle.commerce.domain.model.Order;
 import com.commercesettle.commerce.domain.model.ProductStatus;
@@ -78,6 +80,8 @@ class OrderWorkflowIntegrationTest {
   @Autowired OrderWorkflowService workflow;
   @Autowired OrderResultService results;
   @Autowired PaymentAcceptedService accepted;
+  @Autowired PaymentAcceptanceInbox inbox;
+  @Autowired org.springframework.transaction.PlatformTransactionManager manager;
   @Autowired TestClock clock;
   @Autowired ClosureDouble closure;
 
@@ -87,6 +91,139 @@ class OrderWorkflowIntegrationTest {
     closure.safe = false;
     jdbc.execute(
         "CREATE TABLE IF NOT EXISTS commerce.test_benefit_calls (order_id uuid, operation varchar(20))");
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+  @DisplayName("롤백 뒤 새 트랜잭션의 Inbox 검토·완료 저장도 잠금 대기 상한을 지킨다")
+  void boundsInboxFinalizationAfterRollback(boolean review) throws Exception {
+    var f = fixture();
+    var o = create(f);
+    var id = uuid(o, "id");
+    var event =
+        new EventEnvelope<JsonNode>(
+            UUID.randomUUID(),
+            "PaymentDeclined",
+            1,
+            NOW.atZone(ZoneId.of("Asia/Seoul")).toOffsetDateTime(),
+            UUID.randomUUID(),
+            0,
+            result(id, UUID.randomUUID(), uuid(context(id), "paymentCycleId")));
+    results.accept(
+        event,
+        new PaymentAcceptanceInbox.Source(
+            "commerce-settle.payment.v1", 0, 0, mapper.writeValueAsBytes(event)));
+    var inboxId =
+        jdbc.queryForObject(
+            "select id from commerce.inbox where event_id=?", UUID.class, event.eventId());
+    var transactions = new org.springframework.transaction.support.TransactionTemplate(manager);
+    assertThatThrownBy(
+            () ->
+                transactions.executeWithoutResult(
+                    status -> {
+                      assertThat(inbox.claimResult(event.eventId(), clock.instant())).isPresent();
+                      throw new IllegalStateException("시험 롤백");
+                    }))
+        .isInstanceOf(IllegalStateException.class);
+
+    try (var holder = jdbc.getDataSource().getConnection();
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+      holder.setAutoCommit(false);
+      try (var statement =
+          holder.prepareStatement("select id from commerce.inbox where id=? for update")) {
+        statement.setObject(1, inboxId);
+        statement.executeQuery().close();
+      }
+      var work =
+          executor.submit(
+              () ->
+                  transactions.executeWithoutResult(
+                      status -> {
+                        if (review) inbox.review(inboxId, "ORDER_RESULT_CONFLICT", clock.instant());
+                        else inbox.applied(inboxId, id, clock.instant());
+                      }));
+      try {
+        var failure =
+            org.assertj.core.api.Assertions.catchThrowable(
+                () -> work.get(3, java.util.concurrent.TimeUnit.SECONDS));
+        assertThat(failure)
+            .isInstanceOf(java.util.concurrent.ExecutionException.class)
+            .hasCauseInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThat(
+                ((org.springframework.dao.DataAccessException) failure.getCause())
+                    .getMostSpecificCause())
+            .isInstanceOfSatisfying(
+                java.sql.SQLException.class,
+                error -> assertThat(error.getSQLState()).isEqualTo("55P03"));
+      } finally {
+        holder.rollback();
+      }
+    }
+    assertThat(
+            jdbc.queryForMap(
+                "select status,attempts,result_ref from commerce.inbox where id=?", inboxId))
+        .containsEntry("status", "WAITING")
+        .containsEntry("attempts", 0)
+        .containsEntry("result_ref", null);
+  }
+
+  @Test
+  @DisplayName("결제 확정 감사는 원 수신 이벤트 ID를 보존하고 재수신으로 중복되지 않는다")
+  void preservesPaymentAuditEventId() throws Exception {
+    var f = fixture();
+    var o = create(f);
+    var event = receive("PaymentConfirmed", confirmed(o, context(uuid(o, "id"))), true);
+
+    assertEventAuditAndReplay(event, 1);
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"RefundCompleted", "RefundFailed"})
+  @DisplayName("환불 접수·완료·실패 감사도 원 수신 이벤트 ID를 보존한다")
+  void preservesRefundAuditEventIds(String type) throws Exception {
+    var f = fixture();
+    var o = create(f);
+    var id = uuid(o, "id");
+    var payment = UUID.randomUUID();
+    receive(
+        "PaymentConfirmed", confirmed(o, context(id)).put("paymentId", payment.toString()), true);
+    var r = refund(f, id, "CANCEL");
+    var payload =
+        mapper
+            .createObjectNode()
+            .put("orderId", id.toString())
+            .put("paymentId", payment.toString())
+            .put("refundId", UUID.randomUUID().toString());
+    var acceptedEvent =
+        receive("RefundAccepted", payload.deepCopy().put("requestId", r.path("id").asText()), true);
+    assertEventAuditAndReplay(acceptedEvent, 1);
+    if (type.equals("RefundFailed"))
+      payload.put("reasonCode", "DECLINED").put("reservationReleased", true);
+    var completedEvent = receive(type, payload, true);
+
+    assertEventAuditAndReplay(completedEvent, type.equals("RefundCompleted") ? 2 : 1);
+  }
+
+  private void assertEventAuditAndReplay(UUID event, int count) {
+    assertThat(number("select count(*) from commerce.audit_logs where event_id=?", event))
+        .isEqualTo(count);
+    byte[] body =
+        jdbc.queryForObject(
+            "select raw_body from commerce.inbox where event_id=?", byte[].class, event);
+    var ack = new java.util.concurrent.atomic.AtomicBoolean();
+    var payment =
+        jdbc.queryForObject(
+            "select payload->'payload'->>'paymentId' from commerce.inbox where event_id=?",
+            String.class,
+            event);
+    new PaymentAcceptedListener(mapper, accepted, results)
+        .receive(
+            new ConsumerRecord<>("commerce-settle.payment.v1", 0, 1, payment, body),
+            () -> ack.set(true));
+    assertThat(ack).isTrue();
+    assertThat(results.processEvent(event)).isFalse();
+    assertThat(number("select count(*) from commerce.audit_logs where event_id=?", event))
+        .isEqualTo(count);
   }
 
   @Test

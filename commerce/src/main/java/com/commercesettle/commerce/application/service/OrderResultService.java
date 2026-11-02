@@ -141,7 +141,7 @@ public class OrderResultService {
           benefits.release(o, now);
         }
         orders.save(o);
-        workflow.changed(o, before, "SERVICE", "payment", event.eventType());
+        workflow.changed(o, before, "SERVICE", "payment", event.eventType(), event.eventId());
       }
       return true;
     }
@@ -155,7 +155,7 @@ public class OrderResultService {
       var before = r.get().getStatus();
       if (r.get().linkRefund(refundId, now)) {
         refunds.save(r.get());
-        auditRefund(r.get(), before, event.eventType());
+        auditRefund(r.get(), before, event);
       }
       return true;
     }
@@ -169,7 +169,7 @@ public class OrderResultService {
       var before = r.getStatus();
       if (r.fail(now)) {
         refunds.save(r);
-        auditRefund(r, before, event.eventType());
+        auditRefund(r, before, event);
       }
       return true;
     }
@@ -183,8 +183,8 @@ public class OrderResultService {
       o.restoreRefund(now);
       orders.save(o);
       refunds.save(r);
-      auditRefund(r, refundBefore, event.eventType());
-      workflow.changed(o, before, "SERVICE", "payment", "REFUND_RESTORED");
+      auditRefund(r, refundBefore, event);
+      workflow.changed(o, before, "SERVICE", "payment", "REFUND_RESTORED", event.eventId());
       workflow.emit(
           o,
           "RefundOrderRestored",
@@ -195,7 +195,8 @@ public class OrderResultService {
     return true;
   }
 
-  private void auditRefund(OrderRefundRequest r, OrderRefundRequest.Status before, String reason) {
+  private void auditRefund(
+      OrderRefundRequest r, OrderRefundRequest.Status before, EventEnvelope<JsonNode> event) {
     audit.record(
         new AuditLog.Entry(
             "SERVICE",
@@ -205,7 +206,8 @@ public class OrderResultService {
             r.getId(),
             before.name(),
             r.getStatus().name(),
-            reason,
+            event.eventType(),
+            event.eventId(),
             r.getOrderId().toString(),
             clock.instant()));
   }

@@ -196,7 +196,7 @@ public class OrderWorkflowService {
             inventory.reserveAgain(id, o.getPaymentCycleId(), o.getPaymentWaitUntil());
           benefits.retry(o, clock.instant());
           orders.save(o);
-          changed(o, before, "BUYER", buyer.toString(), "PAYMENT_RETRY");
+          changed(o, before, "BUYER", buyer.toString(), "PAYMENT_RETRY", null);
           paymentRequested(o);
           return OrderView.from(o);
         },
@@ -232,7 +232,7 @@ public class OrderWorkflowService {
           var before = o.getStatus();
           o.ship(clock.instant());
           orders.save(o);
-          changed(o, before, "SELLER", seller.toString(), "SHIPMENT_STARTED");
+          changed(o, before, "SELLER", seller.toString(), "SHIPMENT_STARTED", null);
           return OrderView.from(o);
         },
         replay -> OrderView.from(ownedLocked(ActorKind.SELLER, seller, replay)));
@@ -262,7 +262,8 @@ public class OrderWorkflowService {
         before,
         "SYSTEM",
         "order-clock",
-        confirmed ? "PURCHASE_CONFIRMED" : "DELIVERY_COMPLETED");
+        confirmed ? "PURCHASE_CONFIRMED" : "DELIVERY_COMPLETED",
+        null);
     if (confirmed)
       emit(
           o,
@@ -281,7 +282,7 @@ public class OrderWorkflowService {
     var before = o.getStatus();
     if (!o.requestCancellation(clock.instant())) return;
     orders.save(o);
-    changed(o, before, actor, ref, "CANCELLATION_REQUESTED");
+    changed(o, before, actor, ref, "CANCELLATION_REQUESTED", null);
     emit(
         o,
         "PaymentCancellationRequested",
@@ -339,7 +340,8 @@ public class OrderWorkflowService {
         key);
   }
 
-  void changed(Order o, Order.Status before, String actor, String ref, String reason) {
+  void changed(
+      Order o, Order.Status before, String actor, String ref, String reason, UUID eventId) {
     audit.record(
         new AuditLog.Entry(
             actor,
@@ -350,6 +352,7 @@ public class OrderWorkflowService {
             before.name(),
             o.getStatus().name(),
             reason,
+            eventId,
             o.getId().toString(),
             clock.instant()));
   }
