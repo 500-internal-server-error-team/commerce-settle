@@ -101,6 +101,23 @@ public class BuyerCoupon extends AuditableEntity {
     return new Issued(coupon, history);
   }
 
+  /** 월간 우수고객 한 장. 사용 기간은 혜택 월이며 기한은 다음 달 1일 0시(KST)다. 발급 업무 키는 회차 대상 ID이고 기한이 지난 늦은 발급은 하지 않는다. */
+  public static Issued issueGrade(
+      UUID id, CouponTemplate template, UUID buyerId, UUID targetId, Instant now) {
+    if (template.getKind() != CouponKind.GRADE) {
+      throw new IllegalArgumentException("not a grade template: " + template.getId());
+    }
+    if (!now.isBefore(template.getValidUntil())) {
+      throw new CouponRejectedException(Reason.EXPIRED);
+    }
+    BuyerCoupon coupon =
+        new BuyerCoupon(
+            id, template, buyerId, template.getValidFrom(), template.getValidUntil(), now);
+    CouponHistory history =
+        coupon.history(CouponOperation.ISSUE, null, targetId, null, coupon.discountAmount, 0, now);
+    return new Issued(coupon, history);
+  }
+
   /** 판매자 캠페인의 한 장. 사용 기간은 캠페인 기간이며 기한은 캠페인 종료 시각이다. 발급 업무 키는 구매자 ID다. */
   public static Issued issueSeller(UUID id, CouponTemplate template, UUID buyerId, Instant now) {
     if (template.getKind() != CouponKind.SELLER) {
