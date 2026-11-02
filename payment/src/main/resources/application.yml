@@ -76,6 +76,13 @@ logging:
     dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Seoul"
 
 app:
+  internal-auth:
+    service: payment
+    # Gateway의 내부 호출 자격(ADR 0010). 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
+    senders:
+      gateway:
+        current: ${PAYMENT_GATEWAY_CREDENTIAL}
+        previous: ${PAYMENT_GATEWAY_CREDENTIAL_PREVIOUS:}
   dev-fixtures:
     enabled: ${APP_DEV_FIXTURES_ENABLED:false}
     run-scenarios: ${APP_DEV_FIXTURE_SCENARIOS_ENABLED:false}
