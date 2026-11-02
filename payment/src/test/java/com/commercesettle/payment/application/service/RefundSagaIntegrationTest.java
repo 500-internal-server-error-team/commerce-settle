@@ -1,11 +1,13 @@
 package com.commercesettle.payment.application.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.commercesettle.payment.application.dto.RefundWorkerSettings;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.RefundApprovedPayload;
 import com.commercesettle.payment.application.event.RefundOrderRestoredPayload;
+import com.commercesettle.payment.application.event.RefundReservationResultPayload;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.PaymentGateway.Result;
@@ -22,6 +24,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -45,6 +50,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -84,8 +90,15 @@ class RefundSagaIntegrationTest {
   @Autowired private Clock clock;
   @Autowired private PlatformTransactionManager manager;
 
+  private Connection lockHolder;
+
   @AfterEach
-  void deleteRows() {
+  void deleteRows() throws SQLException {
+    if (lockHolder != null) {
+      lockHolder.rollback();
+      lockHolder.close();
+      lockHolder = null;
+    }
     gateway.reset();
     JdbcTemplate jdbc = jdbc();
     for (String table :
@@ -271,6 +284,89 @@ class RefundSagaIntegrationTest {
         .containsExactly(RefundEventHandler.ALREADY_IN_PROGRESS);
   }
 
+  @Test
+  @DisplayName("환불 행 잠금 경합이 길면 준비 단계는 대기 상한 안에 롤백하고 외부 환불을 호출하지 않는다")
+  void rollsBackPrepareWhenRefundRowLockIsContended() throws Exception {
+    Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 0), 0);
+    approve(payment, UUID.randomUUID());
+    inboxProcessor.processNext();
+    stub().run();
+    lockRefundRow();
+
+    long started = System.nanoTime();
+    assertThatThrownBy(worker::runOnce).isInstanceOf(PessimisticLockingFailureException.class);
+
+    assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+    assertThat(gateway.refunds).isEmpty();
+    assertThat(gateway.lookups).isEmpty();
+    assertThat(jdbc().queryForObject("SELECT external_status FROM payment.refunds", String.class))
+        .isEqualTo("PENDING");
+  }
+
+  @Test
+  @DisplayName("결과 반영 중 환불 행 잠금 경합이 길면 대기 상한 안에 롤백하고 복원·금융 완료를 남기지 않는다")
+  void rollsBackRecordWhenRefundRowLockIsContended() throws Exception {
+    Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 2_000), 0);
+    approve(payment, UUID.randomUUID());
+    inboxProcessor.processNext();
+    stub().run();
+    gateway.beforeRefund = this::lockRefundRow;
+
+    long started = System.nanoTime();
+    assertThatThrownBy(worker::runOnce).isInstanceOf(PessimisticLockingFailureException.class);
+
+    assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+    assertThat(gateway.refunds).hasSize(1);
+    assertThat(jdbc().queryForObject("SELECT external_status FROM payment.refunds", String.class))
+        .isEqualTo("REQUESTED");
+    assertThat(restoreEntries()).isZero();
+    assertThat(walletBalance(payment)).isZero();
+    assertThat(eventTypes(payment)).containsExactly("RefundAccepted", "RefundReservationRequested");
+    assertThat(jdbc().queryForObject("SELECT status FROM payment.payment_jobs", String.class))
+        .isEqualTo("RUNNING");
+  }
+
+  @Test
+  @DisplayName("정산 응답 반영 중 환불 행 잠금 경합이 길면 대기 상한 안에 롤백하고 환불 작업을 만들지 않는다")
+  void rollsBackSettlementReplyWhenRefundRowLockIsContended() throws Exception {
+    Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 0), 0);
+    approve(payment, UUID.randomUUID());
+    inboxProcessor.processNext();
+    UUID refundId = jdbc().queryForObject("SELECT id FROM payment.refunds", UUID.class);
+    lockRefundRow();
+
+    long started = System.nanoTime();
+    assertThatThrownBy(
+            () ->
+                replies.applyReservationResult(
+                    new RefundReservationResultPayload(
+                        refundId,
+                        payment.getId(),
+                        RefundReservationResultPayload.Result.RESERVED,
+                        UUID.randomUUID(),
+                        null)))
+        .isInstanceOf(PessimisticLockingFailureException.class);
+
+    assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+    assertThat(jdbc().queryForObject("SELECT count(*) FROM payment.payment_jobs", Long.class))
+        .isZero();
+    assertThat(jdbc().queryForObject("SELECT step FROM payment.refund_sagas", String.class))
+        .isEqualTo("RESERVATION_REQUESTED");
+  }
+
+  /** 다른 트랜잭션에서 환불 행을 잠그고 정리 때까지 놓지 않는다. */
+  private void lockRefundRow() {
+    try {
+      lockHolder = dataSource.getConnection();
+      lockHolder.setAutoCommit(false);
+      try (Statement statement = lockHolder.createStatement()) {
+        statement.execute("SELECT id FROM payment.refunds FOR UPDATE");
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
   /** 환불 승인부터 RefundCompleted 발행까지 실행하고 환불 ID를 돌려준다. */
   private UUID runSagaToOrderRestore(Payment payment) throws Exception {
     approve(payment, UUID.randomUUID());
@@ -394,12 +490,13 @@ class RefundSagaIntegrationTest {
     return new JdbcTemplate(dataSource);
   }
 
-  /** 다음 결과를 고를 수 있는 외부 환불 대역. 정하지 않으면 성공한다. 호출 본문을 기록한다. */
+  /** 다음 결과를 고를 수 있는 외부 환불 대역. 정하지 않으면 성공한다. 호출 본문을 기록하고, 응답 전 동작을 끼울 수 있다. */
   static final class FakeRefundGateway implements RefundGateway {
     final List<RefundRequest> refunds = new ArrayList<>();
     final List<RefundRequest> lookups = new ArrayList<>();
     private final Deque<Result> refundResults = new ArrayDeque<>();
     private final Deque<Result> lookupResults = new ArrayDeque<>();
+    Runnable beforeRefund = () -> {};
 
     void nextRefund(Result result) {
       refundResults.add(result);
@@ -414,11 +511,13 @@ class RefundSagaIntegrationTest {
       lookups.clear();
       refundResults.clear();
       lookupResults.clear();
+      beforeRefund = () -> {};
     }
 
     @Override
     public synchronized Result refund(RefundRequest request) {
       refunds.add(request);
+      beforeRefund.run();
       Result next = refundResults.poll();
       return next != null ? next : new Result.Succeeded(UUID.randomUUID(), Instant.now());
     }
