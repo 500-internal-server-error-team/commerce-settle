@@ -256,6 +256,44 @@ CREATE TABLE settlement.inbox_conflicts (
 );
 CREATE INDEX inbox_conflicts_event ON settlement.inbox_conflicts(consumer, event_id, created_at);
 
+-- 해석할 수 없는 대상 이벤트의 원문 격리와 DLT 발행 작업. Payment와 같은 컬럼·제약이다. null과 빈 bytes를 구분한다.
+CREATE TABLE settlement.inbox_quarantines (
+    id uuid PRIMARY KEY,
+    consumer varchar(100) NOT NULL,
+    source_topic varchar(249) NOT NULL,
+    source_partition integer NOT NULL CHECK (source_partition >= 0),
+    source_offset bigint NOT NULL CHECK (source_offset >= 0),
+    message_key bytea,
+    raw_body bytea,
+    error_code varchar(80) NOT NULL,
+    created_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
+    UNIQUE (consumer, source_topic, source_partition, source_offset)
+);
+
+CREATE TABLE settlement.inbox_quarantine_deliveries (
+    id uuid PRIMARY KEY,
+    quarantine_id uuid NOT NULL,
+    kind varchar(8) NOT NULL CHECK (kind IN ('DLT', 'REPLAY')),
+    topic varchar(249) NOT NULL,
+    status varchar(20) NOT NULL CHECK (status IN ('PENDING', 'RUNNING', 'RETRY', 'PUBLISHED', 'REVIEW_REQUIRED')),
+    operator_id varchar(100),
+    reason_code varchar(80),
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_run_at timestamptz NOT NULL,
+    lease_until timestamptz,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
+    CHECK ((status = 'RUNNING') = (lease_until IS NOT NULL)),
+    CHECK ((kind = 'DLT' AND operator_id IS NULL AND reason_code IS NULL)
+        OR (kind = 'REPLAY' AND operator_id IS NOT NULL AND reason_code IS NOT NULL))
+);
+CREATE UNIQUE INDEX uk_quarantine_dlt ON settlement.inbox_quarantine_deliveries (quarantine_id) WHERE kind = 'DLT';
+CREATE UNIQUE INDEX uk_quarantine_replay_active ON settlement.inbox_quarantine_deliveries (quarantine_id)
+    WHERE kind = 'REPLAY' AND status IN ('PENDING', 'RUNNING', 'RETRY');
+CREATE INDEX ix_quarantine_delivery_due ON settlement.inbox_quarantine_deliveries (status, next_run_at, lease_until, id);
+
 -- Spring Batch 5.2 메타데이터. 라이브러리의 schema-postgresql.sql에서 서비스 내부 FK만 뺐다(ADR 0006).
 -- Spring Batch가 시각을 LocalDateTime으로 쓰므로 원본의 timestamp를 유지한다.
 CREATE TABLE settlement.BATCH_JOB_INSTANCE (

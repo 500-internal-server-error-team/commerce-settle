@@ -4,6 +4,8 @@ import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PaymentConfirmedPayload;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
 import com.commercesettle.settlement.application.port.InboxStore.Source;
+import com.commercesettle.settlement.application.port.QuarantineStore;
+import com.commercesettle.settlement.application.service.QuarantineService;
 import com.commercesettle.settlement.application.service.SettlementEventService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -23,8 +25,8 @@ import org.springframework.kafka.support.Acknowledgment;
 
 /**
  * Payment·Commerce 토픽에서 Settlement가 처리하는 이벤트만 고른다. 처리 여부는 토픽이 아니라 eventType으로 정하고(ADR 0005), 대상이 아닌
- * 종류는 저장 없이 ack한다. 대상 이벤트는 Payment Listener와 같은 엄격한 규칙으로 해석하며, 해석할 수 없으면 ack하지 않고 예외를 던져 컨테이너를 멈춘다.
- * Inbox 저장과 반영이 커밋된 뒤에만 ack한다.
+ * 종류는 저장 없이 ack한다. 대상 이벤트는 Payment Listener와 같은 엄격한 규칙으로 해석한다. 해석할 수 없으면 격리가 켜져 있을 때 원문과 DLT 작업을
+ * 저장한 뒤 ack하고, 꺼져 있으면 ack하지 않고 예외를 던져 컨테이너를 멈춘다. 반영 중 오류는 격리하지 않는다. Inbox 저장과 반영이 커밋된 뒤에만 ack한다.
  */
 public class SettlementEventListener {
   static final String PAYMENT_TOPIC = "commerce-settle.payment.v1";
@@ -52,8 +54,15 @@ public class SettlementEventListener {
   private final ObjectReader paymentReader;
   private final ObjectReader purchaseReader;
   private final SettlementEventService service;
+  private final QuarantineService quarantine;
+  private final String consumer;
 
-  public SettlementEventListener(ObjectMapper objectMapper, SettlementEventService service) {
+  /** {@code quarantine}이 null이면 해석 실패에 컨테이너를 멈춘다. */
+  public SettlementEventListener(
+      ObjectMapper objectMapper,
+      SettlementEventService service,
+      QuarantineService quarantine,
+      String consumer) {
     this.mapper = objectMapper.copy();
     this.mapper.enable(
         DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,
@@ -74,6 +83,8 @@ public class SettlementEventListener {
     this.purchaseReader =
         mapper.readerFor(new TypeReference<EventEnvelope<PurchaseConfirmedPayload>>() {});
     this.service = service;
+    this.quarantine = quarantine;
+    this.consumer = consumer;
   }
 
   @KafkaListener(
@@ -81,12 +92,27 @@ public class SettlementEventListener {
       idIsGroup = false,
       topics = {PAYMENT_TOPIC, COMMERCE_TOPIC})
   public void receive(ConsumerRecord<String, byte[]> record, Acknowledgment acknowledgment) {
-    String eventType = eventType(record);
     Source source = new Source(record.topic(), record.partition(), record.offset(), record.value());
-    if (PAYMENT_CONFIRMED.equals(eventType)) {
-      service.receivePaymentConfirmed(decodePayment(record), source);
-    } else if (PURCHASE_CONFIRMED.equals(eventType)) {
-      service.receivePurchaseConfirmed(decodePurchase(record), source);
+    try {
+      String eventType = eventType(record);
+      if (PAYMENT_CONFIRMED.equals(eventType)) {
+        service.receivePaymentConfirmed(decodePayment(record), source);
+      } else if (PURCHASE_CONFIRMED.equals(eventType)) {
+        service.receivePurchaseConfirmed(decodePurchase(record), source);
+      }
+    } catch (InvalidRecordException exception) {
+      if (quarantine == null) {
+        throw exception;
+      }
+      // 원문과 DLT 작업을 별도 트랜잭션에 저장한다. 저장에 실패하면 예외가 나가 ack하지 않는다.
+      quarantine.capture(
+          new QuarantineStore.Source(
+              consumer,
+              record.topic(),
+              record.partition(),
+              record.offset(),
+              record.key(),
+              record.value()));
     }
     acknowledgment.acknowledge();
   }
@@ -100,7 +126,7 @@ public class SettlementEventListener {
       return type.textValue();
     } catch (IOException | RuntimeException exception) {
       // Jackson 예외의 원문 입력을 프레임워크 로그로 전달하지 않는다.
-      throw new IllegalArgumentException("Unreadable event record");
+      throw new InvalidRecordException("Unreadable event record");
     }
   }
 
@@ -127,7 +153,7 @@ public class SettlementEventListener {
       requireKey(record, event.payload().paymentId().toString());
       return event;
     } catch (IOException | RuntimeException exception) {
-      throw new IllegalArgumentException("Invalid PaymentConfirmed record");
+      throw new InvalidRecordException("Invalid PaymentConfirmed record");
     }
   }
 
@@ -146,7 +172,7 @@ public class SettlementEventListener {
       requireKey(record, event.payload().paymentId().toString());
       return event;
     } catch (IOException | RuntimeException exception) {
-      throw new IllegalArgumentException("Invalid PurchaseConfirmed record");
+      throw new InvalidRecordException("Invalid PurchaseConfirmed record");
     }
   }
 
@@ -196,6 +222,13 @@ public class SettlementEventListener {
     long value = node.longValue();
     if (value < min || value > max) {
       throw new IllegalArgumentException();
+    }
+  }
+
+  /** 해석 단계의 실패만 나타낸다. 반영 중 예외와 구분해 격리 대상을 정한다. */
+  static final class InvalidRecordException extends IllegalArgumentException {
+    InvalidRecordException(String message) {
+      super(message);
     }
   }
 }

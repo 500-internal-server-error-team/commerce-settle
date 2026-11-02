@@ -1,8 +1,10 @@
 package com.commercesettle.settlement.infrastructure.config;
 
+import com.commercesettle.settlement.application.service.QuarantineService;
 import com.commercesettle.settlement.application.service.SettlementEventService;
 import com.commercesettle.settlement.infrastructure.messaging.SettlementEventListener;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -14,7 +16,12 @@ public class SettlementEventListenerConfiguration {
 
   @Bean
   SettlementEventListener settlementEventListener(
-      ObjectMapper objectMapper, SettlementEventService service) {
-    return new SettlementEventListener(objectMapper, service);
+      ObjectMapper objectMapper,
+      SettlementEventService service,
+      QuarantineService quarantine,
+      @Value("${app.kafka.quarantine.enabled}") boolean quarantineEnabled,
+      @Value("${spring.kafka.consumer.group-id:settlement.v1}") String consumer) {
+    return new SettlementEventListener(
+        objectMapper, service, quarantineEnabled ? quarantine : null, consumer);
   }
 }
