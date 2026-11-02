@@ -4,6 +4,7 @@ import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload.ExternalMethod;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload.Status;
+import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.QuarantineStore;
@@ -31,6 +32,7 @@ public class OrderPaymentRequestedListener {
           "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
 
   private final ObjectReader reader;
+  private final ObjectReader cancellationReader;
   private final ObjectMapper mapper;
   private final OrderPaymentRequestAcceptor acceptor;
   private final QuarantineService quarantine;
@@ -59,6 +61,9 @@ public class OrderPaymentRequestedListener {
         .setCoercion(CoercionInputShape.Boolean, CoercionAction.Fail);
     this.reader =
         this.mapper.readerFor(new TypeReference<EventEnvelope<OrderPaymentRequestedPayload>>() {});
+    this.cancellationReader =
+        this.mapper.readerFor(
+            new TypeReference<EventEnvelope<PaymentCancellationRequestedPayload>>() {});
     this.acceptor = acceptor;
     this.quarantine = quarantine;
     this.consumer = consumer;
@@ -69,7 +74,7 @@ public class OrderPaymentRequestedListener {
       idIsGroup = false,
       topics = "commerce-settle.commerce.v1")
   public void receive(ConsumerRecord<String, byte[]> record, Acknowledgment acknowledgment) {
-    EventEnvelope<OrderPaymentRequestedPayload> event;
+    EventEnvelope<?> event;
     try {
       event = decode(record);
     } catch (IllegalArgumentException exception) {
@@ -88,18 +93,31 @@ public class OrderPaymentRequestedListener {
       acknowledgment.acknowledge();
       return;
     }
-    acceptor.accept(
-        event, new Source(record.topic(), record.partition(), record.offset(), record.value()));
+    Source source = new Source(record.topic(), record.partition(), record.offset(), record.value());
+    if (event.payload() instanceof PaymentCancellationRequestedPayload) {
+      @SuppressWarnings("unchecked")
+      EventEnvelope<PaymentCancellationRequestedPayload> cancellation =
+          (EventEnvelope<PaymentCancellationRequestedPayload>) event;
+      acceptor.acceptCancellation(cancellation, source);
+    } else {
+      @SuppressWarnings("unchecked")
+      EventEnvelope<OrderPaymentRequestedPayload> request =
+          (EventEnvelope<OrderPaymentRequestedPayload>) event;
+      acceptor.accept(request, source);
+    }
     acknowledgment.acknowledge();
   }
 
-  private EventEnvelope<OrderPaymentRequestedPayload> decode(
-      ConsumerRecord<String, byte[]> record) {
+  private EventEnvelope<?> decode(ConsumerRecord<String, byte[]> record) {
     try {
       if (!"commerce-settle.commerce.v1".equals(record.topic())) {
         throw new IllegalArgumentException();
       }
       var json = mapper.readTree(record.value());
+      if (json != null
+          && "PaymentCancellationRequested".equals(json.path("eventType").textValue())) {
+        return decodeCancellation(json, record.key());
+      }
       if (json == null
           || !json.path("occurredAt").isTextual()
           || !json.path("payload").path("paymentWaitUntil").isTextual()) {
@@ -129,6 +147,27 @@ public class OrderPaymentRequestedListener {
       // Jackson 예외의 원문 입력을 프레임워크 로그로 전달하지 않는다.
       throw new IllegalArgumentException("Invalid OrderPaymentRequested record");
     }
+  }
+
+  private EventEnvelope<PaymentCancellationRequestedPayload> decodeCancellation(
+      JsonNode json, String key) throws IOException {
+    if (!json.path("occurredAt").isTextual()) {
+      throw new IllegalArgumentException();
+    }
+    requireUuid(json.path("eventId"));
+    requireUuid(json.path("aggregateId"));
+    var payload = json.path("payload");
+    for (String field : List.of("orderId", "paymentCycleId", "requestId")) {
+      requireUuid(payload.path(field));
+    }
+    OffsetDateTime.parse(json.path("occurredAt").textValue());
+    EventEnvelope<PaymentCancellationRequestedPayload> event = cancellationReader.readValue(json);
+    if (event.eventVersion() != 1
+        || !event.payload().orderId().toString().equals(key)
+        || !event.aggregateId().equals(event.payload().orderId())) {
+      throw new IllegalArgumentException();
+    }
+    return event;
   }
 
   private static void requireUuid(JsonNode node) {

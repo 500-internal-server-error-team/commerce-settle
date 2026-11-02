@@ -2,6 +2,7 @@ package com.commercesettle.payment.infrastructure.persistence.outbox;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
+import com.commercesettle.payment.application.event.PaymentCancellationResultPayload;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
 import com.commercesettle.payment.infrastructure.messaging.OutboxAppended;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -34,9 +35,24 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
   @Transactional(propagation = Propagation.MANDATORY)
   public UUID appendPaymentAccepted(EventEnvelope<PaymentAcceptedPayload> event) {
     // aggregateVersion은 결제 버전이므로 payload의 주문 버전과 비교하지 않는다.
-    if (!"PaymentAccepted".equals(event.eventType())
-        || event.eventVersion() != 1
-        || !event.aggregateId().equals(event.payload().paymentId())) {
+    if (!"PaymentAccepted".equals(event.eventType())) {
+      throw new IllegalArgumentException("Invalid payment outbox event");
+    }
+    return append(event, event.payload().paymentId());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID appendCancellationResult(EventEnvelope<PaymentCancellationResultPayload> event) {
+    if (!"PaymentCancelled".equals(event.eventType())
+        && !"PaymentCancellationRejected".equals(event.eventType())) {
+      throw new IllegalArgumentException("Invalid payment outbox event");
+    }
+    return append(event, event.payload().paymentId());
+  }
+
+  private UUID append(EventEnvelope<?> event, UUID paymentId) {
+    if (event.eventVersion() != 1 || !event.aggregateId().equals(paymentId)) {
       throw new IllegalArgumentException("Invalid payment outbox event");
     }
     byte[] body;
@@ -53,7 +69,8 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
             .addValue("occurred", event.occurredAt().toString())
             .addValue("body", body)
             .addValue("json", new String(body, StandardCharsets.UTF_8))
-            .addValue("key", event.payload().paymentId().toString());
+            .addValue("type", event.eventType())
+            .addValue("key", paymentId.toString());
     // 집계별 append를 커밋까지 직렬화하여 늦은 낮은 버전의 삽입을 막는다.
     jdbc.queryForList(
         "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:aggregate AS text), 0))", params);
@@ -80,7 +97,7 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
             """
             INSERT INTO payment.outbox (id,event_type,event_version,aggregate_id,aggregate_version,
                 topic,occurred_at,message_key,payload,raw_body)
-            VALUES (:id,'PaymentAccepted',1,:aggregate,:version,'commerce-settle.payment.v1',
+            VALUES (:id,:type,1,:aggregate,:version,'commerce-settle.payment.v1',
                 CAST(:occurred AS timestamptz),:key,CAST(:json AS jsonb),:body)
             ON CONFLICT (id) DO NOTHING
             """,

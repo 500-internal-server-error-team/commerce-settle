@@ -165,7 +165,7 @@ class PaymentQueryServiceTest {
     }
 
     @Override
-    public void saveWaiting(EventEnvelope<OrderPaymentRequestedPayload> event, Source source) {
+    public void saveWaiting(EventEnvelope<?> event, Source source) {
       throw new UnsupportedOperationException();
     }
 
@@ -192,6 +192,16 @@ class PaymentQueryServiceTest {
 
     @Override
     public boolean lockClaimed(UUID inboxId, long version) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Optional<UUID> findEarlyCancellation(UUID orderId, UUID paymentCycleId) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void linkResult(UUID inboxId, UUID resultRef, Instant now) {
       throw new UnsupportedOperationException();
     }
 

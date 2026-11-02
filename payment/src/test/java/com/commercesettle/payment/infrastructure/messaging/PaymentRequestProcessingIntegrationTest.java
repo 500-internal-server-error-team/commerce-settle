@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
+import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.service.ApplyOrderPaymentRequestService;
@@ -387,6 +388,127 @@ class PaymentRequestProcessingIntegrationTest {
 
   private void saveWaiting() {
     saveWaiting(cardPaymentEvent());
+  }
+
+  @Test
+  @DisplayName("승인 전 혼합 결제를 취소하면 결제 취소·예약 해제·승인 작업 종료·PaymentCancelled가 함께 커밋된다")
+  void cancelsPendingMixedPaymentInDatabase() {
+    fundWallet(5_000);
+    saveWaiting(event(UUID.randomUUID(), ORDER_ID, CYCLE_ID, 10_000, 2_000));
+    service.processNext();
+    saveCancellation(ORDER_ID, CYCLE_ID);
+
+    assertThat(service.processNext()).isTrue();
+
+    JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+    assertThat(jdbc.queryForObject("SELECT status FROM payment.payments", String.class))
+        .isEqualTo("CANCELLED");
+    assertThat(jdbc.queryForObject("SELECT status FROM payment.mileage_reservations", String.class))
+        .isEqualTo("RELEASED");
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT balance, reserved_amount FROM payment.mileage_wallets WHERE buyer_id = ?",
+                BUYER_ID))
+        .containsEntry("balance", 5_000L)
+        .containsEntry("reserved_amount", 0L);
+    assertThat(
+            jdbc.queryForList(
+                "SELECT kind FROM payment.mileage_entries ORDER BY created_at, kind", String.class))
+        .containsExactlyInAnyOrder("RESERVE", "RELEASE");
+    assertThat(jdbc.queryForObject("SELECT status FROM payment.payment_jobs", String.class))
+        .isEqualTo("DONE");
+    assertThat(
+            jdbc.queryForList(
+                "SELECT event_type || ':' || aggregate_version FROM payment.outbox"
+                    + " ORDER BY sequence_no",
+                String.class))
+        .containsExactly("PaymentAccepted:0", "PaymentCancelled:1");
+    assertThat(jdbc.queryForList("SELECT DISTINCT status FROM payment.inbox", String.class))
+        .containsExactly("APPLIED");
+  }
+
+  @Test
+  @DisplayName("취소가 결제 요청보다 먼저 처리되면 늦은 결제 요청은 취소된 결제를 만들고 두 수신 기록을 그 결제에 연결한다")
+  void cancelsLateRequestAfterEarlyCancellationInDatabase() {
+    fundWallet(5_000);
+    saveCancellation(ORDER_ID, CYCLE_ID);
+    service.processNext();
+    JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.payments", Long.class)).isZero();
+
+    saveWaiting(event(UUID.randomUUID(), ORDER_ID, CYCLE_ID, 10_000, 2_000));
+    service.processNext();
+
+    UUID paymentId =
+        jdbc.queryForObject(
+            "SELECT id FROM payment.payments WHERE status = 'CANCELLED'", UUID.class);
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.payment_jobs", Long.class))
+        .isZero();
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.mileage_reservations", Long.class))
+        .isZero();
+    assertThat(jdbc.queryForList("SELECT result_ref FROM payment.inbox", UUID.class))
+        .containsExactly(paymentId, paymentId);
+    assertThat(
+            jdbc.queryForList(
+                "SELECT event_type FROM payment.outbox ORDER BY sequence_no", String.class))
+        .containsExactly("PaymentAccepted", "PaymentCancelled");
+  }
+
+  @Test
+  @DisplayName("승인 Worker가 먼저 PROCESSING으로 바꾼 결제는 취소하지 않고 마일리지 예약도 유지한다")
+  void rejectsCancellationAfterApprovalStartedInDatabase() {
+    fundWallet(5_000);
+    saveWaiting(event(UUID.randomUUID(), ORDER_ID, CYCLE_ID, 10_000, 2_000));
+    service.processNext();
+    JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+    // 승인 Worker가 외부 호출 전에 결제를 PROCESSING으로 바꾼 상태.
+    jdbc.update("UPDATE payment.payments SET status = 'PROCESSING', version = version + 1");
+    saveCancellation(ORDER_ID, CYCLE_ID);
+
+    service.processNext();
+
+    assertThat(jdbc.queryForObject("SELECT status FROM payment.payments", String.class))
+        .isEqualTo("PROCESSING");
+    assertThat(jdbc.queryForObject("SELECT status FROM payment.mileage_reservations", String.class))
+        .isEqualTo("RESERVED");
+    assertThat(
+            jdbc.queryForList(
+                "SELECT event_type || ':' || (payload -> 'payload' ->> 'reasonCode')"
+                    + " FROM payment.outbox WHERE event_type <> 'PaymentAccepted'",
+                String.class))
+        .containsExactly("PaymentCancellationRejected:PAYMENT_IN_PROGRESS");
+  }
+
+  private void saveCancellation(UUID orderId, UUID cycleId) {
+    String json =
+        """
+        {
+          "eventId": "%s",
+          "eventType": "PaymentCancellationRequested",
+          "eventVersion": 1,
+          "occurredAt": "2026-01-01T00:05:00Z",
+          "aggregateId": "%s",
+          "aggregateVersion": 1,
+          "payload": {
+            "orderId": "%s",
+            "orderVersion": 1,
+            "paymentCycleId": "%s",
+            "requestId": "%s"
+          }
+        }
+        """
+            .formatted(UUID.randomUUID(), orderId, orderId, cycleId, UUID.randomUUID());
+    byte[] body = json.getBytes(StandardCharsets.UTF_8);
+    try {
+      EventEnvelope<PaymentCancellationRequestedPayload> event =
+          mapper.readValue(body, new TypeReference<>() {});
+      new TransactionTemplate(manager)
+          .executeWithoutResult(
+              status ->
+                  inbox.saveWaiting(event, new Source("commerce-settle.commerce.v1", 0, 1L, body)));
+    } catch (IOException exception) {
+      throw new IllegalStateException(exception);
+    }
   }
 
   private void saveWaiting(String json) {

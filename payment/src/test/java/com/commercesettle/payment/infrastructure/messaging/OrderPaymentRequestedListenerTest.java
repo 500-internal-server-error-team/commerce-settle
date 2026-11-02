@@ -8,11 +8,13 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
+import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor;
 import com.commercesettle.payment.infrastructure.config.OrderPaymentRequestedListenerConfiguration;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -67,6 +69,60 @@ class OrderPaymentRequestedListenerTest {
     assertThat(source.getValue().partition()).isEqualTo(2);
     assertThat(source.getValue().offset()).isEqualTo(73L);
     assertThat(source.getValue().body()).containsExactly(body);
+  }
+
+  @Test
+  @DisplayName("같은 토픽의 미결제 취소 요청은 취소 접수로 인계한 뒤 offset을 승인한다")
+  @SuppressWarnings("unchecked")
+  void acceptsPaymentCancellationRequest() throws Exception {
+    var body =
+        """
+        {"eventId":"00000000-0000-0000-0000-000000000009","eventType":"PaymentCancellationRequested",
+         "eventVersion":1,"occurredAt":"2026-01-01T00:05:00Z",
+         "aggregateId":"%1$s","aggregateVersion":1,
+         "payload":{"orderId":"%1$s","orderVersion":1,
+           "paymentCycleId":"00000000-0000-0000-0000-000000000004",
+           "requestId":"00000000-0000-0000-0000-000000000008"}}
+        """
+            .formatted(KEY);
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1");
+
+    listener.receive(record(body, KEY), acknowledgment);
+
+    var event = ArgumentCaptor.forClass(EventEnvelope.class);
+    var order = inOrder(acceptor, acknowledgment);
+    order.verify(acceptor).acceptCancellation(event.capture(), any());
+    order.verify(acknowledgment).acknowledge();
+    assertThat(event.getValue().payload())
+        .isEqualTo(
+            new PaymentCancellationRequestedPayload(
+                UUID.fromString(KEY),
+                1,
+                UUID.fromString("00000000-0000-0000-0000-000000000004"),
+                UUID.fromString("00000000-0000-0000-0000-000000000008")));
+  }
+
+  @Test
+  @DisplayName("키가 주문 ID와 다른 취소 요청은 접수하지 않는다")
+  void rejectsCancellationWithOtherKey() {
+    var body =
+        """
+        {"eventId":"00000000-0000-0000-0000-000000000009","eventType":"PaymentCancellationRequested",
+         "eventVersion":1,"occurredAt":"2026-01-01T00:05:00Z",
+         "aggregateId":"%1$s","aggregateVersion":1,
+         "payload":{"orderId":"%1$s","orderVersion":1,
+           "paymentCycleId":"00000000-0000-0000-0000-000000000004",
+           "requestId":"00000000-0000-0000-0000-000000000008"}}
+        """
+            .formatted(KEY);
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1");
+
+    assertThatThrownBy(
+            () ->
+                listener.receive(
+                    record(body, "00000000-0000-0000-0000-0000000000ff"), acknowledgment))
+        .isInstanceOf(IllegalArgumentException.class);
+    verifyNoInteractions(acceptor, acknowledgment);
   }
 
   @Test

@@ -56,6 +56,21 @@ public class PaymentJob extends AuditableEntity {
     return new PaymentJob(payment, now);
   }
 
+  /**
+   * 결제가 외부 호출 전에 취소돼 실행할 필요가 없어진 작업을 닫는다. 아직 선점되지 않은 작업만 닫으며, 실행 중인 작업은 실행기가 결제 상태를 보고 멈춘다.
+   *
+   * @return 닫았으면 true
+   */
+  public boolean closeBeforeRun(String reasonCode, Instant now) {
+    if (status != PaymentJobStatus.PENDING && status != PaymentJobStatus.RETRY) {
+      return false;
+    }
+    status = PaymentJobStatus.DONE;
+    lastErrorCode = Objects.requireNonNull(reasonCode, "reasonCode");
+    touch(now);
+    return true;
+  }
+
   public UUID getId() {
     return id;
   }
