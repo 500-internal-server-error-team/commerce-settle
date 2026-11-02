@@ -5,6 +5,7 @@ global:
     environment: development
 rule_files:
   - /etc/prometheus/quarantine.rules.yml
+  - /etc/prometheus/notification.rules.yml
 alerting:
   alertmanagers:
     - static_configs:

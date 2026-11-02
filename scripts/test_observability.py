@@ -73,9 +73,12 @@ def verify():
         (directory / "integration.rules.yml").write_text(integration_rules(
             (ROOT / "infra/prometheus/quarantine.rules.yml").read_text(),
         ))
+        (directory / "notification.integration.rules.yml").write_text(integration_rules(
+            (ROOT / "infra/prometheus/notification.rules.yml").read_text(),
+        ))
         (directory / "prometheus.yml").write_text(
             "global:\n  scrape_interval: 1s\n  evaluation_interval: 1s\n"
-            "rule_files: [/etc/prometheus/integration.rules.yml]\n"
+            "rule_files: [/etc/prometheus/integration.rules.yml, /etc/prometheus/notification.integration.rules.yml]\n"
             "alerting:\n  alertmanagers:\n    - static_configs:\n        - targets: [alertmanager:9093]\n"
             "scrape_configs:\n  - job_name: commerce-settle\n    static_configs:\n      - targets: [fixture:8000]\n"
         )
@@ -98,7 +101,10 @@ def verify():
                         mount(ROOT / "infra/prometheus/prometheus.yml", "/etc/prometheus/production.yml"),
                         mount(ROOT / "infra/prometheus/quarantine.rules.yml", "/etc/prometheus/quarantine.rules.yml"),
                         mount(directory / "integration.rules.yml", "/etc/prometheus/integration.rules.yml"),
+                        mount(directory / "notification.integration.rules.yml", "/etc/prometheus/notification.integration.rules.yml"),
                         mount(ROOT / "infra/prometheus/quarantine.rules.test.yml", "/etc/prometheus/quarantine.rules.test.yml"),
+                        mount(ROOT / "infra/prometheus/notification.rules.yml", "/etc/prometheus/notification.rules.yml"),
+                        mount(ROOT / "infra/prometheus/notification.rules.test.yml", "/etc/prometheus/notification.rules.test.yml"),
                     ],
                     "ports": ["127.0.0.1::9090"],
                 },
@@ -143,6 +149,7 @@ def verify():
         try:
             cli("run", "--rm", "--no-deps", "--workdir", "/etc/prometheus", "--entrypoint", "/bin/promtool", "prometheus", "check", "config", "/etc/prometheus/production.yml")
             cli("run", "--rm", "--no-deps", "--workdir", "/etc/prometheus", "--entrypoint", "/bin/promtool", "prometheus", "test", "rules", "/etc/prometheus/quarantine.rules.test.yml")
+            cli("run", "--rm", "--no-deps", "--workdir", "/etc/prometheus", "--entrypoint", "/bin/promtool", "prometheus", "test", "rules", "/etc/prometheus/notification.rules.test.yml")
             cli("run", "--rm", "--no-deps", "--entrypoint", "/bin/amtool", "alertmanager", "check-config", "/etc/alertmanager/base.yml", "/etc/alertmanager/slack.yml")
             cli("up", "-d", "--wait", "--wait-timeout", "120")
             fixture = endpoint("fixture", 8000)
@@ -160,14 +167,20 @@ def verify():
             until(lambda: http(alertmanager + "/api/v2/status"), "Alertmanager was not ready")
             assert not http(alertmanager + "/api/v2/alerts")
             http(fixture + "/state", {"active": True})
+            expected_alerts = {
+                "PaymentQuarantineCaptured", "PaymentQuarantineReviewRequired", "PaymentQuarantineDeliveryOverdue",
+                "NotificationDeliveryOverdue", "NotificationReviewRequired", "NotificationRetryExhausted",
+                "NotificationFinancialActionRequired", "KakaoReauthenticationRequired",
+            }
 
             def firing():
                 alerts = [a for notification in http(fixture + "/notifications") if notification["status"] == "firing" for a in notification["alerts"]]
                 names = {a["labels"]["alertname"] for a in alerts}
-                return alerts if {"PaymentQuarantineCaptured", "PaymentQuarantineReviewRequired", "PaymentQuarantineDeliveryOverdue"} <= names else None
+                return alerts if expected_alerts <= names else None
 
             delivered = until(firing, "firing notifications were not delivered")
             assert all(a["labels"]["severity"] == "critical" for a in delivered)
+            assert all(not ({"buyerId", "sellerId", "orderId", "recipientId", "token", "body"} & set(a["labels"])) for a in delivered)
             http(fixture + "/state", {"active": False})
             def resolved():
                 names = {
@@ -177,7 +190,7 @@ def verify():
                     for a in notification["alerts"]
                     if a["status"] == "resolved"
                 }
-                return {"PaymentQuarantineCaptured", "PaymentQuarantineReviewRequired", "PaymentQuarantineDeliveryOverdue"} <= names
+                return expected_alerts <= names
 
             until(resolved, "resolved notifications were not delivered for all firing alerts")
             print("PASS observability: rule boundaries, stale/duplicate samples, provisioned dashboard, firing/inhibition/resolution delivery")

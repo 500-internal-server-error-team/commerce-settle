@@ -1,0 +1,55 @@
+groups:
+  - name: commerce-notifications
+    interval: 15s
+    rules:
+      - record: commerce:notification_overdue_seconds:max
+        expr: max by (application) (commerce_notification_overdue_seconds and on (job, instance) (time() - commerce_notification_observed_timestamp_seconds < 45) and on (job, instance) (commerce_notification_collection_success == 1))
+      - record: commerce:notification_review_required:max
+        expr: max by (application) (commerce_notification_review_required and on (job, instance) (time() - commerce_notification_observed_timestamp_seconds < 45) and on (job, instance) (commerce_notification_collection_success == 1))
+      - record: commerce:notification_retry_exhausted:max
+        expr: max by (application) (commerce_notification_retry_exhausted and on (job, instance) (time() - commerce_notification_observed_timestamp_seconds < 45) and on (job, instance) (commerce_notification_collection_success == 1))
+      - record: commerce:notification_financial_action_recent:max
+        expr: max by (application) (commerce_notification_financial_action_recent and on (job, instance) (time() - commerce_notification_observed_timestamp_seconds < 45) and on (job, instance) (commerce_notification_collection_success == 1))
+      - alert: NotificationDeliveryOverdue
+        expr: commerce:notification_overdue_seconds:max > 300
+        labels: {severity: warning}
+        annotations:
+          summary: 거래 알림이 준비된 뒤 5분 넘게 대기합니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연
+      - alert: NotificationDeliveryOverdue
+        expr: commerce:notification_overdue_seconds:max > 900
+        labels: {severity: critical}
+        annotations:
+          summary: 거래 알림이 준비된 뒤 15분 넘게 대기합니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연
+      - alert: NotificationReviewRequired
+        expr: commerce:notification_review_required:max > 0
+        labels: {severity: critical}
+        annotations:
+          summary: 발송 여부나 확정 거절을 수동으로 확인해야 합니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연
+      - alert: NotificationRetryExhausted
+        expr: commerce:notification_retry_exhausted:max > 0
+        labels: {severity: critical}
+        annotations:
+          summary: 거래 알림의 재시도 상한을 소진했습니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연
+      - alert: NotificationFinancialActionRequired
+        expr: commerce:notification_financial_action_recent:max > 0
+        labels: {severity: critical}
+        annotations:
+          summary: 최근 확정된 환불·지급 실패에 운영 조치가 필요합니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연
+      - alert: KakaoReauthenticationRequired
+        expr: max by (application) (commerce_notification_kakao_reauthentication_required) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: 본인 카카오 시연 계정의 재인증이 필요합니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연
+      - alert: NotificationObservationFailed
+        expr: (time() - max by (application) (commerce_notification_observed_timestamp_seconds) >= 45) or (max by (application) (commerce_notification_collection_success) == 0)
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: 거래 알림 DB 관측에 실패했거나 표본이 오래됐습니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연

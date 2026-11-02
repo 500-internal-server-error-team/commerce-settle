@@ -247,6 +247,10 @@ Payment API·Worker는 패키지를 복제하지 않습니다. HTTP와 비동기
 
 폴더 이름은 책임을 나타내며 DDD가 특정 이름·깊이를 강제하지는 않습니다. 새 역할이 기존 분류에 맞지 않으면 가장 가까운 책임과 변경 이유부터 검토합니다.
 
+### 본인 카카오톡 시연 어댑터
+
+Commerce의 `infrastructure/client/kakao`가 공식 self-send HTTP와 본인 토큰 파일의 갱신을 맡습니다. 별도 알림 서비스·금융 진행 상태를 만들지 않습니다. 최초 동의는 Git 밖 비밀 파일을 생성하는 loopback 로그인 도구로 받고 Gateway에 인증 콜백이나 토큰 조회 API를 공개하지 않습니다. 기본 앱에는 실제 발송 클라이언트가 없으며 명시적 시연 설정과 시험 계정 목록을 사용합니다. [ADR 0012](decisions/0012-kakao-self-message-demo.md), [시연 설정·현재 연결 범위](development.md#본인-카카오톡-시연)를 따릅니다.
+
 ## Kafka
 
 로컬 Kafka는 단일 브로커이며 토픽 자동 생성을 끕니다. Commerce·Payment·Settlement가 생산자별 원본 3개와 소비자별 DLT 4개 토픽을 준비합니다. smoke는 실제 7개 토픽의 파티션·복제·보존 설정을 확인하고, 별도 임시 토픽에서 메시지를 왕복시킨 뒤 삭제합니다.

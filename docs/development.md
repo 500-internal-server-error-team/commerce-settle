@@ -547,3 +547,39 @@ Redis 비밀번호를 바꿀 때도 앱과 Redis를 함께 재생성해야 합�
 현재 개발 환경의 스키마 적용은 [DB 정책](migrations.md)을 따릅니다. 초기 SQL 수정·이미지 재빌드만으로 기존 DB는 바뀌지 않으며, 새 빈 개발 DB에서 검증합니다. 관측 프로필을 켠 적이 있으면 종료 시에도 `--profile observability`를 지정합니다.
 
 버전 호환성은 [Spring Boot 요구사항](https://docs.spring.io/spring-boot/3.5/system-requirements.html), [Spring Cloud 호환표](https://cloud.spring.io/), Kafka 구성은 [공식 Docker 안내](https://kafka.apache.org/42/getting-started/docker/)를 참고합니다. 외부 배포 시 지원 기간·보안 업데이트·인증·장애 내성을 검토합니다.
+
+
+## 본인 카카오톡 시연
+
+[ADR 0012](decisions/0012-kakao-self-message-demo.md)의 본인 수신 시연입니다. 기본 실행은 `MOCK_KAKAO`입니다. 현재 self-send HTTP·토큰 어댑터를 준비 중이며 #117의 알림 Worker 연결과 배송완료·반품 입고 알림 확장은 선행 기반 공개 후 검증합니다. 아직 이 설정만으로 전체 거래 알림 연결이 완료됐다는 뜻은 아닙니다. 연결 때는 채널·본인 계정 참조를 새 발송에 고정하고, 기존 대기 건을 새 계정으로 돌리지 않는지 확인합니다. 수신자별 본문과 1분 판매 집계도 기존 알림 생성 경계에서 검증합니다.
+
+### 앱 설정과 최초 동의
+
+카카오디벨로퍼스에서 본인 앱의 카카오 로그인을 켜고 `talk_message` 동의항목, `http://127.0.0.1:8765/callback` 리다이렉트 URI, 메시지 링크의 웹 도메인을 등록합니다. 앱의 client secret을 활성화합니다. [공식 self-send 안내](https://developers.kakao.com/docs/ko/kakaotalk-message/rest-api)와 [로그인·토큰 안내](https://developers.kakao.com/docs/ko/kakaologin/rest-api)를 따릅니다. 앱·본인 카카오 사용자 ID는 해당 앱의 기존 도구에서 확인하고 다른 계정으로 대신 동의하지 않습니다.
+
+Git·공유 폴더 밖에 본인 소유 0700 디렉터리를 준비하고 다음 도구를 실행합니다. 키와 client secret은 터미널의 숨김 입력으로 받으며 명령 인자·환경 파일에 넣지 않습니다.
+
+```sh
+python3 -B scripts/kakao_login.py --file /absolute/private/kakao/credentials.json --user-id YOUR_KAKAO_USER_ID --app-id YOUR_KAKAO_APP_ID
+```
+
+도구가 표시한 loopback 주소를 브라우저에서 열고 본인이 로그인·동의합니다. 콜백은 127.0.0.1에만 바인딩하며 5분 뒤 종료합니다. `state`, 동의 범위, 발급된 실제 계정·앱을 검사한 뒤 자격을 0600 파일로 저장하고 토큰·인가 코드·카카오 응답 원문을 출력하지 않습니다. 이 도구는 예시 메시지를 보내지 않습니다.
+
+### 시연 설정과 재인증
+
+`.env`에 시연 구매자·판매자 UUID 목록(`KAKAO_SELF_BUYER_IDS`, `KAKAO_SELF_SELLER_IDS`), 본인 카카오 사용자·앱 ID, 등록한 메시지 링크, 비밀 디렉터리의 절대 경로를 지정합니다. 링크는 기존 시연 안내나 API 문서처럼 실제로 열리는 주소를 사용하며 별도 프론트를 만들지 않습니다. 비밀 디렉터리는 파일 하나가 아닌 디렉터리 전체를 마운트해야 원자적 토큰 교체와 잠금이 가능합니다. `KAKAO_SELF_UID`·`KAKAO_SELF_GID`는 비밀 파일 소유자의 `id -u`·`id -g` 값이며 이 로컬 시연 overlay에서만 실행 사용자를 맞춥니다. 기존 서비스·Git 경로의 소유자나 권한은 바꾸지 않습니다.
+
+```sh
+docker compose -f compose.yml -f compose.kakao-self.yml config --quiet
+docker compose -f compose.yml -f compose.kakao-self.yml up -d --no-deps commerce
+```
+
+앱은 자격 파일과 실제 access token의 계정·앱을 대조하고 만료 전 갱신합니다. 응답에 새 refresh token이 없으면 기존 값을 유지하며, 회전된 토큰은 만료 시각과 함께 원자 저장합니다. 갱신 거절·만료·계정 불일치·안전하지 않은 파일 권한은 재인증 대상으로 알리고 금융 상태를 바꾸지 않습니다. 일시적인 토큰 엔드포인트 오류는 메시지를 보내기 전의 재시도 대상으로 취급합니다.
+
+재인증은 시연 인스턴스의 알림 실행을 멈춘 뒤 같은 경로·계정·앱으로 로그인 도구를 다시 실행합니다. 앱이 도달할 수 없는 비밀 디렉터리는 권한을 넓혀 우회하지 말고 시연 사용자·마운트 설정을 바로잡습니다. 비밀 파일·잠금 파일은 실제 자격이며 작업 임시 파일이나 Git 산출물로 취급하지 않습니다.
+
+### 검증 범위
+
+`KakaoSelfMessageClientIntegrationTest`는 loopback HTTP 서버로 form 전송, 실제 소유자 대조, 갱신·회전, 401·429·확정 거절·응답 유실·불완전 응답을 검사합니다. `python3 -B scripts/test_kakao_login.py`는 비밀 파일 권한·원자 교체·계정과 동의 범위를 검사합니다. 두 검사는 실제 카카오 수신 검증과 다릅니다.
+
+본인 수신 시연은 #117의 알림 기반과 #129·#131·#115 이후의 실제 notice 생산부가 연결된 후보에서 수행합니다. 주문·결제·발송 API의 실제 상태 전이, 알림 이력과 본인 채팅의 수신 내용을 함께 대조합니다. 금융 이벤트를 주입한 시험은 자동 검증으로 따로 표시하며 실제 금융 E2E 성공으로 보고하지 않습니다. API 성공·카카오 수신과 읽음·단말 팝업 확인도 구분합니다.
