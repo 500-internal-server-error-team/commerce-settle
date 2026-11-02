@@ -3,9 +3,11 @@ package com.commercesettle.settlement.infrastructure.messaging;
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PaymentConfirmedPayload;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
+import com.commercesettle.settlement.application.event.RefundReservationRequestedPayload;
 import com.commercesettle.settlement.application.port.InboxStore.Source;
 import com.commercesettle.settlement.application.port.QuarantineStore;
 import com.commercesettle.settlement.application.service.QuarantineService;
+import com.commercesettle.settlement.application.service.RefundEventService;
 import com.commercesettle.settlement.application.service.SettlementEventService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -26,14 +28,16 @@ import org.springframework.kafka.support.Acknowledgment;
 
 /**
  * Payment·Commerce 토픽에서 Settlement가 처리하는 이벤트만 고른다. 처리 여부는 토픽이 아니라 eventType으로 정하고(ADR 0005), 대상이 아닌
- * 종류는 저장 없이 ack한다. 대상 이벤트는 Payment Listener와 같은 엄격한 규칙으로 해석한다. 해석할 수 없으면 격리가 켜져 있을 때 원문과 DLT 작업을
- * 저장한 뒤 ack하고, 꺼져 있으면 ack하지 않고 예외를 던져 컨테이너를 멈춘다. 반영 중 오류는 격리하지 않는다. Inbox 저장과 반영이 커밋된 뒤에만 ack한다.
+ * 종류는 저장 없이 ack한다. 대상은 결제확정·구매확정과 환불 SAGA 요청이다. 대상 이벤트는 Payment Listener와 같은 엄격한 규칙으로 해석한다. 해석할 수
+ * 없으면 격리가 켜져 있을 때 원문과 DLT 작업을 저장한 뒤 ack하고, 꺼져 있으면 ack하지 않고 예외를 던져 컨테이너를 멈춘다. 반영 중 오류는 격리하지 않는다.
+ * Inbox 저장과 반영이 커밋된 뒤에만 ack한다.
  */
 public class SettlementEventListener {
   static final String PAYMENT_TOPIC = "commerce-settle.payment.v1";
   static final String COMMERCE_TOPIC = "commerce-settle.commerce.v1";
   private static final String PAYMENT_CONFIRMED = "PaymentConfirmed";
   private static final String PURCHASE_CONFIRMED = "PurchaseConfirmed";
+  private static final String REFUND_RESERVATION_REQUESTED = "RefundReservationRequested";
   private static final long MAX_AMOUNT = 10_000_000L;
   private static final Pattern UUID_PATTERN =
       Pattern.compile(
@@ -54,7 +58,9 @@ public class SettlementEventListener {
   private final ObjectMapper mapper;
   private final ObjectReader paymentReader;
   private final ObjectReader purchaseReader;
+  private final ObjectReader refundReservationReader;
   private final SettlementEventService service;
+  private final RefundEventService refunds;
   private final QuarantineService quarantine;
   private final String consumer;
 
@@ -62,6 +68,7 @@ public class SettlementEventListener {
   public SettlementEventListener(
       ObjectMapper objectMapper,
       SettlementEventService service,
+      RefundEventService refunds,
       QuarantineService quarantine,
       String consumer) {
     this.mapper = objectMapper.copy();
@@ -83,7 +90,10 @@ public class SettlementEventListener {
         mapper.readerFor(new TypeReference<EventEnvelope<PaymentConfirmedPayload>>() {});
     this.purchaseReader =
         mapper.readerFor(new TypeReference<EventEnvelope<PurchaseConfirmedPayload>>() {});
+    this.refundReservationReader =
+        mapper.readerFor(new TypeReference<EventEnvelope<RefundReservationRequestedPayload>>() {});
     this.service = service;
+    this.refunds = refunds;
     this.quarantine = quarantine;
     this.consumer = consumer;
   }
@@ -100,6 +110,8 @@ public class SettlementEventListener {
         service.receivePaymentConfirmed(decodePayment(record), source);
       } else if (PURCHASE_CONFIRMED.equals(eventType)) {
         receivePurchase(decodePurchase(record), source);
+      } else if (REFUND_RESERVATION_REQUESTED.equals(eventType)) {
+        refunds.receiveReservationRequested(decodeRefundReservation(record), source);
       }
     } catch (InvalidRecordException exception) {
       if (quarantine == null) {
@@ -183,6 +195,23 @@ public class SettlementEventListener {
       return event;
     } catch (IOException | RuntimeException exception) {
       throw new InvalidRecordException("Invalid PurchaseConfirmed record");
+    }
+  }
+
+  private EventEnvelope<RefundReservationRequestedPayload> decodeRefundReservation(
+      ConsumerRecord<String, byte[]> record) {
+    try {
+      JsonNode json = envelope(record, PAYMENT_TOPIC);
+      JsonNode payload = json.path("payload");
+      requireUuid(payload.path("refundId"));
+      requireUuid(payload.path("paymentId"));
+      requireRange(payload.path("netAmount"), 0, MAX_AMOUNT);
+      EventEnvelope<RefundReservationRequestedPayload> event =
+          refundReservationReader.readValue(json);
+      requireKey(record, event.payload().paymentId().toString());
+      return event;
+    } catch (IOException | RuntimeException exception) {
+      throw new InvalidRecordException("Invalid RefundReservationRequested record");
     }
   }
 
