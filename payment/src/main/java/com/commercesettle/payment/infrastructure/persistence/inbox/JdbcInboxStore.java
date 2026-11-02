@@ -4,6 +4,7 @@ import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
+import com.commercesettle.payment.application.port.UnreadableInboxEventException;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -126,10 +127,10 @@ public class JdbcInboxStore implements InboxStore {
             .addValue("now", toTimestamp(now))
             .addValue("eventId", eventId, Types.OTHER);
     applyTransactionLimits();
-    List<Original> rows =
+    List<Claimed> rows =
         jdbc.query(
             """
-            SELECT id, raw_body FROM payment.inbox
+            SELECT id, version, attempts, raw_body FROM payment.inbox
             WHERE consumer = :consumer AND status = 'WAITING' AND next_run_at <= :now
               AND (CAST(:eventId AS uuid) IS NULL OR event_id = :eventId)
             ORDER BY next_run_at, id
@@ -137,29 +138,73 @@ public class JdbcInboxStore implements InboxStore {
             FOR UPDATE SKIP LOCKED
             """,
             params,
-            (rs, row) -> new Original(rs.getObject("id", UUID.class), rs.getBytes("raw_body")));
+            (rs, row) ->
+                new Claimed(
+                    rs.getObject("id", UUID.class),
+                    rs.getLong("version"),
+                    rs.getInt("attempts"),
+                    rs.getBytes("raw_body")));
     if (rows.isEmpty()) {
       return Optional.empty();
     }
-    Original row = rows.get(0);
+    Claimed row = rows.get(0);
     try {
       EventEnvelope<OrderPaymentRequestedPayload> event =
           mapper.readValue(row.body(), new TypeReference<>() {});
-      return Optional.of(new WaitingInboxEvent(row.id(), event));
+      return Optional.of(new WaitingInboxEvent(row.id(), row.version(), row.attempts(), event));
     } catch (IOException exception) {
-      // 저장 시 검증한 원문이므로 읽기 실패는 데이터 손상이다. 원문을 예외에 싣지 않는다.
-      throw new IllegalStateException("Stored inbox body cannot be read: " + row.id());
+      // 저장 때 검증한 원문이므로 읽기 실패는 데이터 손상이나 계약 변경이다.
+      throw new UnreadableInboxEventException(row.id(), row.version(), row.attempts());
     }
   }
 
   @Override
   public void markApplied(UUID inboxId, UUID resultRef, Instant now) {
-    finishWaiting(inboxId, "APPLIED", resultRef, now);
+    finishWaiting(inboxId, "APPLIED", resultRef, null, now);
   }
 
   @Override
-  public void markReviewRequired(UUID inboxId, Instant now) {
-    finishWaiting(inboxId, "REVIEW_REQUIRED", null, now);
+  public void markReviewRequired(UUID inboxId, String errorCode, Instant now) {
+    finishWaiting(inboxId, "REVIEW_REQUIRED", null, requireErrorCode(errorCode), now);
+  }
+
+  @Override
+  public boolean recordFailure(
+      UUID inboxId, long version, String errorCode, Instant retryAt, Instant now) {
+    var params =
+        new MapSqlParameterSource("inboxId", inboxId)
+            .addValue("version", version)
+            .addValue("errorCode", requireErrorCode(errorCode))
+            .addValue(
+                "retryAt",
+                retryAt == null ? null : toTimestamp(retryAt),
+                Types.TIMESTAMP_WITH_TIMEZONE)
+            .addValue("now", toTimestamp(now));
+    applyTransactionLimits();
+    // 롤백 직후 다른 처리기가 이 행을 다시 선점했다면 기다리지 않고 그 처리기에 맡긴다.
+    boolean locked =
+        !jdbc.queryForList(
+                """
+                SELECT id FROM payment.inbox
+                WHERE id = :inboxId AND version = :version AND status = 'WAITING'
+                FOR UPDATE SKIP LOCKED
+                """,
+                params)
+            .isEmpty();
+    if (!locked) {
+      return false;
+    }
+    return jdbc.update(
+            """
+            UPDATE payment.inbox
+            SET attempts = attempts + 1, last_error_code = :errorCode,
+                status = CASE WHEN CAST(:retryAt AS timestamptz) IS NULL
+                    THEN 'REVIEW_REQUIRED' ELSE 'WAITING' END,
+                next_run_at = :retryAt, updated_at = :now, version = version + 1
+            WHERE id = :inboxId AND version = :version AND status = 'WAITING'
+            """,
+            params)
+        == 1;
   }
 
   @Override
@@ -187,22 +232,33 @@ public class JdbcInboxStore implements InboxStore {
     }
   }
 
-  private void finishWaiting(UUID inboxId, String status, UUID resultRef, Instant now) {
+  private void finishWaiting(
+      UUID inboxId, String status, UUID resultRef, String errorCode, Instant now) {
+    // 처리에 성공해도 이전 실패 사유는 지우지 않는다. 마지막 실패·거절 사유로 남긴다.
     int updated =
         jdbc.update(
             """
             UPDATE payment.inbox
             SET status = :status, result_ref = :resultRef, next_run_at = NULL,
+                last_error_code = coalesce(:errorCode, last_error_code),
                 updated_at = :now, version = version + 1
             WHERE id = :inboxId AND status = 'WAITING'
             """,
             new MapSqlParameterSource("inboxId", inboxId)
                 .addValue("status", status)
                 .addValue("resultRef", resultRef, Types.OTHER)
+                .addValue("errorCode", errorCode, Types.VARCHAR)
                 .addValue("now", toTimestamp(now)));
     if (updated != 1) {
       throw new IllegalStateException("Inbox record is not waiting: " + inboxId);
     }
+  }
+
+  private static String requireErrorCode(String errorCode) {
+    if (errorCode == null || errorCode.isBlank() || errorCode.length() > 80) {
+      throw new IllegalArgumentException("Invalid inbox error code");
+    }
+    return errorCode;
   }
 
   private static OffsetDateTime toTimestamp(Instant instant) {
@@ -231,4 +287,6 @@ public class JdbcInboxStore implements InboxStore {
   }
 
   private record Original(UUID id, byte[] body) {}
+
+  private record Claimed(UUID id, long version, int attempts, byte[] body) {}
 }

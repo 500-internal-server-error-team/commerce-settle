@@ -168,11 +168,9 @@ public class ApplyOrderPaymentRequestService {
     outbox.appendPaymentAccepted(envelope);
   }
 
-  /**
-   * 확인 대상으로 남기고 거절 이유를 로그에 남긴다. Inbox에는 사유 컬럼이 없으므로 이유는 로그로 추적한다. 결제수단 참조 같은 payload 원문은 기록하지 않는다.
-   */
+  /** 거절 사유와 함께 확인 대상으로 남긴다. 결제수단 참조 같은 payload 원문은 로그에 남기지 않는다. */
   private boolean review(WaitingInboxEvent claimed, String errorCode, Instant now) {
-    inbox.markReviewRequired(claimed.inboxId(), now);
+    inbox.markReviewRequired(claimed.inboxId(), errorCode, now);
     LOG.atWarn()
         .addKeyValue("event", "payment.accept")
         .addKeyValue("eventId", claimed.event().eventId())

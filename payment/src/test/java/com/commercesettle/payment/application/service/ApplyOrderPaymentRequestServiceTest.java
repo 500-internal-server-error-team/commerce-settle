@@ -1,6 +1,7 @@
 package com.commercesettle.payment.application.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
 import static org.assertj.core.api.Assertions.tuple;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
@@ -34,6 +35,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -205,7 +207,8 @@ class ApplyOrderPaymentRequestServiceTest {
     assertThat(wallet.getReservedAmount()).isZero();
     assertThat(reservations.saved).isEmpty();
     assertThat(outbox.accepted).isEmpty();
-    assertThat(inbox.reviewRequired).containsExactly(inboxId);
+    assertThat(inbox.reviewRequired)
+        .containsExactly(entry(inboxId, "PAYMENT_REQUEST_MILEAGE_INSUFFICIENT"));
   }
 
   @Test
@@ -216,7 +219,8 @@ class ApplyOrderPaymentRequestServiceTest {
     service.processNext();
 
     assertThat(payments.all()).isEmpty();
-    assertThat(inbox.reviewRequired).containsExactly(inboxId);
+    assertThat(inbox.reviewRequired)
+        .containsExactly(entry(inboxId, "PAYMENT_REQUEST_MILEAGE_INSUFFICIENT"));
   }
 
   @Test
@@ -254,7 +258,8 @@ class ApplyOrderPaymentRequestServiceTest {
     service.processNext();
 
     assertThat(payments.all()).isEmpty();
-    assertThat(inbox.reviewRequired).containsExactly(inboxId);
+    assertThat(inbox.reviewRequired)
+        .containsExactly(entry(inboxId, "PAYMENT_REQUEST_AMOUNT_MISMATCH"));
   }
 
   @Test
@@ -280,7 +285,8 @@ class ApplyOrderPaymentRequestServiceTest {
     service.processNext();
 
     assertThat(payments.all()).isEmpty();
-    assertThat(inbox.reviewRequired).containsExactly(inboxId);
+    assertThat(inbox.reviewRequired)
+        .containsExactly(entry(inboxId, "PAYMENT_REQUEST_AMOUNT_INVALID"));
   }
 
   @Test
@@ -306,7 +312,8 @@ class ApplyOrderPaymentRequestServiceTest {
     service.processNext();
 
     assertThat(payments.all()).isEmpty();
-    assertThat(inbox.reviewRequired).containsExactly(inboxId);
+    assertThat(inbox.reviewRequired)
+        .containsExactly(entry(inboxId, "PAYMENT_REQUEST_ORDER_NOT_PENDING"));
   }
 
   @Test
@@ -338,7 +345,8 @@ class ApplyOrderPaymentRequestServiceTest {
     service.processNext();
 
     assertThat(payments.all()).hasSize(1);
-    assertThat(inbox.reviewRequired).containsExactly(secondInboxId);
+    assertThat(inbox.reviewRequired)
+        .containsExactly(entry(secondInboxId, "PAYMENT_REQUEST_ORDER_CONFLICT"));
   }
 
   @ParameterizedTest
@@ -361,7 +369,8 @@ class ApplyOrderPaymentRequestServiceTest {
     service.processNext();
 
     assertThat(payments.all()).hasSize(1);
-    assertThat(inbox.reviewRequired).containsExactly(secondInboxId);
+    assertThat(inbox.reviewRequired)
+        .containsExactly(entry(secondInboxId, "PAYMENT_REQUEST_ORDER_CONFLICT"));
   }
 
   @Test
@@ -499,7 +508,7 @@ class ApplyOrderPaymentRequestServiceTest {
     private final Map<UUID, OrderPaymentRequestedPayload> payloads = new HashMap<>();
     private final Map<UUID, UUID> applied = new HashMap<>();
     private final Map<UUID, OrderPaymentRequestedPayload> originals = new HashMap<>();
-    private final List<UUID> reviewRequired = new ArrayList<>();
+    private final Map<UUID, String> reviewRequired = new LinkedHashMap<>();
 
     UUID add(OrderPaymentRequestedPayload payload) {
       UUID inboxId = UUID.randomUUID();
@@ -507,6 +516,8 @@ class ApplyOrderPaymentRequestServiceTest {
       waiting.add(
           new WaitingInboxEvent(
               inboxId,
+              0,
+              0,
               new EventEnvelope<>(
                   UUID.randomUUID(),
                   "OrderPaymentRequested",
@@ -540,8 +551,14 @@ class ApplyOrderPaymentRequestServiceTest {
     }
 
     @Override
-    public void markReviewRequired(UUID inboxId, Instant now) {
-      reviewRequired.add(inboxId);
+    public void markReviewRequired(UUID inboxId, String errorCode, Instant now) {
+      reviewRequired.put(inboxId, errorCode);
+    }
+
+    @Override
+    public boolean recordFailure(
+        UUID inboxId, long version, String errorCode, Instant retryAt, Instant now) {
+      throw new UnsupportedOperationException();
     }
 
     @Override
