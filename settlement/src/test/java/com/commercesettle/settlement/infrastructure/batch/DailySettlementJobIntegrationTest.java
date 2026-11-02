@@ -44,7 +44,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "management.tracing.enabled=false",
       "spring.kafka.admin.auto-create=false",
       "settlement.daily-batch.schedule-enabled=false",
-      "settlement.payout-worker.enabled=false"
+      "settlement.payout-worker.enabled=false",
+      "settlement.inbox-processor.enabled=false"
     })
 @Testcontainers
 class DailySettlementJobIntegrationTest {
