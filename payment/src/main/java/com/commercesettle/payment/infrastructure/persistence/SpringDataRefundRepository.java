@@ -18,6 +18,10 @@ interface SpringDataRefundRepository extends JpaRepository<Refund, UUID> {
 
   Optional<Refund> findByOrderRefundRequestId(UUID orderRefundRequestId);
 
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("select r from Refund r where r.businessKey = :businessKey")
+  Optional<Refund> findByBusinessKeyForUpdate(@Param("businessKey") UUID businessKey);
+
   Optional<Refund> findFirstByPaymentIdAndStatusIn(
       UUID paymentId, Collection<RefundStatus> statuses);
 }

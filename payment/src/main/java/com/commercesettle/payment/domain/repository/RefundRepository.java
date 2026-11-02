@@ -14,6 +14,9 @@ public interface RefundRepository {
 
   Optional<Refund> findByOrderRefundRequestId(UUID orderRefundRequestId);
 
+  /** 환불 작업의 업무 키로 환불을 찾아 현재 트랜잭션이 끝날 때까지 잠근다. */
+  Optional<Refund> findByBusinessKeyForUpdate(UUID businessKey);
+
   /** 같은 원결제에 진행 중이거나 완료된 환불. 확정 거절된 환불은 제외한다. */
   Optional<Refund> findActiveByPaymentId(UUID paymentId);
 }

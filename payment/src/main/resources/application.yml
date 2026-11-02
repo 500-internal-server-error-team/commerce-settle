@@ -137,7 +137,15 @@ app:
     # PAYMENT_ROLE=worker에서만 동작한다. 정산금 예약이 확인된 환불의 외부 환불·마일리지 복원 Worker와
     # 정산 응답 stub을 켠다. RefundApproved·RefundOrderRestored 반영은 payment-request-processor가 맡는다.
     enabled: false
+    # stub: 즉시 성공하는 개발용 외부 환불. finance-mock 환불 연동은 아직 없다.
+    gateway: ${PAYMENT_REFUND_GATEWAY:stub}
     poll-interval-ms: 1000
+    max-jobs-per-poll: 20
+    # 호출 제한 시간은 임대보다 짧아야 한다.
+    lease-duration: 30s
+    http-timeout: 5s
+    unconfirmed-retry-delay: 5s
+    max-attempts: 10
     settlement-stub:
       # Settlement 환불 예약·원장 상쇄·예약 해제 응답을 즉시 성공으로 대신한다.
       # Settlement 수신기를 연결하면 false로 끈다.
