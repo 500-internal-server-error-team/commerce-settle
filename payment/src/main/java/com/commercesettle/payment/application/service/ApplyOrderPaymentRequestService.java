@@ -142,9 +142,16 @@ public class ApplyOrderPaymentRequestService {
     int attempts = previousAttempts + 1;
     Instant now = clock.instant();
     Instant retryAt = retryable && attempts < MAX_ATTEMPTS ? now.plus(retryDelay(attempts)) : null;
-    Boolean recorded =
-        transactions.execute(
-            status -> inbox.recordFailure(inboxId, version, errorCode, retryAt, now));
+    Boolean recorded;
+    try {
+      recorded =
+          transactions.execute(
+              status -> inbox.recordFailure(inboxId, version, errorCode, retryAt, now));
+    } catch (RuntimeException recordFailure) {
+      // 기록 실패만 올라가면 처리 실패의 원인을 잃으므로 함께 싣는다.
+      recordFailure.addSuppressed(cause);
+      throw recordFailure;
+    }
     String result =
         !Boolean.TRUE.equals(recorded)
             ? "SKIPPED"

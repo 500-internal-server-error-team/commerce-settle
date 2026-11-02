@@ -458,6 +458,23 @@ class ApplyOrderPaymentRequestServiceTest {
     assertThat(inbox.failures).isEmpty();
   }
 
+  @Test
+  @DisplayName("실패 기록마저 실패하면 기록 예외에 처리 실패의 원인을 함께 실어 던진다")
+  void keepsProcessingCauseWhenRecordingFails() {
+    jobs.failSave = true;
+    inbox.recordFailure = new IllegalStateException("database unavailable");
+    inbox.add(card(UUID.randomUUID(), UUID.randomUUID()));
+
+    assertThatThrownBy(service::processNext)
+        .hasMessage("database unavailable")
+        .satisfies(
+            thrown ->
+                assertThat(thrown.getSuppressed())
+                    .singleElement()
+                    .extracting(Throwable::getMessage)
+                    .isEqualTo("job save failed"));
+  }
+
   @ParameterizedTest
   @CsvSource({"1, 1", "2, 2", "3, 4", "6, 32", "7, 60", "9, 60"})
   @DisplayName("재시도 대기는 1초부터 두 배씩 늘고 60초를 넘지 않는다")
@@ -571,6 +588,7 @@ class ApplyOrderPaymentRequestServiceTest {
     private final Map<UUID, String> reviewRequired = new LinkedHashMap<>();
     private final List<Failure> failures = new ArrayList<>();
     private RuntimeException claimFailure;
+    private RuntimeException recordFailure;
 
     UUID add(OrderPaymentRequestedPayload payload) {
       return add(payload, 0);
@@ -627,6 +645,9 @@ class ApplyOrderPaymentRequestServiceTest {
     @Override
     public boolean recordFailure(
         UUID inboxId, long version, String errorCode, Instant retryAt, Instant now) {
+      if (recordFailure != null) {
+        throw recordFailure;
+      }
       failures.add(new Failure(inboxId, version, errorCode, retryAt));
       return true;
     }
