@@ -1,5 +1,6 @@
 package com.commercesettle.commerce.domain.model;
 
+import com.commercesettle.commerce.domain.exception.EventAdmissionClosedException;
 import com.commercesettle.commerce.domain.exception.SaleEventConflictException;
 import com.commercesettle.commerce.domain.exception.SaleEventConflictException.Reason;
 import com.commercesettle.commerce.domain.exception.VersionConflictException;
@@ -148,6 +149,48 @@ public class SaleEvent extends AuditableEntity {
     return Optional.of(finish(inventory, PERIOD_END_REASON, movementId, now));
   }
 
+  /** 확정 거절 뒤 재시도의 수량 확보: R+1. 신규 참여는 저장소의 조건부 갱신으로 같은 조건을 검사하고, 재시도는 이벤트 행을 잠근 뒤 이 메서드로 확보한다. */
+  void reserveSlot(Instant now) {
+    if (status != SaleEventStatus.OPEN || now.isBefore(startsAt) || !now.isBefore(endsAt)) {
+      throw new EventAdmissionClosedException(EventAdmissionClosedException.Reason.NOT_OPEN);
+    }
+    if (soldCount + reservedCount >= quota) {
+      throw new EventAdmissionClosedException(EventAdmissionClosedException.Reason.NO_REMAINING);
+    }
+    reservedCount++;
+    touch(now);
+  }
+
+  /** 결제 확정: R−1, S+1과 배정 재고 −1·판매 +1. 진행 중에 S=Q가 되면 매진 종료하며, 남은 배정분이 없으므로 반환 이력은 없다. */
+  InventoryMovement confirmSale(
+      ProductInventory inventory, UUID cycleId, UUID movementId, Instant now) {
+    requireSameProduct(inventory);
+    requireReservedSlot();
+    InventoryMovement movement = inventory.consumeFromEvent(movementId, cycleId, now);
+    reservedCount--;
+    soldCount++;
+    if (status.isInProgress() && soldCount == quota) {
+      status = SaleEventStatus.SOLD_OUT;
+      closedAt = truncate(now);
+    }
+    touch(now);
+    return movement;
+  }
+
+  /** 확정 거절·승인 차단된 취소: R−1. 이미 종료된 이벤트면 종료 때 남겨 둔 배정분 1개를 가용 재고로 돌린다. */
+  Optional<InventoryMovement> releaseSlot(
+      ProductInventory inventory, UUID cycleId, UUID movementId, Instant now) {
+    requireSameProduct(inventory);
+    requireReservedSlot();
+    Optional<InventoryMovement> movement =
+        status.isInProgress()
+            ? Optional.empty()
+            : Optional.of(inventory.releaseFromEvent(movementId, cycleId, now));
+    reservedCount--;
+    touch(now);
+    return movement;
+  }
+
   public Gauge gauge(Instant now) {
     return gauge(status, startsAt, endsAt, quota, soldCount, reservedCount, now);
   }
@@ -230,6 +273,12 @@ public class SaleEvent extends AuditableEntity {
   private void requireVersion(long expectedVersion) {
     if (expectedVersion != getVersion()) {
       throw new VersionConflictException("sale event", expectedVersion, getVersion());
+    }
+  }
+
+  private void requireReservedSlot() {
+    if (reservedCount < 1) {
+      throw new IllegalStateException("sale event has no reserved slot: " + id);
     }
   }
 
