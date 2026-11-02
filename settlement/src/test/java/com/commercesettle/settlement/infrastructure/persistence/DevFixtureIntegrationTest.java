@@ -6,6 +6,7 @@ import com.commercesettle.settlement.domain.model.SettlementAmounts;
 import com.commercesettle.settlement.domain.model.SettlementItem;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
 import com.commercesettle.settlement.infrastructure.batch.DailySettlementLauncher;
+import com.commercesettle.settlement.support.FixedProductSettlementContexts;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -16,6 +17,7 @@ import org.springframework.batch.core.BatchStatus;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -32,6 +34,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "settlement.payout-worker.enabled=false",
       "settlement.inbox-processor.enabled=false"
     })
+@Import(FixedProductSettlementContexts.class)
 @Testcontainers
 class DevFixtureIntegrationTest {
   @Container @ServiceConnection
