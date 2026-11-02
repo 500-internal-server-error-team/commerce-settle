@@ -50,10 +50,12 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
       "app.auth.rate-limit.identifier-hmac-key=regular-order-api-test-hmac-key-32bytes",
       "app.auth.password-reset.delivery-key=regular-order-api-test-delivery-key-32bytes",
-      "app.address.encryption-key=regular-order-api-test-address-key-32bytes"
+      "app.address.encryption-key=regular-order-api-test-address-key-32bytes",
+      "app.internal-auth.senders.gateway.current=" + OrderIntegrationTest.GATEWAY_CREDENTIAL
     })
 @Testcontainers
 class OrderIntegrationTest {
+  static final String GATEWAY_CREDENTIAL = "test-gateway-credential-0123456789abcdef0123";
   private static final ShippingAddress SHIPPING =
       new ShippingAddress("시험 수령인", "000-0000-0000", "00001", "가상시 시험로 1", "101호");
 
@@ -561,6 +563,7 @@ class OrderIntegrationTest {
   private static HttpHeaders headers(UUID buyer) {
     var headers = new HttpHeaders();
     headers.setContentType(MediaType.APPLICATION_JSON);
+    headers.setBearerAuth(GATEWAY_CREDENTIAL);
     headers.set("X-Authenticated-Actor-Kind", "BUYER");
     headers.set("X-Authenticated-Actor-Id", buyer.toString());
     return headers;
