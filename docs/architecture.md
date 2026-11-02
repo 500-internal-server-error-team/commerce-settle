@@ -40,7 +40,7 @@ PostgreSQL·Kafka·Redis는 각각 `postgres-data`·`kafka-data`·`redis-data` �
 
 가입·로그인·복구·상품/이벤트 조회의 공개 여부는 OpenAPI의 PUBLIC 작업을 HTTP 메서드·정규화한 경로로 대조합니다. 경로 접두사만으로 공개하지 않으며 백엔드의 Gateway 허용 작업도 같은 기준을 사용합니다. 보호 작업에 검증된 계정 종류·ID가 없거나 로그아웃에 세션 해시가 없으면 `401`로 거절합니다. `/internal`·`/mock`는 Gateway 경로를 만들지 않으며 기존 서비스별/운영자별 자격과 허용 경로를 직접 확인합니다. Worker는 접수된 내부 명령·업무 키로 실행하며 사용자 세션을 재사용하지 않습니다. 컨테이너의 같은 네트워크나 클라이언트가 보낸 계정 ID만으로 호출을 신뢰하지 않습니다.
 
-인증용 Redis 쓰기는 커머스에만 허용합니다. Gateway는 해당 세션·가드의 읽기와 읽기 전용 검증 스크립트, Redis 실행 식별자 확인만 [허용](decisions/0003-redis-sessions.md#gateway의-redis-권한과-스크립트-재적재)하고 Payment·Settlement·Mock에는 인증 키 접근을 허용하지 않습니다. 키 접두사 대신 Redis ACL로 경계를 적용합니다. [Compose](../compose.yml)는 앱별 Redis 사용자를 두어 커머스에 인증 키 쓰기, Gateway에 위 읽기 권한만 주고, Payment·Settlement·Mock에는 아직 키 권한을 주지 않습니다. 키 패턴은 키 인자가 없는 명령을 제한하지 못하므로 커머스에는 `EVAL`·`EVALSHA`만 주고 `SCRIPT`·`FUNCTION`·키 목록(`SCAN`·`RANDOMKEY`·`DBSIZE`)·DB 전환은 허용하지 않습니다. 자기 키가 필요해지는 기능에서 해당 키 패턴을 추가합니다. `default` 사용자는 운영·검사용이며 앱에 전달하지 않습니다. Gateway는 `SessionAuthenticationFilter`에서 PUBLIC 판정·세션 검증·신원 헤더 교체를 수행하고, 세션 계정 종류가 작업의 `x-actor`와 다르면 `403`으로 거절합니다. 커머스는 로그인 때 `issue-session.lua`로 가드와 인증 버전을 확인한 뒤 세션을 저장하고, 로그아웃 때 신원이 같은 세션만 삭제합니다. 비밀번호 재설정은 `block-guard.lua`로 가드를 변경 중으로 막고 DB 커밋 뒤 `confirm-guard.lua`로 같은 변경만 새 인증 버전으로 엽니다. Gateway는 상류 `Authorization`을 커머스·Payment·Settlement별 Gateway 자격으로 교체합니다. 커머스는 `InternalCallerFilter`에서 [판정 순서](decisions/0010-internal-service-credentials.md#백엔드-판정-순서)를 적용하며 현재 Gateway 자격만 설정합니다. Payment·Settlement·Finance Mock도 공유 `internal-auth`로 자격을 판정합니다. Settlement의 지급 클라이언트에는 Finance Mock 자격을 부착하며 Payment의 PG 클라이언트와 나머지 서비스·운영자 호출, 미확정 인증 변경의 재조정, Redis 실행 식별자 확인은 아직 구현 전입니다.
+인증용 Redis 쓰기는 커머스에만 허용합니다. Gateway는 해당 세션·가드의 읽기와 읽기 전용 검증 스크립트, Redis 실행 식별자 확인만 [허용](decisions/0003-redis-sessions.md#gateway의-redis-권한과-스크립트-재적재)하고 Payment·Settlement·Mock에는 인증 키 접근을 허용하지 않습니다. 키 접두사 대신 Redis ACL로 경계를 적용합니다. [Compose](../compose.yml)는 앱별 Redis 사용자를 두어 커머스에 인증 키 쓰기, Gateway에 위 읽기 권한만 주고, Payment·Settlement·Mock에는 아직 키 권한을 주지 않습니다. 키 패턴은 키 인자가 없는 명령을 제한하지 못하므로 커머스에는 `EVAL`·`EVALSHA`만 주고 `SCRIPT`·`FUNCTION`·키 목록(`SCAN`·`RANDOMKEY`·`DBSIZE`)·DB 전환은 허용하지 않습니다. 자기 키가 필요해지는 기능에서 해당 키 패턴을 추가합니다. `default` 사용자는 운영·검사용이며 앱에 전달하지 않습니다. Gateway는 `SessionAuthenticationFilter`에서 PUBLIC 판정·세션 검증·신원 헤더 교체를 수행하고, 세션 계정 종류가 작업의 `x-actor`와 다르면 `403`으로 거절합니다. 커머스는 로그인 때 `issue-session.lua`로 가드와 인증 버전을 확인한 뒤 세션을 저장하고, 로그아웃 때 신원이 같은 세션만 삭제합니다. 비밀번호 재설정은 `block-guard.lua`로 가드를 변경 중으로 막고 DB 커밋 뒤 `confirm-guard.lua`로 같은 변경만 새 인증 버전으로 엽니다. Gateway는 상류 `Authorization`을 커머스·Payment·Settlement별 Gateway 자격으로 교체합니다. 커머스는 `InternalCallerFilter`에서 [판정 순서](decisions/0010-internal-service-credentials.md#백엔드-판정-순서)를 적용하며 현재 Gateway 자격만 설정합니다. Payment·Settlement·Finance Mock의 자격 판정과 서비스·운영자 자격 부착, 미확정 인증 변경의 재조정, Redis 실행 식별자 확인은 아직 구현 전입니다.
 
 ### 거래 알림
 
@@ -52,7 +52,7 @@ Payment·Settlement는 확정 상태와 알림 요청 Outbox를 함께 저장하
 
 ### PG 대역 3종 설계
 
-`finance-mock` 안에 논리 PG 3종·간편결제 1종의 승인·조회·전액 환불과 지급 기관 대역을 구현합니다. 같은 Spring Boot 앱의 거래 영역이며 Compose 컨테이너를 늘리지 않습니다. 신용카드·체크카드는 PG A/B/C 중 한 곳을, 간편결제는 `EASY_PAY`만 호출합니다. [PG 시험 설정](design.md#pg-3종과-장애-시나리오)과 [간편결제 대역](design.md#간편결제-대역)을 따릅니다.
+다음은 `finance-mock` 안에 구현할 논리 PG 3종·간편결제 1종과 지급 기관 대역입니다. 같은 Spring Boot 앱의 거래 영역이며 Compose 컨테이너를 늘리지 않습니다. 신용카드·체크카드는 PG A/B/C 중 한 곳을, 간편결제는 `EASY_PAY`만 호출합니다. [PG 시험 설정](design.md#pg-3종과-장애-시나리오)과 [간편결제 대역](design.md#간편결제-대역)을 따릅니다.
 
 ![금융 모의 서버의 PG·간편결제·지급 API](diagrams/payment-providers.svg)
 
@@ -82,7 +82,6 @@ Prometheus·Grafana는 각각 `prometheus-data`·`grafana-data` 볼륨을 사용
 | `payment` | `payment-worker` | PG·간편결제 호출·후속 작업 역할, 같은 `payment` DB·계정 |
 | `settlement` | `settlement` | 원장·예약·정산·지급, `settlement` DB·계정 |
 | `finance-mock` | `finance-mock` | 외부 PG·간편결제·지급 API 모의 서버, `finance_mock` DB·계정 |
-| `internal-auth` | 없음 | 내부 호출 자격 판정 라이브러리. 커머스·Payment·Settlement·Finance Mock이 의존하며 DB 없음 |
 
 Payment 두 실행은 같은 jar·DB를 사용하고 `PAYMENT_ROLE=api|worker`로 메트릭 태그를 구분합니다. 실제 역할별 Bean 활성화와 업무 처리 로직은 구현해야 합니다.
 
@@ -121,7 +120,7 @@ Compose DNS로 서비스를 찾습니다. 초기 구성에 별도 서비스 레�
 | Outbox 발행·선행 상태 대기 재처리 | 각 생산·소비 앱 | Commerce Relay는 커밋 후·슬롯 반환·시작 시 깨우고 신호 누락·재시도·만료 임대는 기본 1초 복구 조회로 처리. 소비자는 영속 대기한 원업무를 재판정 | [전달·복구](decisions/0005-kafka-event-delivery-and-capacity.md#안전한-전달과-실행) |
 | 신규 접수 제한·재개 판정 | `commerce` | 15초마다 묶어서 관측하고 기존 작업의 처리·복구는 계속 허용 | [접수 제한](policies.md#신규-접수-제한과-재개) |
 
-이 목표 구조에서 제안하는 초기 주기는 미결제 기한·이벤트 종료·쿠폰 만료 스케줄러 매분, 주소·알림 보존 작업 매일 한 번입니다. 실행 시각·묶음 크기·동시성은 서버 설정으로 명시하고 검증합니다. 사용 가능 여부는 요청 시에도 기한과 상태를 검사하므로 스케줄러 지연으로 만료 쿠폰·종료 이벤트를 허용하거나 시작한 이벤트의 참여를 막지 않습니다. 대량 작업은 제한된 묶음과 재시작 지점을 사용하고, 실제 소요 시간·실패 복구 비용에 따라 Spring Batch 적용을 추가 검토합니다.
+이 목표 구조에서 제안하는 초기 주기는 미결제 기한·이벤트 종료·쿠폰 만료 스케줄러 매분, 주소·알림 보존 작업 매일 한 번입니다. 실행 시각·묶음 크기·동시성은 서버 설정으로 명시하고 검증합니다. 사용 가능 여부는 요청 시에도 기한과 상태를 검사하므로 스케줄러 지연으로 만료 쿠폰·종료 이벤트를 허용하지 않습니다. 대량 작업은 제한된 묶음과 재시작 지점을 사용하고, 실제 소요 시간·실패 복구 비용에 따라 Spring Batch 적용을 추가 검토합니다.
 
 웰컴 쿠폰은 가입 트랜잭션, 판매자 쿠폰은 발급 요청에서 처리합니다. Redis 세션은 서버의 만료 검사와 TTL, Kafka 토픽은 보존 설정을 사용합니다. 마일리지 적립·만료와 판매자 구독 갱신은 이 실행 계약의 범위에서 제외합니다. Outbox·Inbox·금융 Job·원장의 자동 삭제는 [보존 기준](decisions/0005-kafka-event-delivery-and-capacity.md#보존과-삭제-초기값)에 따라 비활성입니다.
 
@@ -235,7 +234,6 @@ Payment API·Worker는 패키지를 복제하지 않습니다. HTTP와 비동기
 | 위치 | 기준 |
 | --- | --- |
 | `gateway/`, `commerce/`, `payment/`, `settlement/`, `finance-mock/` | 독립 애플리케이션의 Gradle 모듈. 업무 모듈은 도메인 이름, 외부 대역은 대상·역할로 이름을 짓고 `-service`는 생략 |
-| `internal-auth/` | 실행하지 않는 공유 라이브러리 모듈. 추출 범위는 [공유 코드 경계](decisions/0009-api-contract-and-shared-code.md#추출-기록) |
 | `<모듈>/src/main/resources` | 앱 설정 |
 | `infra/postgres/schema` | 서비스 DB별 스키마 DDL. 생성·변경 절차는 [DB 정책](migrations.md)을 따름 |
 | `<모듈>/src/test/java`, `src/test/resources` | 단위·통합 테스트와 필요한 fixture. [테스트 규칙](../CONTRIBUTING.md#테스트-작성) 적용 |
@@ -261,7 +259,7 @@ Payment API·Worker는 패키지를 복제하지 않습니다. HTTP와 비동기
 
 Gateway는 빌드에 포함한 [OpenAPI](openapi.json)의 `/api/` 작업을 HTTP 메서드·경로와 `x-owner-service`로 대조해 커머스·Payment API·Settlement로 전달합니다. 경로 접두사가 같은 판매자 API도 상품·계정은 커머스, 정산·지급 조회는 Settlement로 구분합니다. 명세에 없는 경로·메서드와 `/internal`·`/mock`·관리 경로는 전달하지 않습니다. API 명세는 `/v3/api-docs/commerce|payment|settlement`, Swagger UI는 `/swagger-ui.html`입니다.
 
-라우팅, Gateway의 세션 검증, 커머스 상품·재고 API와 판매자 가입·로그인 세션 발급·로그아웃·비밀번호 복구는 구현했지만 나머지 업무 API는 구현 전입니다. 커머스·Payment·Settlement는 Gateway 자격, Finance Mock은 지급에 Settlement, PG 승인·조회·환불에 Payment 자격이 없는 직접 호출을 컨트롤러 전에 거절합니다. 판정은 공유 라이브러리 `internal-auth`가 맡고 서비스는 허용 발신자만 설정합니다. 서비스·운영자 자격은 Settlement→Finance Mock 지급 호출과 Payment→Finance Mock PG 수신 경계를 연결했습니다. Payment Worker의 실제 PG 클라이언트와 나머지 쌍은 해당 호출을 구현할 때 [연결 방법](development.md#내부-호출-자격)에 따라 추가합니다. 내부 HTTP는 평문이므로 로컬 개발 환경에서만 사용합니다. Gateway 자체 오류는 [공통 오류 계약](../CONTRIBUTING.md#오류)으로 응답하고 백엔드의 오류 응답은 보존합니다. 전송 계층의 자동 재시도를 끄며 응답 전 연결 단절도 업무 실패로 확정하지 않습니다. 구매자의 주문·결제 요청과 판매자의 상품·정산 요청에 서로 다른 권한을 적용하고, 각 서비스에서도 계정 종류·거래 소유권을 검증해야 합니다.
+라우팅, Gateway의 세션 검증, 커머스 상품·재고 API와 판매자 가입·로그인 세션 발급·로그아웃·비밀번호 복구, Payment의 본인 결제 조회·목록은 구현했지만 나머지 업무 API는 구현 전입니다. 커머스는 Gateway 자격이 없는 직접 호출을 거절하지만 Payment·Settlement·Finance Mock의 자격 확인은 구현 전이므로 로컬 개발 환경에서만 사용합니다. Gateway 자체 오류는 [공통 오류 계약](../CONTRIBUTING.md#오류)으로 응답하고 백엔드의 오류 응답은 보존합니다. 전송 계층의 자동 재시도를 끄며 응답 전 연결 단절도 업무 실패로 확정하지 않습니다. 구매자의 주문·결제 요청과 판매자의 상품·정산 요청에 서로 다른 권한을 적용하고, 각 서비스에서도 계정 종류·거래 소유권을 검증해야 합니다.
 
 `v3`는 Springdoc의 OpenAPI 3 문서 경로이며 서비스 API의 세 번째 버전을 뜻하지 않습니다.
 
@@ -281,7 +279,7 @@ Prometheus는 6개 실행의 JVM·프로세스·HTTP 메트릭과 명시적으�
 
 Redis는 내부 네트워크에서 앱별 ACL 사용자로 연결합니다. AOF는 Redis의 변경 내역을 디스크에 기록해 재시작 때 복원하는 영속화 방식이며, `redis-data` 볼륨에 보존합니다. 결제·정산의 기준 데이터를 Redis에 저장한다는 뜻은 아닙니다. 키 접두사 자체는 보안 격리가 아니며, 앱이 접근할 수 있는 키는 [위 ACL](#사용자-인증과-내부-신원-전달)이 제한합니다. 키는 `commerce-settle:<domain>:<purpose>:<id>`로 구분하고 TTL·무효화·장애 시 동작은 해당 도메인 담당자가 설계합니다. 금액·멱등성의 최종 정합성을 캐시만으로 보장하지 않습니다. 128MB·noeviction 설정은 메모리 초과 쓰기를 거절하므로 사용량을 관측해야 합니다.
 
-로그인 세션은 Redis를 원본으로 사용하며 [세션 정책](policies.md#인증공통-api-기준)을 따릅니다. 고정 만료는 expiresAt과 TTL을 함께 검사하고 메모리 초과·인증 가드 누락·저장소 오류를 우회하지 않습니다. 세션 세대와 승인한 Redis 실행 식별자는 Gateway·커머스에 동일하게 배포할 인증 설정입니다. 세션 세대는 `AUTH_SESSION_EPOCH`로 Gateway·커머스에 적용했고, 실행 식별자는 구현 시 추가합니다. Redis 재접속 뒤에는 AOF 복원만으로 인증을 재개하지 않고 [복구 절차](development.md#redis-세션-검증과-복구)를 거칩니다.
+로그인 세션은 Redis를 원본으로 사용하며 [세션 정책](policies.md#인증공통-api-기준)을 따릅니다. 고정 만료는 expiresAt과 TTL을 함께 검사하고 메모리 초과·인증 가드 누락·저장소 오류를 우회하지 않습니다. 세션 세대와 승인한 Redis 실행 식별자는 Gateway·커머스에 동일하게 배포할 인증 설정입니다. 세션 세대는 `AUTH_SESSION_EPOCH`로 Gateway에 적용했고, 커머스 적용과 실행 식별자는 구현 시 추가합니다. Redis 재접속 뒤에는 AOF 복원만으로 인증을 재개하지 않고 [복구 절차](development.md#redis-세션-검증과-복구)를 거칩니다.
 
 Zipkin은 Micrometer·OpenTelemetry의 HTTP 추적을 수집합니다. 샘플링 기본값은 10%이며 환경 변수로 조정합니다. smoke는 sampled `traceparent`로 Gateway CLIENT→Commerce SERVER의 부모 관계를 확인합니다. Kafka 업무 이벤트의 추적 전파는 Producer·Consumer 구현 시 검증합니다. 개발용 메모리 저장소는 최대 10,000개 span을 보관하며 재시작하면 추적이 사라집니다.
 

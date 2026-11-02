@@ -6309,8 +6309,8 @@
         ],
         "x-owner-service": "payment",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "실제 DB에서 구매자 본인의 결제만 조회한다. 목록은 createdAt DESC,id DESC 순서이며 page≥0,size=1..100(기본20)을 사용하고, orderId를 주면 그 주문의 본인 결제만 거른다. method는 결제를 처음 만든 결제 요청의 외부 결제수단이며 외부 결제액이 0원이면 null, providerId는 외부 승인 시도가 생기기 전까지 null이다.",
         "security": [
           {
             "accountSession": []
@@ -6439,8 +6439,8 @@
         ],
         "x-owner-service": "payment",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "실제 DB에서 구매자 본인의 결제만 조회한다. 타인·없는 결제는 404다. method는 결제를 처음 만든 결제 요청의 외부 결제수단이며 외부 결제액이 0원이면 null, providerId는 외부 승인 시도가 생기기 전까지 null이다.",
         "security": [
           {
             "accountSession": []
