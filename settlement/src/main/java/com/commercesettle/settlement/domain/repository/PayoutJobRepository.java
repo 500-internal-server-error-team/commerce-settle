@@ -18,6 +18,9 @@ public interface PayoutJobRepository {
    */
   Optional<LeasedJob> leaseNext(String owner, Duration leaseDuration);
 
+  /** {@link #leaseNext(String, Duration)}와 같되 {@code kind}에 해당하는 작업만 고른다. */
+  Optional<LeasedJob> leaseNext(String owner, Duration leaseDuration, LeaseKind kind);
+
   /** 이 token의 임대가 {@code minRemaining}보다 더 남아 있는지 확인한다. 외부 호출 직전에 호출 제한 시간을 넘겨 쓴다. */
   boolean holdsLease(UUID jobId, UUID leaseToken, Duration minRemaining);
 
@@ -26,6 +29,14 @@ public interface PayoutJobRepository {
    * 트랜잭션에서 실행하며, false면 다른 실행자가 인계했거나 임대가 끝난 것이라 같은 트랜잭션의 결과 반영을 모두 롤백해야 한다.
    */
   boolean releaseLease(UUID jobId, UUID leaseToken, PayoutJobStatus status, Duration runAfter);
+
+  /** 동시 실행 슬롯을 나누는 작업 종류. 작업 상태로 구분한다. */
+  enum LeaseKind {
+    /** 도래한 PENDING. 아직 실행 요청을 보낸 적 없는 새 지급이다. */
+    NEW,
+    /** 도래한 RETRY(결과 조회)와 임대가 만료된 RUNNING(중단 복구). */
+    RECOVERY
+  }
 
   record LeasedJob(UUID jobId, UUID payoutId, UUID businessKey, UUID leaseToken, int attempts) {}
 }
