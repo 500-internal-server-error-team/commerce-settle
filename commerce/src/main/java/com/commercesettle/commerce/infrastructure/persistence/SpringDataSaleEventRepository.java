@@ -53,7 +53,7 @@ interface SpringDataSaleEventRepository extends JpaRepository<SaleEvent, UUID> {
 
   Page<SaleEvent> findBySellerId(UUID sellerId, Pageable pageable);
 
-  Page<SaleEvent> findByStatusNot(SaleEventStatus status, Pageable pageable);
+  Page<SaleEvent> findByStatusIn(Collection<SaleEventStatus> statuses, Pageable pageable);
 
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query(

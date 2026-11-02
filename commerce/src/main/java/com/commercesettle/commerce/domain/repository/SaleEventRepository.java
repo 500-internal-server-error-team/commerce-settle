@@ -34,7 +34,7 @@ public interface SaleEventRepository {
 
   PageResult<SaleEvent> findBySeller(UUID sellerId, int page, int size);
 
-  /** 미공개를 제외한 이벤트. */
+  /** 공개 목록에 보이는 예정·진행 중(SCHEDULED/OPEN) 이벤트. 종료·매진 이벤트는 단건·게이지 조회로만 제공한다. */
   PageResult<SaleEvent> findPublished(int page, int size);
 
   /** 시작 시각이 된 SCHEDULED 이벤트를 쓰기 잠금으로 읽는다. */
