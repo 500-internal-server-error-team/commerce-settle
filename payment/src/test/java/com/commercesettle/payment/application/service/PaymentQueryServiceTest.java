@@ -8,9 +8,9 @@ import com.commercesettle.payment.application.dto.PaymentView;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload.ExternalMethod;
+import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
-import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.commercesettle.payment.domain.exception.PaymentNotFoundException;
 import com.commercesettle.payment.domain.model.Payment;
 import com.commercesettle.payment.domain.model.PaymentAmounts;
@@ -170,12 +170,13 @@ class PaymentQueryServiceTest {
     }
 
     @Override
-    public Optional<WaitingInboxEvent> claimNextWaiting(Instant now) {
+    public Optional<InboxClaim> claimNextWaiting(Instant now, Instant leaseUntil, int maxAttempts) {
       throw new UnsupportedOperationException();
     }
 
     @Override
-    public Optional<WaitingInboxEvent> claimWaitingEvent(UUID eventId, Instant now) {
+    public Optional<InboxClaim> claimWaitingEvent(
+        UUID eventId, Instant now, Instant leaseUntil, int maxAttempts) {
       throw new UnsupportedOperationException();
     }
 
@@ -185,7 +186,18 @@ class PaymentQueryServiceTest {
     }
 
     @Override
-    public void markReviewRequired(UUID inboxId, Instant now) {
+    public void markReviewRequired(UUID inboxId, String errorCode, Instant now) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean lockClaimed(UUID inboxId, long version) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean recordFailure(
+        UUID inboxId, long version, String errorCode, Instant retryAt, Instant now) {
       throw new UnsupportedOperationException();
     }
   }
