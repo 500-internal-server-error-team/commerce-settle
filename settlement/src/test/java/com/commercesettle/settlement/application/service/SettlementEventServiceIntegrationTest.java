@@ -209,6 +209,19 @@ class SettlementEventServiceIntegrationTest {
   }
 
   @Test
+  @DisplayName("환불 마감 정각의 구매확정은 운영 확인으로 남기고 항목을 PAYABLE로 바꾸지 않는다")
+  void purchaseAtRefundDeadlineRequiresReview() {
+    var payment = payment(UUID.randomUUID(), 10_000, 0, 0, 10_000, 0);
+    service.receivePaymentConfirmed(payment, source("commerce-settle.payment.v1", payment));
+
+    var atDeadline = purchase(UUID.randomUUID(), orderId, DELIVERED_AT.plusHours(168));
+    service.receivePurchaseConfirmed(atDeadline, source("commerce-settle.commerce.v1", atDeadline));
+
+    assertInbox(atDeadline.eventId(), "REVIEW_REQUIRED", null);
+    assertThat(item().get("status")).isEqualTo("WAITING_CONFIRMATION");
+  }
+
+  @Test
   @DisplayName("구매확정이 먼저 오면 대기하고, 결제확정 뒤 처리기가 PAYABLE로 바꾼다")
   void purchaseBeforePaymentWaitsThenBecomesPayable() {
     var purchase = purchase(UUID.randomUUID(), orderId, CONFIRMED_AT);
