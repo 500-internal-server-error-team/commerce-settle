@@ -8,6 +8,8 @@ import com.commercesettle.settlement.domain.model.SettlementAmounts;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.commercesettle.settlement.domain.model.SettlementItem;
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository;
+import com.commercesettle.settlement.domain.repository.PayoutJobRepository.LeaseKind;
+import com.commercesettle.settlement.domain.repository.PayoutJobRepository.LeasedJob;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -446,6 +448,49 @@ class PayoutWorkerIntegrationTest {
                 String.class,
                 otherPayoutId))
         .isEqualTo("DONE");
+  }
+
+  @Test
+  @DisplayName("새 지급 임대는 도래한 PENDING만, 복구 임대는 도래한 RETRY와 임대가 만료된 RUNNING만 고른다")
+  void leasesByKind() {
+    UUID retry = jobIdOf(settle(UUID.randomUUID()));
+    UUID expired = jobIdOf(settle(UUID.randomUUID()));
+    UUID notDue = jobIdOf(settle(UUID.randomUUID()));
+    UUID running = jobIdOf(settle(UUID.randomUUID()));
+    jdbc.update("UPDATE settlement.payout_jobs SET status = 'RETRY' WHERE id = ?", retry);
+    jdbc.update(
+        "UPDATE settlement.payout_jobs SET status = 'RETRY',"
+            + " next_run_at = now() + interval '1 minute' WHERE id = ?",
+        notDue);
+    for (UUID id : List.of(expired, running)) {
+      jdbc.update(
+          "UPDATE settlement.payout_jobs SET status = 'RUNNING', lease_token = gen_random_uuid(),"
+              + " lease_until = now() + interval '1 minute' WHERE id = ?",
+          id);
+    }
+    jdbc.update(
+        "UPDATE settlement.payout_jobs SET lease_until = now() - interval '1 second' WHERE id = ?",
+        expired);
+    Duration lease = Duration.ofSeconds(30);
+
+    assertThat(jobs.leaseNext("worker", lease, LeaseKind.NEW))
+        .map(LeasedJob::payoutId)
+        .contains(payoutId);
+    assertThat(jobs.leaseNext("worker", lease, LeaseKind.NEW)).isEmpty();
+
+    List<UUID> recovered = new ArrayList<>();
+    jobs.leaseNext("worker", lease, LeaseKind.RECOVERY).ifPresent(j -> recovered.add(j.jobId()));
+    jobs.leaseNext("worker", lease, LeaseKind.RECOVERY).ifPresent(j -> recovered.add(j.jobId()));
+    assertThat(recovered).containsExactlyInAnyOrder(retry, expired);
+    assertThat(jobs.leaseNext("worker", lease, LeaseKind.RECOVERY)).isEmpty();
+  }
+
+  private UUID jobIdOf(UUID batchId) {
+    return jdbc.queryForObject(
+        "SELECT j.id FROM settlement.payout_jobs j JOIN settlement.payouts p ON p.id = j.payout_id"
+            + " WHERE p.batch_id = ?",
+        UUID.class,
+        batchId);
   }
 
   private void lockItems() {

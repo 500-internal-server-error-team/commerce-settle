@@ -14,6 +14,10 @@ import org.springframework.transaction.annotation.Transactional;
 /** 지급 작업 임대는 업무 상태 전이가 아니라 실행권 선점이라 조건부 SQL로 처리하고, 만료는 DB 시각으로 판정한다. */
 @Repository
 class JpaPayoutJobRepository implements PayoutJobRepository {
+  private static final String NEW_DUE = "(status = 'PENDING' AND next_run_at <= now())";
+  private static final String RECOVERY_DUE =
+      "(status = 'RETRY' AND next_run_at <= now()) OR (status = 'RUNNING' AND lease_until < now())";
+
   private final SpringDataPayoutJobRepository repository;
   private final NamedParameterJdbcOperations jdbc;
 
@@ -36,6 +40,22 @@ class JpaPayoutJobRepository implements PayoutJobRepository {
   @Override
   @Transactional
   public Optional<LeasedJob> leaseNext(String owner, Duration leaseDuration) {
+    return lease(owner, leaseDuration, NEW_DUE + " OR " + RECOVERY_DUE);
+  }
+
+  @Override
+  @Transactional
+  public Optional<LeasedJob> leaseNext(String owner, Duration leaseDuration, LeaseKind kind) {
+    return lease(
+        owner,
+        leaseDuration,
+        switch (kind) {
+          case NEW -> NEW_DUE;
+          case RECOVERY -> RECOVERY_DUE;
+        });
+  }
+
+  private Optional<LeasedJob> lease(String owner, Duration leaseDuration, String due) {
     return jdbc
         .query(
             "UPDATE settlement.payout_jobs"
@@ -44,8 +64,8 @@ class JpaPayoutJobRepository implements PayoutJobRepository {
                 + " attempts = attempts + 1, updated_at = now(), version = version + 1"
                 + " WHERE id = ("
                 + "   SELECT id FROM settlement.payout_jobs"
-                + "   WHERE (status IN ('PENDING', 'RETRY') AND next_run_at <= now())"
-                + "      OR (status = 'RUNNING' AND lease_until < now())"
+                + "   WHERE "
+                + due
                 + "   ORDER BY next_run_at, id LIMIT 1 FOR UPDATE SKIP LOCKED)"
                 + " RETURNING id, payout_id, business_key, lease_token, attempts",
             new MapSqlParameterSource()
