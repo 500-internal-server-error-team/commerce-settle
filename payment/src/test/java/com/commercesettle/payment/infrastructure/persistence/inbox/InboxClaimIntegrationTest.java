@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
+import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
@@ -197,10 +198,14 @@ class InboxClaimIntegrationTest {
           .extracting(WaitingInboxEvent::attempts)
           .isEqualTo(attempt);
     }
-    Optional<WaitingInboxEvent> eleventh =
-        inTransaction(() -> claim(LATER.plus(LEASE.multipliedBy(10))));
+    Optional<InboxClaim> eleventh =
+        inTransaction(() -> claimRaw(LATER.plus(LEASE.multipliedBy(10))));
 
-    assertThat(eleventh).isEmpty();
+    assertThat(eleventh)
+        .containsInstanceOf(InboxClaim.Reviewed.class)
+        .get()
+        .extracting(result -> ((InboxClaim.Reviewed) result).errorCode())
+        .isEqualTo("PAYMENT_REQUEST_ATTEMPTS_EXHAUSTED");
     assertThat(jdbc.queryForMap("SELECT status, attempts, last_error_code FROM payment.inbox"))
         .containsEntry("status", "REVIEW_REQUIRED")
         .containsEntry("attempts", 10)
@@ -225,19 +230,28 @@ class InboxClaimIntegrationTest {
   }
 
   @Test
-  @DisplayName("원문을 읽을 수 없는 행은 확인 대상으로 넘기고 다음 행을 선점한다")
-  void marksUnreadableBodyAsReviewAndClaimsNext() {
+  @DisplayName("원문을 읽을 수 없는 행은 그 행만 확인 대상으로 넘기고, 다음 선점에서 다음 행을 잡는다")
+  void marksOnlyUnreadableRowAsReviewPerClaim() {
     EventEnvelope<OrderPaymentRequestedPayload> readable = saveWaiting();
     UUID unreadableId = insertUnreadableWaiting();
 
-    Optional<WaitingInboxEvent> claimed = inTransaction(() -> claim(LATER));
+    Optional<InboxClaim> first = inTransaction(() -> claimRaw(LATER));
 
-    assertThat(claimed).get().extracting(WaitingInboxEvent::event).isEqualTo(readable);
+    assertThat(first)
+        .contains(new InboxClaim.Reviewed(unreadableId, "PAYMENT_REQUEST_BODY_UNREADABLE"));
     assertThat(
             jdbc.queryForMap(
                 "SELECT status, last_error_code FROM payment.inbox WHERE id = ?", unreadableId))
         .containsEntry("status", "REVIEW_REQUIRED")
         .containsEntry("last_error_code", "PAYMENT_REQUEST_BODY_UNREADABLE");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT attempts FROM payment.inbox WHERE id <> ?", Integer.class, unreadableId))
+        .isZero();
+    assertThat(inTransaction(() -> claim(LATER)))
+        .get()
+        .extracting(WaitingInboxEvent::event)
+        .isEqualTo(readable);
   }
 
   @Test
@@ -345,7 +359,19 @@ class InboxClaimIntegrationTest {
     }
   }
 
+  /** 처리할 요청을 선점한 결과만 기대하는 시험용. 확인 대상으로 넘긴 결과가 오면 실패한다. */
   private Optional<WaitingInboxEvent> claim(Instant now) {
+    return claimRaw(now)
+        .map(
+            result -> {
+              if (result instanceof InboxClaim.Claimed(WaitingInboxEvent event)) {
+                return event;
+              }
+              throw new AssertionError("Unexpected review: " + result);
+            });
+  }
+
+  private Optional<InboxClaim> claimRaw(Instant now) {
     return inbox.claimNextWaiting(now, now.plus(LEASE), 10);
   }
 

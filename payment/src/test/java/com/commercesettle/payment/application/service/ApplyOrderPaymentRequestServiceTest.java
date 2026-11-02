@@ -10,6 +10,7 @@ import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload.ExternalMethod;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload.Status;
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
+import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
@@ -448,6 +449,18 @@ class ApplyOrderPaymentRequestServiceTest {
   }
 
   @Test
+  @DisplayName("선점에서 확인 대상으로 넘긴 행은 처리하지 않고 처리 1건으로 센다")
+  void countsReviewedClaimAsHandledWithoutProcessing() {
+    inbox.addReviewed("PAYMENT_REQUEST_ATTEMPTS_EXHAUSTED");
+
+    assertThat(service.processNext()).isTrue();
+
+    assertThat(payments.all()).isEmpty();
+    assertThat(inbox.failures).isEmpty();
+    assertThat(service.processNext()).isFalse();
+  }
+
+  @Test
   @DisplayName("임대가 끝나 다른 처리기가 선점한 요청은 처리하지 않고 건너뛴다")
   void skipsRequestWhenLeaseWasLost() {
     inbox.leaseLost = true;
@@ -592,7 +605,7 @@ class ApplyOrderPaymentRequestServiceTest {
   }
 
   private static final class FakeInbox implements InboxStore {
-    private final Queue<WaitingInboxEvent> waiting = new ArrayDeque<>();
+    private final Queue<InboxClaim> waiting = new ArrayDeque<>();
     private final Map<UUID, OrderPaymentRequestedPayload> payloads = new HashMap<>();
     private final Map<UUID, UUID> applied = new HashMap<>();
     private final Map<UUID, OrderPaymentRequestedPayload> originals = new HashMap<>();
@@ -611,18 +624,25 @@ class ApplyOrderPaymentRequestServiceTest {
       UUID inboxId = UUID.randomUUID();
       payloads.put(inboxId, payload);
       waiting.add(
-          new WaitingInboxEvent(
-              inboxId,
-              3,
-              attempts,
-              new EventEnvelope<>(
-                  UUID.randomUUID(),
-                  "OrderPaymentRequested",
-                  1,
-                  OffsetDateTime.parse("2026-10-29T09:00:00+09:00"),
-                  payload.orderId(),
-                  0,
-                  payload)));
+          new InboxClaim.Claimed(
+              new WaitingInboxEvent(
+                  inboxId,
+                  3,
+                  attempts,
+                  new EventEnvelope<>(
+                      UUID.randomUUID(),
+                      "OrderPaymentRequested",
+                      1,
+                      OffsetDateTime.parse("2026-10-29T09:00:00+09:00"),
+                      payload.orderId(),
+                      0,
+                      payload))));
+      return inboxId;
+    }
+
+    UUID addReviewed(String errorCode) {
+      UUID inboxId = UUID.randomUUID();
+      waiting.add(new InboxClaim.Reviewed(inboxId, errorCode));
       return inboxId;
     }
 
@@ -632,8 +652,7 @@ class ApplyOrderPaymentRequestServiceTest {
     }
 
     @Override
-    public Optional<WaitingInboxEvent> claimNextWaiting(
-        Instant now, Instant leaseUntil, int maxAttempts) {
+    public Optional<InboxClaim> claimNextWaiting(Instant now, Instant leaseUntil, int maxAttempts) {
       if (claimFailure != null) {
         throw claimFailure;
       }
@@ -642,10 +661,13 @@ class ApplyOrderPaymentRequestServiceTest {
     }
 
     @Override
-    public Optional<WaitingInboxEvent> claimWaitingEvent(
+    public Optional<InboxClaim> claimWaitingEvent(
         UUID eventId, Instant now, Instant leaseUntil, int maxAttempts) {
       return claimNextWaiting(now, leaseUntil, maxAttempts)
-          .filter(e -> e.event().eventId().equals(eventId));
+          .filter(
+              claim ->
+                  claim instanceof InboxClaim.Claimed(WaitingInboxEvent e)
+                      && e.event().eventId().equals(eventId));
     }
 
     @Override

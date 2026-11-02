@@ -3,6 +3,7 @@ package com.commercesettle.payment.application.service;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
+import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
@@ -84,7 +85,10 @@ public class ApplyOrderPaymentRequestService {
     this.lease = Duration.ofMillis(leaseMs);
   }
 
-  /** 처리할 WAITING 하나를 처리하고, 처리하거나 실패를 기록한 이벤트가 있었는지 반환한다. 선점이나 실패 기록 자체가 실패하면 예외를 그대로 던진다. */
+  /**
+   * 처리할 WAITING 하나를 처리하고, 다룬 행이 있었는지 반환한다. 처리, 실패 기록, 확인 대상 전환 모두 1건이다. 선점이나 실패 기록 자체가 실패하면 예외를 그대로
+   * 던진다.
+   */
   public boolean processNext() {
     return processClaimed(now -> inbox.claimNextWaiting(now, now.plus(lease), MAX_ATTEMPTS));
   }
@@ -95,12 +99,15 @@ public class ApplyOrderPaymentRequestService {
         now -> inbox.claimWaitingEvent(eventId, now, now.plus(lease), MAX_ATTEMPTS));
   }
 
-  private boolean processClaimed(Function<Instant, Optional<WaitingInboxEvent>> claim) {
-    Optional<WaitingInboxEvent> next = transactions.execute(status -> claim.apply(clock.instant()));
+  private boolean processClaimed(Function<Instant, Optional<InboxClaim>> claim) {
+    Optional<InboxClaim> next = transactions.execute(status -> claim.apply(clock.instant()));
     if (next == null || next.isEmpty()) {
       return false;
     }
-    WaitingInboxEvent claimed = next.get();
+    if (!(next.get() instanceof InboxClaim.Claimed(WaitingInboxEvent claimed))) {
+      // 선점 트랜잭션에서 이미 확인 대상으로 넘기고 커밋했다. 처리 1건으로 센다.
+      return true;
+    }
     try {
       transactions.executeWithoutResult(
           status -> {
@@ -128,23 +135,21 @@ public class ApplyOrderPaymentRequestService {
   private void recordFailure(WaitingInboxEvent claimed, RuntimeException cause) {
     int attempts = claimed.attempts();
     Instant now = clock.instant();
-    Instant retryAt = attempts < MAX_ATTEMPTS ? now.plus(retryDelay(attempts)) : null;
+    Instant retry = attempts < MAX_ATTEMPTS ? now.plus(retryDelay(attempts)) : null;
     Boolean recorded;
     try {
       recorded =
           transactions.execute(
               status ->
                   inbox.recordFailure(
-                      claimed.inboxId(), claimed.version(), PROCESSING_FAILED, retryAt, now));
+                      claimed.inboxId(), claimed.version(), PROCESSING_FAILED, retry, now));
     } catch (RuntimeException recordFailure) {
       // 기록 실패만 올라가면 처리 실패의 원인을 잃으므로 함께 싣는다.
       recordFailure.addSuppressed(cause);
       throw recordFailure;
     }
     String result =
-        !Boolean.TRUE.equals(recorded)
-            ? "SKIPPED"
-            : retryAt == null ? "REVIEW_REQUIRED" : "WAITING";
+        !Boolean.TRUE.equals(recorded) ? "SKIPPED" : retry == null ? "REVIEW_REQUIRED" : "WAITING";
     LOG.atWarn()
         .setCause(cause)
         .addKeyValue("event", "payment.accept")

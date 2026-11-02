@@ -2,6 +2,7 @@ package com.commercesettle.payment.infrastructure.persistence.inbox;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
+import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
@@ -119,18 +120,17 @@ public class JdbcInboxStore implements InboxStore {
   }
 
   @Override
-  public Optional<WaitingInboxEvent> claimNextWaiting(
-      Instant now, Instant leaseUntil, int maxAttempts) {
+  public Optional<InboxClaim> claimNextWaiting(Instant now, Instant leaseUntil, int maxAttempts) {
     return claimWaiting(null, now, leaseUntil, maxAttempts);
   }
 
   @Override
-  public Optional<WaitingInboxEvent> claimWaitingEvent(
+  public Optional<InboxClaim> claimWaitingEvent(
       UUID eventId, Instant now, Instant leaseUntil, int maxAttempts) {
     return claimWaiting(Objects.requireNonNull(eventId), now, leaseUntil, maxAttempts);
   }
 
-  private Optional<WaitingInboxEvent> claimWaiting(
+  private Optional<InboxClaim> claimWaiting(
       UUID eventId, Instant now, Instant leaseUntil, int maxAttempts) {
     if (!leaseUntil.isAfter(now) || maxAttempts < 1) {
       throw new IllegalArgumentException("Invalid inbox claim");
@@ -143,11 +143,10 @@ public class JdbcInboxStore implements InboxStore {
             .addValue("exhausted", ATTEMPTS_EXHAUSTED)
             .addValue("eventId", eventId, Types.OTHER);
     applyTransactionLimits();
-    // 확인 대상으로 넘긴 행은 대기 행에서 빠지므로 반복은 끝난다.
-    while (true) {
-      List<Claimed> rows =
-          jdbc.query(
-              """
+    // 한 번에 한 행만 다룬다. 확인 대상으로 넘긴 행도 처리 1건으로 돌려줘 처리기의 배치 크기에 들어가게 한다.
+    List<Claimed> rows =
+        jdbc.query(
+            """
               WITH next AS (
                   SELECT id FROM payment.inbox
                   WHERE consumer = :consumer AND status = 'WAITING' AND next_run_at <= :now
@@ -166,33 +165,35 @@ public class JdbcInboxStore implements InboxStore {
               FROM next WHERE i.id = next.id
               RETURNING i.id, i.event_id, i.version, i.attempts, i.status, i.raw_body
               """,
-              params,
-              (rs, row) ->
-                  new Claimed(
-                      rs.getObject("id", UUID.class),
-                      rs.getObject("event_id", UUID.class),
-                      rs.getLong("version"),
-                      rs.getInt("attempts"),
-                      rs.getString("status"),
-                      rs.getBytes("raw_body")));
-      if (rows.isEmpty()) {
-        return Optional.empty();
-      }
-      Claimed row = rows.get(0);
-      if (!"WAITING".equals(row.status())) {
-        // 마지막 시도가 결과를 남기지 못하고 끝났다. 상한을 넘겨 다시 처리하지 않는다.
-        logReview(row, ATTEMPTS_EXHAUSTED);
-        continue;
-      }
-      try {
-        EventEnvelope<OrderPaymentRequestedPayload> event =
-            mapper.readValue(row.body(), new TypeReference<>() {});
-        return Optional.of(new WaitingInboxEvent(row.id(), row.version(), row.attempts(), event));
-      } catch (IOException exception) {
-        // 저장 때 검증한 원문이므로 읽기 실패는 데이터 손상이나 계약 변경이다. 다시 읽어도 같으므로 재시도하지 않는다.
-        finishWaiting(row.id(), "REVIEW_REQUIRED", null, BODY_UNREADABLE, now);
-        logReview(row, BODY_UNREADABLE);
-      }
+            params,
+            (rs, row) ->
+                new Claimed(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("event_id", UUID.class),
+                    rs.getLong("version"),
+                    rs.getInt("attempts"),
+                    rs.getString("status"),
+                    rs.getBytes("raw_body")));
+    if (rows.isEmpty()) {
+      return Optional.empty();
+    }
+    Claimed row = rows.get(0);
+    if (!"WAITING".equals(row.status())) {
+      // 마지막 시도가 결과를 남기지 못하고 끝났다. 상한을 넘겨 다시 처리하지 않는다.
+      logReview(row, ATTEMPTS_EXHAUSTED);
+      return Optional.of(new InboxClaim.Reviewed(row.id(), ATTEMPTS_EXHAUSTED));
+    }
+    try {
+      EventEnvelope<OrderPaymentRequestedPayload> event =
+          mapper.readValue(row.body(), new TypeReference<>() {});
+      return Optional.of(
+          new InboxClaim.Claimed(
+              new WaitingInboxEvent(row.id(), row.version(), row.attempts(), event)));
+    } catch (IOException exception) {
+      // 저장 때 검증한 원문이므로 읽기 실패는 데이터 손상이나 계약 변경이다. 다시 읽어도 같으므로 재시도하지 않는다.
+      finishWaiting(row.id(), "REVIEW_REQUIRED", null, BODY_UNREADABLE, now);
+      logReview(row, BODY_UNREADABLE);
+      return Optional.of(new InboxClaim.Reviewed(row.id(), BODY_UNREADABLE));
     }
   }
 
