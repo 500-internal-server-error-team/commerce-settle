@@ -2,7 +2,7 @@
 
 서비스별 PostgreSQL과 [Redis 인증 데이터](#redis-인증-데이터)의 설계입니다. PostgreSQL의 물리 FK는 만들지 않고 아래 관계를 애플리케이션에서 검증합니다. 공통 시간 컬럼은 [시간 정보와 감사 기록](architecture.md#시간-정보와-감사-기록)에 따라 채웁니다. 생성/수정 시각과 행위 감사 로그는 별개입니다. 식별자는 서버 생성 UUID, 금액·누적 수량은 bigint, PostgreSQL 시각은 `timestamptz`이며 조회 시간대는 KST입니다. 내부 저장은 같은 절대시각을 유지합니다. `?`는 nullable, 나머지 컬럼은 NOT NULL입니다. 숫자 버전은 0부터 시작하고 조건부 갱신마다 증가합니다.
 
-이 문서는 테이블·컬럼·제약·인덱스의 목표 스키마를 정의합니다. 실제 DDL과 환경별 생성·변경 절차는 [DB 정책](migrations.md)을 따르며, 명세의 존재를 테이블 구현 완료로 간주하지 않습니다. 현재 커머스의 `products`·`product_inventory`·`inventory_movements`·`inventory_reservations`·`sale_events`·`event_participations`·`coupon_templates`·`buyer_coupons`·`coupon_history`·`idempotency_records`·`buyer_accounts`·`seller_accounts`·`password_reset_tokens`·`audit_logs`는 [commerce 초기 SQL](../infra/postgres/schema/commerce.sql)에, 정산의 `settlement_items`·`settlement_entries`·`settlement_batches`·`payouts`·`payout_jobs`·`settlement_reservations`·`inbox`·`inbox_conflicts`·`inbox_quarantines`·`inbox_quarantine_deliveries`와 Spring Batch 메타데이터는 [settlement 초기 SQL](../infra/postgres/schema/settlement.sql)에, 금융 Mock의 `mock_accounts`·`mock_scenarios`·`mock_transactions`·`mock_funds_reservations`·`mock_cash_entries`·`idempotency_records`는 [finance_mock 초기 SQL](../infra/postgres/schema/finance_mock.sql)에 반영했습니다. 금융 Mock은 지급과 PG·간편결제 승인·전액 환불·입금 처리를 구현하며 해당 컬럼을 사용합니다.
+이 문서는 테이블·컬럼·제약·인덱스의 목표 스키마를 정의합니다. 실제 DDL과 환경별 생성·변경 절차는 [DB 정책](migrations.md)을 따르며, 명세의 존재를 테이블 구현 완료로 간주하지 않습니다. 현재 커머스의 `products`·`product_inventory`·`inventory_movements`·`inventory_reservations`·`sale_events`·`event_participations`·`coupon_templates`·`buyer_coupons`·`coupon_history`·`idempotency_records`·`buyer_accounts`·`seller_accounts`·`password_reset_tokens`·`audit_logs`는 [commerce 초기 SQL](../infra/postgres/schema/commerce.sql)에, 정산의 `settlement_items`·`settlement_entries`·`settlement_batches`·`payouts`·`payout_jobs`·`settlement_reservations`·`inbox`·`inbox_conflicts`·`inbox_quarantines`·`inbox_quarantine_deliveries`·`payout_job_replays`·`idempotency_records`·`audit_logs`와 Spring Batch 메타데이터는 [settlement 초기 SQL](../infra/postgres/schema/settlement.sql)에, 금융 Mock의 `mock_accounts`·`mock_scenarios`·`mock_transactions`·`mock_funds_reservations`·`mock_cash_entries`·`idempotency_records`는 [finance_mock 초기 SQL](../infra/postgres/schema/finance_mock.sql)에 반영했습니다. 금융 Mock은 지급과 PG·간편결제 승인·전액 환불·입금 처리를 구현하며 해당 컬럼을 사용합니다.
 
 주문의 `orders`·`order_addresses`·`order_refund_requests`도 commerce 초기 SQL과 도메인·저장소에 반영했습니다. 주문·재고 예약·결제 결과·배송·취소/반품 상태와 Inbox/Outbox를 연결합니다. 쿠폰·이벤트 실저장과 금융/정산 실행은 소유 어댑터 및 해당 서비스의 책임입니다. 현재 연결·검증 범위는 [주문 업무 흐름](development.md#주문-업무-흐름)을 따릅니다.
 
@@ -875,6 +875,23 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건을 적용합니다. 금융 결과와 지급 항목·Job을 함께 반영하고, 만료된 실행자의 결과는 모두 롤백합니다. 호출·조회·원키 재개는 [공통 복구](policies.md#공통-복구)를 따릅니다.
 
 **인덱스:** (status,next_run_at,lease_until,id).
+
+### payout_job_replays
+
+소유: `settlement`. 운영 재처리 이력. 원업무 키·금액·계정 사본은 `payouts`에 그대로 두고 다시 연 실행자·사유·이전 상태만 남깁니다.
+
+| 컬럼 | 타입 | 의미 |
+| --- | --- | --- |
+| `id` | `uuid` | PK; 서버 생성 |
+| `job_id` | `uuid` | →payout_jobs.id |
+| `expected_version` | `bigint` | 재처리 요청의 예상 작업 버전 |
+| `previous_status` | `varchar(24)` | 다시 열기 전 작업 상태(REVIEW_REQUIRED) |
+| `previous_attempts` | `integer` | 다시 열기 전 시도 수. 재처리는 시도 수를 0으로 되돌린다 |
+| `operator_id` | `varchar(100)` | 검증한 `operator:<식별자>` 발신자 |
+| `reason` | `varchar(200)` | 운영자가 입력한 재처리 사유 |
+| `created_at` | `timestamptz` | NOT NULL |
+
+**제약:** UNIQUE(job_id,expected_version). 작업 행 잠금 아래 작업·배치 전이·멱등 기록·감사 행과 같은 트랜잭션에 저장합니다.
 
 ### settlement_reservations
 
