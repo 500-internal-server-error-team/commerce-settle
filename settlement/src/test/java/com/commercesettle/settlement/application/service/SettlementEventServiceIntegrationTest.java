@@ -5,16 +5,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PaymentConfirmedPayload;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
+import com.commercesettle.settlement.application.port.InboxStore;
 import com.commercesettle.settlement.application.port.InboxStore.Source;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.Timestamp;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -30,6 +33,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -61,6 +65,8 @@ class SettlementEventServiceIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper mapper;
   @Autowired MutableClock clock;
+  @Autowired InboxStore inbox;
+  @Autowired TransactionTemplate transactions;
 
   private final AtomicLong offsets = new AtomicLong();
   private UUID paymentId;
@@ -227,6 +233,54 @@ class SettlementEventServiceIntegrationTest {
   }
 
   @Test
+  @DisplayName("결제확정이 오지 않으면 10번째 판정에서 대기를 멈추고 운영 확인으로 남긴다")
+  void waitingPurchaseStopsAfterMaxAttempts() {
+    var purchase = purchase(UUID.randomUUID(), orderId, CONFIRMED_AT);
+    service.receivePurchaseConfirmed(purchase, source("commerce-settle.commerce.v1", purchase));
+    for (int attempt = 2; attempt < 10; attempt++) {
+      assertThat(service.processNextWaiting()).isTrue();
+    }
+    assertInbox(purchase.eventId(), "WAITING", null);
+    assertThat(attempts(purchase.eventId())).isEqualTo(9);
+
+    assertThat(service.processNextWaiting()).isTrue();
+
+    assertInbox(purchase.eventId(), "REVIEW_REQUIRED", null);
+    assertThat(attempts(purchase.eventId())).isEqualTo(10);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT last_error_code FROM settlement.inbox WHERE event_id = ?",
+                String.class,
+                purchase.eventId()))
+        .isEqualTo("PAYMENT_NOT_ARRIVED");
+    assertThat(service.processNextWaiting()).isFalse();
+  }
+
+  @Test
+  @DisplayName("대기 간격은 기준 1초에서 두 배씩 늘어 60초에서 멈춘다")
+  void waitingDelayGrowsExponentially() {
+    var purchase = purchase(UUID.randomUUID(), orderId, CONFIRMED_AT);
+    service.receivePurchaseConfirmed(purchase, source("commerce-settle.commerce.v1", purchase));
+    UUID inboxId =
+        jdbc.queryForObject(
+            "SELECT id FROM settlement.inbox WHERE event_id = ?", UUID.class, purchase.eventId());
+
+    List<Long> delays = new ArrayList<>();
+    for (int attempt = 2; attempt <= 8; attempt++) {
+      transactions.executeWithoutResult(
+          status -> inbox.markWaiting(inboxId, Duration.ofSeconds(1), 10, NOW));
+      delays.add(
+          jdbc.queryForObject(
+              "SELECT round(extract(epoch FROM next_run_at - clock_timestamp()))::bigint"
+                  + " FROM settlement.inbox WHERE id = ?",
+              Long.class,
+              inboxId));
+    }
+
+    assertThat(delays).containsExactly(2L, 4L, 8L, 16L, 32L, 60L, 60L);
+  }
+
+  @Test
   @DisplayName("결제확정 뒤 구매확정은 바로 PAYABLE이 되고, 다른 주문의 구매확정은 운영 확인으로 남긴다")
   void purchaseAfterPayment() {
     var payment = payment(UUID.randomUUID(), 10_000, 0, 0, 10_000, 0);
@@ -379,6 +433,11 @@ class SettlementEventServiceIntegrationTest {
             "SELECT status, result_ref FROM settlement.inbox WHERE event_id = ?", eventId);
     assertThat(row.get("status")).isEqualTo(status);
     assertThat(row.get("result_ref")).isEqualTo(resultRef);
+  }
+
+  private int attempts(UUID eventId) {
+    return jdbc.queryForObject(
+        "SELECT attempts FROM settlement.inbox WHERE event_id = ?", Integer.class, eventId);
   }
 
   private static Instant instant(Map<String, Object> row, String column) {

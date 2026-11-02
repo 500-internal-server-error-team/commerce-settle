@@ -142,19 +142,28 @@ class JdbcInboxStore implements InboxStore {
   }
 
   @Override
-  public void markWaiting(UUID inboxId, Duration delay, Instant now) {
-    int updated =
-        jdbc.update(
+  public boolean markWaiting(UUID inboxId, Duration baseDelay, int maxAttempts, Instant now) {
+    // SET의 attempts는 갱신 전 값이다. 상한 판정과 대기 시간을 같은 문장에서 정해 롤백 뒤에도 횟수가 어긋나지 않는다.
+    List<String> statuses =
+        jdbc.query(
             """
             UPDATE settlement.inbox
-            SET status = 'WAITING', next_run_at = clock_timestamp() + make_interval(secs => :delay),
+            SET attempts = attempts + 1, last_error_code = 'PAYMENT_NOT_ARRIVED',
+                status = CASE WHEN attempts + 1 >= :max THEN 'REVIEW_REQUIRED' ELSE 'WAITING' END,
+                next_run_at = CASE WHEN attempts + 1 >= :max THEN NULL
+                    ELSE clock_timestamp()
+                        + make_interval(secs => least(60, :base * power(2, least(attempts, 6)))) END,
                 updated_at = :now, version = version + 1
             WHERE id = :inboxId AND status IN ('RECEIVED', 'WAITING')
+            RETURNING status
             """,
             new MapSqlParameterSource("inboxId", inboxId)
-                .addValue("delay", delay.toMillis() / 1000.0)
-                .addValue("now", now.atOffset(ZoneOffset.UTC)));
-    requireOne(updated, inboxId);
+                .addValue("base", baseDelay.toMillis() / 1000.0)
+                .addValue("max", maxAttempts)
+                .addValue("now", now.atOffset(ZoneOffset.UTC)),
+            (rs, row) -> rs.getString(1));
+    requireOne(statuses.size(), inboxId);
+    return "WAITING".equals(statuses.get(0));
   }
 
   private void finish(UUID inboxId, String status, UUID resultRef, Instant now) {

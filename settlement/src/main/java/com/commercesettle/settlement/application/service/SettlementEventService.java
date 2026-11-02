@@ -29,6 +29,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class SettlementEventService {
   private static final Logger LOGGER = LoggerFactory.getLogger(SettlementEventService.class);
+  // policies.md 재처리: 최대 10회, 1초부터 최대 60초 간격, 소진 시 REVIEW_REQUIRED.
+  private static final int MAX_WAITING_ATTEMPTS = 10;
 
   private final InboxStore inbox;
   private final SettlementItemRepository items;
@@ -125,7 +127,9 @@ public class SettlementEventService {
     Optional<SettlementItem> found = items.findByPaymentId(purchase.paymentId());
     if (found.isEmpty()) {
       // 결제 원장이 아직 없다. 두 토픽 사이 순서는 보장되지 않는다(ADR 0005).
-      inbox.markWaiting(inboxId, waitingRecheckDelay, now);
+      if (!inbox.markWaiting(inboxId, waitingRecheckDelay, MAX_WAITING_ATTEMPTS, now)) {
+        logReview(event, "PAYMENT_NOT_ARRIVED");
+      }
       return;
     }
     SettlementItem item = found.get();
@@ -164,6 +168,10 @@ public class SettlementEventService {
 
   private void review(UUID inboxId, EventEnvelope<?> event, String reason, Instant now) {
     inbox.markReviewRequired(inboxId, now);
+    logReview(event, reason);
+  }
+
+  private static void logReview(EventEnvelope<?> event, String reason) {
     LOGGER
         .atWarn()
         .addKeyValue("event", "settlement.inbox")
