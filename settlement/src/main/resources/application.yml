@@ -84,6 +84,9 @@ settlement:
     unconfirmed-retry-delay: 5m
     max-attempts: 10
     max-jobs-per-poll: 8
+  inbox-processor:
+    # 선행 결제를 기다리는 구매확정(WAITING)을 짧은 주기로 다시 판정한다(ADR 0007).
+    interval-ms: 1000
 
 springdoc:
   paths-to-match: /api/**
