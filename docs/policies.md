@@ -361,7 +361,19 @@ Redis 단절·재접속·실행 식별자 변경을 감지하면 Gateway와 커�
 
 건수는 아직 종결되지 않은 로컬 행을 각각 세며 같은 업무가 서로 다른 단계에 있다는 이유로 합산한 총량과 비교하지 않습니다. 미발행 Outbox와 RECEIVED/WAITING/REVIEW_REQUIRED Inbox, 실행·재시도·수동 확인이 남은 금융 Job을 포함합니다. 예약된 미래 지급·재시도의 도래 전 시간은 지연으로 세지 않고, REVIEW_REQUIRED는 자동 실행 지연에서 제외하되 미완료 건수와 별도 알람에는 포함합니다. 이로써 정상적인 다음 실행 시각 대기나 5분 조회 주기를 적체로 오인하지 않습니다.
 
-Commerce의 각 인스턴스가 기존 내부 Prometheus에서 필요한 관측을 15초마다 묶어서 읽어 접수 상태를 판정합니다. 요청마다 원격 지표·다른 서비스 DB를 조회하지 않습니다. 각 소유 앱은 자기 DB의 논리 대기열·수집 시각을 내보내며 같은 대기열을 여러 인스턴스가 관측해도 중복 합산하지 않습니다. Kafka lag와 실제 데이터 파일시스템 사용률도 담당 수집기의 원본 관측 시각을 확인합니다. 누락된 지표를 0으로 대체하거나 Prometheus 조회 성공만으로 오래된 표본을 최신으로 취급하지 않습니다. 업무 지표·lag·저장소 수집과 gate 구현은 아직 없습니다.
+Commerce의 각 인스턴스가 기존 내부 Prometheus에서 필요한 관측을 15초마다 묶어서 읽어 접수 상태를 판정합니다. 요청마다 원격 지표·다른 서비스 DB를 조회하지 않습니다. 각 소유 앱은 자기 DB의 논리 대기열·수집 시각을 내보내며 같은 대기열을 여러 인스턴스가 관측해도 중복 합산하지 않습니다. Kafka lag와 실제 데이터 파일시스템 사용률도 담당 수집기의 원본 관측 시각을 확인합니다. 누락된 지표를 0으로 대체하거나 Prometheus 조회 성공만으로 오래된 표본을 최신으로 취급하지 않습니다. Commerce의 gate와 자기 DB의 금융 Outbox·Inbox 관측을 구현했습니다. Payment·Settlement 대기열, Kafka lag·데이터 파일시스템 수집기는 연결 전이므로 기본 환경의 신규 접수는 닫힙니다. 외부 관측 연결과 실제 서비스 왕복은 [#120](https://github.com/500-internal-server-error-team/commerce-settle/issues/120)에서 추적합니다.
+
+관측 연동은 다음 metric 이름과 label을 사용합니다. 값 metric과 원본 시각 metric의 수집기 label(`job`·`instance` 등)은 같아야 합니다. `signal`은 아래 표의 대문자 값이며 `resource`는 값 metric의 `queue`·`group`·`store` 값과 같습니다. 각 수집기는 값과 원본 시각을 같은 관측 묶음에서 캡처해 한 scrape에 내보냅니다. 원본 시각은 epoch 초이며 0은 미수집/실패입니다. Prometheus가 제공하는 표본 timestamp를 원본 수집 시각으로 대신하지 않습니다.
+
+| 신호 | 값 metric · 필수 resource |
+| --- | --- |
+| `QUEUE_SIZE` | `commerce_settle_financial_queue_records{queue="…"}` |
+| `DUE_AGE` | `commerce_settle_financial_queue_due_delay_seconds{queue="…"}` |
+| `LAG` | `commerce_settle_kafka_group_lag_records{group="commerce.v1\|payment.v1\|settlement.v1"}` |
+| `STORAGE` | `commerce_settle_data_filesystem_usage_ratio{store="kafka\|postgres"}` |
+| 원본 시각 | `commerce_settle_admission_observed_timestamp_seconds{signal="…",resource="…"}` |
+
+표의 `\|`는 필수 값의 나열이며 실제 label 값에 포함하지 않습니다. 필수 대기열은 `commerce.outbox`, `commerce.inbox`, `payment.outbox`, `payment.inbox`, `payment.payment_jobs`, `settlement.outbox`, `settlement.inbox`, `settlement.payout_jobs`입니다. 새 금융 논리 대기열을 추가하면 필수 대상과 소유 수집기를 함께 갱신합니다. lag 수집기는 그룹의 모든 구독 파티션을 합산하고 일부 관측 실패도 전체 실패로 처리합니다. 저장소 수집기는 서비스 이름의 디스크 대신 각 종류의 실제 데이터 파일시스템을 모두 확인해 최대 사용률과 가장 오래된 원본 시각을 내보냅니다. 같은 resource의 복제 관측은 가장 최신 원본 시각을 선택하며 동시각이면 최대값을 사용합니다. 알림 전용 대기열은 포함하지 않습니다.
 
 거절은 `503 COMMON_CAPACITY_EXCEEDED`, `Retry-After: 30`으로 응답합니다. 일시적 서비스 용량 부족을 계정별 `429`와 구분합니다. gate 확인은 기존 멱등 결과/본문 충돌 판정 뒤, 새 주문·결제 회차와 재고·쿠폰·마일리지 예약·Outbox 저장 전에 하며, 거절을 완료된 멱등 결과로 캐시하지 않습니다. 클라이언트는 같은 키·본문으로 재시도합니다. 이미 접수한 작업의 상태·예약·원키는 바꾸지 않고 Consumer·Worker·Outbox 배출을 계속합니다. 저장소 오류로 트랜잭션을 완료할 수 없다면 접수 성공을 반환하지 않습니다.
 

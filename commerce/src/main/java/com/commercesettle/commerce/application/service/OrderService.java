@@ -46,6 +46,7 @@ public class OrderService {
   private final long seed;
   private final OrderBenefits benefits;
   private final ProductRepository products;
+  private final OrderAdmissionService admission;
 
   public OrderService(
       OrderRepository orders,
@@ -58,6 +59,7 @@ public class OrderService {
       Clock clock,
       OrderBenefits benefits,
       ProductRepository products,
+      OrderAdmissionService admission,
       @Value("${app.orders.simulation-seed:67}") long seed) {
     this.orders = orders;
     this.accounts = accounts;
@@ -70,6 +72,7 @@ public class OrderService {
     this.seed = seed;
     this.benefits = benefits;
     this.products = products;
+    this.admission = admission;
   }
 
   @Transactional
@@ -105,6 +108,7 @@ public class OrderService {
   }
 
   private OrderView createNew(UUID buyerId, UUID orderId, RegularOrderCommand command) {
+    admission.requireAdmission();
     validateRegular(command);
     var address =
         addresses

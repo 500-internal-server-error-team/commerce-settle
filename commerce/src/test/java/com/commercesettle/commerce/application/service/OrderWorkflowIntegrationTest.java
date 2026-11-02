@@ -41,6 +41,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -63,6 +64,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers
 @Import(OrderWorkflowIntegrationTest.Beans.class)
 class OrderWorkflowIntegrationTest {
+  @MockitoBean OrderAdmissionService admission;
   static final String GATEWAY = "test-gateway-credential-0123456789abcdef0123";
   static final String PAYMENT = "test-payment-credential-0123456789abcdef0123";
   static final String OPERATOR = "test-operator-credential-0123456789abcdef0123";
@@ -336,6 +338,50 @@ class OrderWorkflowIntegrationTest {
     receive("PaymentCancelled", result(id, payment, uuid(context(id), "paymentCycleId")), true);
     assertStock(f, 2, 0, 0);
     assertThat(buyer(f, id).path("status").asText()).isEqualTo("CANCELLED");
+  }
+
+  @Test
+  @DisplayName("접수 중단은 새 결제 회차만 막고 키 재시도·기존 결과·미결제 취소를 보존한다")
+  void gatesOnlyNewPaymentRetry() throws Exception {
+    var f = fixture();
+    var created = create(f);
+    UUID id = uuid(created, "id");
+    var ctx = context(id);
+    receive("PaymentDeclined", result(id, UUID.randomUUID(), uuid(ctx, "paymentCycleId")), true);
+    var declined = buyer(f, id);
+    String path = "/api/orders/" + id + "/payment-retries";
+    String retryKey = UUID.randomUUID().toString();
+    long outbox = number("select count(*) from commerce.outbox where aggregate_id=?", id);
+    long audit = number("select count(*) from commerce.audit_logs where aggregate_id=?", id);
+    org.mockito.Mockito.doThrow(
+            new com.commercesettle.commerce.application.exception.OrderCapacityExceededException())
+        .when(admission)
+        .requireAdmission();
+
+    assertThat(
+            call("BUYER", f.buyer(), path, version(declined), 503, retryKey).path("code").asText())
+        .isEqualTo("COMMON_CAPACITY_EXCEEDED");
+    assertThat(buyer(f, id)).isEqualTo(declined);
+    assertStock(f, 2, 0, 0);
+    assertThat(number("select count(*) from commerce.outbox where aggregate_id=?", id))
+        .isEqualTo(outbox);
+    assertThat(number("select count(*) from commerce.audit_logs where aggregate_id=?", id))
+        .isEqualTo(audit);
+    org.mockito.Mockito.doNothing().when(admission).requireAdmission();
+    var retry = call("BUYER", f.buyer(), path, version(declined), 202, retryKey);
+    org.mockito.Mockito.doThrow(
+            new com.commercesettle.commerce.application.exception.OrderCapacityExceededException())
+        .when(admission)
+        .requireAdmission();
+    assertThat(call("BUYER", f.buyer(), path, version(declined), 202, retryKey)).isEqualTo(retry);
+    call("BUYER", f.buyer(), path, version(retry), 409, retryKey);
+    assertStock(f, 1, 1, 0);
+    call(
+        "BUYER",
+        f.buyer(),
+        "/api/orders/" + id + "/cancellation",
+        version(retry).put("reason", "시험 취소"),
+        202);
   }
 
   @Test
