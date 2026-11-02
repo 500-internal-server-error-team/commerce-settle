@@ -150,6 +150,37 @@ CREATE TABLE payment.payment_jobs (
 );
 CREATE INDEX ix_payment_jobs_status_next_run ON payment.payment_jobs (status, next_run_at, lease_until, id);
 
+-- 외부 승인 시도. 외부 호출 전에 provider·결제수단·계정·재원·금액·시나리오를 고정해 재전송·조회에 같은 값을 쓴다.
+CREATE TABLE payment.payment_attempts (
+    id                  uuid         PRIMARY KEY,
+    payment_id          uuid         NOT NULL,
+    attempt_no          integer      NOT NULL,
+    cycle_id            uuid         NOT NULL,
+    provider_id         varchar(16)  NOT NULL,
+    method              varchar(24)  NOT NULL,
+    account_ref         varchar(100) NOT NULL,
+    funding_account_ref varchar(100) NOT NULL,
+    business_key        uuid         NOT NULL,
+    external_ref        uuid,
+    amount              bigint       NOT NULL,
+    status              varchar(24)  NOT NULL,
+    scenario_version    varchar(32)  NOT NULL,
+    created_at          timestamptz  NOT NULL,
+    updated_at          timestamptz  NOT NULL,
+    version             bigint       NOT NULL,
+
+    CONSTRAINT uk_payment_attempts_payment_attempt UNIQUE (payment_id, attempt_no),
+    CONSTRAINT uk_payment_attempts_provider_business_key UNIQUE (provider_id, business_key),
+    CONSTRAINT ck_payment_attempts_status
+        CHECK (status IN ('PENDING', 'PROCESSING', 'UNKNOWN', 'APPROVED', 'DECLINED', 'CANCELLED')),
+    CONSTRAINT ck_payment_attempts_provider CHECK (provider_id IN ('PG_A', 'PG_B', 'PG_C', 'EASY_PAY')),
+    CONSTRAINT ck_payment_attempts_method CHECK (method IN ('CREDIT_CARD', 'DEBIT_CARD', 'EASY_PAY')),
+    CONSTRAINT ck_payment_attempts_counts CHECK (attempt_no > 0 AND amount > 0 AND version >= 0)
+);
+CREATE INDEX ix_payment_attempts_status_updated ON payment.payment_attempts (status, updated_at, id);
+CREATE UNIQUE INDEX uk_payment_attempts_active ON payment.payment_attempts (payment_id)
+    WHERE status IN ('PENDING', 'PROCESSING', 'UNKNOWN', 'APPROVED');
+
 CREATE TABLE payment.mileage_wallets (
     id              uuid        PRIMARY KEY,
     buyer_id        uuid        NOT NULL,

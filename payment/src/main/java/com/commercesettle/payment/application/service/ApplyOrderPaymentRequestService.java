@@ -5,6 +5,7 @@ import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationResultPayload;
+import com.commercesettle.payment.application.event.PaymentConfirmedPayload;
 import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
@@ -18,6 +19,7 @@ import com.commercesettle.payment.domain.model.Payment;
 import com.commercesettle.payment.domain.model.PaymentAmounts;
 import com.commercesettle.payment.domain.model.PaymentJob;
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
+import com.commercesettle.payment.domain.model.PaymentStatus;
 import com.commercesettle.payment.domain.repository.MileageEntryRepository;
 import com.commercesettle.payment.domain.repository.MileageReservationRepository;
 import com.commercesettle.payment.domain.repository.MileageWalletRepository;
@@ -241,6 +243,19 @@ public class ApplyOrderPaymentRequestService {
       reserveMileage(wallet.get(), payment, now);
     }
     appendAccepted(payment, payload, now);
+    if (payment.getStatus() == PaymentStatus.CONFIRMED) {
+      // 마일리지 전액 결제는 외부 승인 없이 같은 트랜잭션에서 확정했다. 새 결제라 버전은 0이고 PaymentAccepted 뒤에 발행된다.
+      outbox.appendPaymentConfirmed(
+          new EventEnvelope<>(
+              UUID.nameUUIDFromBytes(
+                  ("PaymentConfirmed:" + payment.getId()).getBytes(StandardCharsets.UTF_8)),
+              "PaymentConfirmed",
+              1,
+              now.atOffset(ZoneOffset.UTC),
+              payment.getId(),
+              0,
+              PaymentConfirmedPayload.of(payment)));
+    }
     inbox.markApplied(inboxId, payment.getId(), now);
     return true;
   }

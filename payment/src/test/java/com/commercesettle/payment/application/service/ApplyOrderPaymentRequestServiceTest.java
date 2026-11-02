@@ -12,6 +12,8 @@ import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationResultPayload;
+import com.commercesettle.payment.application.event.PaymentConfirmedPayload;
+import com.commercesettle.payment.application.event.PaymentDeclinedPayload;
 import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
@@ -31,6 +33,7 @@ import com.commercesettle.payment.domain.repository.MileageEntryRepository;
 import com.commercesettle.payment.domain.repository.MileageReservationRepository;
 import com.commercesettle.payment.domain.repository.MileageWalletRepository;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository;
+import com.commercesettle.payment.domain.repository.PaymentJobRepository.LeasedJob;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -1173,6 +1176,23 @@ class ApplyOrderPaymentRequestServiceTest {
           .filter(j -> j.getOperation() == operation && j.getBusinessKey().equals(businessKey))
           .findFirst();
     }
+
+    @Override
+    public Optional<LeasedJob> leaseNext(
+        PaymentJobOperation operation, String owner, Duration leaseDuration) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean holdsLease(UUID jobId, UUID leaseToken, Duration minRemaining) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean releaseLease(
+        UUID jobId, UUID leaseToken, PaymentJobStatus status, Duration runAfter, String errorCode) {
+      throw new UnsupportedOperationException();
+    }
   }
 
   private static final class FakeWallets implements MileageWalletRepository {
@@ -1229,6 +1249,18 @@ class ApplyOrderPaymentRequestServiceTest {
     private final List<EventEnvelope<PaymentAcceptedPayload>> accepted = new ArrayList<>();
     private final List<EventEnvelope<PaymentCancellationResultPayload>> cancellations =
         new ArrayList<>();
+    private final List<EventEnvelope<PaymentConfirmedPayload>> confirmed = new ArrayList<>();
+
+    @Override
+    public UUID appendPaymentConfirmed(EventEnvelope<PaymentConfirmedPayload> event) {
+      confirmed.add(event);
+      return event.eventId();
+    }
+
+    @Override
+    public UUID appendPaymentDeclined(EventEnvelope<PaymentDeclinedPayload> event) {
+      throw new UnsupportedOperationException();
+    }
 
     @Override
     public UUID appendCancellationResult(EventEnvelope<PaymentCancellationResultPayload> event) {

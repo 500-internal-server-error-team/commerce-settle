@@ -3,6 +3,8 @@ package com.commercesettle.payment.infrastructure.persistence.outbox;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationResultPayload;
+import com.commercesettle.payment.application.event.PaymentConfirmedPayload;
+import com.commercesettle.payment.application.event.PaymentDeclinedPayload;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
 import com.commercesettle.payment.infrastructure.messaging.OutboxAppended;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -46,6 +48,24 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
   public UUID appendCancellationResult(EventEnvelope<PaymentCancellationResultPayload> event) {
     if (!"PaymentCancelled".equals(event.eventType())
         && !"PaymentCancellationRejected".equals(event.eventType())) {
+      throw new IllegalArgumentException("Invalid payment outbox event");
+    }
+    return append(event, event.payload().paymentId());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID appendPaymentConfirmed(EventEnvelope<PaymentConfirmedPayload> event) {
+    if (!"PaymentConfirmed".equals(event.eventType())) {
+      throw new IllegalArgumentException("Invalid payment outbox event");
+    }
+    return append(event, event.payload().paymentId());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID appendPaymentDeclined(EventEnvelope<PaymentDeclinedPayload> event) {
+    if (!"PaymentDeclined".equals(event.eventType())) {
       throw new IllegalArgumentException("Invalid payment outbox event");
     }
     return append(event, event.payload().paymentId());
