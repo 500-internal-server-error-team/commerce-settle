@@ -80,6 +80,13 @@ app:
     enabled: ${APP_DEV_FIXTURES_ENABLED:false}
     run-scenarios: ${APP_DEV_FIXTURE_SCENARIOS_ENABLED:false}
   kafka:
+    quarantine:
+      # 새 초기 SQL과 격리·DLT·재처리 시험을 확인한 환경에서만 켠다.
+      enabled: false
+      interval-ms: 1000
+      batch-size: 32
+      lease-ms: 240000
+      result-timeout-ms: 125000
     order-payment-requested:
       # 개발용 초기 SQL 적용과 신규 그룹 offset 초기화 후에만 활성화한다.
       enabled: false
