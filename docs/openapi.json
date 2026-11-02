@@ -6680,7 +6680,7 @@
         ],
         "x-owner-service": "payment",
         "x-actor": "BUYER",
-        "x-implemented": false,
+        "x-implemented": true,
         "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
         "security": [
           {

@@ -217,6 +217,8 @@ Settlement는 환불 요청을 Inbox와 같은 트랜잭션에 반영하고 결�
 
 판매자 알림 요청 `SettlementNoticeRequested`(key·aggregateId=batchId)도 같은 Outbox로 보냅니다. 일배치 확정 때 `SETTLEMENT_READY`, 지급 성공 반영 때 `PAYOUT_COMPLETED`, 확정 거절 반영 때 `PAYOUT_ACTION_REQUIRED`(`PROVIDER_DECLINED`)이며 업무 변경과 같은 트랜잭션에 저장합니다.
 
+Payment는 같은 Commerce 토픽에서 `RefundApproved`·`RefundOrderRestored` v1을 결제 요청과 같은 Inbox 경계로 수신하고(key는 `paymentId`), `RefundAccepted`·`RefundReservationRequested`·`RefundFinancialCompleted`·`RefundReleaseRequested`·`RefundCompleted`·`RefundFailed`를 원결제 집계의 Outbox로 발행합니다. Settlement 응답(`RefundReservationResult`·`RefundLedgerReversed`·`RefundReservationReleased`) 수신과 finance-mock 환불 호출은 아직 연결하지 않았고 개발용 stub이 즉시 성공을 대신합니다. 진행은 `GET /api/refunds/{refundId}`로 조회하며 `INTERNAL_PENDING`은 원장 상쇄·주문 복구 확인 대기입니다. 저장·전이는 [refunds](data-model.md#refunds)·[refund_sagas](data-model.md#refund_sagas)를 따릅니다.
+
 PaymentAccepted·RefundAccepted 이벤트로 주문 조회에 금융 처리 ID를 먼저 연결합니다. 결제/실패/취소 결과는 현재 paymentCycleId와 대조하며 오래된 회차 결과로 새 예약을 해제하지 않습니다.
 
 지급 생성 전 Settlement는 서비스 자격의 ProductSettlementContext로 상품·판매자 일치와 판매자 상태·수취 시험계정·버전을 확인합니다. 커머스의 상품 영역이 소유 관계를 확인하고 판매자 영역이 상태·계좌·버전을 제공합니다. 이 조회 계약이 판매자 정보의 소유권을 상품이나 Settlement로 옮기지는 않습니다. 수취 계정과 출금 시험계정을 payouts에 사본으로 저장하고 이후 재시도에는 현재 프로필을 다시 적용하지 않습니다. SettlementBatch는 상품 회차 대신 sellerId+batchDate+policyVersion으로 식별합니다. Payout의 holdReason·nextAttemptAt으로 보류와 다음 시도를 안내하고 succeededAt으로 실제 성공을 구분합니다. 원래 업무 키·계정 사본·항목 연결은 보류/재시작에 유지합니다.
