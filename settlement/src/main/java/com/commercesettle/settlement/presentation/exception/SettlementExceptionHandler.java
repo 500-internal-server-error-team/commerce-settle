@@ -1,5 +1,9 @@
 package com.commercesettle.settlement.presentation.exception;
 
+import com.commercesettle.settlement.application.exception.IdempotencyConflictException;
+import com.commercesettle.settlement.application.exception.OperationRejectedException;
+import com.commercesettle.settlement.domain.exception.PayoutJobNotFoundException;
+import com.commercesettle.settlement.domain.exception.PayoutNotAllowedException;
 import com.commercesettle.settlement.domain.exception.PayoutNotFoundException;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
@@ -15,6 +19,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.core.MethodParameter;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
@@ -53,6 +59,44 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
   @ExceptionHandler(PayoutNotFoundException.class)
   ResponseEntity<Object> payoutNotFound(PayoutNotFoundException e, WebRequest request) {
     return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "지급을 찾을 수 없습니다.", null, request);
+  }
+
+  @ExceptionHandler(PayoutJobNotFoundException.class)
+  ResponseEntity<Object> payoutJobNotFound(PayoutJobNotFoundException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "지급 작업을 찾을 수 없습니다.", null, request);
+  }
+
+  @ExceptionHandler(OperationRejectedException.class)
+  ResponseEntity<Object> operationRejected(OperationRejectedException e, WebRequest request) {
+    ErrorCode code =
+        switch (e.reason()) {
+          case VERSION_CONFLICT -> ErrorCode.COMMON_VERSION_CONFLICT;
+          case LEASE_ACTIVE -> ErrorCode.PAYOUT_JOB_LEASE_ACTIVE;
+          case NOT_REPLAYABLE -> ErrorCode.PAYOUT_JOB_NOT_REPLAYABLE;
+          case BATCH_NOT_DUE -> ErrorCode.SETTLEMENT_BATCH_NOT_DUE;
+          case POLICY_UNSUPPORTED -> ErrorCode.SETTLEMENT_POLICY_UNSUPPORTED;
+          case NO_ELIGIBLE_ITEMS -> ErrorCode.SETTLEMENT_NO_ELIGIBLE_ITEMS;
+        };
+    return respond(code, request);
+  }
+
+  @ExceptionHandler(PayoutNotAllowedException.class)
+  ResponseEntity<Object> payoutNotAllowed(PayoutNotAllowedException e, WebRequest request) {
+    return respond(ErrorCode.SETTLEMENT_PAYOUT_NOT_ALLOWED, request);
+  }
+
+  /** 같은 행을 다른 트랜잭션이 먼저 바꿨다(낙관적 잠금·유일 제약). 같은 키로 다시 요청하면 최신 상태로 판정한다. */
+  @ExceptionHandler({
+    OptimisticLockingFailureException.class,
+    DataIntegrityViolationException.class
+  })
+  ResponseEntity<Object> versionConflict(RuntimeException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_VERSION_CONFLICT, request);
+  }
+
+  @ExceptionHandler(IdempotencyConflictException.class)
+  ResponseEntity<Object> idempotencyConflict(IdempotencyConflictException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_IDEMPOTENCY_CONFLICT, request);
   }
 
   @ExceptionHandler({DataAccessException.class, CannotCreateTransactionException.class})

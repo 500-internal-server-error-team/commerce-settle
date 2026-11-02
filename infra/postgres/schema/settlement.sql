@@ -146,6 +146,19 @@ CREATE TABLE settlement.payout_jobs (
 CREATE INDEX ix_payout_jobs_due ON settlement.payout_jobs (status, next_run_at, lease_until, id);
 
 -- 항목별 환불·지급 예약. 한 항목에는 ACTIVE 예약이 하나뿐이라 환불과 지급이 배타적이다.
+-- 운영 재처리 이력. 원업무 키·금액·계정은 지급에 그대로 두고, 누가 어떤 버전에서 왜 다시 열었는지와 이전 시도 수만 남긴다.
+CREATE TABLE settlement.payout_job_replays (
+    id                uuid         PRIMARY KEY,
+    job_id            uuid         NOT NULL,
+    expected_version  bigint       NOT NULL CHECK (expected_version >= 0),
+    previous_status   varchar(24)  NOT NULL,
+    previous_attempts integer      NOT NULL CHECK (previous_attempts >= 0),
+    operator_id       varchar(100) NOT NULL,
+    reason            varchar(200) NOT NULL,
+    created_at        timestamptz  NOT NULL,
+    UNIQUE (job_id, expected_version)
+);
+
 CREATE TABLE settlement.settlement_reservations (
     id                   uuid        PRIMARY KEY,
     item_id              uuid        NOT NULL,
@@ -364,6 +377,52 @@ CREATE TABLE settlement.outbox (
 CREATE INDEX outbox_due ON settlement.outbox(status, next_run_at, lease_until, id);
 CREATE INDEX outbox_occurred ON settlement.outbox(occurred_at, created_at, id);
 CREATE INDEX outbox_aggregate ON settlement.outbox(aggregate_id, aggregate_version, sequence_no);
+
+-- 요청 멱등 기록(data-model.md idempotency_records). 키·본문 원문 대신 SHA-256만 저장한다.
+CREATE TABLE settlement.idempotency_records (
+    id uuid PRIMARY KEY,
+    actor_kind varchar(24) NOT NULL,
+    actor_id varchar(100) NOT NULL,
+    operation varchar(100) NOT NULL,
+    key_hash char(64) NOT NULL,
+    request_hash char(64) NOT NULL,
+    resource_id uuid,
+    response_status integer,
+    response_snapshot jsonb,
+    status varchar(16) NOT NULL,
+    expires_at timestamptz,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0,
+    CONSTRAINT uq_idempotency_records_key UNIQUE (actor_kind, actor_id, operation, key_hash),
+    CONSTRAINT ck_idempotency_records_status CHECK (status IN ('PENDING', 'COMPLETED'))
+);
+CREATE INDEX ix_idempotency_records_expires ON settlement.idempotency_records (expires_at);
+CREATE INDEX ix_idempotency_records_resource ON settlement.idempotency_records (resource_id);
+
+-- 주요 변경의 실행 주체·행위(data-model.md audit_logs). 추가 전용이다.
+CREATE TABLE settlement.audit_logs (
+    id             uuid         PRIMARY KEY,
+    actor_kind     varchar(16)  NOT NULL,
+    actor_ref      varchar(100) NOT NULL,
+    action         varchar(80)  NOT NULL,
+    aggregate_type varchar(50)  NOT NULL,
+    aggregate_id   uuid         NOT NULL,
+    before_status  varchar(32),
+    after_status   varchar(32),
+    reason_code    varchar(80),
+    event_id       uuid,
+    correlation_id varchar(100) NOT NULL,
+    occurred_at    timestamptz  NOT NULL,
+
+    CONSTRAINT ck_audit_logs_actor_kind
+        CHECK (actor_kind IN ('BUYER', 'SELLER', 'SERVICE', 'OPERATOR', 'SYSTEM'))
+);
+CREATE INDEX ix_audit_logs_aggregate
+    ON settlement.audit_logs (aggregate_type, aggregate_id, occurred_at, id);
+CREATE INDEX ix_audit_logs_actor ON settlement.audit_logs (actor_kind, actor_ref, occurred_at, id);
+CREATE INDEX ix_audit_logs_correlation ON settlement.audit_logs (correlation_id);
+
 
 -- Spring Batch 5.2 메타데이터. 라이브러리의 schema-postgresql.sql에서 서비스 내부 FK만 뺐다(ADR 0006).
 -- Spring Batch가 시각을 LocalDateTime으로 쓰므로 원본의 timestamp를 유지한다.

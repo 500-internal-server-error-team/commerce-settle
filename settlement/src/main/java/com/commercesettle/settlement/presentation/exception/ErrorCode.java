@@ -12,6 +12,15 @@ enum ErrorCode {
   COMMON_METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "요청을 처리할 수 없습니다."),
   COMMON_NOT_ACCEPTABLE(HttpStatus.NOT_ACCEPTABLE, "요청을 처리할 수 없습니다."),
   COMMON_UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "요청을 처리할 수 없습니다."),
+  COMMON_VERSION_CONFLICT(HttpStatus.CONFLICT, "다른 변경이 먼저 반영됐습니다. 최신 상태를 조회한 뒤 다시 요청해 주세요."),
+  COMMON_IDEMPOTENCY_CONFLICT(
+      HttpStatus.CONFLICT, "같은 멱등키의 다른 요청이 있거나 처리 중입니다. 같은 본문이면 잠시 후 다시 요청해 주세요."),
+  PAYOUT_JOB_LEASE_ACTIVE(HttpStatus.CONFLICT, "지급 작업이 실행 중입니다. 실행이 끝난 뒤 다시 요청해 주세요."),
+  PAYOUT_JOB_NOT_REPLAYABLE(HttpStatus.CONFLICT, "현재 지급 작업 상태에서는 재처리할 수 없습니다."),
+  SETTLEMENT_BATCH_NOT_DUE(HttpStatus.CONFLICT, "배치 마감이 아직 지나지 않았습니다."),
+  SETTLEMENT_POLICY_UNSUPPORTED(HttpStatus.CONFLICT, "지원하지 않는 정산 정책 버전입니다."),
+  SETTLEMENT_NO_ELIGIBLE_ITEMS(HttpStatus.CONFLICT, "마감 전 지급 대상 항목이 없습니다."),
+  SETTLEMENT_PAYOUT_NOT_ALLOWED(HttpStatus.CONFLICT, "지급 전 검증을 통과하지 못했습니다."),
   COMMON_TEMPORARILY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "요청을 처리할 수 없습니다."),
   COMMON_INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "요청을 처리할 수 없습니다.");
 

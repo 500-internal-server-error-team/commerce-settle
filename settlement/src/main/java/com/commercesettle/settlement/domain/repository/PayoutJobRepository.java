@@ -3,6 +3,7 @@ package com.commercesettle.settlement.domain.repository;
 import com.commercesettle.settlement.domain.model.PayoutJob;
 import com.commercesettle.settlement.domain.model.PayoutJobStatus;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -15,6 +16,29 @@ public interface PayoutJobRepository {
   Optional<PayoutJob> findByPayoutId(UUID payoutId);
 
   List<PayoutJob> findByPayoutIds(Collection<UUID> payoutIds);
+
+  Optional<PayoutJob> findById(UUID id);
+
+  /** 행을 잠그고 읽는다. 잠금 동안 Worker의 임대 선점은 이 작업을 건너뛴다. 호출자의 트랜잭션에서 실행한다. */
+  Optional<PayoutJob> findByIdForUpdate(UUID id);
+
+  /** 변경을 즉시 반영해 증가한 버전을 응답에 쓸 수 있게 한다. */
+  PayoutJob saveNow(PayoutJob job);
+
+  /** 작업을 생성 시각·ID 내림차순으로 한 페이지 읽는다. */
+  List<PayoutJob> findPage(int page, int size);
+
+  long count();
+
+  /** 운영 재처리 이력. 같은 작업·같은 예상 버전의 재처리는 한 번뿐이다. */
+  void recordReplay(
+      UUID jobId,
+      long expectedVersion,
+      PayoutJobStatus previousStatus,
+      int previousAttempts,
+      String operatorId,
+      String reason,
+      Instant now);
 
   /**
    * 도래한 PENDING·RETRY 작업이나 임대가 만료된 RUNNING 작업 하나를 RUNNING으로 바꾸고 새 임대 token을 준다. 시도 횟수를 하나 늘리며, 만료

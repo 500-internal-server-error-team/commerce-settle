@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.domain.model;
 
+import com.commercesettle.settlement.domain.exception.InvalidPayoutTransitionException;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -42,6 +43,23 @@ public class PayoutJob extends AuditableEntity {
   /** 바로 실행할 수 있는 지급 작업을 만든다. */
   public static PayoutJob schedule(Payout payout, Instant now) {
     return new PayoutJob(UUID.randomUUID(), payout.getId(), payout.getBusinessKey(), now);
+  }
+
+  /**
+   * 운영 확인으로 멈춘 작업을 같은 업무 키로 다시 연다. 시도 수를 0으로 되돌려 새 라운드를 열고 바로 실행할 수 있게 한다. 지급이 이미 호출됐으면 Worker가 원거래
+   * 조회부터 한다.
+   */
+  public void reopenForReplay(Instant now) {
+    if (status != PayoutJobStatus.REVIEW_REQUIRED) {
+      throw new InvalidPayoutTransitionException("payout job", status, PayoutJobStatus.PENDING);
+    }
+    this.status = PayoutJobStatus.PENDING;
+    this.attempts = 0;
+    this.nextRunAt = truncate(now);
+    this.leaseOwner = null;
+    this.leaseToken = null;
+    this.leaseUntil = null;
+    touch(now);
   }
 
   public UUID getId() {
