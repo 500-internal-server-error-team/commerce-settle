@@ -134,6 +134,14 @@ app:
     settlement-events:
       # PaymentConfirmed·PurchaseConfirmed 수신. 개발용 초기 SQL 적용과 신규 그룹 offset 초기화 후에만 활성화한다.
       enabled: ${APP_KAFKA_SETTLEMENT_EVENTS_ENABLED:false}
+  outbox:
+    # 커밋된 Settlement 발행 이벤트(환불 SAGA 응답·판매자 알림 요청)를 Kafka로 보낸다. 저장은 항상 하고 Relay만 이 스위치로 켠다.
+    # 임대는 producer max.block.ms와 delivery.timeout.ms의 합보다 길어야 한다.
+    enabled: ${APP_OUTBOX_ENABLED:false}
+    recovery-interval-ms: 1000
+    max-in-flight: 8
+    lease-ms: 240000
+    max-attempts: 10
   internal-auth:
     service: settlement
     # Gateway의 내부 호출 자격(ADR 0010). 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
