@@ -28,7 +28,7 @@ interface SpringDataSaleEventRepository extends JpaRepository<SaleEvent, UUID> {
       value =
           """
           UPDATE commerce.sale_events
-          SET reserved_count = reserved_count + 1, version = version + 1, updated_at = :now
+          SET reserved_count = reserved_count + 1
           WHERE id = :eventId AND status = 'OPEN' AND starts_at <= :now AND ends_at > :now
             AND sold_count + reserved_count < quota
           """,

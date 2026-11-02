@@ -14,10 +14,14 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import org.hibernate.annotations.OptimisticLock;
 
 /**
  * 판매자 상품 하나의 선착순 이벤트. 미공개(DRAFT)일 때만 내용을 바꾸고, 공개 때 한정 수량 Q를 상품 재고에서 배정한다. 공개 후 이름·가격·수량·기간은 고정하며 조기
  * 종료만 허용한다. 종료는 판매(S)·결제 대기 예약(R)이 아닌 배정분 {@code Q−S−R}만 가용 재고로 돌리고 기존 예약은 해제하지 않는다.
+ *
+ * <p>버전과 updatedAt은 이벤트 정의와 상태의 변경만 나타낸다. S·R은 이벤트 행 잠금이나 조건부 갱신으로 직렬화하므로 둘을 바꾸지 않으며, 그래서 참여가 이어져도
+ * 주문의 expectedEventVersion과 판매자의 조기 종료가 충돌하지 않는다.
  */
 @Entity
 @Table(name = "sale_events")
@@ -43,8 +47,13 @@ public class SaleEvent extends AuditableEntity {
   private String name;
   private long eventPrice;
   private long quota;
+
+  @OptimisticLock(excluded = true)
   private long soldCount;
+
+  @OptimisticLock(excluded = true)
   private long reservedCount;
+
   private Instant startsAt;
   private Instant endsAt;
 
@@ -158,7 +167,6 @@ public class SaleEvent extends AuditableEntity {
       throw new EventAdmissionClosedException(EventAdmissionClosedException.Reason.NO_REMAINING);
     }
     reservedCount++;
-    touch(now);
   }
 
   /** 결제 확정: R−1, S+1과 배정 재고 −1·판매 +1. 진행 중에 S=Q가 되면 매진 종료하며, 남은 배정분이 없으므로 반환 이력은 없다. */
@@ -172,8 +180,8 @@ public class SaleEvent extends AuditableEntity {
     if (status.isInProgress() && soldCount == quota) {
       status = SaleEventStatus.SOLD_OUT;
       closedAt = truncate(now);
+      touch(now);
     }
-    touch(now);
     return movement;
   }
 
@@ -187,7 +195,6 @@ public class SaleEvent extends AuditableEntity {
             ? Optional.empty()
             : Optional.of(inventory.releaseFromEvent(movementId, cycleId, now));
     reservedCount--;
-    touch(now);
     return movement;
   }
 
