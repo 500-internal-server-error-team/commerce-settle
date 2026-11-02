@@ -21,7 +21,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 @ConditionalOnProperty(name = "app.outbox.enabled", havingValue = "true")
 public class OutboxConfiguration {
   @Bean(defaultCandidate = false)
-  ThreadPoolTaskExecutor outboxExecutor(@Value("${app.outbox.max-in-flight:8}") int maxInFlight) {
+  ThreadPoolTaskExecutor outboxExecutor(@Value("${app.outbox.max-in-flight:32}") int maxInFlight) {
     if (maxInFlight < 1) {
       throw new IllegalArgumentException("Invalid outbox executor limit");
     }
@@ -56,7 +56,7 @@ public class OutboxConfiguration {
       KafkaProperties properties,
       @Qualifier("outboxExecutor") Executor executor,
       @Qualifier("outboxCoordinator") Executor coordinator,
-      @Value("${app.outbox.max-in-flight:8}") int maxInFlight,
+      @Value("${app.outbox.max-in-flight:32}") int maxInFlight,
       @Value("${app.outbox.lease-ms:240000}") long leaseMs,
       @Value("${app.outbox.max-attempts:10}") int maxAttempts,
       @Value("${app.outbox.recovery-interval-ms:1000}") long recoveryIntervalMs) {
