@@ -1,5 +1,6 @@
 package com.commercesettle.gateway.config;
 
+import com.commercesettle.gateway.filter.RunIdGate;
 import com.commercesettle.gateway.filter.SessionVerifier;
 import io.lettuce.core.ClientOptions;
 import io.lettuce.core.RedisClient;
@@ -39,7 +40,8 @@ public class SessionAuthenticationConfiguration {
   SessionVerifier sessionVerifier(
       RedisClient sessionRedisClient,
       RedisProperties redis,
-      @Value("${gateway.auth.session-epoch}") String epoch) {
+      @Value("${gateway.auth.session-epoch}") String epoch,
+      @Value("${gateway.auth.redis-run-id}") String redisRunId) {
     final var uri =
         RedisURI.builder()
             .withHost(redis.getHost())
@@ -55,6 +57,7 @@ public class SessionAuthenticationConfiguration {
         uri.withPassword(redis.getPassword().toCharArray());
       }
     }
-    return new SessionVerifier(sessionRedisClient, uri.build(), UUID.fromString(epoch));
+    return new SessionVerifier(
+        sessionRedisClient, uri.build(), UUID.fromString(epoch), new RunIdGate(redisRunId));
   }
 }

@@ -60,6 +60,7 @@ import reactor.netty.http.server.HttpServer;
       "management.server.port=0",
       "management.zipkin.tracing.export.enabled=false",
       "gateway.auth.session-epoch=00000000-0000-4000-8000-0000000000aa",
+      "gateway.auth.redis-run-id=0000000000000000000000000000000000000000",
       "gateway.internal-credentials.commerce=" + GatewayRoutingIntegrationTest.COMMERCE_CREDENTIAL,
       "gateway.internal-credentials.payment=" + GatewayRoutingIntegrationTest.PAYMENT_CREDENTIAL,
       "gateway.internal-credentials.settlement="

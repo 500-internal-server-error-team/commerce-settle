@@ -1,10 +1,15 @@
 package com.commercesettle.gateway.filter;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
+import com.commercesettle.gateway.filter.RunIdGate.State;
 import com.commercesettle.gateway.filter.SessionVerification.Outcome;
 import io.lettuce.core.ClientOptions;
+import io.lettuce.core.KillArgs;
 import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisConnectionException;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.TimeoutOptions;
 import io.lettuce.core.api.StatefulRedisConnection;
@@ -20,6 +25,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -64,15 +70,15 @@ class SessionVerifierIntegrationTest {
 
   private static RedisClient client;
   private static StatefulRedisConnection<String, String> admin;
-  private static SessionVerifier verifier;
+  private static String runId;
+  // 게이트는 한 번 닫히면 다시 열리지 않으므로 시험마다 새 Gateway 연결을 만든다.
+  private RedisClient gatewayClient;
+  private SessionVerifier verifier;
+  private RunIdGate gate;
 
   @BeforeAll
   static void connect() {
-    client = RedisClient.create();
-    client.setOptions(
-        ClientOptions.builder()
-            .timeoutOptions(TimeoutOptions.enabled(Duration.ofSeconds(2)))
-            .build());
+    client = client();
     admin =
         client.connect(
             RedisURI.builder()
@@ -80,17 +86,25 @@ class SessionVerifierIntegrationTest {
                 .withPort(REDIS.getMappedPort(6379))
                 .withPassword(ADMIN_PASSWORD.toCharArray())
                 .build());
-    verifier = new SessionVerifier(client, gatewayUri(REDIS.getMappedPort(6379)), EPOCH);
+    runId = RunIdGate.runId(admin.sync().info("server"));
+  }
+
+  @BeforeEach
+  void openGate() {
+    gatewayClient = client();
+    verifier = verifier(runId);
+    assertThat(verifier.checkRunId().block(Duration.ofSeconds(5))).isEqualTo(State.OPEN);
   }
 
   @AfterEach
   void clear() {
+    verifier.destroy();
+    gatewayClient.shutdown();
     admin.sync().flushall();
   }
 
   @AfterAll
   static void disconnect() {
-    verifier.destroy();
     admin.close();
     client.shutdown();
   }
@@ -143,10 +157,69 @@ class SessionVerifierIntegrationTest {
     try (var socket = new ServerSocket(0)) {
       closedPort = socket.getLocalPort();
     }
-    final var unreachable = new SessionVerifier(client, gatewayUri(closedPort), EPOCH);
+    final var unreachable =
+        new SessionVerifier(gatewayClient, gatewayUri(closedPort), EPOCH, new RunIdGate(runId));
 
+    assertThatThrownBy(() -> unreachable.checkRunId().block(Duration.ofSeconds(10)))
+        .isInstanceOf(RedisConnectionException.class);
     assertThat(unreachable.verify(TOKEN_HASH).block(Duration.ofSeconds(10)).outcome())
         .isEqualTo(Outcome.UNAVAILABLE);
+  }
+
+  @Test
+  @DisplayName("run_id를 확인하기 전에는 Redis를 읽지 않고 판정 불가로 처리한다")
+  void refusesBeforeRunIdCheck() {
+    saveSession(session -> {});
+    saveGuard(guard -> {});
+    final var unchecked = verifier(runId);
+
+    assertThat(unchecked.verify(TOKEN_HASH).block(Duration.ofSeconds(5)).outcome())
+        .isEqualTo(Outcome.UNAVAILABLE);
+  }
+
+  @Test
+  @DisplayName("승인한 run_id와 실제 Redis가 다르면 게이트를 닫고 유효한 세션도 판정 불가로 처리한다")
+  void closesOnRunIdMismatch() {
+    saveSession(session -> {});
+    saveGuard(guard -> {});
+    final var mismatched = verifier("0".repeat(40));
+
+    assertThat(mismatched.checkRunId().block(Duration.ofSeconds(5))).isEqualTo(State.CLOSED);
+    assertThat(mismatched.verify(TOKEN_HASH).block(Duration.ofSeconds(5)).outcome())
+        .isEqualTo(Outcome.UNAVAILABLE);
+  }
+
+  @Test
+  @DisplayName("연 뒤 연결이 끊기면 재연결과 run_id 재확인이 성공해도 판정 불가를 유지한다")
+  void staysClosedAfterReconnect() {
+    saveSession(session -> {});
+    saveGuard(guard -> {});
+    assertThat(verify().outcome()).isEqualTo(Outcome.AUTHENTICATED);
+
+    admin.sync().clientKill(KillArgs.Builder.user("gateway"));
+
+    await().atMost(Duration.ofSeconds(5)).until(() -> gate.state() == State.CLOSED);
+    // Lettuce가 다시 연결해 같은 Redis의 run_id를 읽어도 닫힌 게이트는 열리지 않는다.
+    await()
+        .atMost(Duration.ofSeconds(10))
+        .ignoreExceptions()
+        .until(() -> verifier.checkRunId().block(Duration.ofSeconds(2)) == State.CLOSED);
+    assertThat(verify().outcome()).isEqualTo(Outcome.UNAVAILABLE);
+  }
+
+  @Test
+  @DisplayName("Gateway만 재시작하고 run_id·세대가 같으면 기존 세션을 그대로 인증한다")
+  void keepsSessionsAcrossGatewayRestart() {
+    saveSession(session -> {});
+    saveGuard(guard -> {});
+    verifier.destroy();
+    gatewayClient.shutdown();
+
+    gatewayClient = client();
+    verifier = verifier(runId);
+    assertThat(verifier.checkRunId().block(Duration.ofSeconds(5))).isEqualTo(State.OPEN);
+
+    assertThat(verify()).isEqualTo(SessionVerification.authenticated("SELLER", ACTOR_ID));
   }
 
   static Stream<Arguments> rejectedSessions() {
@@ -238,8 +311,22 @@ class SessionVerifierIntegrationTest {
             });
   }
 
-  private static SessionVerification verify() {
+  private SessionVerification verify() {
     return verifier.verify(TOKEN_HASH).block(Duration.ofSeconds(5));
+  }
+
+  private SessionVerifier verifier(String approvedRunId) {
+    gate = new RunIdGate(approvedRunId);
+    return new SessionVerifier(gatewayClient, gatewayUri(REDIS.getMappedPort(6379)), EPOCH, gate);
+  }
+
+  private static RedisClient client() {
+    final var created = RedisClient.create();
+    created.setOptions(
+        ClientOptions.builder()
+            .timeoutOptions(TimeoutOptions.enabled(Duration.ofSeconds(2)))
+            .build());
+    return created;
   }
 
   private static void saveSession(Consumer<HashMap<String, String>> change) {
