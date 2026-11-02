@@ -18,7 +18,6 @@ import com.commercesettle.payment.domain.model.Payment;
 import com.commercesettle.payment.domain.model.PaymentAmounts;
 import com.commercesettle.payment.domain.model.PaymentJob;
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
-import com.commercesettle.payment.domain.model.PaymentStatus;
 import com.commercesettle.payment.domain.repository.MileageEntryRepository;
 import com.commercesettle.payment.domain.repository.MileageReservationRepository;
 import com.commercesettle.payment.domain.repository.MileageWalletRepository;
@@ -125,13 +124,14 @@ public class ApplyOrderPaymentRequestService {
     try {
       transactions.executeWithoutResult(
           status -> {
+            inbox.lockOrder(claimed.orderId());
             if (!inbox.lockClaimed(claimed.inboxId(), claimed.version())) {
-              // 임대가 끝나 다른 처리기가 선점했다. 그 처리기의 결과를 덮어쓰지 않는다.
-              LOG.atWarn()
+              // 취소 처리에서 이미 완료했거나 다른 처리기가 다시 선점했다. 기존 결과를 덮어쓰지 않는다.
+              LOG.atDebug()
                   .addKeyValue("event", "payment.accept")
                   .addKeyValue("inboxId", claimed.inboxId())
                   .addKeyValue("result", "SKIPPED")
-                  .log("Payment request lease was lost");
+                  .log("Payment request already handled or lease lost");
               return;
             }
             process(Optional.of(claimed), clock.instant());
@@ -185,8 +185,6 @@ public class ApplyOrderPaymentRequestService {
       return false;
     }
     UUID inboxId = claimed.get().inboxId();
-    // 결제가 아직 없으면 잠글 행이 없다. 같은 주문의 결제 요청과 취소 요청이 서로의 커밋을 보고 처리하도록 주문 단위로 직렬화한다.
-    payments.lockOrder(claimed.get().event().aggregateId());
     if (claimed.get().event().payload()
         instanceof PaymentCancellationRequestedPayload cancellation) {
       return cancel(claimed.get(), cancellation, now);
@@ -206,13 +204,6 @@ public class ApplyOrderPaymentRequestService {
     }
 
     Optional<Payment> existing = payments.findByOrderId(payload.orderId());
-    if (existing.isPresent()
-        && existing.get().getStatus() == PaymentStatus.CANCELLED
-        && existing.get().getCurrentCycleId().equals(payload.paymentCycleId())) {
-      // 이 요청보다 먼저 처리한 취소가 이 원문으로 이미 취소된 결제를 만들었다.
-      inbox.markApplied(inboxId, existing.get().getId(), now);
-      return true;
-    }
     if (existing.isPresent()) {
       if (!isSameRequest(existing.get(), payload, amounts.get())) {
         return review(claimed.get(), "PAYMENT_REQUEST_ORDER_CONFLICT", now);
@@ -431,19 +422,23 @@ public class ApplyOrderPaymentRequestService {
    */
   private boolean cancelWithoutPayment(
       WaitingInboxEvent claimed, PaymentCancellationRequestedPayload request, Instant now) {
-    Optional<OrderPaymentRequestedPayload> original =
+    Optional<InboxStore.PaymentRequest> original =
         inbox.findPaymentRequest(request.orderId(), request.paymentCycleId());
     if (original.isEmpty()) {
       inbox.markApplied(claimed.inboxId(), null, now);
       return true;
     }
-    Optional<PaymentAmounts> amounts = toAmounts(original.get());
-    if (amounts.isEmpty() || !matchesCommerceAmounts(original.get(), amounts.get())) {
+    OrderPaymentRequestedPayload payload = original.get().payload();
+    Optional<PaymentAmounts> amounts = toAmounts(payload);
+    if (payload.status() != OrderPaymentRequestedPayload.Status.PAYMENT_PENDING
+        || amounts.isEmpty()
+        || !matchesCommerceAmounts(payload, amounts.get())) {
       return review(claimed, PAYMENT_CANCELLATION_REQUEST_INVALID, now);
     }
-    Payment payment = payments.save(newPayment(original.get(), amounts.get(), now));
+    Payment payment = payments.save(newPayment(payload, amounts.get(), now));
     payment.cancel(now);
-    appendAccepted(payment, original.get(), now);
+    inbox.linkPaymentRequest(original.get().inboxId(), payment.getId(), now);
+    appendAccepted(payment, payload, now);
     appendCancellationResult(
         PAYMENT_CANCELLED, payment, CANCELLED_BEFORE_PAYMENT, cancelledEventId(payment), 0, now);
     inbox.markApplied(claimed.inboxId(), payment.getId(), now);

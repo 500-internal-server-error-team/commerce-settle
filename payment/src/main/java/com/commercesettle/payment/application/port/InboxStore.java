@@ -25,6 +25,9 @@ public interface InboxStore {
   Optional<InboxClaim> claimWaitingEvent(
       UUID eventId, Instant now, Instant leaseUntil, int maxAttempts);
 
+  /** 현재 트랜잭션에서 주문 하나의 요청·취소를 직렬화한다. Inbox 행 잠금보다 먼저 호출한다. */
+  void lockOrder(UUID orderId);
+
   /** 선점한 버전 그대로인 WAITING 행을 현재 트랜잭션에서 잠근다. 그 사이 다른 처리기가 선점했거나 처리했으면 false를 돌려준다. */
   boolean lockClaimed(UUID inboxId, long version);
 
@@ -39,7 +42,7 @@ public interface InboxStore {
    */
   boolean recordFailure(UUID inboxId, long version, String errorCode, Instant retryAt, Instant now);
 
-  /** 결제를 처음 APPLIED로 만든 요청을 원문에서 다시 읽는다. 결제에 저장하지 않는 결제수단 비교에 쓴다. */
+  /** 결제 생성에 사용한 원문을 처리 상태와 관계없이 읽는다. 결제수단 비교·조회에 쓴다. */
   Optional<OrderPaymentRequestedPayload> findOriginalRequest(UUID paymentId);
 
   /**
@@ -48,7 +51,12 @@ public interface InboxStore {
   Optional<UUID> findEarlyCancellation(UUID orderId, UUID paymentCycleId);
 
   /** 같은 주문·회차로 받은 결제 요청 원문을 상태와 관계없이 찾는다. 결제가 없을 때 취소를 확정하는 데 쓴다. */
-  Optional<OrderPaymentRequestedPayload> findPaymentRequest(UUID orderId, UUID paymentCycleId);
+  Optional<PaymentRequest> findPaymentRequest(UUID orderId, UUID paymentCycleId);
+
+  /** 원문을 결제에 연결한다. WAITING은 취소 결과로 완료하고, REVIEW_REQUIRED의 상태·사유는 보존한다. */
+  void linkPaymentRequest(UUID inboxId, UUID paymentId, Instant now);
+
+  record PaymentRequest(UUID inboxId, OrderPaymentRequestedPayload payload) {}
 
   /** 결제 없이 APPLIED로 남긴 취소 요청을 나중에 만든 결제에 연결한다. */
   void linkResult(UUID inboxId, UUID resultRef, Instant now);

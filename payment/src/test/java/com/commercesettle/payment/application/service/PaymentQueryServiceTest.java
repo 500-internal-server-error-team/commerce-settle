@@ -128,11 +128,6 @@ class PaymentQueryServiceTest {
     public long countByBuyer(UUID buyerId, UUID orderId) {
       return byId.values().stream().filter(p -> p.getBuyerId().equals(buyerId)).count();
     }
-
-    @Override
-    public void lockOrder(UUID orderId) {
-      throw new UnsupportedOperationException();
-    }
   }
 
   private static final class FakeInbox implements InboxStore {
@@ -206,13 +201,22 @@ class PaymentQueryServiceTest {
     }
 
     @Override
+    public void lockOrder(UUID orderId) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void linkPaymentRequest(UUID inboxId, UUID paymentId, Instant now) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
     public void linkResult(UUID inboxId, UUID resultRef, Instant now) {
       throw new UnsupportedOperationException();
     }
 
     @Override
-    public Optional<OrderPaymentRequestedPayload> findPaymentRequest(
-        UUID orderId, UUID paymentCycleId) {
+    public Optional<PaymentRequest> findPaymentRequest(UUID orderId, UUID paymentCycleId) {
       throw new UnsupportedOperationException();
     }
 
