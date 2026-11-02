@@ -1,9 +1,11 @@
 package com.commercesettle.settlement.infrastructure.client;
 
+import com.commercesettle.internalauth.InternalCredentials;
 import com.commercesettle.settlement.application.port.PayoutGateway;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.time.OffsetDateTime;
 import java.util.UUID;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.client.HttpClientErrorException;
@@ -14,15 +16,24 @@ import org.springframework.web.client.RestClientException;
  * finance-mock 지급 대역의 HTTP 구현. 성공·확정 거절만 확정 결과로 보고, 처리 중·5xx·504(응답 유실)·타임아웃은 미확정으로 돌려준다. 조회의 404는
  * 대역이 MOCK_TRANSACTION_NOT_FOUND라고 답했을 때만 거래 부재로 본다. 응답의 업무 키·금액·작업·출금 계정·금융 시나리오 버전이 요청과 다르면 결과를
  * 믿지 않는다.
+ *
+ * <p>모든 요청에 Finance Mock용 {@code service:settlement} 내부 호출 자격(ADR 0010)을 붙인다. 자격 거절(401·403)은 대역이
+ * 요청을 처리하지 않았다는 뜻이지 지급 결과가 아니므로 미확정으로 둔다.
  */
 public class HttpPayoutGateway implements PayoutGateway {
   private static final String NOT_FOUND_CODE = "MOCK_TRANSACTION_NOT_FOUND";
 
   private final RestClient client;
+  private final String authorization;
   private final String lookupScenarioVersion;
 
-  public HttpPayoutGateway(RestClient client, String lookupScenarioVersion) {
+  /**
+   * @param credential Finance Mock이 {@code service:settlement}로 확인하는 자격. 없거나 43자 미만이면 기동하지 않는다.
+   */
+  public HttpPayoutGateway(RestClient client, String credential, String lookupScenarioVersion) {
     this.client = client;
+    this.authorization =
+        "Bearer " + InternalCredentials.requireFormat("service:settlement", credential);
     this.lookupScenarioVersion = lookupScenarioVersion;
   }
 
@@ -33,6 +44,7 @@ public class HttpPayoutGateway implements PayoutGateway {
           client
               .post()
               .uri("/mock/payouts")
+              .header(HttpHeaders.AUTHORIZATION, authorization)
               .header("Idempotency-Key", "payout-" + request.businessKey())
               .contentType(MediaType.APPLICATION_JSON)
               .body(
@@ -62,6 +74,7 @@ public class HttpPayoutGateway implements PayoutGateway {
                   "/mock/payouts/{businessKey}?scenarioVersion={scenarioVersion}",
                   request.businessKey(),
                   lookupScenarioVersion)
+              .header(HttpHeaders.AUTHORIZATION, authorization)
               .retrieve()
               .body(MockTransaction.class);
       return interpret(body, request);
@@ -99,7 +112,7 @@ public class HttpPayoutGateway implements PayoutGateway {
 
   /**
    * 형식 오류는 같은 요청을 다시 보내도 해결되지 않는다. 409는 다른 본문뿐 아니라 같은 키의 앞선 요청이 처리 중일 때도 오므로 미확정으로 두고, 다음 조회에서 원거래를
-   * 요청과 비교해 가린다. 그 밖의 4xx도 판단할 수 없어 미확정으로 둔다.
+   * 요청과 비교해 가린다. 자격 거절(401·403)을 포함한 그 밖의 4xx도 판단할 수 없어 미확정으로 둔다.
    */
   private static Result rejectedOrUnconfirmed(HttpClientErrorException e) {
     if (HttpStatus.resolve(e.getStatusCode().value()) == HttpStatus.BAD_REQUEST) {

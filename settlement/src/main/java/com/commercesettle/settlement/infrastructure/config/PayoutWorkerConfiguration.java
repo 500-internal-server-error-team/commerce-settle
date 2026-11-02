@@ -28,11 +28,14 @@ public class PayoutWorkerConfiguration {
       RestClient.Builder builder,
       PayoutWorkerSettings settings,
       @Value("${settlement.payout.mock-base-url}") String baseUrl,
+      @Value("${settlement.payout.mock-credential}") String credential,
       @Value("${settlement.payout.lookup-scenario-version}") String lookupScenarioVersion) {
     HttpClient http = HttpClient.newBuilder().connectTimeout(settings.httpTimeout()).build();
     JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(http);
     requestFactory.setReadTimeout(settings.httpTimeout());
     return new HttpPayoutGateway(
-        builder.baseUrl(baseUrl).requestFactory(requestFactory).build(), lookupScenarioVersion);
+        builder.baseUrl(baseUrl).requestFactory(requestFactory).build(),
+        credential,
+        lookupScenarioVersion);
   }
 }

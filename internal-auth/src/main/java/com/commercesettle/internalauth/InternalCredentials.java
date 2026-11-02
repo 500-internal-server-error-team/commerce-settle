@@ -40,14 +40,24 @@ public final class InternalCredentials {
             throw new IllegalStateException("Internal sender needs one or two credentials");
           }
           for (var value : values) {
-            if (value == null || !FORMAT.matcher(value).matches()) {
-              throw new IllegalStateException(
-                  "Internal credential for " + sender + " must be URL-safe and at least 43 chars");
-            }
-            entries.add(new Entry(sender, digest(value)));
+            entries.add(new Entry(sender, digest(requireFormat(sender, value))));
           }
         });
     this.entries = List.copyOf(entries);
+  }
+
+  /**
+   * 자격이 URL-safe 43자(256비트) 이상인지 확인한다. 보내는 쪽도 기동 때 같은 기준으로 확인한다. 오류 메시지에 원문을 넣지 않는다.
+   *
+   * @param sender 자격을 쓰는 발신자 ID
+   * @return 확인한 자격
+   */
+  public static String requireFormat(String sender, String value) {
+    if (value == null || !FORMAT.matcher(value).matches()) {
+      throw new IllegalStateException(
+          "Internal credential for " + sender + " must be URL-safe and at least 43 chars");
+    }
+    return value;
   }
 
   /** 자격과 일치하는 발신자 ID. 모든 등록 값과 비교해 일치 위치에 따라 시간이 달라지지 않게 한다. */

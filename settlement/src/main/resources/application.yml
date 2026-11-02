@@ -75,6 +75,8 @@ settlement:
     # 원거래 조회에 쓰는 조회 통신 시나리오. 원거래의 금융 실행 버전과 별개다.
     lookup-scenario-version: ${PAYOUT_LOOKUP_SCENARIO_VERSION:payout-normal-v1}
     mock-base-url: ${FINANCE_MOCK_URL:http://finance-mock:8080}
+    # Finance Mock이 service:settlement로 확인하는 내부 호출 자격(ADR 0010). 없거나 43자 미만이면 기동하지 않는다.
+    mock-credential: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL}
   payout-worker:
     enabled: ${SETTLEMENT_PAYOUT_WORKER_ENABLED:true}
     # 금융 Worker 임대 기준: 조회 1초, 임대 30초, HTTP 5초(policies.md). 미확정은 5분마다 원거래를 조회한다.

@@ -1,6 +1,7 @@
 package com.commercesettle.settlement.infrastructure.client;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
@@ -14,6 +15,10 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -23,6 +28,7 @@ import org.springframework.web.client.RestClient;
 class HttpPayoutGatewayTest {
   private static final UUID KEY = UUID.fromString("5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a");
   private static final UUID EXTERNAL = UUID.fromString("0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9");
+  private static final String CREDENTIAL = "settlement-credential-0123456789abcdef0123456";
   private static final PayoutRequest REQUEST =
       new PayoutRequest(KEY, "payout-funding-default", "seller-account", 25_500, "payout-v1");
 
@@ -33,7 +39,7 @@ class HttpPayoutGatewayTest {
   void setUp() {
     RestClient.Builder builder = RestClient.builder().baseUrl("http://finance-mock");
     server = MockRestServiceServer.bindTo(builder).build();
-    gateway = new HttpPayoutGateway(builder.build(), "lookup-v1");
+    gateway = new HttpPayoutGateway(builder.build(), CREDENTIAL, "lookup-v1");
   }
 
   @Test
@@ -42,6 +48,7 @@ class HttpPayoutGatewayTest {
     server
         .expect(requestTo("http://finance-mock/mock/payouts"))
         .andExpect(method(HttpMethod.POST))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer " + CREDENTIAL))
         .andExpect(header("Idempotency-Key", "payout-" + KEY))
         .andExpect(jsonPath("$.businessKey").value(KEY.toString()))
         .andExpect(jsonPath("$.accountRef").value("payout-funding-default"))
@@ -65,6 +72,7 @@ class HttpPayoutGatewayTest {
     server
         .expect(requestTo("http://finance-mock/mock/payouts/" + KEY + "?scenarioVersion=lookup-v1"))
         .andExpect(method(HttpMethod.GET))
+        .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer " + CREDENTIAL))
         .andRespond(transaction(HttpStatus.OK, KEY, 25_500, "PROCESSING"));
 
     assertThat(gateway.execute(REQUEST)).isEqualTo(new Result.Declined(EXTERNAL));
@@ -83,6 +91,29 @@ class HttpPayoutGatewayTest {
 
     assertThat(gateway.execute(REQUEST)).isInstanceOf(Result.Unconfirmed.class);
     assertThat(gateway.lookup(REQUEST)).isInstanceOf(Result.Unconfirmed.class);
+  }
+
+  @Test
+  @DisplayName("대역이 자격을 거절(401·403)하면 지급 결과로 확정하지 않고 미확정으로 둔다")
+  void credentialRejectionIsUnconfirmed() {
+    server
+        .expect(requestTo("http://finance-mock/mock/payouts"))
+        .andRespond(problem(HttpStatus.UNAUTHORIZED, "COMMON_AUTHENTICATION_REQUIRED"));
+    server
+        .expect(requestTo("http://finance-mock/mock/payouts/" + KEY + "?scenarioVersion=lookup-v1"))
+        .andRespond(problem(HttpStatus.FORBIDDEN, "COMMON_ROLE_FORBIDDEN"));
+
+    assertThat(gateway.execute(REQUEST)).isEqualTo(new Result.Unconfirmed("HTTP 401"));
+    assertThat(gateway.lookup(REQUEST)).isEqualTo(new Result.Unconfirmed("HTTP 403"));
+  }
+
+  @ParameterizedTest
+  @NullAndEmptySource
+  @ValueSource(strings = "short-credential")
+  @DisplayName("Finance Mock 자격이 없거나 짧으면 만들지 않는다")
+  void requiresCredential(String credential) {
+    assertThatThrownBy(() -> new HttpPayoutGateway(RestClient.create(), credential, "lookup-v1"))
+        .isInstanceOf(IllegalStateException.class);
   }
 
   @Test
