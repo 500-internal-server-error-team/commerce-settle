@@ -1,6 +1,7 @@
 package com.commercesettle.payment.application.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 import static org.assertj.core.api.Assertions.tuple;
 
@@ -12,6 +13,7 @@ import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
+import com.commercesettle.payment.application.port.UnreadableInboxEventException;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.commercesettle.payment.domain.model.MileageEntry;
 import com.commercesettle.payment.domain.model.MileageEntryKind;
@@ -29,6 +31,7 @@ import com.commercesettle.payment.domain.repository.PaymentJobRepository;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -45,6 +48,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.springframework.transaction.support.TransactionOperations;
 
 class ApplyOrderPaymentRequestServiceTest {
 
@@ -67,6 +71,7 @@ class ApplyOrderPaymentRequestServiceTest {
           reservations,
           entries,
           outbox,
+          TransactionOperations.withoutTransaction(),
           Clock.fixed(NOW, ZoneOffset.UTC));
 
   @Test
@@ -406,6 +411,61 @@ class ApplyOrderPaymentRequestServiceTest {
     assertThat(inbox.reviewRequired).isEmpty();
   }
 
+  @Test
+  @DisplayName("처리 중 예외가 나면 선점한 버전으로 실패를 기록하고 1초 뒤 다시 처리하게 한다")
+  void recordsFirstFailureForRetryAfterOneSecond() {
+    jobs.failSave = true;
+    UUID inboxId = inbox.add(card(UUID.randomUUID(), UUID.randomUUID()));
+
+    assertThat(service.processNext()).isTrue();
+
+    assertThat(inbox.failures)
+        .containsExactly(
+            new Failure(inboxId, 3, "PAYMENT_REQUEST_PROCESSING_FAILED", NOW.plusSeconds(1)));
+    assertThat(inbox.applied).isEmpty();
+  }
+
+  @Test
+  @DisplayName("9번 실패한 요청이 다시 실패하면 재시도 시각 없이 확인 대상으로 기록한다")
+  void recordsTenthFailureAsReview() {
+    jobs.failSave = true;
+    UUID inboxId = inbox.add(card(UUID.randomUUID(), UUID.randomUUID()), 9);
+
+    service.processNext();
+
+    assertThat(inbox.failures)
+        .containsExactly(new Failure(inboxId, 3, "PAYMENT_REQUEST_PROCESSING_FAILED", null));
+  }
+
+  @Test
+  @DisplayName("원문을 읽을 수 없는 행은 첫 실패에도 재시도 없이 확인 대상으로 기록한다")
+  void recordsUnreadableBodyAsReviewWithoutRetry() {
+    UUID inboxId = UUID.randomUUID();
+    inbox.claimFailure = new UnreadableInboxEventException(inboxId, 5, 0);
+
+    assertThat(service.processNext()).isTrue();
+
+    assertThat(inbox.failures)
+        .containsExactly(new Failure(inboxId, 5, "PAYMENT_REQUEST_BODY_UNREADABLE", null));
+  }
+
+  @Test
+  @DisplayName("선점 자체가 실패하면 기록할 행이 없으므로 예외를 그대로 던진다")
+  void rethrowsWhenClaimFails() {
+    inbox.claimFailure = new IllegalStateException("database unavailable");
+
+    assertThatThrownBy(service::processNext).hasMessage("database unavailable");
+    assertThat(inbox.failures).isEmpty();
+  }
+
+  @ParameterizedTest
+  @CsvSource({"1, 1", "2, 2", "3, 4", "6, 32", "7, 60", "9, 60"})
+  @DisplayName("재시도 대기는 1초부터 두 배씩 늘고 60초를 넘지 않는다")
+  void growsRetryDelayUpToSixtySeconds(int attempts, long seconds) {
+    assertThat(ApplyOrderPaymentRequestService.retryDelay(attempts))
+        .isEqualTo(Duration.ofSeconds(seconds));
+  }
+
   private static OrderPaymentRequestedPayload mixed(UUID orderId, UUID cycleId) {
     return payload(
         orderId,
@@ -509,15 +569,21 @@ class ApplyOrderPaymentRequestServiceTest {
     private final Map<UUID, UUID> applied = new HashMap<>();
     private final Map<UUID, OrderPaymentRequestedPayload> originals = new HashMap<>();
     private final Map<UUID, String> reviewRequired = new LinkedHashMap<>();
+    private final List<Failure> failures = new ArrayList<>();
+    private RuntimeException claimFailure;
 
     UUID add(OrderPaymentRequestedPayload payload) {
+      return add(payload, 0);
+    }
+
+    UUID add(OrderPaymentRequestedPayload payload, int attempts) {
       UUID inboxId = UUID.randomUUID();
       payloads.put(inboxId, payload);
       waiting.add(
           new WaitingInboxEvent(
               inboxId,
-              0,
-              0,
+              3,
+              attempts,
               new EventEnvelope<>(
                   UUID.randomUUID(),
                   "OrderPaymentRequested",
@@ -536,6 +602,9 @@ class ApplyOrderPaymentRequestServiceTest {
 
     @Override
     public Optional<WaitingInboxEvent> claimNextWaiting(Instant now) {
+      if (claimFailure != null) {
+        throw claimFailure;
+      }
       return Optional.ofNullable(waiting.poll());
     }
 
@@ -558,7 +627,8 @@ class ApplyOrderPaymentRequestServiceTest {
     @Override
     public boolean recordFailure(
         UUID inboxId, long version, String errorCode, Instant retryAt, Instant now) {
-      throw new UnsupportedOperationException();
+      failures.add(new Failure(inboxId, version, errorCode, retryAt));
+      return true;
     }
 
     @Override
@@ -566,6 +636,8 @@ class ApplyOrderPaymentRequestServiceTest {
       return Optional.ofNullable(originals.get(paymentId));
     }
   }
+
+  private record Failure(UUID inboxId, long version, String errorCode, Instant retryAt) {}
 
   private static final class FakePayments implements PaymentRepository {
     private final Map<UUID, Payment> byId = new HashMap<>();
@@ -593,9 +665,13 @@ class ApplyOrderPaymentRequestServiceTest {
 
   private static final class FakeJobs implements PaymentJobRepository {
     private final List<PaymentJob> saved = new ArrayList<>();
+    private boolean failSave;
 
     @Override
     public PaymentJob save(PaymentJob job) {
+      if (failSave) {
+        throw new IllegalStateException("job save failed");
+      }
       saved.add(job);
       return job;
     }
