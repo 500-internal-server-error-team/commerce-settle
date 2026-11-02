@@ -150,6 +150,8 @@ app:
     expiry-batch-size: 100
     # 매월 1일 00:10 KST부터 월간 우수고객 회차 실행, 10분마다 미완료 회차 재확인
     grade-scheduler-enabled: true
+    # 실행자 잠금을 잡았는데도 이보다 오래 갱신이 없는 진행 중 실행은 강제 종료 잔류로 보고 정리 뒤 재시작
+    grade-stale-after: PT10M
   sale-events:
     # 이벤트 시작·종료 처리. docs/architecture.md#정기-작업과-비동기-실행
     scheduler-enabled: true

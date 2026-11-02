@@ -1,5 +1,6 @@
 package com.commercesettle.commerce.infrastructure.batch;
 
+import com.commercesettle.commerce.application.port.CouponIssueRunExecutions;
 import com.commercesettle.commerce.application.service.GradeCouponService;
 import com.commercesettle.commerce.domain.model.CouponIssueRun;
 import com.commercesettle.commerce.domain.model.CouponIssueRunStatus;
@@ -29,11 +30,17 @@ public class GradeCouponLauncher {
   private final JobLauncher jobLauncher;
   private final Job gradeCouponJob;
   private final GradeCouponService grades;
+  private final GradeCouponExecutions executions;
 
-  GradeCouponLauncher(JobLauncher jobLauncher, Job gradeCouponJob, GradeCouponService grades) {
+  GradeCouponLauncher(
+      JobLauncher jobLauncher,
+      Job gradeCouponJob,
+      GradeCouponService grades,
+      GradeCouponExecutions executions) {
     this.jobLauncher = jobLauncher;
     this.gradeCouponJob = gradeCouponJob;
     this.grades = grades;
+    this.executions = executions;
   }
 
   /** 혜택 월보다 이전인데 끝나지 않은 회차의 혜택 월. */
@@ -52,6 +59,18 @@ public class GradeCouponLauncher {
         && run.getStatus() != CouponIssueRunStatus.ISSUING) {
       return Optional.of(run.getStatus());
     }
+    Optional<CouponIssueRunExecutions.Held> held = executions.tryLock(run.getId());
+    if (held.isEmpty()) {
+      logAlreadyRunning(run);
+      return Optional.of(run.getStatus());
+    }
+    try (CouponIssueRunExecutions.Held ignored = held.get()) {
+      launch(run, true);
+    }
+    return grades.currentRun(targetMonth).map(CouponIssueRun::getStatus);
+  }
+
+  private void launch(CouponIssueRun run, boolean mayRecover) {
     JobParameters parameters =
         new JobParametersBuilder()
             .addLocalDate(GradeCouponJobConfiguration.TARGET_MONTH, run.getTargetMonth())
@@ -63,15 +82,22 @@ public class GradeCouponLauncher {
       // Job은 끝났지만 업무 종결이 남았을 수 있어 같은 회차를 다시 확인한다.
       grades.finish(run.getId());
     } catch (JobExecutionAlreadyRunningException e) {
-      LOGGER
-          .atWarn()
-          .addKeyValue("event", "coupon.grade-job")
-          .addKeyValue("targetMonth", run.getTargetMonth())
-          .addKeyValue("result", "ALREADY_RUNNING")
-          .log("Grade coupon job is already running");
+      if (mayRecover && executions.recoverIfStale(run.getId())) {
+        launch(run, false);
+        return;
+      }
+      logAlreadyRunning(run);
     } catch (JobRestartException | JobParametersInvalidException e) {
       throw new IllegalStateException("grade coupon job cannot be started", e);
     }
-    return grades.currentRun(targetMonth).map(CouponIssueRun::getStatus);
+  }
+
+  private static void logAlreadyRunning(CouponIssueRun run) {
+    LOGGER
+        .atWarn()
+        .addKeyValue("event", "coupon.grade-job")
+        .addKeyValue("targetMonth", run.getTargetMonth())
+        .addKeyValue("result", "ALREADY_RUNNING")
+        .log("Grade coupon job is already running");
   }
 }

@@ -10,8 +10,11 @@ import com.commercesettle.commerce.application.exception.OrderStubException;
 import com.commercesettle.commerce.domain.exception.AccountNotFoundException;
 import com.commercesettle.commerce.domain.exception.BuyerAddressNotFoundException;
 import com.commercesettle.commerce.domain.exception.CouponCampaignConflictException;
+import com.commercesettle.commerce.domain.exception.CouponIssueRunNotFoundException;
 import com.commercesettle.commerce.domain.exception.CouponRecipientNotFoundException;
 import com.commercesettle.commerce.domain.exception.CouponRejectedException;
+import com.commercesettle.commerce.domain.exception.CouponRunConflictException;
+import com.commercesettle.commerce.domain.exception.CouponRunStateUnverifiedException;
 import com.commercesettle.commerce.domain.exception.CouponTemplateNotFoundException;
 import com.commercesettle.commerce.domain.exception.DefaultAddressConflictException;
 import com.commercesettle.commerce.domain.exception.DuplicateAccountEmailException;
@@ -213,6 +216,29 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
 
   private ResponseEntity<Object> notIssuable(String detail, WebRequest request) {
     return respond(ErrorCode.COUPON_CAMPAIGN_NOT_ISSUABLE, detail, null, request);
+  }
+
+  @ExceptionHandler(CouponIssueRunNotFoundException.class)
+  ResponseEntity<Object> couponRunNotFound(CouponIssueRunNotFoundException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "월간 혜택 회차를 찾을 수 없습니다.", null, request);
+  }
+
+  @ExceptionHandler(CouponRunConflictException.class)
+  ResponseEntity<Object> couponRunConflict(CouponRunConflictException e, WebRequest request) {
+    return respond(
+        switch (e.reason()) {
+          case NOT_REPLACEABLE -> ErrorCode.COUPON_RUN_NOT_REPLACEABLE;
+          case EXECUTION_ACTIVE -> ErrorCode.COUPON_RUN_EXECUTION_ACTIVE;
+          case VERSION_CONFLICT -> ErrorCode.COUPON_RUN_VERSION_CONFLICT;
+          case EXPIRED -> ErrorCode.COUPON_RUN_EXPIRED;
+        },
+        request);
+  }
+
+  @ExceptionHandler(CouponRunStateUnverifiedException.class)
+  ResponseEntity<Object> couponRunUnverified(
+      CouponRunStateUnverifiedException e, WebRequest request) {
+    return respond(ErrorCode.COUPON_RUN_STATE_UNVERIFIED, request);
   }
 
   @ExceptionHandler(CouponRejectedException.class)
