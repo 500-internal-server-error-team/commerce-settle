@@ -19,4 +19,10 @@ public interface PaymentRepository {
   List<Payment> findByBuyer(UUID buyerId, UUID orderId, int page, int size);
 
   long countByBuyer(UUID buyerId, UUID orderId);
+
+  /**
+   * 현재 트랜잭션이 끝날 때까지 주문 하나의 결제 생성·취소를 직렬화한다. 결제가 아직 없어 행 잠금을 걸 수 없는 경우에도 같은 주문의 결제 요청과 취소 요청이 서로의
+   * 커밋을 보고 처리하게 한다.
+   */
+  void lockOrder(UUID orderId);
 }

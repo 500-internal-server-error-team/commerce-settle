@@ -47,6 +47,9 @@ public interface InboxStore {
    */
   Optional<UUID> findEarlyCancellation(UUID orderId, UUID paymentCycleId);
 
+  /** 같은 주문·회차로 받은 결제 요청 원문을 상태와 관계없이 찾는다. 결제가 없을 때 취소를 확정하는 데 쓴다. */
+  Optional<OrderPaymentRequestedPayload> findPaymentRequest(UUID orderId, UUID paymentCycleId);
+
   /** 결제 없이 APPLIED로 남긴 취소 요청을 나중에 만든 결제에 연결한다. */
   void linkResult(UUID inboxId, UUID resultRef, Instant now);
 }

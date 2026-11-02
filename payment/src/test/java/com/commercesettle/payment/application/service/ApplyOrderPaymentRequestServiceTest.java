@@ -653,6 +653,45 @@ class ApplyOrderPaymentRequestServiceTest {
   }
 
   @Test
+  @DisplayName("결제 요청이 확인 대상으로 끝난 주문의 취소는 그 원문으로 취소된 결제를 만들고 PaymentCancelled를 남긴다")
+  void cancelsOrderWhosePaymentRequestEndedInReview() {
+    wallets.fund(BUYER_ID, 1_000);
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    UUID requestId = inbox.add(mixed(orderId, cycleId));
+    service.processNext();
+    assertThat(inbox.reviewRequired).containsKey(requestId);
+    UUID cancellationId = inbox.addCancellation(orderId, cycleId);
+
+    service.processNext();
+
+    Payment payment = payments.all().get(0);
+    assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELLED);
+    assertThat(jobs.saved).isEmpty();
+    assertThat(reservations.saved).isEmpty();
+    assertThat(outbox.accepted).hasSize(1);
+    assertThat(outbox.cancellations)
+        .singleElement()
+        .extracting(event -> event.payload().reasonCode())
+        .isEqualTo("CANCELLED_BEFORE_PAYMENT");
+    assertThat(inbox.applied).containsEntry(cancellationId, payment.getId());
+  }
+
+  @Test
+  @DisplayName("결제 요청과 취소 요청 모두 주문 단위 잠금을 먼저 잡는다")
+  void locksOrderBeforeProcessing() {
+    UUID orderId = UUID.randomUUID();
+    UUID cycleId = UUID.randomUUID();
+    inbox.add(card(orderId, cycleId));
+    inbox.addCancellation(orderId, cycleId);
+
+    service.processNext();
+    service.processNext();
+
+    assertThat(payments.lockedOrders).containsExactly(orderId, orderId);
+  }
+
+  @Test
   @DisplayName("결제 요청보다 취소가 먼저 오면 늦은 결제 요청은 결제를 취소 상태로 만들고 승인·마일리지 예약을 하지 않는다")
   void cancelsLatePaymentRequestAfterEarlyCancellation() {
     MileageWallet wallet = wallets.fund(BUYER_ID, 5_000);
@@ -894,6 +933,14 @@ class ApplyOrderPaymentRequestServiceTest {
     }
 
     @Override
+    public Optional<OrderPaymentRequestedPayload> findPaymentRequest(
+        UUID orderId, UUID paymentCycleId) {
+      return payloads.values().stream()
+          .filter(p -> p.orderId().equals(orderId) && p.paymentCycleId().equals(paymentCycleId))
+          .findFirst();
+    }
+
+    @Override
     public void markReviewRequired(UUID inboxId, String errorCode, Instant now) {
       reviewRequired.put(inboxId, errorCode);
     }
@@ -920,6 +967,7 @@ class ApplyOrderPaymentRequestServiceTest {
 
   private static final class FakePayments implements PaymentRepository {
     private final Map<UUID, Payment> byId = new HashMap<>();
+    private final List<UUID> lockedOrders = new ArrayList<>();
 
     List<Payment> all() {
       return new ArrayList<>(byId.values());
@@ -954,6 +1002,11 @@ class ApplyOrderPaymentRequestServiceTest {
     @Override
     public long countByBuyer(UUID buyerId, UUID orderId) {
       throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void lockOrder(UUID orderId) {
+      lockedOrders.add(orderId);
     }
   }
 

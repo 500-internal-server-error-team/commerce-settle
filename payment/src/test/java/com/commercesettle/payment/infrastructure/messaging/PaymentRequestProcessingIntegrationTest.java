@@ -479,6 +479,101 @@ class PaymentRequestProcessingIntegrationTest {
         .containsExactly("PaymentCancellationRejected:PAYMENT_IN_PROGRESS");
   }
 
+  @Test
+  @DisplayName("결제 요청이 마일리지 부족으로 확인 대상이 된 뒤 온 취소는 취소된 결제를 만들고 PaymentCancelled를 커밋한다")
+  void cancelsOrderWhosePaymentRequestEndedInReviewInDatabase() {
+    fundWallet(1_000);
+    saveWaiting(event(UUID.randomUUID(), ORDER_ID, CYCLE_ID, 10_000, 2_000));
+    service.processNext();
+    saveCancellation(ORDER_ID, CYCLE_ID);
+
+    service.processNext();
+
+    JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+    UUID paymentId = jdbc.queryForObject("SELECT id FROM payment.payments", UUID.class);
+    assertThat(jdbc.queryForObject("SELECT status FROM payment.payments", String.class))
+        .isEqualTo("CANCELLED");
+    assertThat(
+            jdbc.queryForList(
+                "SELECT event_type || ':' || status || ':' || coalesce(result_ref::text, '-')"
+                    + " FROM payment.inbox ORDER BY event_type",
+                String.class))
+        .containsExactly(
+            "OrderPaymentRequested:REVIEW_REQUIRED:-",
+            "PaymentCancellationRequested:APPLIED:" + paymentId);
+    assertThat(
+            jdbc.queryForList(
+                "SELECT event_type FROM payment.outbox ORDER BY sequence_no", String.class))
+        .containsExactly("PaymentAccepted", "PaymentCancelled");
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.mileage_reservations", Long.class))
+        .isZero();
+  }
+
+  @Test
+  @DisplayName("같은 주문의 결제 요청과 취소를 두 처리기가 동시에 처리해도 승인 가능한 결제가 남지 않고 결제가 취소된다")
+  void serializesConcurrentRequestAndCancellationOfSameOrder() throws Exception {
+    List<UUID> orders = new ArrayList<>();
+    for (int i = 0; i < 10; i++) {
+      UUID orderId = UUID.randomUUID();
+      UUID cycleId = UUID.randomUUID();
+      saveWaiting(event(UUID.randomUUID(), orderId, cycleId, 10_000, 0));
+      saveCancellation(orderId, cycleId);
+      orders.add(orderId);
+    }
+    var start = new CountDownLatch(1);
+    var executor = Executors.newFixedThreadPool(2);
+    try {
+      List<Future<?>> workers = new ArrayList<>();
+      for (int i = 0; i < 2; i++) {
+        workers.add(
+            executor.submit(
+                () -> {
+                  start.await(10, TimeUnit.SECONDS);
+                  while (service.processNext()) {
+                    // 처리할 행이 없을 때까지 계속 처리한다.
+                  }
+                  return null;
+                }));
+      }
+      start.countDown();
+      for (Future<?> worker : workers) {
+        worker.get(60, TimeUnit.SECONDS);
+      }
+    } finally {
+      executor.shutdownNow();
+    }
+    // 잠금 대기 상한으로 재시도 대기에 들어간 요청이 있으면 처리 시각을 지나 마저 처리한다.
+    clock.set(NOW.plusSeconds(120));
+    while (service.processNext()) {
+      // 남은 재시도를 처리한다.
+    }
+
+    JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+    assertThat(
+            jdbc.queryForList(
+                "SELECT order_id FROM payment.payments WHERE status = 'CANCELLED'", UUID.class))
+        .containsExactlyInAnyOrderElementsOf(orders);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM payment.payment_jobs WHERE status <> 'DONE'", Long.class))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM payment.outbox WHERE event_type = 'PaymentCancelled'",
+                Long.class))
+        .isEqualTo(orders.size());
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM payment.inbox WHERE status <> 'APPLIED'", Long.class))
+        .isZero();
+    // 주문 단위로 직렬화되므로 같은 주문의 결제를 동시에 만들다 실패해 재시도한 요청이 없다.
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM payment.inbox WHERE attempts > 1 OR last_error_code IS NOT NULL",
+                Long.class))
+        .isZero();
+  }
+
   private void saveCancellation(UUID orderId, UUID cycleId) {
     String json =
         """
