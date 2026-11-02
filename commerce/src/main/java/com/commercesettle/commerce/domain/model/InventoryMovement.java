@@ -39,6 +39,7 @@ public class InventoryMovement {
       UUID businessRef,
       long availableDelta,
       long reservedDelta,
+      long allocatedDelta,
       long soldDelta,
       String reason,
       Instant now) {
@@ -53,6 +54,7 @@ public class InventoryMovement {
     movement.businessRef = Objects.requireNonNull(businessRef, "businessRef");
     movement.availableDelta = availableDelta;
     movement.reservedDelta = reservedDelta;
+    movement.allocatedDelta = allocatedDelta;
     movement.soldDelta = soldDelta;
     movement.reason = reason;
     movement.createdAt = Objects.requireNonNull(now, "now").truncatedTo(ChronoUnit.MICROS);
