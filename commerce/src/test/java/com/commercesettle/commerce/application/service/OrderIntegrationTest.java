@@ -518,10 +518,8 @@ class OrderIntegrationTest {
     }
     problem(
         post(f.buyer(), key(), body),
-        field.equals("buyerCouponId") ? 503 : 400,
-        field.equals("buyerCouponId")
-            ? "COMMON_TEMPORARILY_UNAVAILABLE"
-            : "COMMON_VALIDATION_FAILED");
+        field.equals("buyerCouponId") ? 409 : 400,
+        field.equals("buyerCouponId") ? "COUPON_NOT_APPLICABLE" : "COMMON_VALIDATION_FAILED");
     assertInventory(f.product(), 1, 0);
   }
 
