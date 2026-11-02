@@ -3,6 +3,7 @@ package com.commercesettle.settlement.infrastructure.batch;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -21,19 +22,26 @@ import org.springframework.stereotype.Component;
 
 /**
  * batchDate를 식별 파라미터로 일배치를 실행한다. 직전 실행이 실패·중단이면 Spring Batch가 같은 JobInstance를 이어서 재시작하고, 이미 완료됐으면
- * 새로 실행하지 않고 완료로 돌려준다(저장된 배치가 결과다). 실행 중으로 남은 실행은 건드리지 않는다(ADR 0007 D7의 강제 종료 복구는 후속).
+ * 새로 실행하지 않고 완료로 돌려준다(저장된 배치가 결과다). 같은 batchDate의 실행자 잠금을 쥔 채 실행하며, 다른 실행자가 쥐고 있으면 시작하지 않고 실행 중으로
+ * 돌려준다. 실행 중으로 남은 실행은 건드리지 않는다(ADR 0007 D7의 강제 종료 복구는 후속). 실행자 ID는 비식별 파라미터로 남긴다.
  */
 @Component
 public class DailySettlementLauncher {
   private static final Logger LOGGER = LoggerFactory.getLogger(DailySettlementLauncher.class);
 
+  static final String EXECUTOR_ID = "executorId";
+
   private final JobLauncher jobLauncher;
   private final Job dailySettlementJob;
+  private final DailySettlementLock lock;
   private final Clock clock;
+  private final String executorId = "settlement-" + UUID.randomUUID();
 
-  DailySettlementLauncher(JobLauncher jobLauncher, Job dailySettlementJob, Clock clock) {
+  DailySettlementLauncher(
+      JobLauncher jobLauncher, Job dailySettlementJob, DailySettlementLock lock, Clock clock) {
     this.jobLauncher = jobLauncher;
     this.dailySettlementJob = dailySettlementJob;
+    this.lock = lock;
     this.clock = clock;
   }
 
@@ -50,9 +58,21 @@ public class DailySettlementLauncher {
     if (SettlementBatch.cutoffOf(batchDate).isAfter(clock.instant())) {
       throw new IllegalArgumentException("cutoff of batchDate has not passed yet");
     }
+    Optional<DailySettlementLock.Held> held = lock.tryAcquire(batchDate);
+    if (held.isEmpty()) {
+      logAlreadyRunning(batchDate);
+      return BatchStatus.STARTED;
+    }
+    try (DailySettlementLock.Held ignored = held.get()) {
+      return launch(batchDate, itemIds);
+    }
+  }
+
+  private BatchStatus launch(LocalDate batchDate, Set<UUID> itemIds) {
     JobParametersBuilder builder =
         new JobParametersBuilder()
-            .addLocalDate(DailySettlementJobConfiguration.BATCH_DATE, batchDate);
+            .addLocalDate(DailySettlementJobConfiguration.BATCH_DATE, batchDate)
+            .addString(EXECUTOR_ID, executorId, false);
     if (itemIds != null)
       builder.addString(
           "fixtureItemIds",
@@ -70,15 +90,19 @@ public class DailySettlementLauncher {
     } catch (JobInstanceAlreadyCompleteException e) {
       return BatchStatus.COMPLETED;
     } catch (JobExecutionAlreadyRunningException e) {
-      LOGGER
-          .atWarn()
-          .addKeyValue("event", "settlement.daily-batch")
-          .addKeyValue("batchDate", batchDate)
-          .addKeyValue("result", "ALREADY_RUNNING")
-          .log("Daily settlement is already running");
+      logAlreadyRunning(batchDate);
       return BatchStatus.STARTED;
     } catch (JobRestartException | JobParametersInvalidException e) {
       throw new IllegalStateException("daily settlement cannot be started", e);
     }
+  }
+
+  private static void logAlreadyRunning(LocalDate batchDate) {
+    LOGGER
+        .atWarn()
+        .addKeyValue("event", "settlement.daily-batch")
+        .addKeyValue("batchDate", batchDate)
+        .addKeyValue("result", "ALREADY_RUNNING")
+        .log("Daily settlement is already running");
   }
 }

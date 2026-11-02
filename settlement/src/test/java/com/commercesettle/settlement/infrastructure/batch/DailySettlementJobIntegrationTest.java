@@ -10,6 +10,7 @@ import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.commercesettle.settlement.domain.model.SettlementItem;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -263,6 +264,31 @@ class DailySettlementJobIntegrationTest {
     assertThat(count("settlement_batches WHERE seller_id = ?", second)).isEqualTo(1);
     assertThat(contexts.calls.get(first)).isEqualTo(1);
     assertThat(statusOf(secondItem)).isEqualTo("PAYOUT_RESERVED");
+  }
+
+  @Test
+  @DisplayName("같은 날짜를 다른 실행자가 실행 중이면(잠금 보유) Job을 시작하지 않고 실행 중으로 돌려준다")
+  void doesNotStartWhileAnotherExecutorHoldsLock() throws SQLException {
+    LocalDate batchDate = LocalDate.of(2026, 9, 8);
+    SettlementItem item =
+        payable(UUID.randomUUID(), 10_000, SettlementBatch.cutoffOf(batchDate).minusSeconds(60));
+    long executions = count("batch_job_execution");
+
+    try (Connection other =
+            DriverManager.getConnection(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+        PreparedStatement lock = other.prepareStatement("SELECT pg_advisory_lock(?, ?)")) {
+      lock.setInt(1, DailySettlementLock.NAMESPACE);
+      lock.setInt(2, DailySettlementLock.key(batchDate));
+      lock.executeQuery().close();
+
+      assertThat(launcher.run(batchDate)).isEqualTo(BatchStatus.STARTED);
+    }
+
+    assertThat(count("batch_job_execution")).isEqualTo(executions);
+    assertThat(statusOf(item)).isEqualTo("PAYABLE");
+    assertThat(launcher.run(batchDate)).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(statusOf(item)).isEqualTo("PAYOUT_RESERVED");
   }
 
   @Test
