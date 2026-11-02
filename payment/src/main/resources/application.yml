@@ -106,6 +106,22 @@ app:
     # 선점 뒤 처리 결과나 실패를 기록하기 전까지 다른 처리기가 같은 요청을 다시 잡지 않는 시간.
     # 한 건의 처리 트랜잭션보다 충분히 길어야 한다.
     lease-ms: 30000
+  payment-approval:
+    # PAYMENT_ROLE=worker에서만 동작한다. 외부 결제액이 있는 결제의 승인 작업을 PG 대역에 보내고 결과를 반영한다.
+    enabled: false
+    # stub: 즉시 승인하는 개발용 대역(finance-mock PG 대역 #121 병합 전), http: finance-mock PG 대역
+    gateway: ${PAYMENT_APPROVAL_GATEWAY:stub}
+    mock-base-url: ${FINANCE_MOCK_URL:http://finance-mock:8080}
+    poll-interval-ms: 1000
+    max-jobs-per-poll: 20
+    # 호출 제한 시간은 임대보다 짧아야 한다.
+    lease-duration: 30s
+    http-timeout: 5s
+    unconfirmed-retry-delay: 5s
+    max-attempts: 10
+    card-provider: PG_A
+    funding-account-ref: ${PAYMENT_FUNDING_ACCOUNT_REF:payout-funding-default}
+    scenario-version: ${PAYMENT_SCENARIO_VERSION:pg-normal-v1}
   outbox:
     # PAYMENT_ROLE=worker에서만 동작한다. 커밋된 결제 이벤트를 Kafka로 발행한다.
     enabled: false
