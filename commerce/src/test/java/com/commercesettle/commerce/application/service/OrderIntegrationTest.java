@@ -481,7 +481,12 @@ class OrderIntegrationTest {
       case "quantity" -> body.put(field, 1.5);
       default -> body.put(field, true);
     }
-    problem(post(f.buyer(), key(), body), 400, "COMMON_VALIDATION_FAILED");
+    problem(
+        post(f.buyer(), key(), body),
+        field.equals("buyerCouponId") ? 503 : 400,
+        field.equals("buyerCouponId")
+            ? "COMMON_TEMPORARILY_UNAVAILABLE"
+            : "COMMON_VALIDATION_FAILED");
     assertInventory(f.product(), 1, 0);
   }
 

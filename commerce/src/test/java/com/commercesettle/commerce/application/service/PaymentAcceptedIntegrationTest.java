@@ -497,6 +497,67 @@ class PaymentAcceptedIntegrationTest {
     assertInventory(f);
   }
 
+  @Autowired OrderResultService results;
+
+  @Test
+  @DisplayName("같은 Kafka 소비 경계가 결제 확정 결과를 영속 인계하고 주문·재고에 반영한다")
+  void appliesConfirmedResultFromRealKafka() throws Exception {
+    var f = order();
+    var payment = UUID.randomUUID();
+    var p = mapper.createObjectNode();
+    for (var field :
+        List.of(
+            "buyerId",
+            "sellerId",
+            "productId",
+            "grossAmount",
+            "couponAmount",
+            "totalAmount",
+            "mileageAmount",
+            "externalAmount",
+            "sellerCouponAmount",
+            "platformCouponAmount",
+            "settlementBaseAmount")) p.set(field, f.original().required(field));
+    p.put("orderId", f.id().toString())
+        .put("paymentId", payment.toString())
+        .put("paymentCycleId", f.cycle().toString())
+        .put("orderVersion", 0)
+        .put("policyVersion", "order-regular-v1")
+        .put("confirmedAt", NOW.atZone(ZoneId.of("Asia/Seoul")).toOffsetDateTime().toString())
+        .put("feeAmount", 1500)
+        .put("sellerNetAmount", 8500);
+    var event =
+        new EventEnvelope<JsonNode>(
+            UUID.randomUUID(),
+            "PaymentConfirmed",
+            1,
+            NOW.atZone(ZoneId.of("Asia/Seoul")).toOffsetDateTime(),
+            payment,
+            1,
+            p);
+    kafka
+        .send(TOPIC, payment.toString(), mapper.writeValueAsBytes(event))
+        .get(10, TimeUnit.SECONDS);
+    await()
+        .atMost(Duration.ofSeconds(20))
+        .untilAsserted(
+            () ->
+                assertThat(
+                        jdbc.queryForObject(
+                            "select count(*) from commerce.inbox where event_id=?",
+                            Long.class,
+                            event.eventId()))
+                    .isEqualTo(1));
+    assertThat(results.processEvent(event.eventId())).isTrue();
+    assertThat(get(f).path("status").asText()).isEqualTo("PAID");
+    assertThat(
+            jdbc.queryForObject(
+                "select status from commerce.inventory_reservations where order_id=?",
+                String.class,
+                f.id()))
+        .isEqualTo("CONSUMED");
+  }
+
   @Autowired OrderRepository orders;
 
   private Fixture order() {

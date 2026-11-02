@@ -40,6 +40,20 @@ public class JdbcOrderEventOutbox implements OrderEventOutbox {
         || event.aggregateVersion() != event.payload().orderVersion()) {
       throw new IllegalArgumentException("Invalid order outbox event");
     }
+    return append(event, event.payload().orderId());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID append(EventEnvelope<?> event, UUID messageKey) {
+    if (event.eventVersion() != 1
+        || !java.util.Set.of(
+                "OrderPaymentRequested",
+                "PaymentCancellationRequested",
+                "RefundApproved",
+                "RefundOrderRestored",
+                "PurchaseConfirmed")
+            .contains(event.eventType())) throw new IllegalArgumentException("Invalid order event");
     byte[] body;
     try {
       body = mapper.writeValueAsBytes(event);
@@ -51,10 +65,11 @@ public class JdbcOrderEventOutbox implements OrderEventOutbox {
         new MapSqlParameterSource("id", event.eventId())
             .addValue("aggregate", event.aggregateId())
             .addValue("version", event.aggregateVersion())
+            .addValue("type", event.eventType())
             .addValue("occurred", event.occurredAt().toString())
             .addValue("body", body)
             .addValue("json", new String(body, StandardCharsets.UTF_8))
-            .addValue("key", event.payload().orderId().toString());
+            .addValue("key", messageKey.toString());
     // 집계별 append를 커밋까지 직렬화하여 늦은 낮은 버전의 삽입을 막는다.
     jdbc.queryForList(
         "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:aggregate AS text), 0))", params);
@@ -81,7 +96,7 @@ public class JdbcOrderEventOutbox implements OrderEventOutbox {
             """
             INSERT INTO commerce.outbox (id,event_type,event_version,aggregate_id,aggregate_version,
                 topic,occurred_at,message_key,payload,raw_body)
-            VALUES (:id,'OrderPaymentRequested',1,:aggregate,:version,'commerce-settle.commerce.v1',
+            VALUES (:id,:type,1,:aggregate,:version,'commerce-settle.commerce.v1',
                 CAST(:occurred AS timestamptz),:key,CAST(:json AS jsonb),:body)
             ON CONFLICT (id) DO NOTHING
             """,

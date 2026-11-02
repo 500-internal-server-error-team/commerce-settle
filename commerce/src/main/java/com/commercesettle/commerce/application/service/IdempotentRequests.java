@@ -58,6 +58,19 @@ public class IdempotentRequests {
     return execute(request, resourceId, responseStatus, firstRun, replay, null);
   }
 
+  /** 외부 조회에 앞서 영구 키의 기존 결과·본문 충돌을 확인한다. 새 키는 저장하지 않는다. */
+  public <T> Optional<T> replayPermanent(Request request, Function<UUID, T> replay) {
+    var scope =
+        new IdempotencyStore.Scope(
+            request.actorKind(), request.actorId(), request.operation(), sha256(request.key()));
+    var found = store.find(scope);
+    if (found.isEmpty()) return Optional.empty();
+    var body = request.body().stream().map(value -> value == null ? "N" : "V" + value).toList();
+    if (!found.get().requestHash().equals(sha256(fingerprint(body))))
+      throw new IdempotencyConflictException("same key was used with a different request");
+    return Optional.of(replay.apply(found.get().resourceId()));
+  }
+
   private <T> T execute(
       Request request,
       UUID resourceId,

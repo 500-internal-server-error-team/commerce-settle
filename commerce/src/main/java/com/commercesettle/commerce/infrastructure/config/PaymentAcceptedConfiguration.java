@@ -16,8 +16,10 @@ public class PaymentAcceptedConfiguration {
   @Bean
   @ConditionalOnProperty(name = "app.kafka.payment-accepted.enabled", havingValue = "true")
   PaymentAcceptedListener paymentAcceptedListener(
-      ObjectMapper mapper, PaymentAcceptedService service) {
-    return new PaymentAcceptedListener(mapper, service);
+      ObjectMapper mapper,
+      PaymentAcceptedService service,
+      com.commercesettle.commerce.application.service.OrderResultService results) {
+    return new PaymentAcceptedListener(mapper, service, results);
   }
 
   @Bean

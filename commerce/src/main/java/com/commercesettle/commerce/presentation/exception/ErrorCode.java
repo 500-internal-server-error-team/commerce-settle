@@ -15,6 +15,9 @@ enum ErrorCode {
   COMMON_VERSION_CONFLICT(HttpStatus.CONFLICT, "다른 변경이 먼저 반영됐습니다. 최신 상태를 조회한 뒤 다시 요청해 주세요."),
   COMMON_IDEMPOTENCY_CONFLICT(
       HttpStatus.CONFLICT, "같은 멱등키의 다른 요청이 있거나 처리 중입니다. 같은 본문이면 잠시 후 다시 요청해 주세요."),
+  PAYMENT_STATE_CONFLICT(HttpStatus.CONFLICT, "현재 주문 상태에서 처리할 수 없습니다."),
+  ORDER_REFUND_WINDOW_CLOSED(HttpStatus.CONFLICT, "환불 요청 기한이 지났습니다."),
+  ORDER_REFUND_IN_PROGRESS(HttpStatus.CONFLICT, "진행 중인 취소·반품이 있습니다."),
   INVENTORY_INSUFFICIENT(HttpStatus.CONFLICT, "가용 재고보다 많이 줄일 수 없습니다."),
   ACCOUNT_EMAIL_DUPLICATED(HttpStatus.CONFLICT, "이미 가입한 이메일입니다."),
   COMMON_RATE_LIMITED(HttpStatus.TOO_MANY_REQUESTS, "요청이 많습니다. Retry-After 이후 다시 시도해 주세요."),

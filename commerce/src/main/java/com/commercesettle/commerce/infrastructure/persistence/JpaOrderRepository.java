@@ -89,4 +89,23 @@ class JpaOrderRepository implements OrderRepository {
   public Optional<OrderAddress> findAddressByBuyerAndOrderId(UUID buyerId, UUID orderId) {
     return addresses.findByBuyerAndOrderId(buyerId, orderId);
   }
+
+  @Override
+  public PageResult<Order> findBySeller(UUID sellerId, int page, int size) {
+    return new PageResult<>(
+        orders.findBySellerWithOffset(sellerId, (long) page * size, size),
+        page,
+        size,
+        orders.countBySellerId(sellerId));
+  }
+
+  @Override
+  public Optional<Order> findById(UUID id) {
+    return orders.findById(id);
+  }
+
+  @Override
+  public java.util.List<UUID> findDue(java.time.Instant now, int limit, UUID after) {
+    return orders.findDue(now, limit, after);
+  }
 }

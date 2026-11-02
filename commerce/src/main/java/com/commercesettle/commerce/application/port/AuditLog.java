@@ -37,6 +37,8 @@ public interface AuditLog {
 
   /** 허용한 행위 목록. 새 행위는 감사 계약과 함께 추가한다. */
   enum Action {
-    ACCOUNT_AUTH_CHANGED
+    ACCOUNT_AUTH_CHANGED,
+    ORDER_TRANSITION,
+    REFUND_REQUEST_TRANSITION
   }
 }

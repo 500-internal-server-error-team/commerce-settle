@@ -122,7 +122,7 @@ docker compose exec postgres psql -U postgres -d finance_mock -c \
 
 서비스별 초기 데이터·설정은 한 트랜잭션에서 적재하고 기존 수정·논리삭제·잔액·원장을 보존합니다. 고정 계정 ID/이메일·상품 소유자·금융 스냅샷 주문 ID 충돌은 적재를 롤백합니다. 업무 시나리오는 초기 적재 커밋 후 개별 업무 트랜잭션으로 실행합니다. 중간 실패 때 이미 커밋한 금융 효과를 되돌리지 않고 고정 이벤트·업무 키로 남은 처리를 이어갑니다. 옵션을 꺼도 기존 데이터는 남습니다. 전체 DB를 아우르는 원자적 초기화나 기존 실험 상태의 리셋은 제공하지 않습니다.
 
-#94에서 추가된 DB 저장 모델에도 PAYMENT_PENDING/UNSHIPPED 주문과 독립 암호화 배송지 사본을 각 4행 넣습니다. 이름은 `request-order-0`~`3`, 회차는 `request-cycle-0`~`3`, 주소는 `request-address-0`~`3`이며 Payment 요청과 ID·구매자·판매자·상품·금액·생성 후 10분 대기 기한을 맞춥니다. 배송 seed는 20261030, 달력은 `fixture-calendar-v1`/공휴일 없는 Asia/Seoul 사본입니다. 이 fixture는 저장·조회 모델용 사본이며 재고 예약·Outbox를 새로 실행하지 않습니다. 기본 주문 API에서 본인 자료를 조회할 수 있습니다. 결제 결과 반영은 구현 전이므로 금융 시나리오를 실행해도 DB 주문 상태를 임의 전이시키지 않습니다.
+#94에서 추가된 DB 저장 모델에도 PAYMENT_PENDING/UNSHIPPED 주문과 독립 암호화 배송지 사본을 각 4행 넣습니다. 이름은 `request-order-0`~`3`, 회차는 `request-cycle-0`~`3`, 주소는 `request-address-0`~`3`이며 Payment 요청과 ID·구매자·판매자·상품·금액·생성 후 10분 대기 기한을 맞춥니다. 배송 seed는 20261030, 달력은 `fixture-calendar-v1`/공휴일 없는 Asia/Seoul 사본입니다. 이 fixture는 저장·조회 모델용 사본이며 재고 예약·Outbox를 새로 실행하지 않습니다. 기본 주문 API에서 본인 자료를 조회할 수 있습니다. 이 저장 모델 fixture에는 재고 예약이 없어 주문 결과의 전체 흐름 시험에는 위 샘플 대신 `POST /api/orders`로 새 주문을 생성합니다.
 
 주문은 `APP_ORDER_STUB_ENABLED=true`일 때 구매자 A/B별 메모리 샘플 10개를 별도로 조회합니다. DB 주문·금융 데이터와 연결되지 않으며 DB 상품·주소 변경도 반영하지 않습니다. 배송/구매확정, 환불/SAGA, 마일리지 해제/복원, 쿠폰·이벤트·알림, PG·간편결제·PG 입금 대역은 선행 업무 구현 후 fixture를 추가합니다. 부하 시험용 대량 데이터 생성도 이 기능 fixture와 별개입니다.
 
@@ -130,7 +130,7 @@ docker compose exec postgres psql -U postgres -d finance_mock -c \
 
 `Order.pendingRegular`는 쿠폰·이벤트 없는 일반 주문의 상품·금액·결제 구성과 최초 회차, 생성 후 10분 대기 기한을 고정합니다. 마일리지 잔액 확인이나 외부 승인·예약은 수행하지 않습니다. 배송 소요일·공휴일 달력은 [배송 정책](policies.md#배송환불-기한과-자동-구매확정)을 사본으로 보존합니다.
 
-`OrderRepository.save`는 호출자의 트랜잭션 안에서 주문과 `OrderAddress`를 함께 저장하며 트랜잭션 밖 호출은 거절합니다. 호출자는 주소록의 암호문을 복사하지 않고, 기존 `AddressCipher`로 새 주문 주소 ID에 묶어 다시 암호화한 사본을 넘겨야 합니다. 목록·단건·주소 조회는 구매자 ID로 제한합니다. 일반 주문 응용 서비스가 상품·활성 구매자·주소의 현재 유효성을 확인하고 재고 예약·Outbox·영구 멱등 기록까지 같은 트랜잭션에 연결합니다. 쿠폰·이벤트 예약과 결제 결과 반영은 구현 전입니다.
+`OrderRepository.save`는 호출자의 트랜잭션 안에서 주문과 `OrderAddress`를 함께 저장하며 트랜잭션 밖 호출은 거절합니다. 호출자는 주소록의 암호문을 복사하지 않고, 기존 `AddressCipher`로 새 주문 주소 ID에 묶어 다시 암호화한 사본을 넘겨야 합니다. 목록·단건·주소 조회는 구매자 ID로 제한합니다. 일반 주문 응용 서비스가 상품·활성 구매자·주소의 현재 유효성을 확인하고 재고 예약·Outbox·영구 멱등 기록까지 같은 트랜잭션에 연결합니다. 쿠폰·이벤트는 소유 어댑터로 연결하며, 결제 결과·배송·취소/반품은 [주문 업무 흐름](#주문-업무-흐름)을 따릅니다.
 
 `OrderTest`와 `OrderRepositoryIntegrationTest`는 금액·결제 구성, 배송 정책·주소 사본, 실제 PostgreSQL 재조회·구매자별 목록·원자 저장·유일성·잠금 대기 상한을 검사합니다. 다른 DB 시험과 같이 빈 전용 컨테이너에 commerce 초기 SQL을 적용하고 종료 때 제거합니다. 기존 개발 DB에는 초기 SQL을 재실행하지 않으며 [DB 적용 정책](migrations.md#현재-개발-환경의-적용-방식)을 따릅니다.
 
@@ -138,7 +138,7 @@ docker compose exec postgres psql -U postgres -d finance_mock -c \
 
 `APP_ORDER_STUB_ENABLED`의 기본값 false에서는 실제 DB의 `POST /api/orders`, `GET /api/orders`, `GET /api/orders/{orderId}`를 제공합니다. 개발 fixture를 켜고 구매자 A로 로그인하면 초기 DB 주문과 새 주문을 조회할 수 있습니다. 같은 인스턴스에서 메모리 stub과 DB API를 함께 켜지는 않습니다.
 
-요청은 정식 `OrderCreate`의 11개 키가 모두 필수이며 `eventId`, `buyerCouponId`, `expectedEventVersion`은 현재 null만 허용합니다. 본인 `addressId`를 명시하고 조회한 상품 버전·총액을 보냅니다. 카드·혼합·전액 마일리지 구성을 결제 요청에 보존하지만, 마일리지 확인·예약은 Payment의 책임이며 이 API가 잔액 확보나 결제 승인을 보장하지 않습니다.
+요청은 정식 `OrderCreate`의 11개 키가 모두 필수입니다. 기본 설정은 쿠폰·이벤트 없는 일반 주문을 지원합니다. 쿠폰·이벤트 조합을 입력하면 소유 어댑터 연결 전에는 503이며, 수량·마일리지 병용·이벤트 버전 조합 오류는 400입니다. 본인 `addressId`를 명시하고 조회한 상품 버전·총액을 보냅니다. 카드·혼합·전액 마일리지 구성을 결제 요청에 보존하지만, 마일리지 확인·예약은 Payment의 책임이며 이 API가 잔액 확보나 결제 승인을 보장하지 않습니다.
 
 ```bash
 curl -i http://localhost:8080/api/orders \
@@ -152,7 +152,7 @@ curl -i http://localhost:8080/api/orders \
 
 목록은 `createdAt DESC, id DESC`, 기본 20개·최대 100개입니다. 데이터 범위를 벗어난 유효한 페이지는 빈 `items`와 본인 주문의 `totalElements`를 반환합니다. 타인·없는 주문은 404이며 정지·삭제 구매자는 접근할 수 없습니다. DB 재기동 뒤에도 주문과 키를 보존합니다. 배송 사본은 기존 `weekdays-v1`(Asia/Seoul, 공휴일 없는 달력), seed 기본 67과 `order-regular-v1` 정책 버전을 사용합니다. seed는 `app.orders.simulation-seed`로 지정할 수 있습니다.
 
-Outbox relay는 기존 `app.outbox.enabled=false` 기본값을 유지합니다. 격리한 실험 인스턴스에서 켜면 `commerce-settle.commerce.v1`에 주문 ID를 key로 발행합니다. Payment의 `PaymentAccepted` 발행은 #75에서 구현됐습니다. Payment의 재시도 상한(#76), Commerce의 결제 확정·거절·취소 반영과 신규 접수 제한 gate는 구현 전입니다. 접수 ID 연결은 [결제 접수 결과 수신](#결제-접수-결과-수신)에서 확인합니다. 따라서 이 API의 주문은 대기 상태를 유지하며 10분이 지났다는 이유로 예약을 해제하지 않습니다. 새 주문의 재고 예약이 누적되는 실험은 전용 DB에서 실행합니다.
+Outbox relay는 기존 `app.outbox.enabled=false` 기본값을 유지합니다. 격리한 실험 인스턴스에서 켜면 `commerce-settle.commerce.v1`에 주문 ID를 key로 발행합니다. Payment의 `PaymentAccepted` 발행은 #75에서 구현됐습니다. Payment의 재시도 상한(#76)과 Commerce의 신규 접수 제한 gate는 별도 작업입니다. 결제 확정·거절·취소 반영은 아래 주문 업무 흐름을 따릅니다. 접수 ID 연결은 [결제 접수 결과 수신](#결제-접수-결과-수신)에서 확인합니다. 결과 처리기를 켜지 않으면 주문은 대기 상태를 유지하며, 10분이 지나도 승인 차단 결과 없이 예약을 해제하지 않습니다. 새 주문의 재고 예약이 누적되는 실험은 전용 DB에서 실행합니다.
 
 `OrderIntegrationTest`는 실제 HTTP·PostgreSQL에서 11필드 입력·본인 조회·금액/이벤트 계약·영구 멱등·동시 요청·마지막 재고 경쟁·DB 저장 실패의 전체 롤백을 검증합니다.
 
@@ -160,13 +160,51 @@ Outbox relay는 기존 `app.outbox.enabled=false` 기본값을 유지합니다. 
 
 Commerce의 `PaymentAccepted` Listener와 처리기는 기본 비활성입니다. 격리한 시험 인스턴스에서 `APP_KAFKA_PAYMENT_ACCEPTED_ENABLED=true`, `APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED=true`로 각각 활성화합니다. Payment는 기존 주문 요청 Listener·Worker 처리기·Outbox Relay, Commerce는 주문 Outbox Relay를 함께 켜야 전체 왕복이 진행됩니다. 기본 `auto-offset-reset=none`은 유지하며 새 소비 그룹의 시작 offset은 시험 전에 명시적으로 준비합니다. 새 DB에는 갱신한 Commerce 초기 SQL을 적용하고, 기존 DB·볼륨에 전체 SQL을 재실행하거나 데이터를 초기화하지 않습니다.
 
-`commerce.v1`은 `commerce-settle.payment.v1`의 원문·최초 위치와 WAITING 행을 커밋한 뒤 ACK합니다. 같은 ID·같은 bytes는 원래 결과를 유지하고 다른 bytes는 `inbox_conflicts`에 보존합니다. 잘못된 스키마·미지원 이벤트는 현재 무ACK로 Consumer를 중단하므로 입력 원인을 확인한 뒤 재개합니다. DLT 발행이나 금융 보상으로 자동 전환하지 않습니다.
+`commerce.v1`은 `commerce-settle.payment.v1`의 원문·최초 위치와 WAITING 행을 커밋한 뒤 ACK합니다. 같은 ID·같은 bytes는 원래 결과를 유지하고 다른 bytes는 `inbox_conflicts`에 보존합니다. 주문 결과도 같은 Listener가 인계하며, 같은 생산자 토픽의 정산·알림 전용 이벤트는 해당 소비 그룹에 맡깁니다. 잘못된 스키마·알 수 없는 이벤트는 무ACK로 Consumer를 중단하므로 입력 원인을 확인한 뒤 재개합니다. DLT 발행이나 금융 보상으로 자동 전환하지 않습니다.
 
 처리기는 1초마다 최대 100건을 한 건씩 별도 트랜잭션으로 처리합니다. 도래한 잠긴 Inbox는 건너뛰고, 주문의 회차·버전·기존 ID를 확인해 `paymentId`와 Inbox APPLIED를 함께 저장합니다. `PAYMENT_PENDING`·금액·주소 사본·재고 예약은 유지합니다. envelope의 Payment aggregateVersion을 주문 버전으로 비교하지 않습니다.
 
-선행 주문 미도착·일시 반영 실패는 1초부터 최대 60초 간격으로 지수 재시도하며 10회 소진 시 사유와 함께 REVIEW_REQUIRED로 남깁니다. 반영 트랜잭션이 롤백되면 별도 트랜잭션에서 재시도 기록을 남기며, 이미 다른 처리기가 완료한 행은 변경하지 않습니다. 이전 회차·버전·상태·다른 ID의 충돌은 즉시 확인 대상으로 보존합니다. 운영 HTTP 재처리 API·확정/거절/취소 반영은 후속 작업입니다.
+선행 주문 미도착·일시 반영 실패는 1초부터 최대 60초 간격으로 지수 재시도하며 10회 소진 시 사유와 함께 REVIEW_REQUIRED로 남깁니다. 반영 트랜잭션이 롤백되면 별도 트랜잭션에서 재시도 기록을 남기며, 이미 다른 처리기가 완료한 행은 변경하지 않습니다. 이전 회차·버전·상태·다른 ID의 충돌은 즉시 확인 대상으로 보존합니다. 운영 HTTP 재처리 API는 후속 작업입니다. 확정·거절·취소와 환불 결과는 별도 주문 결과 처리기가 같은 Inbox에서 처리합니다.
 
 `PaymentAcceptedIntegrationTest`는 전용 PostgreSQL·Kafka에서 HTTP 주문 조회, 원자 반영·롤백·중복·충돌·잠금 대기 상한·건너뛰기·지수 재시도·소진·Consumer 재시작을 검증합니다. 이 시험은 빈 전용 토픽에서 `earliest`를 명시적으로 사용하며 운영 기본값을 바꾸지 않습니다.
+
+## 주문 업무 흐름
+
+주문 API는 실제 PostgreSQL을 사용합니다. Swagger UI에서 구매자·판매자로 각각 로그인해 발급받은 토큰으로 호출하거나 Postman/curl을 사용합니다. 공개 요청은 Gateway로 보내고 내부 컨텍스트·운영 종결은 Gateway에 노출하지 않습니다. 판매자 목록에는 주소가 없으며, 본인 이행 대상 주문의 단건 조회에서만 주문 당시 주소 사본을 제공합니다. `deliveryAddress.isDefault=false`는 주소록 항목이 아닌 주문 사본임을 뜻합니다.
+
+| 순서 | 호출·동작 | 완료 의미 |
+| --- | --- | --- |
+| 구매자 견적·주문 | `POST /api/order-quotes` → 위 일반 주문 생성 → `GET /api/orders/{orderId}` | 견적은 예약하지 않음. 생성 201은 결제 대기 |
+| 결제 결과 | Payment v1 결과 인계 → 주문 결과 처리기 → 구매자/판매자 주문 조회 | 확정 결과만 PAID·판매 수량 반영. 미확정·취소 거절과 취소 대기 중 거절은 승인 차단 확인까지 예약 유지 |
+| 판매자 발송 | `POST /api/sellers/me/orders/{orderId}/shipments`에 `{expectedVersion, shipmentReference}` | 최초 서버 발송·모의 도착 시각 고정 |
+| 배송·구매확정 | 내부 매분 작업 | 주말·보관한 공휴일 제외. 도착 예정 시각+168시간 초과·진행 중 환불 없음일 때 확정 |
+| 구매자 취소/반품 | `POST /api/orders/{orderId}/refund-requests`에 `{kind, reason, expectedVersion}` | 미발송 CANCEL 자동 승인. 발송 후 RETURN은 판매자 심사 대기 |
+| 판매자 심사·입고 | `decision` → 실제 도착·재판매 가능 검수 뒤 `receipt` | 입고는 명시적 판매자 확정이며 금융 결과와 무관하게 재고 한 번 복원 |
+
+변경 호출마다 8~128자 `Idempotency-Key`를 보내고, `expectedVersion`은 대상 주문 또는 반품 요청의 최신 조회 값입니다. 같은 키·본문은 현재 결과를 반환하며 다른 본문은 409입니다. 예를 들어 발송 후 구매자가 반품을 요청하고 판매자가 승인·입고하려면 다음 본문을 각 경로에 보냅니다. 응답의 요청 `id`와 최신 `version`을 다음 호출에 사용합니다.
+
+```text
+BUYER: POST /api/orders/{orderId}/refund-requests
+{"kind":"RETURN","reason":"단순 변심","expectedVersion":2}
+SELLER: POST /api/sellers/me/refund-requests/{requestId}/decision
+{"decision":"APPROVE","reason":"반품 승인","expectedVersion":0}
+SELLER: POST /api/sellers/me/refund-requests/{requestId}/receipt
+{"expectedVersion":1}
+```
+
+입고 전에 `GET /api/refund-requests/{requestId}` 또는 판매자 요청 목록에서 최신 버전을 확인합니다. 금융 접수 이벤트도 요청 버전을 바꿀 수 있습니다. `receipt`는 승인된 RETURN 상품의 실제 도착·재판매 가능 검수를 마친 판매자의 확정입니다. 도착·검수를 자동 생성하지 않고, 금융 환불 성공만으로 입고하지 않습니다. 미입고 기한·자동 반품 운송·재판매 불가 판정 API는 현재 계약에 없습니다. 승인 전 RETURN만 구매자가 `withdrawal`로 철회할 수 있습니다.
+
+주문 스케줄러는 `APP_ORDER_WORKFLOW_ENABLED=true`, 결과 처리기는 `APP_ORDER_RESULT_PROCESSOR_ENABLED=true`로 시험 인스턴스에서 활성화합니다. 결과 수신은 기존 `APP_KAFKA_PAYMENT_ACCEPTED_ENABLED=true`를 공유하며, 접수 ID 처리기는 기존 플래그를 별도로 유지합니다. 기본값은 모두 false입니다. 이 설정은 인스턴스 환경에 전달해야 하며 `.env` 추가만으로 기존 Compose 컨테이너에 전달되지 않습니다. 빈 전용 DB에는 갱신한 초기 SQL을 적용하고 기존 볼륨을 초기화하지 않습니다.
+
+Payment 내부 조회와 운영 종결은 ADR 0010의 `service:payment`·`operator:<식별자>` 자격을 인스턴스의 `app.internal-auth.senders`에 설정해야 합니다. 사용자 토큰이나 Gateway 자격으로 호출할 수 없습니다. 운영 종결은 외부 확정 거절·마일리지 미복원·정산 예약 해제·고객 확인을 모두 검증한 `RefundClosureEvidence`가 필요합니다. 기본 미연결 구현은 503이며 금융 실패만으로 주문을 PAID로 되돌리거나 자동 구매확정을 진행하지 않습니다.
+
+쿠폰·이벤트의 실제 예약·확정·해제·복원은 `OrderBenefits` 어댑터로 교체합니다. 주문 트랜잭션에 참여하고 이벤트 가격/버전·기간/참여 제한과 쿠폰 소유/수단/기한/예산을 다시 확인해야 합니다. `OrderWorkflowIntegrationTest`의 DB 기록 대역은 해당 호출·금액 사본·로컬 롤백만 검증하며 실제 쿠폰 예산·이벤트 재고 구현의 완료가 아닙니다. Payment/Settlement의 실제 회차 재접수·마일리지 재예약·승인 차단·원환불/예약 해제 조회·환불 복구 확인 왕복은 각 소유 서비스와 통합 검증해야 합니다. 금융 성공을 임의로 반환하는 기본 어댑터는 없습니다. 거래 알림과 신규 접수 용량 gate는 별도 미구현 경계입니다.
+
+```bash
+./gradlew :commerce:test --tests '*OrderWorkflow*' --tests '*OrderIntegrationTest' --tests '*PaymentAcceptedIntegrationTest'
+```
+
+이 명령은 전용 PostgreSQL·Kafka와 명시적 계약 결과 대역으로 구매자/판매자 HTTP 흐름, 중복·역순·기한 경합·잠금 상한·롤백을 확인합니다. 실제 PG·마일리지·정산 금융 정합성 완료를 뜻하지 않습니다.
 
 ## 주문 API stub
 
