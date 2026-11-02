@@ -209,6 +209,23 @@ class SettlementEventServiceIntegrationTest {
   }
 
   @Test
+  @DisplayName("같은 결제의 다른 eventId가 정책 버전만 다르면 운영 확인으로 남기고 원장은 그대로다")
+  void otherPolicyVersionForSamePayment() {
+    var original = payment(UUID.randomUUID(), 10_000, 0, 0, 10_000, 0);
+    service.receivePaymentConfirmed(original, source("commerce-settle.payment.v1", original));
+
+    var otherPolicy = withPolicy(payment(UUID.randomUUID(), 10_000, 0, 0, 10_000, 0), "v2");
+    service.receivePaymentConfirmed(otherPolicy, source("commerce-settle.payment.v1", otherPolicy));
+
+    assertInbox(otherPolicy.eventId(), "REVIEW_REQUIRED", null);
+    assertThat(count("settlement_entries")).isEqualTo(5);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT DISTINCT policy_version FROM settlement.settlement_entries", String.class))
+        .isEqualTo("v1");
+  }
+
+  @Test
   @DisplayName("환불 마감 정각의 구매확정은 운영 확인으로 남기고 항목을 PAYABLE로 바꾸지 않는다")
   void purchaseAtRefundDeadlineRequiresReview() {
     var payment = payment(UUID.randomUUID(), 10_000, 0, 0, 10_000, 0);

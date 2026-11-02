@@ -74,7 +74,7 @@ public class SettlementEventService {
             payment.sellerNetAmount());
     Optional<SettlementItem> existing = items.findByPaymentId(payment.paymentId());
     if (existing.isPresent()) {
-      if (sameFact(existing.get(), payment, amounts)) {
+      if (sameFact(existing.get(), payment, amounts, recordedPolicyVersion(payment.paymentId()))) {
         inbox.markApplied(inboxId.get(), existing.get().getId(), now);
       } else {
         review(inboxId.get(), event, "PAYMENT_ALREADY_RECORDED_WITH_DIFFERENT_VALUES", now);
@@ -157,9 +157,22 @@ public class SettlementEventService {
     }
   }
 
+  /** 항목에는 정책 버전이 없으므로 최초 원장(상쇄 줄 제외)의 값을 쓴다. 최초 5 leg는 같은 값이다. */
+  private String recordedPolicyVersion(UUID paymentId) {
+    return entries.findByPaymentId(paymentId).stream()
+        .filter(entry -> entry.getReversalOf() == null)
+        .map(SettlementEntry::getPolicyVersion)
+        .findFirst()
+        .orElse(null);
+  }
+
   private static boolean sameFact(
-      SettlementItem item, PaymentConfirmedPayload payment, SettlementAmounts amounts) {
+      SettlementItem item,
+      PaymentConfirmedPayload payment,
+      SettlementAmounts amounts,
+      String recordedPolicyVersion) {
     return item.getAmounts().equals(amounts)
+        && payment.policyVersion().equals(recordedPolicyVersion)
         && item.getSellerId().equals(payment.sellerId())
         && item.getProductId().equals(payment.productId())
         && item.getOrderId().equals(payment.orderId())
