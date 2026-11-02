@@ -99,6 +99,11 @@ app:
   order-stub:
     enabled: ${APP_ORDER_STUB_ENABLED:false}
     seed: ${APP_ORDER_STUB_SEED:67}
+  sale-events:
+    # 이벤트 시작·종료 처리. docs/architecture.md#정기-작업과-비동기-실행
+    scheduler-enabled: true
+    schedule-interval-ms: 60000
+    batch-size: 100
   outbox:
     enabled: false
     recovery-interval-ms: 1000

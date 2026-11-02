@@ -19,6 +19,8 @@ import com.commercesettle.commerce.application.exception.IdempotencyConflictExce
 import com.commercesettle.commerce.application.service.ProductCatalogService;
 import com.commercesettle.commerce.domain.exception.InsufficientInventoryException;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
+import com.commercesettle.commerce.domain.exception.SaleEventConflictException;
+import com.commercesettle.commerce.domain.exception.SaleEventConflictException.Reason;
 import com.commercesettle.commerce.domain.exception.VersionConflictException;
 import com.commercesettle.commerce.domain.model.Product;
 import com.commercesettle.commerce.domain.model.ProductStatus;
@@ -180,6 +182,24 @@ class SellerProductControllerTest {
                         + "\"expectedVersion\":0}"))
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.code").value("COMMON_VERSION_CONFLICT"));
+  }
+
+  @Test
+  @DisplayName("공개 후 종료 전 이벤트가 있는 상품의 변경은 409 PRODUCT_EVENT_IN_PROGRESS이다")
+  void mapsProductLockedByEvent() throws Exception {
+    given(
+            catalog.change(
+                eq(SELLER), eq(PRODUCT), anyString(), anyString(), anyLong(), any(), anyLong()))
+        .willThrow(new SaleEventConflictException(Reason.PRODUCT_LOCKED_BY_EVENT));
+
+    mvc.perform(
+            asSeller(put(PRODUCTS + "/" + PRODUCT))
+                .header("Idempotency-Key", KEY)
+                .content(
+                    "{\"name\":\"키보드\",\"unitPrice\":1000,\"status\":\"STOPPED\","
+                        + "\"expectedVersion\":0}"))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("PRODUCT_EVENT_IN_PROGRESS"));
   }
 
   @Test

@@ -12,6 +12,8 @@ import com.commercesettle.commerce.domain.exception.DefaultAddressConflictExcept
 import com.commercesettle.commerce.domain.exception.DuplicateAccountEmailException;
 import com.commercesettle.commerce.domain.exception.InsufficientInventoryException;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
+import com.commercesettle.commerce.domain.exception.SaleEventConflictException;
+import com.commercesettle.commerce.domain.exception.SaleEventNotFoundException;
 import com.commercesettle.commerce.domain.exception.VersionConflictException;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
@@ -107,6 +109,30 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
   @ExceptionHandler(ProductNotFoundException.class)
   ResponseEntity<Object> productNotFound(ProductNotFoundException e, WebRequest request) {
     return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "상품을 찾을 수 없습니다.", null, request);
+  }
+
+  @ExceptionHandler(SaleEventNotFoundException.class)
+  ResponseEntity<Object> eventNotFound(SaleEventNotFoundException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "이벤트를 찾을 수 없습니다.", null, request);
+  }
+
+  /** 기간 중복은 상품을 쓰는 다른 공개 이벤트 때문이므로 상품 변경 차단과 같은 코드로 알린다. 나머지는 현재 상태와 맞지 않는 요청이다. */
+  @ExceptionHandler(SaleEventConflictException.class)
+  ResponseEntity<Object> eventConflict(SaleEventConflictException e, WebRequest request) {
+    return switch (e.reason()) {
+      case PRODUCT_LOCKED_BY_EVENT -> respond(ErrorCode.PRODUCT_EVENT_IN_PROGRESS, request);
+      case PERIOD_OVERLAP ->
+          respond(
+              ErrorCode.PRODUCT_EVENT_IN_PROGRESS, "같은 상품에 기간이 겹치는 공개 이벤트가 있습니다.", null, request);
+      case NOT_DRAFT ->
+          respond(ErrorCode.COMMON_VERSION_CONFLICT, "공개한 이벤트는 바꾸거나 다시 공개할 수 없습니다.", null, request);
+      case NOT_IN_PROGRESS ->
+          respond(ErrorCode.COMMON_VERSION_CONFLICT, "공개 후 종료 전 이벤트만 종료할 수 있습니다.", null, request);
+      case PERIOD_ENDED ->
+          respond(ErrorCode.COMMON_VERSION_CONFLICT, "종료 시각이 지난 이벤트는 공개할 수 없습니다.", null, request);
+      case PRODUCT_NOT_ON_SALE ->
+          respond(ErrorCode.COMMON_VERSION_CONFLICT, "판매 중인 상품만 이벤트로 공개할 수 있습니다.", null, request);
+    };
   }
 
   @ExceptionHandler(BuyerAddressNotFoundException.class)

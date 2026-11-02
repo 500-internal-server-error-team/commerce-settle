@@ -1,6 +1,7 @@
 package com.commercesettle.commerce.application.service;
 
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
+import com.commercesettle.commerce.domain.exception.SaleEventConflictException;
 import com.commercesettle.commerce.domain.model.InventoryMovement;
 import com.commercesettle.commerce.domain.model.Product;
 import com.commercesettle.commerce.domain.model.ProductInventory;
@@ -9,6 +10,7 @@ import com.commercesettle.commerce.domain.repository.InventoryMovementRepository
 import com.commercesettle.commerce.domain.repository.PageResult;
 import com.commercesettle.commerce.domain.repository.ProductInventoryRepository;
 import com.commercesettle.commerce.domain.repository.ProductRepository;
+import com.commercesettle.commerce.domain.repository.SaleEventRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
@@ -28,6 +30,7 @@ public class ProductCatalogService {
   private final ProductRepository products;
   private final ProductInventoryRepository inventories;
   private final InventoryMovementRepository movements;
+  private final SaleEventRepository events;
   private final IdempotentRequests idempotency;
   private final Clock clock;
 
@@ -35,11 +38,13 @@ public class ProductCatalogService {
       ProductRepository products,
       ProductInventoryRepository inventories,
       InventoryMovementRepository movements,
+      SaleEventRepository events,
       IdempotentRequests idempotency,
       Clock clock) {
     this.products = products;
     this.inventories = inventories;
     this.movements = movements;
+    this.events = events;
     this.idempotency = idempotency;
     this.clock = clock;
   }
@@ -87,7 +92,7 @@ public class ProductCatalogService {
         existingId -> ownedProduct(sellerId, existingId));
   }
 
-  /** 공개 후 종료 전 이벤트가 있으면 거절하는 확인은 선착순 이벤트를 구현할 때 재고 행 잠금 뒤에 추가한다. */
+  /** 공개 후 종료 전 이벤트가 있으면 거절한다. 이 확인은 이벤트 공개와 같은 재고 행 잠금 아래에서 한다. */
   @Transactional
   public Product change(
       UUID sellerId,
@@ -107,6 +112,7 @@ public class ProductCatalogService {
         200,
         recordId -> {
           lockInventory(sellerId, productId);
+          requireNoEventInProgress(productId);
           Product product = ownedProduct(sellerId, productId);
           product.change(name, unitPrice, status, expectedVersion, clock.instant());
           return products.save(product);
@@ -114,7 +120,7 @@ public class ProductCatalogService {
         existingId -> ownedProduct(sellerId, existingId));
   }
 
-  /** 공개 후 종료 전 이벤트 확인은 {@link #change}와 같은 위치에 추가한다. */
+  /** 공개 후 종료 전 이벤트가 있으면 {@link #change}와 같이 거절한다. */
   @Transactional
   public void delete(UUID sellerId, UUID productId, String idempotencyKey, long expectedVersion) {
     idempotency.execute(
@@ -124,6 +130,7 @@ public class ProductCatalogService {
         204,
         recordId -> {
           lockInventory(sellerId, productId);
+          requireNoEventInProgress(productId);
           Product product = ownedProduct(sellerId, productId);
           product.delete(expectedVersion, clock.instant());
           return products.save(product);
@@ -172,6 +179,13 @@ public class ProductCatalogService {
     Optional<ProductInventory> inventory = inventories.findByProductIdForUpdate(productId);
     ownedProduct(sellerId, productId);
     return inventory.orElseThrow(() -> missingInventory(productId));
+  }
+
+  private void requireNoEventInProgress(UUID productId) {
+    if (events.existsInProgressByProductId(productId)) {
+      throw new SaleEventConflictException(
+          SaleEventConflictException.Reason.PRODUCT_LOCKED_BY_EVENT);
+    }
   }
 
   private Product ownedProduct(UUID sellerId, UUID productId) {
