@@ -12,10 +12,15 @@ import com.commercesettle.payment.domain.model.MileageWallet;
 import com.commercesettle.payment.domain.model.PaymentAmounts;
 import com.commercesettle.payment.domain.repository.MileageEntryRepository;
 import com.commercesettle.payment.domain.repository.MileageWalletRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.HexFormat;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Value;
@@ -30,6 +35,7 @@ import org.springframework.transaction.support.TransactionOperations;
 @ConditionalOnProperty(name = "app.dev-fixtures.enabled", havingValue = "true")
 public class DevFixtureLoader {
   public static final String TOPIC = "commerce-settle.fixture.payment.v1";
+  public static final String SNAPSHOT_SOURCE = "commerce-settle.fixture.snapshot";
   private static final Instant AS_OF = Instant.parse("2026-09-01T00:00:00Z");
   private final JdbcTemplate jdbc;
   private final TransactionOperations transactions;
@@ -129,6 +135,76 @@ public class DevFixtureLoader {
             "SELECT id FROM payment.payments WHERE order_id=?", UUID.class, id("order-" + name));
     if (!id("payment-" + name).equals(existing))
       throw new IllegalStateException("Fixture payment order conflicts");
+    snapshotRequest(name, seller, product, gross);
+  }
+
+  /**
+   * 스냅샷 결제를 만든 결제 요청 원문을 APPLIED Inbox로 남긴다. 실제 결제처럼 결제수단을 원문에서 읽게 한다. Kafka를 거치지 않았으므로 출처 토픽을
+   * {@link #SNAPSHOT_SOURCE}로 구분한다.
+   */
+  private void snapshotRequest(String name, int seller, int product, long gross) {
+    var at = AS_OF.atOffset(ZoneOffset.ofHours(9));
+    UUID order = id("order-" + name);
+    var event =
+        new EventEnvelope<>(
+            id("snapshot-event-" + name),
+            "OrderPaymentRequested",
+            1,
+            at,
+            order,
+            0,
+            new OrderPaymentRequestedPayload(
+                order,
+                account(1),
+                account(seller),
+                id("cycle-" + name),
+                account(product),
+                0,
+                Status.PAYMENT_PENDING,
+                "fixture-v1",
+                at.plusMinutes(10),
+                ExternalMethod.CREDIT_CARD,
+                "fixture-card",
+                gross,
+                0,
+                gross,
+                0,
+                gross,
+                0,
+                0,
+                gross));
+    byte[] body;
+    try {
+      body = mapper.writeValueAsBytes(event);
+    } catch (JsonProcessingException e) {
+      throw new IllegalStateException("Fixture request cannot be serialized", e);
+    }
+    jdbc.update(
+        """
+        INSERT INTO payment.inbox (id,consumer,event_id,event_type,event_version,occurred_at,payload,
+            raw_body,body_hash,source_topic,source_partition,source_offset,aggregate_id,
+            aggregate_version,status,result_ref)
+        VALUES (?,?,?,'OrderPaymentRequested',1,?,CAST(? AS jsonb),?,?,?,0,0,?,0,'APPLIED',?)
+        ON CONFLICT (consumer,event_id) DO NOTHING
+        """,
+        id("snapshot-inbox-" + name),
+        consumer,
+        event.eventId(),
+        at,
+        new String(body, StandardCharsets.UTF_8),
+        body,
+        sha256(body),
+        SNAPSHOT_SOURCE,
+        order,
+        id("payment-" + name));
+  }
+
+  private static String sha256(byte[] body) {
+    try {
+      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body));
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 unavailable", e);
+    }
   }
 
   /** Kafka에 실제 발행한 위치로 접수한다. 중간 실패 후 같은 eventId·본문으로 재개한다. */

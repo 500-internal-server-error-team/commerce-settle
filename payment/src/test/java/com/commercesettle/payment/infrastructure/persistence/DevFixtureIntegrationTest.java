@@ -55,6 +55,7 @@ class DevFixtureIntegrationTest {
   @Test
   void createsRealRequestsAndPreservesFinancialEffectsOnRestart() throws Exception {
     assertThat(count("payments")).isEqualTo(14);
+    assertThat(snapshotRequests()).isEqualTo(14);
     try (var admin = Admin.create(Map.of("bootstrap.servers", KAFKA.getBootstrapServers()))) {
       admin
           .describeTopics(List.of(DevFixtureLoader.TOPIC))
@@ -83,8 +84,10 @@ class DevFixtureIntegrationTest {
     assertThat(count("mileage_entries")).isEqualTo(5);
     assertThat(
             jdbc.queryForList(
-                "SELECT status FROM payment.inbox WHERE status <> 'WAITING' ORDER BY status",
-                String.class))
+                "SELECT status FROM payment.inbox WHERE status <> 'WAITING' AND source_topic <> ?"
+                    + " ORDER BY status",
+                String.class,
+                DevFixtureLoader.SNAPSHOT_SOURCE))
         .containsExactly("APPLIED", "APPLIED", "APPLIED", "REVIEW_REQUIRED");
     assertThat(
             jdbc.queryForObject(
@@ -117,6 +120,7 @@ class DevFixtureIntegrationTest {
     assertThat(jdbc.queryForList("SELECT * FROM payment.mileage_entries ORDER BY id"))
         .isEqualTo(before);
     assertThat(count("payments")).isEqualTo(17);
+    assertThat(snapshotRequests()).isEqualTo(14);
     assertThat(
             jdbc.queryForObject(
                 "SELECT status FROM payment.inbox WHERE event_id=?",
@@ -152,6 +156,18 @@ class DevFixtureIntegrationTest {
                 assertThat(c)
                     .doesNotHaveBean("paymentDevFixtures")
                     .doesNotHaveBean("devFixturePaymentTopic"));
+  }
+
+  /** 스냅샷 결제마다 그 결제를 가리키는 카드 결제 요청 원문이 APPLIED로 한 건씩 있는지 센다. */
+  private long snapshotRequests() {
+    return jdbc.queryForObject(
+        """
+        SELECT count(*) FROM payment.inbox i JOIN payment.payments p ON p.id = i.result_ref
+        WHERE i.source_topic = ? AND i.status = 'APPLIED' AND p.order_id = i.aggregate_id
+          AND i.payload -> 'payload' ->> 'externalMethod' = 'CREDIT_CARD'
+        """,
+        Long.class,
+        DevFixtureLoader.SNAPSHOT_SOURCE);
   }
 
   private void publishAndAccept(
