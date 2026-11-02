@@ -17,7 +17,8 @@ public class PaymentRequestProcessorConfiguration {
   @Bean
   PaymentRequestProcessor paymentRequestProcessor(
       ApplyOrderPaymentRequestService service,
-      @Value("${app.payment-request-processor.batch-size:100}") int batchSize) {
-    return new PaymentRequestProcessor(service, batchSize);
+      @Value("${app.payment-request-processor.batch-size:100}") int batchSize,
+      @Value("${app.payment-request-processor.concurrency:3}") int concurrency) {
+    return new PaymentRequestProcessor(service, batchSize, concurrency);
   }
 }

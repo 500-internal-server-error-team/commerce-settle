@@ -202,7 +202,7 @@ class PaymentRequestProcessingIntegrationTest {
   }
 
   @Test
-  @DisplayName("확인 대상 전환도 처리 건수에 포함해 한 주기에 배치 크기만큼만 바꾸고 커밋한다")
+  @DisplayName("확인 대상 전환도 처리 건수에 포함하고, 배치가 차면 이어서 남은 요청까지 처리한다")
   void countsReviewTransitionsTowardBatchSize() {
     List<UUID> exhausted = new ArrayList<>();
     for (int i = 0; i < 3; i++) {
@@ -222,15 +222,7 @@ class PaymentRequestProcessingIntegrationTest {
     }
     PaymentRequestProcessor processor = new PaymentRequestProcessor(service, 2);
 
-    processor.run();
-
-    assertThat(
-            jdbc.queryForList(
-                "SELECT status || ':' || attempts FROM payment.inbox ORDER BY next_run_at NULLS FIRST",
-                String.class))
-        .containsExactly("REVIEW_REQUIRED:10", "REVIEW_REQUIRED:10", "WAITING:10", "WAITING:0");
-    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.payments", Long.class)).isZero();
-
+    // 첫 배치 2건은 모두 확인 대상 전환이다. 배치가 찼으므로 다음 배치에서 남은 확인 대상과 정상 요청을 처리한다.
     processor.run();
 
     assertThat(

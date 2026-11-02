@@ -8,6 +8,9 @@ import com.commercesettle.payment.infrastructure.config.PaymentRequestProcessorC
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Queue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -27,13 +30,43 @@ class PaymentRequestProcessorTest {
   }
 
   @Test
-  @DisplayName("한 주기에 배치 크기까지만 처리한다")
-  void processesAtMostBatchSize() {
+  @DisplayName("배치 크기까지 처리하면 간격을 기다리지 않고 남은 요청을 이어서 처리한다")
+  void keepsProcessingWhileBatchesAreFull() {
     StubService service = new StubService(true, true, true, true, true);
 
     new PaymentRequestProcessor(service, 2).run();
 
-    assertThat(service.calls).isEqualTo(2);
+    assertThat(service.calls).isEqualTo(6);
+  }
+
+  @Test
+  @DisplayName("설정한 슬롯 수만큼 요청을 동시에 처리한다")
+  void processesWithConcurrentSlots() throws Exception {
+    CountDownLatch allStarted = new CountDownLatch(3);
+    AtomicInteger calls = new AtomicInteger();
+    ApplyOrderPaymentRequestService service =
+        new StubService() {
+          @Override
+          public boolean processNext() {
+            if (calls.incrementAndGet() > 3) {
+              return false;
+            }
+            allStarted.countDown();
+            try {
+              // 세 슬롯이 모두 들어올 때까지 기다린다. 순차 실행이면 시간 초과로 false가 된다.
+              return allStarted.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+              Thread.currentThread().interrupt();
+              return false;
+            }
+          }
+        };
+    PaymentRequestProcessor processor = new PaymentRequestProcessor(service, 10, 3);
+
+    processor.run();
+
+    assertThat(allStarted.getCount()).isZero();
+    processor.stop();
   }
 
   @Test
@@ -62,7 +95,7 @@ class PaymentRequestProcessorTest {
                     .hasSize(expected ? 1 : 0));
   }
 
-  private static final class StubService extends ApplyOrderPaymentRequestService {
+  private static class StubService extends ApplyOrderPaymentRequestService {
     private final Queue<Boolean> results;
     private boolean failNext;
     private int calls;
