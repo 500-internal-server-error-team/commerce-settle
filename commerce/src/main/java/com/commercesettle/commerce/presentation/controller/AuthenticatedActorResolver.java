@@ -17,8 +17,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 /**
  * Gateway의 신원 헤더에서 계정 종류·ID를 읽는다. 없거나 형식이 틀리면 401이다.
  *
- * <p>백엔드의 Gateway 호출 자격 검사(ADR 0010)가 아직 없어 헤더를 위조한 직접 호출을 막지 못한다. 로컬 개발 환경에서만 사용하며, 자격 검사는 이 경계 앞에
- * 둔다.
+ * <p>내부 호출 자격 판정(ADR 0010)이 컨트롤러 전에 Gateway가 아닌 발신자의 신원 헤더를 거절하므로, 여기 도달한 헤더는 Gateway가 검증해 보낸 값이다.
  */
 @Component
 class AuthenticatedActorResolver implements HandlerMethodArgumentResolver, WebMvcConfigurer {

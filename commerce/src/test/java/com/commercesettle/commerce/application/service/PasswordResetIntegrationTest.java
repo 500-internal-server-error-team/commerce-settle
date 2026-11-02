@@ -60,7 +60,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "app.auth.session-epoch=" + PasswordResetIntegrationTest.EPOCH,
       "app.auth.rate-limit.identifier-hmac-key=password-reset-test-hmac-key-32bytes",
       "app.auth.password-reset.delivery-key=password-reset-test-delivery-key-32bytes",
-      "app.address.encryption-key=password-reset-test-address-key-32bytes"
+      "app.address.encryption-key=password-reset-test-address-key-32bytes",
+      "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123"
     })
 @Testcontainers
 class PasswordResetIntegrationTest {

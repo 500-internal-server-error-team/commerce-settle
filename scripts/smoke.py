@@ -122,6 +122,27 @@ def gateway_json(base, method, path, body=None, token=None, headers=None):
         return error.code, json.loads(payload) if payload.startswith(b"{") else {}
 
 
+def check_internal_credentials():
+    # Same network as Commerce: only the Gateway credential in the gateway container passes.
+    def direct(*headers):
+        return compose(
+            "exec", "-T", "gateway", "sh", "-c",
+            'exec curl --silent --output /dev/null --write-out "%{http_code}" "$@"',
+            "smoke", *headers, "http://commerce:8080/api/products",
+        ).stdout.strip()
+
+    assert direct() == "401"
+    assert direct("-H", "X-Authenticated-Actor-Kind: SELLER") == "401"
+    assert direct("-H", "Authorization: Bearer " + "x" * 43) == "401"
+    passed = compose(
+        "exec", "-T", "gateway", "sh", "-c",
+        'exec curl --silent --output /dev/null --write-out "%{http_code}" '
+        '-H "Authorization: Bearer $COMMERCE_GATEWAY_CREDENTIAL" '
+        "http://commerce:8080/api/products",
+    ).stdout.strip()
+    assert passed == "200", passed
+
+
 def check_login_flow(base):
     # A fresh email per run keeps reruns away from the per-email login limit.
     email = f"smoke-{uuid.uuid4().hex}@example.com"
@@ -312,6 +333,9 @@ def main():
 
     check_redis_acl(config)
     print("PASS Redis ACL: per-app users, Commerce auth writes and read-only Gateway checks")
+
+    check_internal_credentials()
+    print("PASS Commerce internal credential: direct calls without the Gateway credential get 401")
 
     check_session_auth(config, base)
     print("PASS Gateway session: 401 without a session, Redis session pass, role 403, pending guard 503")

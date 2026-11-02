@@ -56,13 +56,15 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "app.auth.session-epoch=" + DevFixtureIntegrationTest.EPOCH,
       "app.auth.rate-limit.identifier-hmac-key=dev-fixture-test-hmac-key-32bytes",
       "app.auth.password-reset.delivery-key=dev-fixture-test-delivery-key-32bytes",
-      "app.address.encryption-key=dev-fixture-test-address-key-32bytes"
+      "app.address.encryption-key=dev-fixture-test-address-key-32bytes",
+      "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123"
     })
 @Testcontainers
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class DevFixtureIntegrationTest {
   static final String PASSWORD = "fixture-integration-password";
   static final String EPOCH = "00000000-0000-4000-8000-000000000090";
+  private static final String GATEWAY_CREDENTIAL = "test-gateway-credential-0123456789abcdef0123";
   private static final RedisScript<String> VERIFY =
       RedisScript.of(new ClassPathResource("gateway/verify-session.lua"), String.class);
 
@@ -86,6 +88,14 @@ class DevFixtureIntegrationTest {
 
   @BeforeAll
   void startupActuallyLoadsFixtures() {
+    // 실제 경로처럼 Gateway의 내부 호출 자격을 붙여 호출한다.
+    http.getRestTemplate()
+        .getInterceptors()
+        .add(
+            (request, body, execution) -> {
+              request.getHeaders().setBearerAuth(GATEWAY_CREDENTIAL);
+              return execution.execute(request, body);
+            });
     assertThat(count("buyer_accounts")).isEqualTo(8);
     assertThat(count("seller_accounts")).isEqualTo(5);
     assertThat(count("products")).isEqualTo(28);

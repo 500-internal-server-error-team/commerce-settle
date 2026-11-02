@@ -35,7 +35,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
       "app.auth.rate-limit.identifier-hmac-key=buyer-address-test-hmac-key-32bytes",
       "app.auth.password-reset.delivery-key=buyer-address-test-delivery-key-32bytes",
-      "app.address.encryption-key=buyer-address-test-address-key-32bytes"
+      "app.address.encryption-key=buyer-address-test-address-key-32bytes",
+      "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123"
     })
 @Testcontainers
 class BuyerAddressIntegrationTest {
