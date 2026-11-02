@@ -29,20 +29,30 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /** 실제 PostgreSQL에서 지급 대역의 멱등·자금 선점·차감·해제와 응답 유실·조회 장애를 HTTP 경계로 확인한다. */
-@SpringBootTest(properties = "management.tracing.enabled=false")
+@SpringBootTest(
+    properties = {
+      "management.tracing.enabled=false",
+      // 인라인 속성은 ':'도 구분자로 읽으므로 발신자 ID의 ':'를 이스케이프한다.
+      "app.internal-auth.senders[service\\:settlement].current="
+          + MockPayoutIntegrationTest.SETTLEMENT
+    })
 @AutoConfigureMockMvc
 @Testcontainers
 class MockPayoutIntegrationTest {
@@ -50,6 +60,10 @@ class MockPayoutIntegrationTest {
   static final PostgreSQLContainer<?> POSTGRES =
       new PostgreSQLContainer<>("postgres:18.3").withInitScript("db/finance_mock.sql");
 
+  static final String SETTLEMENT = "settlement-credential-0123456789abcdef0123456";
+  // Gateway가 다른 서비스에 보내는 값이거나 다른 대상의 자격이다. 대역은 이 값을 모른다.
+  private static final String GATEWAY = "payment-gateway-credential-0123456789abcdef01";
+  private static final String OTHER_TARGET = "commerce-settlement-credential-0123456789abc";
   private static final long OPENING_BALANCE = 1_000_000;
   private static final String SELLER_ACCOUNT = "seller-account-1";
 
@@ -286,6 +300,31 @@ class MockPayoutIntegrationTest {
     assertThat(cashEntries(account)).containsExactly(-30_000L);
   }
 
+  @ParameterizedTest(name = "{0} {1} → {3}")
+  @CsvSource({
+    "POST,/mock/payouts,'',401,COMMON_AUTHENTICATION_REQUIRED",
+    "POST,/mock/payouts," + GATEWAY + ",401,COMMON_AUTHENTICATION_REQUIRED",
+    "GET,/mock/payouts/00000000-0000-4000-8000-000000000001,"
+        + OTHER_TARGET
+        + ",401,COMMON_AUTHENTICATION_REQUIRED",
+    "POST,/mock/accounts," + SETTLEMENT + ",403,COMMON_ROLE_FORBIDDEN",
+    "GET,/mock/unregistered," + SETTLEMENT + ",404,COMMON_RESOURCE_NOT_FOUND"
+  })
+  @DisplayName("Settlement 자격이 아니거나 자기 작업이 아니면 대역 처리 전에 공통 오류로 거절한다")
+  void rejectsCallerWithoutSettlementCredential(
+      String method, String path, String credential, int status, String code) throws Exception {
+    MockHttpServletRequestBuilder request = "POST".equals(method) ? post(path) : get(path);
+    if (!credential.isEmpty()) {
+      request.header(HttpHeaders.AUTHORIZATION, "Bearer " + credential);
+    }
+
+    mvc.perform(request.contentType(MediaType.APPLICATION_JSON).content("{}"))
+        .andExpect(status().is(status))
+        .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+        .andExpect(jsonPath("$.code").value(code))
+        .andExpect(jsonPath("$.instance").value(path));
+  }
+
   private ResultActions payout(UUID key, String accountRef, long amount, String scenario)
       throws Exception {
     return payout(key, accountRef, Long.toString(amount), scenario);
@@ -301,13 +340,17 @@ class MockPayoutIntegrationTest {
             .formatted(key, accountRef, SELLER_ACCOUNT, amount, scenario);
     return mvc.perform(
         post("/mock/payouts")
+            .header(HttpHeaders.AUTHORIZATION, "Bearer " + SETTLEMENT)
             .header("Idempotency-Key", "payout-" + key)
             .contentType(MediaType.APPLICATION_JSON)
             .content(body));
   }
 
   private ResultActions lookup(UUID key, String scenario) throws Exception {
-    return mvc.perform(get("/mock/payouts/{key}", key).param("scenarioVersion", scenario));
+    return mvc.perform(
+        get("/mock/payouts/{key}", key)
+            .header(HttpHeaders.AUTHORIZATION, "Bearer " + SETTLEMENT)
+            .param("scenarioVersion", scenario));
   }
 
   private static String transactionId(ResultActions result) throws Exception {

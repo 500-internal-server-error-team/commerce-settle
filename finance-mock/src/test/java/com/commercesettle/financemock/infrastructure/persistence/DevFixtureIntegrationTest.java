@@ -12,6 +12,7 @@ import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -22,10 +23,14 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     properties = {
       "management.server.port=0",
       "management.tracing.enabled=false",
-      "app.dev-fixtures.enabled=true"
+      "app.dev-fixtures.enabled=true",
+      "app.internal-auth.senders[service\\:settlement].current="
+          + DevFixtureIntegrationTest.SETTLEMENT
     })
 @Testcontainers
 class DevFixtureIntegrationTest {
+  static final String SETTLEMENT = "test-settlement-credential-0123456789abcdef0123";
+
   @Container @ServiceConnection
   static final PostgreSQLContainer<?> POSTGRES =
       new PostgreSQLContainer<>("postgres:18.3").withInitScript("db/finance_mock.sql");
@@ -37,6 +42,7 @@ class DevFixtureIntegrationTest {
   @Test
   void createsActualPayoutRecordsAndPreservesBalanceAcrossResume() throws Exception {
     HttpHeaders headers = new HttpHeaders();
+    headers.setBearerAuth(SETTLEMENT);
     headers.set("Idempotency-Key", "fixture-payout-loss");
     var body =
         Map.of(
@@ -58,19 +64,23 @@ class DevFixtureIntegrationTest {
         .isEqualTo(504);
     loader.runScenarios();
     assertThat(
-            http.getForEntity(
+            http.exchange(
                     "/mock/payouts/"
                         + DevFixtureLoader.key(2)
                         + "?scenarioVersion=fixture-response-loss-v1",
+                    HttpMethod.GET,
+                    new HttpEntity<>(headers),
                     String.class)
                 .getStatusCode()
                 .value())
         .isEqualTo(200);
     assertThat(
-            http.getForEntity(
+            http.exchange(
                     "/mock/payouts/"
                         + DevFixtureLoader.key(3)
                         + "?scenarioVersion=fixture-lookup-failure-v1",
+                    HttpMethod.GET,
+                    new HttpEntity<>(headers),
                     String.class)
                 .getStatusCode()
                 .value())

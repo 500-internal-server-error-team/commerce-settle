@@ -35,7 +35,12 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /** 지급 접수·확정이 한 트랜잭션이라 중간 상태가 커밋되지 않고, 조회는 저장된 결과만 돌려주는지 실제 PostgreSQL에서 확인한다. */
-@SpringBootTest(properties = "management.tracing.enabled=false")
+@SpringBootTest(
+    properties = {
+      "management.tracing.enabled=false",
+      "app.internal-auth.senders[service\\:settlement].current="
+          + "test-settlement-credential-0123456789abcdef0123"
+    })
 @Testcontainers
 class MockPayoutRecoveryIntegrationTest {
   @Container @ServiceConnection
