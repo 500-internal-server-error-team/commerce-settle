@@ -91,7 +91,7 @@ def stack():
     finally:
         try:
             if attempted:
-                compose("down", "-v", "--rmi", "local", "--remove-orphans", timeout=180)
+                compose("--profile", "*", "down", "-v", "--rmi", "local", "--remove-orphans", timeout=180)
                 for kind in ["container", "volume"]:
                     remaining = subprocess.check_output(["docker", kind, "ls", "-q", "--filter", "label=com.docker.compose.project=" + project], text=True, timeout=15).strip()
                     if remaining:
