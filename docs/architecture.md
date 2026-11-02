@@ -253,7 +253,7 @@ Payment API·Worker는 패키지를 복제하지 않습니다. HTTP와 비동기
 
 전달·용량 산정과 선택 이유는 [Kafka 이벤트 전달과 용량 산정](decisions/0005-kafka-event-delivery-and-capacity.md)을 따릅니다. 생산자별 토픽·책임별 Consumer 그룹, 업무 상태·Outbox의 원자 저장과 Inbox·처리 대기 작업의 커밋 후 offset 승인을 구현 기준으로 삼고 파티션·동시 실행·보존·접수 제한은 ADR의 초기값으로 시작하고 정상 부하와 장애 후 배출 시험으로 조정합니다. 이벤트 종류·key·그룹·payload는 [API 이벤트 계약](api.md#이벤트-연동)이 소유합니다. 토픽·서비스 사이의 전역 순서는 가정하지 않으며 금융 이벤트에 배송지·비밀번호·인증 토큰을 넣지 않습니다.
 
-현재 Commerce의 Outbox·Relay와 Payment의 Inbox 영속 인계를 구현하고 전용 PostgreSQL·Kafka 시험으로 원문 전달·경합·재전달·ACK 경계를 확인했습니다. 발행·수신은 기본 비활성입니다. 주문 API·금융 Worker와의 전체 연결 및 금융 업무 전체의 정합성·처리량·장애 후 배출 목표는 구현·검증 전입니다. 활성화 절차와 시험 범위는 [Kafka 전달 기반](development.md#kafka-전달-기반)을 따릅니다.
+현재 Commerce의 Outbox·Relay와 Payment의 Inbox 영속 인계·원문 격리·DLT 발행·운영 재처리를 구현했습니다. 해석 불가 원문과 발행 작업은 Payment DB에 함께 보존하고, Kafka 응답은 DB 트랜잭션 밖의 전용 실행기에서 기다립니다. 저장 구조와 논리 관계는 [메시지 데이터 모델](data-model.md#메시지멱등성감사)을 따릅니다. 발행·수신·원문 격리는 기본 비활성이며 다른 소비자의 DLT는 토픽만 준비한 상태입니다. 금융 업무 전체의 연결·정합성·처리량·장애 후 배출 목표는 검증 전입니다. 활성화 절차와 시험 범위는 [Kafka 전달 기반](development.md#kafka-전달-기반)을 따릅니다.
 
 ## 네트워크와 관측
 

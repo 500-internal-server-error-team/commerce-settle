@@ -1112,7 +1112,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 ![메시지·멱등성·감사 ERD](diagrams/erd-integration.svg)
 
-Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보존·삭제 초기값](decisions/0005-kafka-event-delivery-and-capacity.md#보존과-삭제-초기값)을 따릅니다. 첫 구현은 이 DB 기록의 자동 삭제를 비활성화하며 일반 관리·가입의 기존 만료 정책은 유지합니다. 해석 불가 메시지의 격리는 원본 bytes·topic·partition·offset·실패 사유를 같은 소비자 DB에 저장할 수 있어야 하고, 구체 테이블·컬럼은 해당 소비자의 스키마 DDL에서 정의합니다.
+Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보존·삭제 초기값](decisions/0005-kafka-event-delivery-and-capacity.md#보존과-삭제-초기값)을 따릅니다. 첫 구현은 이 DB 기록의 자동 삭제를 비활성화하며 일반 관리·가입의 기존 만료 정책은 유지합니다. 해석 불가 메시지는 원본 bytes·topic·partition·offset·실패 사유를 같은 소비자 DB에 보존해야 합니다. Payment는 아래 `inbox_quarantines`·`inbox_quarantine_deliveries`·`inbox_quarantine_resumes`로 원문·발행 작업·재개 이력을 분리합니다. 정상 Inbox나 업무 eventId를 참조하지 않으며, 활성화와 ACK·재처리 경계는 [Kafka 전달 기반](development.md#kafka-전달-기반)을 따릅니다.
 
 ### outbox
 
@@ -1224,7 +1224,7 @@ Payment는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
-| `id`, `quarantine_id` | `uuid`, `uuid` | 작업 ID·격리 원문 참조 |
+| `id`, `quarantine_id` | `uuid`, `uuid` | 작업 ID·→inbox_quarantines.id |
 | `kind`, `topic` | `varchar(8)`, `varchar(249)` | DLT/REPLAY·고정 목적지 |
 | `status` | `varchar(20)` | PENDING/RUNNING/RETRY/PUBLISHED/REVIEW_REQUIRED |
 | `operator_id`, `reason_code` | `varchar(100)?`, `varchar(80)?` | 재처리 요청자·사유; DLT 작업에는 null |
@@ -1241,7 +1241,7 @@ Payment는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
-| `id`, `delivery_id` | `uuid`, `uuid` | 재개 요청 ID·기존 발행 작업 참조 |
+| `id`, `delivery_id` | `uuid`, `uuid` | 재개 요청 ID·→inbox_quarantine_deliveries.id |
 | `expected_version`, `previous_attempts` | `bigint`, `integer` | 재개 전 버전·누적 시도 수 |
 | `operator_id`, `reason_code`, `created_at` | `varchar(100)`, `varchar(80)`, `timestamptz` | 요청자·사유·요청 시각 |
 
