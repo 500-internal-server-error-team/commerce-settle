@@ -5,6 +5,8 @@ import static org.awaitility.Awaitility.await;
 
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PaymentConfirmedPayload;
+import com.commercesettle.settlement.application.port.QuarantineStore;
+import com.commercesettle.settlement.application.service.QuarantineService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -25,7 +27,10 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -52,6 +57,8 @@ import org.testcontainers.kafka.KafkaContainer;
       "app.kafka.quarantine.interval-ms=100"
     })
 @Timeout(120)
+// 같은 토픽·DB를 공유하므로 offset·건수를 세는 첫 시험을 먼저 실행한다.
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class SettlementQuarantineIntegrationTest {
   private static final String PAYMENT_TOPIC = SettlementEventListener.PAYMENT_TOPIC;
   private static final String COMMERCE_TOPIC = SettlementEventListener.COMMERCE_TOPIC;
@@ -85,8 +92,10 @@ class SettlementQuarantineIntegrationTest {
   @Autowired KafkaListenerEndpointRegistry registry;
   @Autowired JdbcTemplate jdbc;
   @Autowired ObjectMapper mapper;
+  @Autowired QuarantineService quarantines;
 
   @Test
+  @Order(1)
   @DisplayName("해석할 수 없는 대상 이벤트는 원문을 격리하고 ack하며, DLT에 같은 bytes와 원본 위치가 발행되고 뒤의 메시지도 처리된다")
   void quarantinesInvalidRecordAndContinues() throws Exception {
     String key = UUID.randomUUID().toString();
@@ -140,6 +149,48 @@ class SettlementQuarantineIntegrationTest {
                             "SELECT status FROM settlement.inbox_quarantine_deliveries",
                             String.class))
                     .containsExactly("PUBLISHED", "PUBLISHED"));
+  }
+
+  @Test
+  @Order(2)
+  @DisplayName("원인을 고친 격리 원문을 재처리하면 원래 토픽에 같은 key·bytes로 발행되고 Settlement가 다시 받아 반영한다")
+  void replayRepublishesToSourceTopic() throws Exception {
+    UUID paymentId = UUID.randomUUID();
+    byte[] body = payment(paymentId);
+    // 해석기를 고치기 전에 격리됐던 원문이라고 본다. 실제 수신 위치와 겹치지 않게 큰 offset을 쓴다.
+    UUID quarantineId =
+        quarantines.capture(
+            new QuarantineStore.Source(
+                GROUP, PAYMENT_TOPIC, 2, 1_000_000, paymentId.toString(), body));
+
+    UUID replay = quarantines.requestReplay(quarantineId, 0, "ops@team", "PARSER_FIXED");
+
+    await()
+        .atMost(Duration.ofSeconds(30))
+        .untilAsserted(
+            () ->
+                assertThat(
+                        jdbc.queryForList(
+                            "SELECT status FROM settlement.inbox WHERE aggregate_id = ?",
+                            String.class,
+                            paymentId))
+                    .containsExactly("APPLIED"));
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT raw_body FROM settlement.inbox WHERE aggregate_id = ?",
+                byte[].class,
+                paymentId))
+        .isEqualTo(body);
+    await()
+        .atMost(Duration.ofSeconds(10))
+        .untilAsserted(
+            () ->
+                assertThat(
+                        jdbc.queryForObject(
+                            "SELECT status FROM settlement.inbox_quarantine_deliveries WHERE id = ?",
+                            String.class,
+                            replay))
+                    .isEqualTo("PUBLISHED"));
   }
 
   private void send(String topic, String key, byte[] body) throws Exception {

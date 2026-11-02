@@ -8,6 +8,7 @@ import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcOperations;
@@ -80,6 +81,86 @@ class JdbcQuarantineStore implements QuarantineStore {
         """,
         params);
     return original.id();
+  }
+
+  @Override
+  public Optional<UUID> requestReplay(
+      UUID quarantineId, long expectedVersion, String operator, String reasonCode, Instant now) {
+    applyTransactionLimits();
+    var params =
+        params(now)
+            .addValue("id", quarantineId)
+            .addValue("version", expectedVersion)
+            .addValue("operator", operator)
+            .addValue("reason", reasonCode)
+            .addValue("delivery", UUID.randomUUID());
+    var topics =
+        jdbc.query(
+            """
+            UPDATE settlement.inbox_quarantines q SET version=version+1
+            WHERE q.id=:id AND q.version=:version
+              AND NOT EXISTS (SELECT 1 FROM settlement.inbox_quarantine_deliveries d
+                WHERE d.quarantine_id=q.id AND d.kind='REPLAY' AND d.status IN ('PENDING','RUNNING','RETRY'))
+            RETURNING source_topic
+            """,
+            params,
+            (rs, row) -> rs.getString(1));
+    if (topics.size() != 1) {
+      return Optional.empty();
+    }
+    params.addValue("topic", topics.getFirst());
+    jdbc.update(
+        """
+        INSERT INTO settlement.inbox_quarantine_deliveries
+          (id,quarantine_id,kind,topic,status,operator_id,reason_code,next_run_at,created_at,updated_at)
+        VALUES (:delivery,:id,'REPLAY',:topic,'PENDING',:operator,:reason,clock_timestamp(),:now,:now)
+        """,
+        params);
+    return Optional.of((UUID) params.getValue("delivery"));
+  }
+
+  @Override
+  public Optional<UUID> resumeDelivery(
+      UUID deliveryId, long expectedVersion, String operator, String reasonCode, Instant now) {
+    applyTransactionLimits();
+    var params =
+        params(now)
+            .addValue("id", deliveryId)
+            .addValue("version", expectedVersion)
+            .addValue("operator", operator)
+            .addValue("reason", reasonCode)
+            .addValue("audit", UUID.randomUUID());
+    var rows =
+        jdbc.query(
+            """
+            SELECT attempts,version,status FROM settlement.inbox_quarantine_deliveries
+            WHERE id=:id FOR UPDATE
+            """,
+            params,
+            (rs, row) ->
+                new Exhausted(
+                    rs.getInt("attempts"), rs.getLong("version"), rs.getString("status")));
+    if (rows.size() != 1
+        || rows.getFirst().version() != expectedVersion
+        || !"REVIEW_REQUIRED".equals(rows.getFirst().status())) {
+      return Optional.empty();
+    }
+    params.addValue("attempts", rows.getFirst().attempts());
+    jdbc.update(
+        """
+        INSERT INTO settlement.inbox_quarantine_resumes
+          (id,delivery_id,expected_version,previous_attempts,operator_id,reason_code,created_at)
+        VALUES (:audit,:id,:version,:attempts,:operator,:reason,:now)
+        """,
+        params);
+    jdbc.update(
+        """
+        UPDATE settlement.inbox_quarantine_deliveries SET status='PENDING',attempts=0,
+          next_run_at=clock_timestamp(),updated_at=clock_timestamp(),version=version+1
+        WHERE id=:id AND version=:version AND status='REVIEW_REQUIRED'
+        """,
+        params);
+    return Optional.of((UUID) params.getValue("audit"));
   }
 
   @Override
@@ -185,4 +266,6 @@ class JdbcQuarantineStore implements QuarantineStore {
   }
 
   private record Original(UUID id, String key, byte[] body) {}
+
+  private record Exhausted(int attempts, long version, String status) {}
 }
