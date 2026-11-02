@@ -2,7 +2,7 @@
 
 서비스별 PostgreSQL과 [Redis 인증 데이터](#redis-인증-데이터)의 설계입니다. PostgreSQL의 물리 FK는 만들지 않고 아래 관계를 애플리케이션에서 검증합니다. 공통 시간 컬럼은 [시간 정보와 감사 기록](architecture.md#시간-정보와-감사-기록)에 따라 채웁니다. 생성/수정 시각과 행위 감사 로그는 별개입니다. 식별자는 서버 생성 UUID, 금액·누적 수량은 bigint, PostgreSQL 시각은 `timestamptz`이며 조회 시간대는 KST입니다. 내부 저장은 같은 절대시각을 유지합니다. `?`는 nullable, 나머지 컬럼은 NOT NULL입니다. 숫자 버전은 0부터 시작하고 조건부 갱신마다 증가합니다.
 
-이 문서는 테이블·컬럼·제약·인덱스의 목표 스키마를 정의합니다. 실제 DDL과 환경별 생성·변경 절차는 [DB 정책](migrations.md)을 따르며, 명세의 존재를 테이블 구현 완료로 간주하지 않습니다. 현재 커머스의 `products`·`product_inventory`·`inventory_movements`·`inventory_reservations`·`idempotency_records`·`buyer_accounts`·`seller_accounts`·`password_reset_tokens`·`audit_logs`는 [commerce 초기 SQL](../infra/postgres/schema/commerce.sql)에, 정산의 `settlement_items`·`settlement_entries`·`settlement_batches`·`payouts`·`payout_jobs`·`settlement_reservations`·`inbox`·`inbox_conflicts`와 Spring Batch 메타데이터는 [settlement 초기 SQL](../infra/postgres/schema/settlement.sql)에, 금융 Mock의 `mock_accounts`·`mock_scenarios`·`mock_transactions`·`mock_funds_reservations`·`mock_cash_entries`·`idempotency_records`는 [finance_mock 초기 SQL](../infra/postgres/schema/finance_mock.sql)에 반영했습니다. 금융 Mock은 지급 대역 동작만 구현했으며 PG·간편결제 승인·환불·입금 컬럼은 아직 쓰지 않습니다.
+이 문서는 테이블·컬럼·제약·인덱스의 목표 스키마를 정의합니다. 실제 DDL과 환경별 생성·변경 절차는 [DB 정책](migrations.md)을 따르며, 명세의 존재를 테이블 구현 완료로 간주하지 않습니다. 현재 커머스의 `products`·`product_inventory`·`inventory_movements`·`inventory_reservations`·`idempotency_records`·`buyer_accounts`·`seller_accounts`·`password_reset_tokens`·`audit_logs`는 [commerce 초기 SQL](../infra/postgres/schema/commerce.sql)에, 정산의 `settlement_items`·`settlement_entries`·`settlement_batches`·`payouts`·`payout_jobs`·`settlement_reservations`·`inbox`·`inbox_conflicts`·`inbox_quarantines`·`inbox_quarantine_deliveries`와 Spring Batch 메타데이터는 [settlement 초기 SQL](../infra/postgres/schema/settlement.sql)에, 금융 Mock의 `mock_accounts`·`mock_scenarios`·`mock_transactions`·`mock_funds_reservations`·`mock_cash_entries`·`idempotency_records`는 [finance_mock 초기 SQL](../infra/postgres/schema/finance_mock.sql)에 반영했습니다. 금융 Mock은 지급 대역 동작만 구현했으며 PG·간편결제 승인·환불·입금 컬럼은 아직 쓰지 않습니다.
 
 주문의 `orders`·`order_addresses`·`order_refund_requests`도 commerce 초기 SQL과 도메인·저장소에 반영했습니다. 주문·재고 예약·결제 결과·배송·취소/반품 상태와 Inbox/Outbox를 연결합니다. 쿠폰·이벤트 실저장과 금융/정산 실행은 소유 어댑터 및 해당 서비스의 책임입니다. 현재 연결·검증 범위는 [주문 업무 흐름](development.md#주문-업무-흐름)을 따릅니다.
 
@@ -1187,7 +1187,7 @@ Payment Inbox는 처리 시도를 추적하는 `attempts`(`integer`, 0 이상, �
 
 Payment·Commerce는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니다.
 
-Settlement는 `PaymentConfirmed`·`PurchaseConfirmed`를 Listener 트랜잭션에서 `RECEIVED`로 저장하고 같은 트랜잭션에 반영해 `APPLIED`(`result_ref`=정산 항목 ID) 또는 `REVIEW_REQUIRED`로 남긴 뒤 ACK합니다. 선행 결제 항목이 없는 구매확정만 `WAITING`으로 두고 1초 주기 처리기가 다시 판정하며, 재시도 상한은 아직 없습니다. Settlement도 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니다.
+Settlement는 `PaymentConfirmed`·`PurchaseConfirmed`를 Listener 트랜잭션에서 `RECEIVED`로 저장하고 같은 트랜잭션에 반영해 `APPLIED`(`result_ref`=정산 항목 ID) 또는 `REVIEW_REQUIRED`로 남긴 뒤 ACK합니다. 선행 결제 항목이 없는 구매확정만 `WAITING`으로 두고 1초 주기 처리기가 다시 판정합니다. Commerce와 같은 `attempts`·`last_error_code`를 두어 1~60초 지수 대기로 최대 10회 판정하고, 소진하면 같은 UPDATE에서 `REVIEW_REQUIRED`·`PAYMENT_NOT_ARRIVED`로 남깁니다. 소진 뒤 결제확정이 와도 자동으로 다시 판정하지 않습니다. Listener와 처리기가 같은 항목을 동시에 바꿔 버전이 충돌하면 Listener가 새 트랜잭션으로 한 번 다시 판정합니다. Settlement도 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니다.
 
 Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원자 저장하고 `result_ref`에 주문 ID를 남깁니다. Commerce Inbox에는 `attempts integer NOT NULL DEFAULT 0 CHECK (attempts>=0)`와 `last_error_code varchar(80)?`를 추가해 선행 주문 미도착·반영 실패를 1~60초 지수 대기로 최대 10회 처리하고 소진 시 REVIEW_REQUIRED로 보존합니다. 이전 회차·버전·상태·다른 결제 ID는 즉시 확인 대상으로 남기며 주문을 덮어쓰지 않습니다. 원문·최초 출처·기존 처리 결과와 충돌 이력은 재시작·중복 인계에도 유지합니다. Payment의 재시도 컬럼·처리 변경은 별도 #76 범위입니다.
 
@@ -1211,7 +1211,7 @@ Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원
 
 ### inbox_quarantines
 
-소유: `payment`. 유효한 Envelope로 해석할 수 없는 입력의 원문입니다. `app.kafka.quarantine.enabled`를 명시적으로 켠 경우에만 수신 경로에 연결합니다.
+소유: `payment`·`settlement`(각 서비스 스키마, 같은 컬럼·제약). 유효한 Envelope로 해석할 수 없는 입력의 원문입니다. `app.kafka.quarantine.enabled`를 명시적으로 켠 경우에만 수신 경로에 연결합니다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -1226,7 +1226,7 @@ Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원
 
 ### inbox_quarantine_deliveries
 
-소유: `payment`. 격리 원문의 DLT 발행과 운영 재처리 작업입니다. 원문은 위 행을 참조하며 별도로 복제하지 않습니다.
+소유: `payment`·`settlement`. 격리 원문의 DLT 발행과 운영 재처리 작업입니다. Settlement는 DLT 작업만 만들며 REPLAY 요청과 재개 이력(`inbox_quarantine_resumes`)은 아직 없습니다. 원문은 위 행을 참조하며 별도로 복제하지 않습니다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
