@@ -54,6 +54,18 @@ public class CashEntry {
     return accountId;
   }
 
+  public static CashEntry pgReceipt(UUID accountId, UUID approvalId, long amount, Instant now) {
+    if (amount <= 0) throw new IllegalArgumentException("receipt amount must be positive");
+    return new CashEntry(
+        UUID.randomUUID(), accountId, CashEntryKind.PG_RECEIPT, approvalId, amount, now);
+  }
+
+  public static CashEntry refundDebit(UUID accountId, UUID refundId, long amount, Instant now) {
+    if (amount <= 0) throw new IllegalArgumentException("refund amount must be positive");
+    return new CashEntry(
+        UUID.randomUUID(), accountId, CashEntryKind.REFUND_DEBIT, refundId, -amount, now);
+  }
+
   public CashEntryKind getKind() {
     return kind;
   }

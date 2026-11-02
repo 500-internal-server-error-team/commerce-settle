@@ -14,6 +14,7 @@ enum ErrorCode {
   MOCK_TRANSACTION_NOT_FOUND(HttpStatus.NOT_FOUND, "조회 시점에 해당 거래 기록이 없습니다. 금융 실패나 취소 확정이 아닙니다."),
   MOCK_SCENARIO_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "요청한 시나리오 설정이 없습니다."),
   MOCK_LOOKUP_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "거래를 조회하지 못했습니다. 같은 업무 키로 다시 조회해 주세요."),
+  MOCK_REFUND_CONFLICT(HttpStatus.CONFLICT, "원승인의 성공 상태와 외부 결제액 전액을 확인해 주세요."),
   MOCK_FUNDS_NOT_PREPARED(HttpStatus.INTERNAL_SERVER_ERROR, "시험 지급 재원이 준비되지 않았습니다."),
   COMMON_TEMPORARILY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "요청을 처리할 수 없습니다."),
   COMMON_INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "요청을 처리할 수 없습니다.");

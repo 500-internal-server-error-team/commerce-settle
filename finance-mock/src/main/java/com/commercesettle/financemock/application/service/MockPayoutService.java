@@ -1,7 +1,7 @@
 package com.commercesettle.financemock.application.service;
 
+import com.commercesettle.financemock.application.dto.MockExecutionResult;
 import com.commercesettle.financemock.application.dto.MockTransactionView;
-import com.commercesettle.financemock.application.dto.PayoutResult;
 import com.commercesettle.financemock.application.exception.IdempotencyConflictException;
 import com.commercesettle.financemock.application.exception.ScenarioUnavailableException;
 import com.commercesettle.financemock.application.port.IdempotencyStore;
@@ -38,7 +38,7 @@ public class MockPayoutService {
     this.scenarios = scenarios;
   }
 
-  public PayoutResult execute(
+  public MockExecutionResult execute(
       UUID businessKey,
       String accountRef,
       String sellerAccountRef,
@@ -51,7 +51,7 @@ public class MockPayoutService {
 
     Optional<MockTransactionView> existing = transactions.replay(scope, requestHash);
     if (existing.isPresent()) {
-      return new PayoutResult(existing.get(), false);
+      return new MockExecutionResult(existing.get(), false);
     }
 
     MockScenario scenario =
@@ -77,12 +77,12 @@ public class MockPayoutService {
       // 같은 키의 다른 요청이 먼저 커밋했다. 같은 본문이면 그 거래를 돌려준다.
       return transactions
           .replay(scope, requestHash)
-          .map(view -> new PayoutResult(view, false))
+          .map(view -> new MockExecutionResult(view, false))
           .orElseThrow(() -> e);
     }
 
     pause(outcome.delayMs());
-    return new PayoutResult(completed, outcome.responseLost());
+    return new MockExecutionResult(completed, outcome.responseLost());
   }
 
   static void pause(int delayMs) {

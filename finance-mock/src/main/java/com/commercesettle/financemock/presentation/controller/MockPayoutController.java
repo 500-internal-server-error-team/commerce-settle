@@ -1,6 +1,6 @@
 package com.commercesettle.financemock.presentation.controller;
 
-import com.commercesettle.financemock.application.dto.PayoutResult;
+import com.commercesettle.financemock.application.dto.MockExecutionResult;
 import com.commercesettle.financemock.application.service.MockPayoutLookupService;
 import com.commercesettle.financemock.application.service.MockPayoutService;
 import com.commercesettle.financemock.presentation.dto.MockPayoutRequest;
@@ -41,7 +41,7 @@ class MockPayoutController {
   ResponseEntity<MockTransactionResponse> execute(
       @RequestHeader("Idempotency-Key") @Size(min = 8, max = 128) String idempotencyKey,
       @Valid @RequestBody MockPayoutRequest request) {
-    PayoutResult result =
+    MockExecutionResult result =
         payouts.execute(
             request.businessKey(),
             request.accountRef(),

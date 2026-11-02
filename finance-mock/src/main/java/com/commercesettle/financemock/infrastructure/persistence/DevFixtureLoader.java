@@ -4,6 +4,7 @@ import com.commercesettle.financemock.application.service.MockPayoutService;
 import com.commercesettle.financemock.domain.model.AccountPurpose;
 import com.commercesettle.financemock.domain.model.MockAccount;
 import com.commercesettle.financemock.domain.model.MockScenario;
+import com.commercesettle.financemock.domain.model.PaymentProvider;
 import com.commercesettle.financemock.domain.repository.MockAccountRepository;
 import com.commercesettle.financemock.domain.repository.MockScenarioRepository;
 import java.math.BigDecimal;
@@ -71,7 +72,49 @@ public class DevFixtureLoader {
                     20261030,
                     at));
           }
+          loadPayments(at);
         });
+  }
+
+  private void loadPayments(Instant at) {
+    String walletRef = "fixture-easy-wallet";
+    if (accounts.find("EASY_PAY", walletRef, AccountPurpose.WALLET).isEmpty()) {
+      accounts.save(MockAccount.open("EASY_PAY", walletRef, AccountPurpose.WALLET, 1_000_000, at));
+    }
+    String[] versions = {
+      "fixture-pg-normal-v1",
+      "fixture-pg-reject-v1",
+      "fixture-pg-response-loss-v1",
+      "fixture-pg-refund-reject-v1",
+      "fixture-pg-refund-loss-v1",
+      "fixture-pg-lookup-fail-v1"
+    };
+    for (PaymentProvider provider : PaymentProvider.values()) {
+      for (int i = 0; i < versions.length; i++) {
+        if (scenarios.find(provider.name(), versions[i]).isPresent()) continue;
+        int days =
+            switch (provider) {
+              case PG_B -> 6;
+              case PG_C -> 7;
+              default -> 5;
+            };
+        scenarios.save(
+            MockScenario.payment(
+                provider,
+                versions[i],
+                new MockScenario.Delay(0, 0),
+                i == 1 ? BigDecimal.ONE : BigDecimal.ZERO,
+                i == 2 ? BigDecimal.ONE : BigDecimal.ZERO,
+                new MockScenario.Delay(0, 0),
+                i == 3 ? BigDecimal.ONE : BigDecimal.ZERO,
+                i == 4 ? BigDecimal.ONE : BigDecimal.ZERO,
+                new MockScenario.Delay(0, 0),
+                i == 5 ? BigDecimal.ONE : BigDecimal.ZERO,
+                days,
+                20261102,
+                at));
+      }
+    }
   }
 
   /** 각 호출은 독립 커밋한다. 일부 실행 뒤 중단돼도 고정 업무 키로 이중 차감 없이 재개한다. */

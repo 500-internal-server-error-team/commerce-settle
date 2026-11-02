@@ -10,6 +10,10 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 
 interface SpringDataMockAccountRepository extends JpaRepository<MockAccount, UUID> {
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("SELECT a FROM MockAccount a WHERE a.id = :id")
+  Optional<MockAccount> findForUpdate(UUID id);
+
   Optional<MockAccount> findByProviderIdAndAccountRefAndPurpose(
       String providerId, String accountRef, AccountPurpose purpose);
 

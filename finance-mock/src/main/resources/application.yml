@@ -32,6 +32,10 @@ spring:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
 
 finance-mock:
+  pg:
+    calendar-version: ${PG_CALENDAR_VERSION:weekdays-v1}
+    holidays: ${PG_CALENDAR_HOLIDAYS:}
+    receipts-enabled: ${PG_RECEIPTS_ENABLED:true}
   # 시험 시작 때 준비하는 지급 재원 계정과 정상 지급 시나리오. 기존 행은 바꾸지 않는다.
   payout-fixture:
     account-ref: ${PAYOUT_FUNDING_ACCOUNT_REF:payout-funding-default}
@@ -40,7 +44,7 @@ finance-mock:
     seed: ${PAYOUT_SCENARIO_SEED:20261030}
 
 springdoc:
-  paths-to-match: /api/**
+  paths-to-match: /api/**,/mock/**
 
 management:
   server:

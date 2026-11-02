@@ -6,6 +6,7 @@ import com.commercesettle.financemock.application.exception.PayoutAccountNotFoun
 import com.commercesettle.financemock.application.exception.ScenarioUnavailableException;
 import com.commercesettle.financemock.application.exception.TransactionNotFoundException;
 import com.commercesettle.financemock.domain.exception.InsufficientMockFundsException;
+import com.commercesettle.financemock.domain.exception.InvalidMockTransitionException;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
 import java.net.URI;
@@ -57,6 +58,16 @@ public class FinanceMockExceptionHandler extends ResponseEntityExceptionHandler 
   @ExceptionHandler(TransactionNotFoundException.class)
   ResponseEntity<Object> transactionNotFound(TransactionNotFoundException e, WebRequest request) {
     return respond(ErrorCode.MOCK_TRANSACTION_NOT_FOUND, null, request);
+  }
+
+  @ExceptionHandler(IllegalArgumentException.class)
+  ResponseEntity<Object> invalidPayment(IllegalArgumentException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_VALIDATION_FAILED, null, request);
+  }
+
+  @ExceptionHandler(InvalidMockTransitionException.class)
+  ResponseEntity<Object> invalidTransition(InvalidMockTransitionException e, WebRequest request) {
+    return respond(ErrorCode.MOCK_REFUND_CONFLICT, null, request);
   }
 
   @ExceptionHandler(ScenarioUnavailableException.class)

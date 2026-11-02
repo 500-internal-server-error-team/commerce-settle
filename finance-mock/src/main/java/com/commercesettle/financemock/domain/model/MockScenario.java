@@ -33,6 +33,11 @@ public class MockScenario {
   private int lookupMaxDelayMs;
   private long seed;
   private Instant createdAt;
+  private Integer settlementDelayBusinessDays;
+  private Integer refundMinDelayMs;
+  private Integer refundMaxDelayMs;
+  private BigDecimal refundRejectionRate;
+  private BigDecimal refundResponseLossRate;
 
   protected MockScenario() {}
 
@@ -81,6 +86,56 @@ public class MockScenario {
         now);
   }
 
+  public static MockScenario payment(
+      PaymentProvider provider,
+      String version,
+      Delay approvalDelay,
+      BigDecimal rejectionRate,
+      BigDecimal responseLossRate,
+      Delay refundDelay,
+      BigDecimal refundRejectionRate,
+      BigDecimal refundResponseLossRate,
+      Delay lookupDelay,
+      BigDecimal lookupFailureRate,
+      int settlementDelayBusinessDays,
+      long seed,
+      Instant now) {
+    if (settlementDelayBusinessDays < 0 || settlementDelayBusinessDays > 365) {
+      throw new IllegalArgumentException("settlement delay must be between 0 and 365");
+    }
+    MockScenario scenario =
+        new MockScenario(
+            provider.name(),
+            version,
+            approvalDelay,
+            rejectionRate,
+            responseLossRate,
+            lookupFailureRate,
+            lookupDelay,
+            seed,
+            now);
+    scenario.refundMinDelayMs = refundDelay.minMs();
+    scenario.refundMaxDelayMs = refundDelay.maxMs();
+    scenario.refundRejectionRate = requireRate(refundRejectionRate);
+    scenario.refundResponseLossRate = requireRate(refundResponseLossRate);
+    scenario.settlementDelayBusinessDays = settlementDelayBusinessDays;
+    return scenario;
+  }
+
+  public int getSettlementDelayBusinessDays() {
+    return Objects.requireNonNull(settlementDelayBusinessDays, "payment settlement delay");
+  }
+
+  public PayoutOutcome refundOutcome(long resultSeed) {
+    SplittableRandom random = new SplittableRandom(resultSeed);
+    int delay = Objects.requireNonNull(refundMinDelayMs);
+    delay = drawDelay(delay, Objects.requireNonNull(refundMaxDelayMs), random);
+    return new PayoutOutcome(
+        delay,
+        random.nextDouble() < refundRejectionRate.doubleValue(),
+        random.nextDouble() < refundResponseLossRate.doubleValue());
+  }
+
   /** 거래에 저장할 결과 seed. 같은 시나리오·작업·업무 키면 항상 같은 값이다. */
   public long resultSeed(MockOperation operation, UUID businessKey) {
     String source = seed + ":" + providerId + ":" + operation + ":" + businessKey;
@@ -96,7 +151,7 @@ public class MockScenario {
   /** 저장한 결과 seed로 지연·확정 거절·응답 유실을 정한다. 다시 계산해도 같은 결과다. */
   public PayoutOutcome payoutOutcome(long resultSeed) {
     SplittableRandom random = new SplittableRandom(resultSeed);
-    int delayMs = minDelayMs + random.nextInt(maxDelayMs - minDelayMs + 1);
+    int delayMs = drawDelay(minDelayMs, maxDelayMs, random);
     boolean rejected = random.nextDouble() < rejectionRate.doubleValue();
     boolean responseLost = random.nextDouble() < responseLossRate.doubleValue();
     return new PayoutOutcome(delayMs, rejected, responseLost);
@@ -104,7 +159,7 @@ public class MockScenario {
 
   /** 조회는 거래 결과를 바꾸지 않는 통신 장애라 요청마다 새로 뽑는다. */
   public LookupOutcome lookupOutcome(RandomGenerator random) {
-    int delayMs = lookupMinDelayMs + random.nextInt(lookupMaxDelayMs - lookupMinDelayMs + 1);
+    int delayMs = drawDelay(lookupMinDelayMs, lookupMaxDelayMs, random);
     boolean failed = random.nextDouble() < lookupFailureRate.doubleValue();
     return new LookupOutcome(delayMs, failed);
   }
@@ -115,6 +170,13 @@ public class MockScenario {
       throw new IllegalArgumentException("rate must be between 0 and 1");
     }
     return rate;
+  }
+
+  private static int drawDelay(int min, int max, RandomGenerator random) {
+    long bound = (long) max - min + 1;
+    // 기존 지급의 seed별 결과를 보존하고 int 범위를 넘는 간격만 long으로 뽑는다.
+    return min
+        + (bound <= Integer.MAX_VALUE ? random.nextInt((int) bound) : (int) random.nextLong(bound));
   }
 
   public String getProviderId() {

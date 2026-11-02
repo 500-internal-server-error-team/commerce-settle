@@ -2,7 +2,9 @@ package com.commercesettle.financemock.infrastructure.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
@@ -38,6 +40,7 @@ class DevFixtureIntegrationTest {
   @Autowired DevFixtureLoader loader;
   @Autowired JdbcTemplate jdbc;
   @Autowired TestRestTemplate http;
+  @Autowired ObjectMapper mapper;
 
   @Test
   void createsActualPayoutRecordsAndPreservesBalanceAcrossResume() throws Exception {
@@ -117,6 +120,59 @@ class DevFixtureIntegrationTest {
     assertThat(jdbc.queryForList("SELECT * FROM finance_mock.mock_cash_entries ORDER BY id"))
         .isEqualTo(before);
     assertThat(count("mock_transactions")).isEqualTo(4);
+
+    var approval =
+        Map.of(
+            "businessKey",
+            UUID.randomUUID(),
+            "method",
+            "EASY_PAY",
+            "accountRef",
+            "fixture-easy-wallet",
+            "fundingAccountRef",
+            DevFixtureLoader.ACCOUNT,
+            "amount",
+            30_000,
+            "scenarioVersion",
+            "fixture-pg-normal-v1");
+    var approved =
+        http.postForEntity(
+            "/mock/providers/EASY_PAY/payments", new HttpEntity<>(approval, headers), String.class);
+    assertThat(approved.getStatusCode().value()).isEqualTo(202);
+    var original = mapper.readTree(approved.getBody());
+    assertThat(original.path("status").asText()).isEqualTo("SUCCEEDED");
+    assertThat(
+            mapper.readTree(
+                http.getForEntity(approved.getHeaders().getLocation(), String.class).getBody()))
+        .isEqualTo(original);
+    loader.load();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT balance FROM finance_mock.mock_accounts WHERE account_ref='fixture-easy-wallet'",
+                Long.class))
+        .isEqualTo(970_000);
+    assertThat(
+            mapper.readTree(
+                http.postForEntity(
+                        "/mock/providers/EASY_PAY/payments",
+                        new HttpEntity<>(approval, headers),
+                        String.class)
+                    .getBody()))
+        .isEqualTo(original);
+    var refund = Map.of("businessKey", UUID.randomUUID(), "amount", 30_000);
+    var refunded =
+        http.postForEntity(
+            "/mock/providers/EASY_PAY/payments/" + original.path("id").asText() + "/refunds",
+            new HttpEntity<>(refund, headers),
+            String.class);
+    assertThat(refunded.getStatusCode().value()).isEqualTo(202);
+    assertThat(mapper.readTree(refunded.getBody()).path("status").asText()).isEqualTo("SUCCEEDED");
+    loader.load();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT balance FROM finance_mock.mock_accounts WHERE account_ref='fixture-easy-wallet'",
+                Long.class))
+        .isEqualTo(1_000_000);
   }
 
   private int count(String table) {
