@@ -120,3 +120,96 @@ tests:
       - expr: "payment:quarantine_delivery_records:max"
         eval_time: "1m"
         exp_samples: [{"labels": "payment:quarantine_delivery_records:max{application=\"payment\",consumer=\"payment.v1\",kind=\"DLT\",status=\"RETRY\"}", "value": 1}]
+  - name: settlement-overdue-300-seconds
+    interval: 15s
+    input_series:
+      - {"series": "settlement_quarantine_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+15x12"}
+      - {"series": "settlement_quarantine_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "1+0x12"}
+      - {"series": "settlement_quarantine_delivery_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\",kind=\"DLT\"}", "values": "300+0x12"}
+      - {"series": "settlement_quarantine_captured_recent{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+0x12"}
+    alert_rule_test:
+      - eval_time: "1m"
+        alertname: "SettlementQuarantineDeliveryOverdue"
+        exp_alerts: []
+  - name: settlement-overdue-301-seconds
+    interval: 15s
+    input_series:
+      - {"series": "settlement_quarantine_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+15x12"}
+      - {"series": "settlement_quarantine_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "1+0x12"}
+      - {"series": "settlement_quarantine_delivery_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\",kind=\"DLT\"}", "values": "301+0x12"}
+      - {"series": "settlement_quarantine_captured_recent{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+0x12"}
+    alert_rule_test:
+      - eval_time: "1m"
+        alertname: "SettlementQuarantineDeliveryOverdue"
+        exp_alerts: [{"exp_labels": {"application": "settlement", "consumer": "settlement.v1", "severity": "warning", "kind": "DLT"}, "exp_annotations": {"summary": "격리 발행 작업이 도래 후 5분 넘게 대기합니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치"}}]
+  - name: settlement-overdue-901-seconds
+    interval: 15s
+    input_series:
+      - {"series": "settlement_quarantine_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+15x12"}
+      - {"series": "settlement_quarantine_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "1+0x12"}
+      - {"series": "settlement_quarantine_delivery_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\",kind=\"DLT\"}", "values": "901+0x12"}
+      - {"series": "settlement_quarantine_captured_recent{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+0x12"}
+    alert_rule_test:
+      - eval_time: "1m"
+        alertname: "SettlementQuarantineDeliveryOverdue"
+        exp_alerts: [{"exp_labels": {"application": "settlement", "consumer": "settlement.v1", "severity": "warning", "kind": "DLT"}, "exp_annotations": {"summary": "격리 발행 작업이 도래 후 5분 넘게 대기합니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치"}}, {"exp_labels": {"application": "settlement", "consumer": "settlement.v1", "severity": "critical", "kind": "DLT"}, "exp_annotations": {"summary": "격리 발행 작업이 도래 후 15분 넘게 대기합니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치"}}]
+  - name: settlement-initial-scrape-sees-recent-original
+    interval: 15s
+    input_series:
+      - {"series": "settlement_quarantine_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+15x12"}
+      - {"series": "settlement_quarantine_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "1+0x12"}
+      - {"series": "settlement_quarantine_delivery_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\",kind=\"DLT\"}", "values": "0+0x12"}
+      - {"series": "settlement_quarantine_captured_recent{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - eval_time: "15s"
+        alertname: "SettlementQuarantineCaptured"
+        exp_alerts: [{"exp_labels": {"application": "settlement", "consumer": "settlement.v1", "severity": "critical"}, "exp_annotations": {"summary": "최근 5분 안에 새 원문 격리가 발생했습니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치"}}]
+  - name: settlement-stale
+    interval: 15s
+    input_series:
+      - {"series": "settlement_quarantine_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+0x12"}
+      - {"series": "settlement_quarantine_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "1+0x12"}
+      - {"series": "settlement_quarantine_delivery_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\",kind=\"DLT\"}", "values": "999+0x12"}
+      - {"series": "settlement_quarantine_captured_recent{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+0x12"}
+    promql_expr_test:
+      - expr: "settlement:quarantine_delivery_overdue_seconds:max"
+        eval_time: "1m"
+        exp_samples: []
+    alert_rule_test:
+      - eval_time: "2m"
+        alertname: "SettlementQuarantineObservationFailed"
+        exp_alerts: [{"exp_labels": {"application": "settlement", "consumer": "settlement.v1", "severity": "critical"}, "exp_annotations": {"summary": "격리 DB 관측에 실패했거나 표본이 오래됐습니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치"}}]
+  - name: settlement-failed
+    interval: 15s
+    input_series:
+      - {"series": "settlement_quarantine_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+15x12"}
+      - {"series": "settlement_quarantine_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+0x12"}
+      - {"series": "settlement_quarantine_delivery_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\",kind=\"DLT\"}", "values": "999+0x12"}
+      - {"series": "settlement_quarantine_captured_recent{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+0x12"}
+    promql_expr_test:
+      - expr: "settlement:quarantine_delivery_overdue_seconds:max"
+        eval_time: "1m"
+        exp_samples: []
+    alert_rule_test:
+      - eval_time: "2m"
+        alertname: "SettlementQuarantineObservationFailed"
+        exp_alerts: [{"exp_labels": {"application": "settlement", "consumer": "settlement.v1", "severity": "critical"}, "exp_annotations": {"summary": "격리 DB 관측에 실패했거나 표본이 오래됐습니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치"}}]
+  - name: settlement-same-logical-queue-is-not-summed
+    interval: 15s
+    input_series:
+      - {"series": "settlement_quarantine_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+15x12"}
+      - {"series": "settlement_quarantine_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "1+0x12"}
+      - {"series": "settlement_quarantine_delivery_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\",kind=\"DLT\"}", "values": "0+0x12"}
+      - {"series": "settlement_quarantine_captured_recent{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+0x12"}
+      - {"series": "settlement_quarantine_delivery_records{job=\"commerce-settle\",instance=\"a\",application=\"settlement\",consumer=\"settlement.v1\",kind=\"DLT\",status=\"REVIEW_REQUIRED\"}", "values": "3+0x12"}
+      - {"series": "settlement_quarantine_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"b\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "0+15x12"}
+      - {"series": "settlement_quarantine_collection_success{job=\"commerce-settle\",instance=\"b\",application=\"settlement\",consumer=\"settlement.v1\"}", "values": "1+0x12"}
+      - {"series": "settlement_quarantine_delivery_records{job=\"commerce-settle\",instance=\"b\",application=\"settlement\",consumer=\"settlement.v1\",kind=\"DLT\",status=\"REVIEW_REQUIRED\"}", "values": "3+0x12"}
+    promql_expr_test:
+      - expr: "settlement:quarantine_delivery_records:max"
+        eval_time: "1m"
+        exp_samples: [{"labels": "settlement:quarantine_delivery_records:max{application=\"settlement\",consumer=\"settlement.v1\",kind=\"DLT\",status=\"REVIEW_REQUIRED\"}", "value": 3}]
+    alert_rule_test:
+      - eval_time: "1m"
+        alertname: "SettlementQuarantineReviewRequired"
+        exp_alerts: [{"exp_labels": {"application": "settlement", "consumer": "settlement.v1", "severity": "critical", "kind": "DLT", "status": "REVIEW_REQUIRED"}, "exp_annotations": {"summary": "격리 발행 작업의 재시도를 소진했습니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#dlt-관측과-조치"}}]
