@@ -158,9 +158,13 @@ public class SaleEvent extends AuditableEntity {
     return Optional.of(finish(inventory, PERIOD_END_REASON, movementId, now));
   }
 
-  /** 확정 거절 뒤 재시도의 수량 확보: R+1. 신규 참여는 저장소의 조건부 갱신으로 같은 조건을 검사하고, 재시도는 이벤트 행을 잠근 뒤 이 메서드로 확보한다. */
+  /**
+   * 확정 거절 뒤 재시도의 수량 확보: R+1. 신규 참여는 저장소의 조건부 갱신으로 같은 조건을 검사하고, 재시도는 이벤트 행을 잠근 뒤 이 메서드로 확보한다. 게이지와
+   * 같이 서버 시각으로 기간을 판단하므로 스케줄러가 SCHEDULED를 OPEN으로 바꾸기 전에도 시작 시각부터 받는다. 상태는 바꾸지 않아 version이 참여로 오르지
+   * 않는다.
+   */
   void reserveSlot(Instant now) {
-    if (status != SaleEventStatus.OPEN || now.isBefore(startsAt) || !now.isBefore(endsAt)) {
+    if (!status.isInProgress() || now.isBefore(startsAt) || !now.isBefore(endsAt)) {
       throw new EventAdmissionClosedException(EventAdmissionClosedException.Reason.NOT_OPEN);
     }
     if (soldCount + reservedCount >= quota) {

@@ -210,7 +210,7 @@ class EventReservationTest {
   }
 
   @Test
-  @DisplayName("신규 수량 확보는 열린 기간에 남은 수량이 있을 때만 R을 늘린다")
+  @DisplayName("수량 확보는 저장 상태가 SCHEDULED여도 시작 시각부터 받고, 기간 밖이거나 남은 수량이 없으면 거절한다")
   void reserveSlotChecksPeriodAndRemaining() {
     SaleEvent scheduled =
         SaleEvent.register(
@@ -235,6 +235,11 @@ class EventReservationTest {
         .isEqualTo(Reason.NO_REMAINING);
     assertThat(scheduled.getReservedCount()).isZero();
     assertThat(single.getReservedCount()).isEqualTo(1);
+
+    scheduled.reserveSlot(NOW.plusSeconds(60));
+
+    assertThat(scheduled.getStatus()).isEqualTo(SaleEventStatus.SCHEDULED);
+    assertThat(scheduled.getReservedCount()).isEqualTo(1);
   }
 
   private Result consume(UUID cycle) {

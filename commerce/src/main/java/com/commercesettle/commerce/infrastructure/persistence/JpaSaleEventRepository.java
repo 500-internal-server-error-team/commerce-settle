@@ -59,7 +59,7 @@ class JpaSaleEventRepository implements SaleEventRepository {
   @Override
   public boolean reserveSlot(UUID eventId, Instant now) {
     TransactionLimits.apply(jdbc);
-    return events.incrementReservedIfOpen(eventId, now.truncatedTo(ChronoUnit.MICROS)) == 1;
+    return events.incrementReservedIfAdmitting(eventId, now.truncatedTo(ChronoUnit.MICROS)) == 1;
   }
 
   @Override
