@@ -27,9 +27,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
@@ -40,6 +42,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.SpringApplication;
@@ -248,15 +252,17 @@ class RetentionIntegrationTest {
     assertThat(process(Target.ORDER, order.getId(), NOW)).isEqualTo("MASKED");
   }
 
-  @Test
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
   @DisplayName("일부 대상 이력 저장 실패는 해당 주소만 롤백하고 다음 실행에서 재개한다")
-  void retriesPartialFailureWithoutUndoingSuccess() {
-    var failed = closed(NOW.minus(Duration.ofDays(91)));
+  void retriesPartialFailureWithoutUndoingSuccess(boolean failureHistoryUnavailable) {
+    var failed = closed(NOW.minus(Duration.ofDays(92)));
     var good = closed(NOW.minus(Duration.ofDays(91)));
     jdbc.execute(
         "CREATE FUNCTION commerce.fail_retention() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.target_id='"
             + failed.getId()
-            + "' AND NEW.result='MASKED' THEN RAISE EXCEPTION 'test failure'; END IF; RETURN NEW; END $$");
+            + (failureHistoryUnavailable ? "'" : "' AND NEW.result='MASKED'")
+            + " THEN RAISE EXCEPTION 'test failure'; END IF; RETURN NEW; END $$");
     jdbc.execute(
         "CREATE TRIGGER fail_retention BEFORE INSERT ON commerce.retention_history FOR EACH ROW EXECUTE FUNCTION commerce.fail_retention()");
     try {
@@ -274,11 +280,11 @@ class RetentionIntegrationTest {
                   good.getId()))
           .isEqualTo(time(NOW));
       assertThat(
-              jdbc.queryForObject(
+              jdbc.queryForList(
                   "SELECT result FROM commerce.retention_checks WHERE target_id=?",
                   String.class,
                   failed.getId()))
-          .isEqualTo("FAILED");
+          .isEqualTo(failureHistoryUnavailable ? List.of() : List.of("FAILED"));
     } finally {
       jdbc.execute("DROP TRIGGER fail_retention ON commerce.retention_history");
       jdbc.execute("DROP FUNCTION commerce.fail_retention()");
@@ -562,6 +568,53 @@ class RetentionIntegrationTest {
             jdbc.queryForObject(
                 "SELECT count(*) FROM commerce.retention_history WHERE result='HELD'", Long.class))
         .isEqualTo(1);
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {1, 2})
+  @DisplayName("연결 주문이 잠긴 발송을 반복 선택하지 않고 뒤의 발송을 정리하며 다음 실행에서 회수한다")
+  void skipsBusyDeliveriesAndRecoversAfterOrderUnlock(int batchSize) throws Exception {
+    var busy = new ArrayList<Order>();
+    var busyDeliveries = new ArrayList<UUID>();
+    for (int index = 0; index < batchSize; index++) {
+      var order = closed(NOW.minus(Duration.ofDays(91)));
+      busy.add(order);
+      UUID id = delivery("SENT", order);
+      busyDeliveries.add(id);
+      jdbc.update(
+          "UPDATE commerce.notification_deliveries SET created_at=? WHERE id=?",
+          time(NOW.minus(Duration.ofDays(93)).plusSeconds(index)),
+          id);
+    }
+    UUID ready = delivery("SENT", closed(NOW.minus(Duration.ofDays(91))));
+    var service = new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager);
+
+    try (var holder = jdbc.getDataSource().getConnection()) {
+      holder.setAutoCommit(false);
+      for (Order order : busy) {
+        try (var statement =
+            holder.prepareStatement("SELECT id FROM commerce.orders WHERE id=? FOR UPDATE")) {
+          statement.setObject(1, order.getId());
+          statement.executeQuery().close();
+        }
+      }
+      service.run(batchSize, 3);
+
+      assertThat(notifications.find(ready)).isEmpty();
+      for (UUID id : busyDeliveries) assertThat(notifications.find(id)).isPresent();
+      assertThat(count("notification_retired_keys")).isEqualTo(1);
+      holder.rollback();
+    }
+
+    new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager).run(batchSize, 3);
+
+    assertThat(count("notification_deliveries")).isZero();
+    assertThat(count("notification_retired_keys")).isEqualTo(batchSize + 1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM commerce.retention_history WHERE result='PURGED'",
+                Long.class))
+        .isEqualTo(batchSize + 1);
   }
 
   @Test
@@ -887,7 +940,8 @@ class RetentionIntegrationTest {
   }
 
   private List<UUID> due(Instant now, int limit) {
-    return new TransactionTemplate(manager).execute(status -> store.due(Target.ORDER, now, limit));
+    return new TransactionTemplate(manager)
+        .execute(status -> store.due(Target.ORDER, now, limit, Set.of()));
   }
 
   private String process(Target target, UUID id, Instant now) {

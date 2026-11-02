@@ -7,8 +7,10 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.support.SqlArrayValue;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,10 +25,11 @@ public class JdbcRetentionStore implements RetentionStore {
 
   @Override
   @Transactional(propagation = Propagation.MANDATORY)
-  public List<UUID> due(Target target, Instant now, int limit) {
+  public List<UUID> due(Target target, Instant now, int limit, Set<UUID> skipped) {
     if (limit < 1 || limit > 1000)
       throw new IllegalArgumentException("Invalid retention batch size");
     TransactionLimits.apply(jdbc);
+    var excluded = new SqlArrayValue("uuid", skipped.toArray());
     if (target == Target.ORDER) {
       return jdbc.query(
           """
@@ -35,11 +38,13 @@ public class JdbcRetentionStore implements RetentionStore {
           LEFT JOIN commerce.retention_checks c ON c.target_kind='ORDER' AND c.target_id=o.id
           WHERE o.closed_at<=? AND a.masked_at IS NULL
             AND (c.next_run_at IS NULL OR c.next_run_at<=?)
+            AND NOT (o.id=ANY(?))
           ORDER BY coalesce(c.next_run_at,o.closed_at),o.id FOR UPDATE OF o SKIP LOCKED LIMIT ?
           """,
           (row, index) -> row.getObject(1, UUID.class),
           time(now.minus(PERIOD)),
           time(now),
+          excluded,
           limit);
     }
     return jdbc.query(
@@ -50,11 +55,13 @@ public class JdbcRetentionStore implements RetentionStore {
           AND (c.next_run_at IS NULL OR c.next_run_at<=?)
           AND EXISTS (SELECT 1 FROM commerce.notification_items i JOIN commerce.orders o
             ON o.id=CAST(i.payload->>'orderId' AS uuid) WHERE i.delivery_id=d.id AND o.closed_at<=?)
+          AND NOT (d.id=ANY(?))
         ORDER BY coalesce(c.next_run_at,d.created_at),d.id FOR UPDATE OF d SKIP LOCKED LIMIT ?
         """,
         (row, index) -> row.getObject(1, UUID.class),
         time(now),
         time(now.minus(PERIOD)),
+        excluded,
         limit);
   }
 
