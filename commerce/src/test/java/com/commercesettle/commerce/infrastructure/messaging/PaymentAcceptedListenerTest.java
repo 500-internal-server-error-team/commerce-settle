@@ -24,7 +24,11 @@ class PaymentAcceptedListenerTest {
   private final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
   private final PaymentAcceptedService service = mock(PaymentAcceptedService.class);
   private final Acknowledgment ack = mock(Acknowledgment.class);
-  private final PaymentAcceptedListener listener = new PaymentAcceptedListener(mapper, service);
+  private final PaymentAcceptedListener listener =
+      new PaymentAcceptedListener(
+          mapper,
+          service,
+          mock(com.commercesettle.commerce.application.service.OrderResultService.class));
   private final UUID payment = UUID.randomUUID();
 
   @Test
@@ -84,7 +88,10 @@ class PaymentAcceptedListenerTest {
 
     assertThatThrownBy(() -> listener.receive(record, ack))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessage("Invalid PaymentAccepted record");
+        .hasMessage(
+            kind.equals("eventType")
+                ? "Invalid order result record"
+                : "Invalid PaymentAccepted record");
     verifyNoInteractions(service, ack);
   }
 

@@ -49,11 +49,33 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
 
   @Override
   public void saveWaiting(EventEnvelope<PaymentAcceptedPayload> event, Source source, Instant now) {
+    save(event, source, now);
+  }
+
+  @Override
+  public void saveResult(
+      EventEnvelope<com.fasterxml.jackson.databind.JsonNode> event, Source source, Instant now) {
+    save(event, source, now);
+  }
+
+  private void save(EventEnvelope<?> event, Source source, Instant now) {
     byte[] body = source.body();
     try {
-      EventEnvelope<PaymentAcceptedPayload> decoded =
+      EventEnvelope<com.fasterxml.jackson.databind.JsonNode> decoded =
           mapper.readValue(body, new TypeReference<>() {});
-      if (!event.equals(decoded)) {
+      if (!event.eventId().equals(decoded.eventId())
+          || !event.eventType().equals(decoded.eventType())
+          || event.eventVersion() != decoded.eventVersion()
+          || !event.occurredAt().isEqual(decoded.occurredAt())
+          || !event.aggregateId().equals(decoded.aggregateId())
+          || event.aggregateVersion() != decoded.aggregateVersion()
+          || !mapper
+              .valueToTree(event.payload())
+              .equals(
+                  event.payload() instanceof PaymentAcceptedPayload
+                      ? mapper.valueToTree(
+                          mapper.treeToValue(decoded.payload(), PaymentAcceptedPayload.class))
+                      : decoded.payload())) {
         throw new IllegalArgumentException("Inbox event does not match its source body");
       }
     } catch (IOException exception) {
@@ -114,28 +136,9 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
 
   @Override
   public Optional<Waiting> claim(UUID eventId, Instant now) {
-    var params =
-        new MapSqlParameterSource("consumer", consumer)
-            .addValue("now", toTimestamp(now))
-            .addValue("eventId", eventId, Types.OTHER);
-    TransactionLimits.apply(jdbc.getJdbcOperations());
-    List<Original> rows =
-        jdbc.query(
-            """
-            SELECT id, raw_body FROM commerce.inbox
-            WHERE consumer = :consumer AND status = 'WAITING' AND next_run_at <= :now
-              AND event_type = 'PaymentAccepted' AND event_version = 1
-              AND (CAST(:eventId AS uuid) IS NULL OR event_id = :eventId)
-            ORDER BY next_run_at, id
-            LIMIT 1
-            FOR UPDATE SKIP LOCKED
-            """,
-            params,
-            (rs, row) -> new Original(rs.getObject("id", UUID.class), rs.getBytes("raw_body")));
-    if (rows.isEmpty()) {
-      return Optional.empty();
-    }
-    Original row = rows.get(0);
+    var found = claimBody(eventId, now, true);
+    if (found.isEmpty()) return Optional.empty();
+    Original row = found.get();
     try {
       EventEnvelope<PaymentAcceptedPayload> event =
           mapper.readValue(row.body(), new TypeReference<>() {});
@@ -144,6 +147,42 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
       // 저장 시 검증한 원문이므로 읽기 실패는 데이터 손상이다. 원문을 예외에 싣지 않는다.
       throw new IllegalStateException("Stored inbox body cannot be read: " + row.id());
     }
+  }
+
+  @Override
+  public Optional<WaitingResult> claimResult(UUID eventId, Instant now) {
+    var found = claimBody(eventId, now, false);
+    if (found.isEmpty()) return Optional.empty();
+    try {
+      EventEnvelope<com.fasterxml.jackson.databind.JsonNode> event =
+          mapper.readValue(found.get().body(), new TypeReference<>() {});
+      return Optional.of(new WaitingResult(found.get().id(), event));
+    } catch (IOException e) {
+      throw new IllegalStateException("Stored result cannot be read");
+    }
+  }
+
+  private Optional<Original> claimBody(UUID eventId, Instant now, boolean accepted) {
+    var params =
+        new MapSqlParameterSource("consumer", consumer)
+            .addValue("now", toTimestamp(now))
+            .addValue("accepted", accepted)
+            .addValue("eventId", eventId, Types.OTHER);
+    TransactionLimits.apply(jdbc.getJdbcOperations());
+    List<Original> rows =
+        jdbc.query(
+            """
+            SELECT id, raw_body FROM commerce.inbox
+            WHERE consumer = :consumer AND status = 'WAITING' AND next_run_at <= :now
+              AND ((:accepted AND event_type = 'PaymentAccepted') OR (NOT :accepted AND event_type IN ('PaymentConfirmed','PaymentDeclined','PaymentCancelled','PaymentCancellationRejected','RefundAccepted','RefundCompleted','RefundFailed'))) AND event_version = 1
+              AND (CAST(:eventId AS uuid) IS NULL OR event_id = :eventId)
+            ORDER BY next_run_at, id
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+            """,
+            params,
+            (rs, row) -> new Original(rs.getObject("id", UUID.class), rs.getBytes("raw_body")));
+    return rows.stream().findFirst();
   }
 
   @Override

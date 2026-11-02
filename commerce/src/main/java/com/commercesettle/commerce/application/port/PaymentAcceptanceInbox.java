@@ -21,6 +21,13 @@ public interface PaymentAcceptanceInbox {
   /** WAITING인 현재 행에만 시도 횟수·1~60초 지수 대기 또는 10회 소진 결과를 기록한다. */
   void retry(UUID inboxId, String errorCode, Instant now);
 
+  void saveResult(
+      EventEnvelope<com.fasterxml.jackson.databind.JsonNode> event, Source source, Instant now);
+
+  Optional<WaitingResult> claimResult(UUID eventId, Instant now);
+
+  record WaitingResult(UUID id, EventEnvelope<com.fasterxml.jackson.databind.JsonNode> event) {}
+
   record Waiting(UUID id, EventEnvelope<PaymentAcceptedPayload> event) {}
 
   record Source(String topic, int partition, long offset, byte[] body) {

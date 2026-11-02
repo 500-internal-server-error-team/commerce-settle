@@ -76,6 +76,32 @@ CREATE INDEX ix_orders_refund_deadline ON commerce.orders (status, refund_deadli
 CREATE INDEX ix_orders_payment_wait ON commerce.orders (status, payment_wait_until, id);
 CREATE UNIQUE INDEX uq_orders_payment ON commerce.orders (payment_id) WHERE payment_id IS NOT NULL;
 
+CREATE TABLE commerce.order_refund_requests (
+    id uuid PRIMARY KEY,
+    order_id uuid NOT NULL,
+    buyer_id uuid NOT NULL,
+    seller_id uuid NOT NULL,
+    kind varchar(16) NOT NULL CHECK (kind IN ('CANCEL','RETURN')),
+    status varchar(32) NOT NULL CHECK (status IN ('PENDING_SELLER','APPROVED','REFUNDING','COMPLETED','REJECTED','WITHDRAWN','FAILED_REVIEW','CLOSED')),
+    accepted_at timestamptz NOT NULL,
+    reason varchar(200) NOT NULL CHECK (length(trim(reason)) > 0),
+    refund_id uuid,
+    decision_at timestamptz,
+    received_at timestamptz,
+    closed_reason varchar(200),
+    closure_evidence_ref varchar(200),
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
+    CHECK (received_at IS NULL OR kind = 'RETURN'),
+    CHECK (status <> 'CLOSED' OR (closed_reason IS NOT NULL AND closure_evidence_ref IS NOT NULL))
+);
+CREATE UNIQUE INDEX uq_order_refund_active ON commerce.order_refund_requests(order_id)
+    WHERE status IN ('PENDING_SELLER','APPROVED','REFUNDING','COMPLETED','FAILED_REVIEW');
+CREATE UNIQUE INDEX uq_order_refund_financial ON commerce.order_refund_requests(refund_id) WHERE refund_id IS NOT NULL;
+CREATE INDEX ix_order_refund_order ON commerce.order_refund_requests(order_id,created_at,id);
+CREATE INDEX ix_order_refund_seller ON commerce.order_refund_requests(seller_id,status,created_at,id);
+
 CREATE TABLE commerce.order_addresses (
     id uuid PRIMARY KEY,
     order_id uuid NOT NULL UNIQUE,

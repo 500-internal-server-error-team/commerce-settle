@@ -83,6 +83,12 @@ app:
   kafka:
     payment-accepted:
       enabled: false
+  order-workflow:
+    enabled: ${APP_ORDER_WORKFLOW_ENABLED:false}
+    interval-ms: 60000
+  order-result-processor:
+    enabled: ${APP_ORDER_RESULT_PROCESSOR_ENABLED:false}
+    interval-ms: 1000
   payment-accepted-processor:
     enabled: false
     interval-ms: 1000

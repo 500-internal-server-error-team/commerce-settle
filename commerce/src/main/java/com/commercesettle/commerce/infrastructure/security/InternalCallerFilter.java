@@ -85,6 +85,7 @@ public class InternalCallerFilter extends OncePerRequestFilter {
       reject(request, response, sender, HttpStatus.FORBIDDEN);
       return;
     }
+    request.setAttribute("verifiedInternalCaller", sender);
     chain.doFilter(request, response);
   }
 

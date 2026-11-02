@@ -31,7 +31,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-@Tag(name = "Orders", description = "일반 주문을 생성하고 본인 주문을 조회한다. 결제 결과 반영은 구현 예정이다.")
+@Tag(name = "Orders", description = "주문을 생성하고 본인 주문을 조회한다. 금융 결과는 Payment 이벤트로 반영한다.")
 @ApiResponses({
   @ApiResponse(
       responseCode = "400",

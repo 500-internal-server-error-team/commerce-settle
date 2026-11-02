@@ -8,6 +8,7 @@ import com.commercesettle.commerce.application.exception.AuthenticationFailedExc
 import com.commercesettle.commerce.application.exception.OrderRequestException;
 import com.commercesettle.commerce.application.exception.OrderRequestException.Kind;
 import com.commercesettle.commerce.application.port.AddressCipher;
+import com.commercesettle.commerce.application.port.OrderBenefits;
 import com.commercesettle.commerce.application.port.OrderEventOutbox;
 import com.commercesettle.commerce.domain.exception.BuyerAddressNotFoundException;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
@@ -16,14 +17,15 @@ import com.commercesettle.commerce.domain.model.Account;
 import com.commercesettle.commerce.domain.model.ActorKind;
 import com.commercesettle.commerce.domain.model.Order;
 import com.commercesettle.commerce.domain.model.OrderAddress;
+import com.commercesettle.commerce.domain.model.OrderAmounts;
 import com.commercesettle.commerce.domain.repository.AccountRepository;
 import com.commercesettle.commerce.domain.repository.BuyerAddressRepository;
 import com.commercesettle.commerce.domain.repository.OrderRepository;
 import com.commercesettle.commerce.domain.repository.PageResult;
+import com.commercesettle.commerce.domain.repository.ProductRepository;
 import java.time.Clock;
 import java.time.ZoneId;
 import java.util.Arrays;
-import java.util.List;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -42,6 +44,8 @@ public class OrderService {
   private final OrderEventOutbox outbox;
   private final Clock clock;
   private final long seed;
+  private final OrderBenefits benefits;
+  private final ProductRepository products;
 
   public OrderService(
       OrderRepository orders,
@@ -52,6 +56,8 @@ public class OrderService {
       IdempotentRequests idempotency,
       OrderEventOutbox outbox,
       Clock clock,
+      OrderBenefits benefits,
+      ProductRepository products,
       @Value("${app.orders.simulation-seed:67}") long seed) {
     this.orders = orders;
     this.accounts = accounts;
@@ -62,6 +68,8 @@ public class OrderService {
     this.outbox = outbox;
     this.clock = clock;
     this.seed = seed;
+    this.benefits = benefits;
+    this.products = products;
   }
 
   @Transactional
@@ -104,7 +112,12 @@ public class OrderService {
             .filter(a -> !a.isDeleted() && a.isOwnedBy(buyerId))
             .orElseThrow(() -> new BuyerAddressNotFoundException(command.addressId()));
     // 상품은 이 트랜잭션에서 처음 읽는다. 상품 변경도 재고 행을 먼저 잠근다.
-    var product = inventory.lockInventoryAndReadProduct(command.productId());
+    var product =
+        command.eventId() == null
+            ? inventory.lockInventoryAndReadProduct(command.productId())
+            : products
+                .findById(command.productId())
+                .orElseThrow(() -> new ProductNotFoundException(command.productId()));
     if (!product.isPubliclyVisible()) {
       throw new ProductNotFoundException(command.productId());
     }
@@ -112,7 +125,37 @@ public class OrderService {
       throw new VersionConflictException(
           "product", command.expectedProductVersion(), product.getVersion());
     }
-    long total = product.getUnitPrice() * command.quantity();
+    var offer =
+        benefits.quote(
+            buyerId,
+            product.getId(),
+            product.getSellerId(),
+            product.getUnitPrice(),
+            command.quantity(),
+            command.buyerCouponId(),
+            command.eventId(),
+            command.externalMethod() == null
+                ? null
+                : Order.ExternalMethod.valueOf(command.externalMethod().name()),
+            clock.instant());
+    if (!java.util.Objects.equals(command.expectedEventVersion(), offer.eventVersion())) {
+      throw new VersionConflictException(
+          "event",
+          command.expectedEventVersion() == null ? -1 : command.expectedEventVersion(),
+          offer.eventVersion() == null ? -1 : offer.eventVersion());
+    }
+    long gross = Math.multiplyExact(offer.unitPrice(), command.quantity());
+    if (gross > 10_000_000) throw invalid("quantity");
+    long payable = gross - offer.sellerCouponAmount() - offer.platformCouponAmount();
+    if (command.mileageAmount() < 0 || command.mileageAmount() > payable)
+      throw invalid("mileageAmount");
+    var calculated =
+        new OrderAmounts(
+            gross,
+            offer.sellerCouponAmount(),
+            offer.platformCouponAmount(),
+            command.mileageAmount());
+    long total = calculated.totalAmount();
     if (total > 10_000_000) {
       throw invalid("quantity");
     }
@@ -134,20 +177,20 @@ public class OrderService {
     }
     var now = clock.instant();
     Order order =
-        Order.pendingRegular(
+        Order.pendingOffer(
             orderId,
             buyerId,
             product,
             command.quantity(),
-            command.mileageAmount(),
+            command.eventId(),
+            command.buyerCouponId(),
+            offer.unitPrice(),
+            calculated,
             command.externalMethod() == null
                 ? null
                 : Order.ExternalMethod.valueOf(command.externalMethod().name()),
             account,
             seed,
-            "weekdays-v1",
-            List.of(),
-            "order-regular-v1",
             now);
     UUID snapshotId = UUID.randomUUID();
     OrderAddress snapshot =
@@ -157,12 +200,14 @@ public class OrderService {
             cipher.seal(snapshotId, cipher.open(address.getId(), address.getSealed())),
             now);
     Order saved = orders.save(order, snapshot);
-    inventory.reserve(
-        orderId,
-        product.getId(),
-        command.quantity(),
-        order.getPaymentCycleId(),
-        order.getPaymentWaitUntil());
+    benefits.reserve(saved, command.expectedEventVersion(), now);
+    if (saved.getEventId() == null)
+      inventory.reserve(
+          orderId,
+          product.getId(),
+          command.quantity(),
+          order.getPaymentCycleId(),
+          order.getPaymentWaitUntil());
     var amounts = saved.getAmounts();
     var payload =
         new OrderPaymentRequestedPayload(
@@ -234,15 +279,9 @@ public class OrderService {
   }
 
   private static void validateRegular(RegularOrderCommand c) {
-    if (c.eventId() != null) {
-      throw invalid("eventId");
-    }
-    if (c.buyerCouponId() != null) {
-      throw invalid("buyerCouponId");
-    }
-    if (c.expectedEventVersion() != null) {
-      throw invalid("expectedEventVersion");
-    }
+    if ((c.eventId() == null) != (c.expectedEventVersion() == null)
+        || c.eventId() != null && (c.quantity() != 1 || c.expectedEventVersion() < 0)
+        || c.buyerCouponId() != null && c.mileageAmount() != 0) throw invalid("eventId");
     if (c.productId() == null) {
       throw invalid("productId");
     }

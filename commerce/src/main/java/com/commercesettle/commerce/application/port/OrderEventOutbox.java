@@ -7,4 +7,6 @@ import java.util.UUID;
 public interface OrderEventOutbox {
   /** 주문 상태 저장과 같은 트랜잭션에서 호출한다. 반환값은 저장한 eventId다. */
   UUID appendPaymentRequested(EventEnvelope<OrderPaymentRequestedPayload> event);
+
+  UUID append(EventEnvelope<?> event, UUID messageKey);
 }

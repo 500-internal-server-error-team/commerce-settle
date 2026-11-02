@@ -4344,8 +4344,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약. 쿠폰과 마일리지 병용·지원하지 않는 수단을 거절하고 할인 부담별 사본과 예산 예약을 보존한다.",
+        "x-implemented": true,
+        "description": "예약 없는 서버 견적. 주문 생성 시 가격·버전·금액·소유 조건을 재검증한다. 쿠폰·이벤트는 OrderBenefits 소유 어댑터가 필요하며 기본 설정에서는 503이다.",
         "security": [
           {
             "accountSession": []
@@ -4456,7 +4456,7 @@
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
         "x-implemented": true,
-        "description": "현재는 일반 주문만 구현돼 eventId·buyerCouponId·expectedEventVersion은 null만 허용한다. 활성 구매자의 본인 주소를 새로 암호화하고 주문·주소 사본·재고 예약·영구 멱등 기록·OrderPaymentRequested Outbox를 원자 저장한다. 동일 키·본문은 현재 본인 주문을 반환하며 상품·주소를 다시 예약하지 않는다. 결제 결과 반영·쿠폰/이벤트·신규 접수 제한 gate는 구현 전이다. 이후 계약: 원자주문/주소/재고/쿠폰/이벤트예약·Outbox. 이벤트참여를별도HTTP명령으로중복생성하지않음. 결제는비동기. 쿠폰과 마일리지 병용·지원하지 않는 수단을 거절하고 할인 부담별 사본과 예산 예약을 보존한다. 신규 접수는 Kafka·Worker 적체/저장 공간/관측 유효성 gate를 검사하며 용량 부족이면 예약·새 업무 저장 전 503 COMMON_CAPACITY_EXCEEDED와 Retry-After: 30을 반환한다. 기존 동일 멱등키·본문 결과와 본문 충돌409 판정이 먼저이며 거절을 완료된 멱등 결과로 캐시하지 않는다. 같은 키·본문으로 재시도한다. 취소·환불·기존 지급·원업무 복구·조회에는 이 신규 접수 gate를 적용하지 않는다.",
+        "description": "주문·주소 사본·재고/혜택 예약·영구 멱등 기록·OrderPaymentRequested Outbox를 원자 저장한다. 기본 어댑터는 쿠폰·이벤트가 없는 일반 주문을 지원하며, 쿠폰·이벤트 입력은 소유 어댑터 연결 전 503이다. 결제 결과는 영속 Inbox를 통해 반영한다. 마일리지 예약·외부 승인은 Payment 책임이다. 신규 접수 용량 gate는 구현 전이다.",
         "security": [
           {
             "accountSession": []
@@ -4870,8 +4870,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "같은주문사본·결제구성유지. 미확정거래재시도금지, 모든예약재확보실패시409. 신규 접수는 Kafka·Worker 적체/저장 공간/관측 유효성 gate를 검사하며 용량 부족이면 예약·새 업무 저장 전 503 COMMON_CAPACITY_EXCEEDED와 Retry-After: 30을 반환한다. 기존 동일 멱등키·본문 결과와 본문 충돌409 판정이 먼저이며 거절을 완료된 멱등 결과로 캐시하지 않는다. 같은 키·본문으로 재시도한다. 취소·환불·기존 지급·원업무 복구·조회에는 이 신규 접수 gate를 적용하지 않는다.",
+        "x-implemented": true,
+        "description": "확정 거절 뒤 원래 대기 기한 전 모든 주문 측 예약을 새 회차로 재확보하고 같은 주문 사본·결제 구성으로 OrderPaymentRequested를 저장한다. 미확정·취소 대기 재시도는 409다. Payment의 회차 재접수·마일리지 재예약은 실제 연결 검증이 필요하며 신규 접수 용량 gate는 구현 전이다.",
         "security": [
           {
             "accountSession": []
@@ -5021,7 +5021,7 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
+        "x-implemented": true,
         "description": "Payment의후속승인차단확정후에만예약해제. 이미확정된결제는환불요청사용.",
         "security": [
           {
@@ -5162,7 +5162,7 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
+        "x-implemented": true,
         "description": "결제 완료 주문의 배송 전 취소/반품 또는 배송완료+168시간 이하의 요청만 접수한다. 미발송은 자동 승인, 발송 후는 판매자 승인이 필요하다. 지연된 모의 배송 반영과 기한 검사를 주문 잠금 안에서 처리한다.",
         "security": [
           {
@@ -5308,8 +5308,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "주문 상태·소유권·버전을 검증하는 API. 금융 완료는 수신한 Payment 결과로만 반영한다.",
         "security": [
           {
             "accountSession": []
@@ -5419,7 +5419,7 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
+        "x-implemented": true,
         "description": "PENDING_SELLER만허용. 외부환불/마일리지복원이시작된요청철회금지.",
         "security": [
           {
@@ -5551,8 +5551,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "주문 상태·소유권·버전을 검증하는 API. 금융 완료는 수신한 Payment 결과로만 반영한다.",
         "security": [
           {
             "accountSession": []
@@ -5672,8 +5672,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "주문 상태·소유권·버전을 검증하는 API. 금융 완료는 수신한 Payment 결과로만 반영한다.",
         "security": [
           {
             "accountSession": []
@@ -5783,7 +5783,7 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
-        "x-implemented": false,
+        "x-implemented": true,
         "description": "유효 결제·미발송·진행 중 취소/반품/환불 없음일 때 발송. 서버가 최초 shippedAt·deliveryDueAt을 고정하며 재요청으로 변경하지 않는다. 실제 택배 증명은 아니다.",
         "security": [
           {
@@ -5915,8 +5915,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "주문 상태·소유권·버전을 검증하는 API. 금융 완료는 수신한 Payment 결과로만 반영한다.",
         "security": [
           {
             "accountSession": []
@@ -6036,8 +6036,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "주문 상태·소유권·버전을 검증하는 API. 금융 완료는 수신한 Payment 결과로만 반영한다.",
         "security": [
           {
             "accountSession": []
@@ -6177,8 +6177,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
-        "x-implemented": false,
-        "description": "승인된원반품의입고한번만반영. 금융환불성공만으로재입고하지않음.",
+        "x-implemented": true,
+        "description": "판매자가 승인한 RETURN 상품이 실제 도착하고 재판매 가능 검수를 마쳤음을 명시적으로 확정한다. 금융 환불 결과와 무관하게 재고를 한 번 복원한다. 자동 반품 도착·미입고 기한·재판매 불가 판정 API는 제공하지 않는다.",
         "security": [
           {
             "accountSession": []
@@ -7487,8 +7487,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "SERVICE:payment",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "주문 상태·소유권·버전을 검증하는 API. 금융 완료는 수신한 Payment 결과로만 반영한다.",
         "security": [
           {
             "serviceCredential": []
@@ -7820,8 +7820,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "검증한 OPERATOR 자격만 허용한다. 외부 환불 확정 거절·마일리지 미복원·정산 예약 해제·고객 확인 근거를 트랜잭션 밖에서 조회하고, 주문 잠금 아래 요청 버전·금융 ID·입고 여부를 재검사한다. RefundClosureEvidence 어댑터 미연결은 503이며 미확정·불충분 근거는 409다.",
         "security": [
           {
             "serviceCredential": []

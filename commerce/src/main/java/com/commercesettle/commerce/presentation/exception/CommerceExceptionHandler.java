@@ -70,6 +70,24 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
     this.tracer = tracer;
   }
 
+  @ExceptionHandler(com.commercesettle.commerce.domain.exception.OrderStateException.class)
+  ResponseEntity<Object> orderState(
+      com.commercesettle.commerce.domain.exception.OrderStateException e, WebRequest request) {
+    return respond(
+        switch (e.reason()) {
+          case STATE_CONFLICT -> ErrorCode.PAYMENT_STATE_CONFLICT;
+          case REFUND_WINDOW_CLOSED -> ErrorCode.ORDER_REFUND_WINDOW_CLOSED;
+          case REFUND_IN_PROGRESS -> ErrorCode.ORDER_REFUND_IN_PROGRESS;
+        },
+        request);
+  }
+
+  @ExceptionHandler(
+      com.commercesettle.commerce.application.exception.OrderDependencyUnavailableException.class)
+  ResponseEntity<Object> orderDependency(RuntimeException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE, request);
+  }
+
   @ExceptionHandler(OrderRequestException.class)
   ResponseEntity<Object> orderFailure(OrderRequestException e, WebRequest request) {
     return switch (e.kind()) {
