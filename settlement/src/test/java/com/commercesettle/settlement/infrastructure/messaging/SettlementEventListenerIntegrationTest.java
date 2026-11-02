@@ -28,6 +28,7 @@ import org.junit.jupiter.api.TestMethodOrder;
 import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -100,6 +101,8 @@ class SettlementEventListenerIntegrationTest {
 
     await()
         .atMost(Duration.ofSeconds(30))
+        // 항목이 생기기 전에는 행이 없어 예외가 난다.
+        .ignoreException(EmptyResultDataAccessException.class)
         .untilAsserted(
             () ->
                 assertThat(
