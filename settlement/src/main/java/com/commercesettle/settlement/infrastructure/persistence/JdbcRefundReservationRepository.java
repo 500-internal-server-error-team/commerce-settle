@@ -34,13 +34,16 @@ class JdbcRefundReservationRepository implements RefundReservationRepository {
   public Optional<ItemState> findItem(UUID paymentId) {
     return jdbc
         .query(
-            "SELECT id, status, net_amount, payout_id, version FROM settlement.settlement_items"
+            "SELECT id, status, external_amount, mileage_amount, net_amount, payout_id, version"
+                + " FROM settlement.settlement_items"
                 + " WHERE payment_id = :paymentId",
             new MapSqlParameterSource("paymentId", paymentId),
             (rs, row) ->
                 new ItemState(
                     rs.getObject("id", UUID.class),
                     SettlementItemStatus.valueOf(rs.getString("status")),
+                    rs.getLong("external_amount"),
+                    rs.getLong("mileage_amount"),
                     rs.getLong("net_amount"),
                     rs.getObject("payout_id", UUID.class),
                     rs.getLong("version")))
@@ -138,6 +141,32 @@ class JdbcRefundReservationRepository implements RefundReservationRepository {
             item.previous(),
             "ACTIVE",
             item.version()));
+  }
+
+  @Override
+  public Optional<Long> consume(UUID reservationId, Instant now) {
+    MapSqlParameterSource params =
+        new MapSqlParameterSource("reservationId", reservationId).addValue("now", time(now));
+    int consumed =
+        jdbc.update(
+            "UPDATE settlement.settlement_reservations"
+                + " SET status = 'CONSUMED', updated_at = :now, version = version + 1"
+                + " WHERE id = :reservationId AND kind = 'REFUND' AND status = 'ACTIVE'",
+            params);
+    if (consumed == 0) {
+      return Optional.empty();
+    }
+    return jdbc
+        .queryForList(
+            "UPDATE settlement.settlement_items"
+                + " SET status = 'REFUNDED', updated_at = :now, version = version + 1"
+                + " WHERE status = 'REFUND_RESERVED' AND id ="
+                + " (SELECT item_id FROM settlement.settlement_reservations WHERE id = :reservationId)"
+                + " RETURNING version",
+            params,
+            Long.class)
+        .stream()
+        .findFirst();
   }
 
   private static Reservation reservation(ResultSet rs, int row) throws SQLException {

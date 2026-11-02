@@ -1,20 +1,26 @@
 package com.commercesettle.settlement.application.service;
 
 import com.commercesettle.settlement.application.event.EventEnvelope;
+import com.commercesettle.settlement.application.event.RefundFinancialCompletedPayload;
+import com.commercesettle.settlement.application.event.RefundLedgerReversedPayload;
 import com.commercesettle.settlement.application.event.RefundReservationRequestedPayload;
 import com.commercesettle.settlement.application.event.RefundReservationResultPayload;
 import com.commercesettle.settlement.application.event.RefundReservationResultPayload.Result;
 import com.commercesettle.settlement.application.port.InboxStore;
 import com.commercesettle.settlement.application.port.InboxStore.Source;
 import com.commercesettle.settlement.application.port.SettlementEventOutbox;
+import com.commercesettle.settlement.domain.model.SettlementEntry;
 import com.commercesettle.settlement.domain.repository.RefundReservationRepository;
 import com.commercesettle.settlement.domain.repository.RefundReservationRepository.ItemState;
 import com.commercesettle.settlement.domain.repository.RefundReservationRepository.Reservation;
+import com.commercesettle.settlement.domain.repository.SettlementEntryRepository;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -39,6 +45,7 @@ public class RefundEventService {
 
   private final InboxStore inbox;
   private final RefundReservationRepository reservations;
+  private final SettlementEntryRepository entries;
   private final SettlementEventOutbox outbox;
   private final Clock clock;
   private final Duration waitingRecheckDelay;
@@ -46,11 +53,13 @@ public class RefundEventService {
   RefundEventService(
       InboxStore inbox,
       RefundReservationRepository reservations,
+      SettlementEntryRepository entries,
       SettlementEventOutbox outbox,
       Clock clock,
       @Value("${settlement.inbox-processor.interval-ms}") long waitingRecheckMillis) {
     this.inbox = inbox;
     this.reservations = reservations;
+    this.entries = entries;
     this.outbox = outbox;
     this.clock = clock;
     this.waitingRecheckDelay = Duration.ofMillis(waitingRecheckMillis);
@@ -114,6 +123,63 @@ public class RefundEventService {
         request, Result.REJECTED, null, rejection.orElse(ALREADY_REFUNDED), item.version(), now);
   }
 
+  /**
+   * 외부 환불·마일리지 복원이 끝난 환불의 원장을 상쇄한다. 같은 환불의 ACTIVE 예약이 있고 금액이 원거래와 같을 때만 최초 원장 5 leg마다 반대 부호 줄을 만들고
+   * 항목을 REFUNDED, 예약을 CONSUMED로 바꾼다. 이미 PG 환불이 끝난 사실이라 거절 응답은 없고, 맞지 않으면 운영 확인으로 남긴다.
+   */
+  @Transactional
+  public void receiveFinancialCompleted(
+      EventEnvelope<RefundFinancialCompletedPayload> event, Source source) {
+    Optional<UUID> inboxId = inbox.receive(event, source);
+    if (inboxId.isEmpty()) {
+      return;
+    }
+    Instant now = clock.instant();
+    RefundFinancialCompletedPayload completed = event.payload();
+    Optional<ItemState> item = reservations.findItem(completed.paymentId());
+    Optional<Reservation> reservation =
+        item.flatMap(found -> reservations.find(found.id(), completed.refundId()));
+    if (reservation.isEmpty()) {
+      review(inboxId.get(), event, "REFUND_NOT_RESERVED", now);
+      return;
+    }
+    if (completed.externalAmount() != item.get().externalAmount()
+        || completed.mileageAmount() != item.get().mileageAmount()) {
+      review(inboxId.get(), event, "REFUND_AMOUNT_MISMATCH", now);
+      return;
+    }
+    switch (reservation.get().status()) {
+      case "ACTIVE" -> {
+        List<SettlementEntry> originals =
+            entries.findByPaymentId(completed.paymentId()).stream()
+                .filter(entry -> entry.getReversalOf() == null)
+                .toList();
+        entries.append(
+            SettlementEntry.reversals(
+                originals,
+                completed.refundId(),
+                event.eventId(),
+                event.occurredAt().toInstant(),
+                now));
+        long version =
+            reservations
+                .consume(reservation.get().id(), now)
+                .orElseThrow(() -> new IllegalStateException("Refund reservation changed"));
+        inbox.markApplied(inboxId.get(), reservation.get().id(), now);
+        publish(
+            "RefundLedgerReversed",
+            completed.paymentId(),
+            version,
+            new RefundLedgerReversedPayload(
+                completed.refundId(), completed.paymentId(), reservation.get().id(), time(now)),
+            now);
+      }
+      // 같은 환불을 이미 상쇄했다. 원래 결과는 Outbox가 전달한다.
+      case "CONSUMED" -> inbox.markApplied(inboxId.get(), reservation.get().id(), now);
+      default -> review(inboxId.get(), event, "REFUND_RESERVATION_RELEASED", now);
+    }
+  }
+
   /** 예약할 수 없는 사유. 지급 예약 후·지급 후 환불과 부분 환불은 지원하지 않는다. */
   private Optional<String> rejection(ItemState item, RefundReservationRequestedPayload request) {
     if (item.payoutId() != null) {
@@ -136,17 +202,26 @@ public class RefundEventService {
       String reasonCode,
       long itemVersion,
       Instant now) {
+    publish(
+        "RefundReservationResult",
+        request.paymentId(),
+        itemVersion,
+        new RefundReservationResultPayload(
+            request.refundId(), request.paymentId(), result, reservationId, reasonCode),
+        now);
+  }
+
+  /** 환불 응답은 결제를 key·집계로, 항목 버전을 집계 버전으로 보낸다. */
+  private void publish(
+      String eventType, UUID paymentId, long itemVersion, Object payload, Instant now) {
     outbox.append(
         new EventEnvelope<>(
-            UUID.randomUUID(),
-            "RefundReservationResult",
-            1,
-            now.truncatedTo(ChronoUnit.MICROS).atOffset(ZoneOffset.UTC),
-            request.paymentId(),
-            itemVersion,
-            new RefundReservationResultPayload(
-                request.refundId(), request.paymentId(), result, reservationId, reasonCode)),
-        request.paymentId());
+            UUID.randomUUID(), eventType, 1, time(now), paymentId, itemVersion, payload),
+        paymentId);
+  }
+
+  private static OffsetDateTime time(Instant instant) {
+    return instant.truncatedTo(ChronoUnit.MICROS).atOffset(ZoneOffset.UTC);
   }
 
   private void review(UUID inboxId, EventEnvelope<?> event, String reason, Instant now) {

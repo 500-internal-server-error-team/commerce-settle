@@ -57,6 +57,51 @@ public class SettlementEntry {
     this.createdAt = Objects.requireNonNull(now, "now").truncatedTo(ChronoUnit.MICROS);
   }
 
+  private SettlementEntry(
+      SettlementEntry original,
+      UUID refundId,
+      UUID sourceEventId,
+      Instant sourceOccurredAt,
+      Instant now) {
+    this.id = UUID.randomUUID();
+    this.itemId = original.itemId;
+    this.paymentId = original.paymentId;
+    this.side = original.side;
+    this.leg = original.leg;
+    this.amount = -original.amount;
+    this.businessRef = Objects.requireNonNull(refundId, "refundId");
+    this.sourceEventId = Objects.requireNonNull(sourceEventId, "sourceEventId");
+    this.sourceOccurredAt =
+        Objects.requireNonNull(sourceOccurredAt, "sourceOccurredAt").truncatedTo(ChronoUnit.MICROS);
+    this.reversalOf = original.id;
+    // 원 줄의 정책 버전을 그대로 둔다. 중복 결제 판정은 최초 줄(reversal_of IS NULL)에서만 정책 버전을 읽는다.
+    this.policyVersion = original.policyVersion;
+    this.createdAt = Objects.requireNonNull(now, "now").truncatedTo(ChronoUnit.MICROS);
+  }
+
+  /**
+   * 전액 환불의 상쇄 줄을 최초 원장 줄마다 하나씩 반대 부호로 만든다. 0원 leg도 상쇄해 원 줄과 1:1로 대응한다. business_ref는 refundId다. 최초
+   * 줄이 아니거나 5 leg가 모두 있지 않으면 거절한다.
+   */
+  public static List<SettlementEntry> reversals(
+      List<SettlementEntry> originals,
+      UUID refundId,
+      UUID sourceEventId,
+      Instant sourceOccurredAt,
+      Instant now) {
+    if (originals.size() != EntryLeg.values().length
+        || originals.stream().anyMatch(entry -> entry.reversalOf != null)
+        || originals.stream().map(SettlementEntry::getLeg).distinct().count()
+            != EntryLeg.values().length) {
+      throw new IllegalArgumentException("Reversal requires the five original ledger legs");
+    }
+    return originals.stream()
+        .map(
+            original ->
+                new SettlementEntry(original, refundId, sourceEventId, sourceOccurredAt, now))
+        .toList();
+  }
+
   /**
    * 결제 확정 때의 최초 원장 5 leg를 항목 금액 사본에서 만든다. 0원 leg도 기록해 환불 상쇄가 원 leg마다 반대 부호 1건으로 대응하게 한다. 최초 원장의
    * business_ref는 paymentId다.
