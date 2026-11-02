@@ -1,6 +1,7 @@
 package com.commercesettle.commerce.domain.repository;
 
 import com.commercesettle.commerce.domain.model.CouponTemplate;
+import java.time.LocalDate;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
@@ -25,6 +26,11 @@ public interface CouponTemplateRepository {
   boolean takeSellerIssue(UUID templateId, long discountAmount);
 
   Optional<CouponTemplate> findActiveWelcome();
+
+  /** 혜택 월·등급의 GRADE 캠페인이 없을 때만 저장한다. */
+  void saveGradeIfAbsent(CouponTemplate template);
+
+  Optional<CouponTemplate> findGrade(String grade, LocalDate targetMonth);
 
   /** 활성 웰컴 캠페인이 없을 때만 저장한다. 동시에 만들면 하나만 남고 나머지는 아무것도 하지 않는다. */
   void saveWelcomeIfAbsent(CouponTemplate template);

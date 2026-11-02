@@ -2,6 +2,7 @@ package com.commercesettle.commerce.domain.repository;
 
 import com.commercesettle.commerce.domain.model.BuyerCoupon;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -19,6 +20,9 @@ public interface BuyerCouponRepository {
   Optional<BuyerCoupon> findWelcome(UUID buyerId);
 
   boolean existsByTemplateAndBuyer(UUID templateId, UUID buyerId);
+
+  /** 구매자의 혜택 월 GRADE 쿠폰. 대상 재시도는 이 원쿠폰을 재사용한다. */
+  Optional<BuyerCoupon> findGrade(UUID buyerId, LocalDate targetMonth);
 
   PageResult<BuyerCoupon> findByBuyer(UUID buyerId, int page, int size);
 

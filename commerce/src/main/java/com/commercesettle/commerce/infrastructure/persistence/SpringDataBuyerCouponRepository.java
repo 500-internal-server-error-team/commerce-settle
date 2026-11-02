@@ -5,6 +5,7 @@ import com.commercesettle.commerce.domain.model.BuyerCouponStatus;
 import com.commercesettle.commerce.domain.model.CouponKind;
 import jakarta.persistence.LockModeType;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -22,6 +23,9 @@ interface SpringDataBuyerCouponRepository extends JpaRepository<BuyerCoupon, UUI
   Optional<BuyerCoupon> findByBuyerIdAndKind(UUID buyerId, CouponKind kind);
 
   boolean existsByTemplateIdAndBuyerId(UUID templateId, UUID buyerId);
+
+  Optional<BuyerCoupon> findByBuyerIdAndKindAndTargetMonth(
+      UUID buyerId, CouponKind kind, LocalDate targetMonth);
 
   Page<BuyerCoupon> findByBuyerId(UUID buyerId, Pageable pageable);
 
