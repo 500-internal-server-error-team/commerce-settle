@@ -9,6 +9,7 @@ import com.commercesettle.settlement.application.port.InboxStore;
 import com.commercesettle.settlement.application.port.InboxStore.Source;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
@@ -19,8 +20,14 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -344,6 +351,71 @@ class SettlementEventServiceIntegrationTest {
   }
 
   @Test
+  @DisplayName("처리기의 마지막 대기 판정이 커밋되기 전에 결제확정이 와도 구매확정은 다시 대기한다")
+  void paymentDuringLastWaitingAttemptStillRevives() throws Exception {
+    var purchase = purchase(UUID.randomUUID(), orderId, CONFIRMED_AT);
+    service.receivePurchaseConfirmed(purchase, source("commerce-settle.commerce.v1", purchase));
+    for (int attempt = 2; attempt < 10; attempt++) {
+      assertThat(service.processNextWaiting()).isTrue();
+    }
+    var payment = payment(UUID.randomUUID(), 10_000, 0, 0, 10_000, 0);
+    Source paymentSource = source("commerce-settle.payment.v1", payment);
+    CountDownLatch exhausted = new CountDownLatch(1);
+    CountDownLatch commit = new CountDownLatch(1);
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    try {
+      // 1. 처리기가 10번째 판정에서 결제 항목이 없음을 확인하고 REVIEW_REQUIRED로 바꾼 뒤 커밋 전에 멈춘다.
+      Future<?> processor =
+          executor.submit(
+              () ->
+                  transactions.executeWithoutResult(
+                      status -> {
+                        assertThat(service.processNextWaiting()).isTrue();
+                        exhausted.countDown();
+                        await(commit);
+                      }));
+      assertThat(exhausted.await(10, TimeUnit.SECONDS)).isTrue();
+      // 2. 결제 수신이 항목을 만들고 재대기를 시도한다.
+      Future<?> receiver =
+          executor.submit(() -> service.receivePaymentConfirmed(payment, paymentSource));
+      awaitLockWaitOrDone(receiver);
+      // 3. 처리기가 먼저 커밋하고 결제 수신이 이어서 커밋한다.
+      commit.countDown();
+      processor.get(10, TimeUnit.SECONDS);
+      receiver.get(10, TimeUnit.SECONDS);
+    } finally {
+      commit.countDown();
+      executor.shutdownNow();
+    }
+
+    assertInbox(purchase.eventId(), "WAITING", null);
+    assertThat(lastErrorCode(purchase.eventId())).isEqualTo("PAYMENT_ARRIVED_LATE");
+    assertThat(service.processNextWaiting()).isTrue();
+    assertThat(item().get("status")).isEqualTo("PAYABLE");
+  }
+
+  @Test
+  @DisplayName("본문의 paymentId가 대문자여도 소진 구매확정은 결제확정이 오면 다시 대기한다")
+  void upperCasePaymentIdIsRevived() {
+    var purchase = purchase(UUID.randomUUID(), orderId, CONFIRMED_AT);
+    byte[] body =
+        new String(source("commerce-settle.commerce.v1", purchase).body(), StandardCharsets.UTF_8)
+            .replace(paymentId.toString(), paymentId.toString().toUpperCase(Locale.ROOT))
+            .getBytes(StandardCharsets.UTF_8);
+    service.receivePurchaseConfirmed(
+        purchase, new Source("commerce-settle.commerce.v1", 0, offsets.getAndIncrement(), body));
+    while (service.processNextWaiting()) {}
+    assertInbox(purchase.eventId(), "REVIEW_REQUIRED", null);
+
+    var payment = payment(UUID.randomUUID(), 10_000, 0, 0, 10_000, 0);
+    service.receivePaymentConfirmed(payment, source("commerce-settle.payment.v1", payment));
+
+    assertInbox(purchase.eventId(), "WAITING", null);
+    assertThat(service.processNextWaiting()).isTrue();
+    assertThat(item().get("status")).isEqualTo("PAYABLE");
+  }
+
+  @Test
   @DisplayName("대기 간격은 기준 1초에서 두 배씩 늘어 60초에서 멈춘다")
   void waitingDelayGrowsExponentially() {
     var purchase = purchase(UUID.randomUUID(), orderId, CONFIRMED_AT);
@@ -545,6 +617,31 @@ class SettlementEventServiceIntegrationTest {
   private int attempts(UUID eventId) {
     return jdbc.queryForObject(
         "SELECT attempts FROM settlement.inbox WHERE event_id = ?", Integer.class, eventId);
+  }
+
+  private static void await(CountDownLatch latch) {
+    try {
+      assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException(e);
+    }
+  }
+
+  /** 작업이 행 잠금을 기다리기 시작하거나 기다리지 않고 끝날 때까지 기다린다. */
+  private void awaitLockWaitOrDone(Future<?> task) throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+    while (!task.isDone() && System.nanoTime() < deadline) {
+      Long waiting =
+          jdbc.queryForObject(
+              "SELECT count(*) FROM pg_stat_activity"
+                  + " WHERE datname = current_database() AND wait_event_type = 'Lock'",
+              Long.class);
+      if (waiting != null && waiting > 0) {
+        return;
+      }
+      Thread.sleep(10);
+    }
   }
 
   private static Instant instant(Map<String, Object> row, String column) {

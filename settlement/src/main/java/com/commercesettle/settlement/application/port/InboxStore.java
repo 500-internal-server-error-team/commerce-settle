@@ -31,7 +31,8 @@ public interface InboxStore {
 
   /**
    * 결제가 오지 않아 {@code maxAttempts}번 판정 뒤 REVIEW_REQUIRED로 남은 같은 결제의 구매확정을 WAITING·시도 0으로 되돌리고 되돌린
-   * Inbox ID를 돌려준다. 다른 사유로 운영 확인에 남은 행은 건드리지 않는다.
+   * Inbox ID를 돌려준다. 아직 대기 중인 같은 결제의 구매확정도 시도 0으로 바로 다시 판정하게 한다. 처리기가 마지막 판정 중이면 그 커밋을 기다렸다가 되돌린다.
+   * 다른 사유로 운영 확인에 남은 행은 건드리지 않는다.
    */
   List<UUID> reviveExhaustedPurchases(UUID paymentId, int maxAttempts, Instant now);
 
