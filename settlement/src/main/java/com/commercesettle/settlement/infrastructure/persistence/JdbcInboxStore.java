@@ -207,6 +207,33 @@ class JdbcInboxStore implements InboxStore {
         (rs, row) -> rs.getObject(1, UUID.class));
   }
 
+  @Override
+  public Optional<EarlierRefundRequest> findEarlierRefundRequest(UUID refundId, UUID inboxId) {
+    return jdbc
+        .query(
+            """
+            SELECT status, (payload->'payload'->>'paymentId')::uuid AS payment_id,
+                (payload->'payload'->>'netAmount')::bigint AS net_amount, result_ref
+            FROM settlement.inbox
+            WHERE consumer = :consumer AND event_type = 'RefundReservationRequested'
+              AND (payload->'payload'->>'refundId')::uuid = :refundId
+              AND (created_at, id) < (SELECT created_at, id FROM settlement.inbox WHERE id = :inboxId)
+            ORDER BY created_at, id
+            LIMIT 1
+            """,
+            new MapSqlParameterSource("consumer", consumer)
+                .addValue("refundId", refundId)
+                .addValue("inboxId", inboxId),
+            (rs, row) ->
+                new EarlierRefundRequest(
+                    rs.getString("status"),
+                    rs.getObject("payment_id", UUID.class),
+                    rs.getLong("net_amount"),
+                    rs.getObject("result_ref", UUID.class)))
+        .stream()
+        .findFirst();
+  }
+
   private void finish(UUID inboxId, String status, UUID resultRef, Instant now) {
     int updated =
         jdbc.update(
