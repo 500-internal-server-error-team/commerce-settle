@@ -14,7 +14,8 @@ spring:
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
     hikari:
-      maximum-pool-size: 10
+      # 승인 슬롯·결제 요청 처리 슬롯·Outbox 발행·수신 Listener가 함께 쓴다. 슬롯 수를 늘리면 함께 늘린다.
+      maximum-pool-size: ${PAYMENT_DB_POOL_SIZE:20}
       minimum-idle: 1
   jpa:
     open-in-view: false
@@ -54,7 +55,8 @@ spring:
     listener:
       observation-enabled: true
       ack-mode: manual_immediate
-      concurrency: 1
+      # 구독 토픽의 파티션 수(3)만큼 읽는다. 파티션 안의 순서는 그대로 유지된다.
+      concurrency: ${PAYMENT_KAFKA_LISTENER_CONCURRENCY:3}
       missing-topics-fatal: true
 
 springdoc:
@@ -109,7 +111,7 @@ app:
     enabled: false
     interval-ms: 1000
     # 동시에 처리하는 슬롯 수와 슬롯별 한 주기 상한. 상한에 닿으면 기다리지 않고 이어서 처리한다.
-    # 처리 트랜잭션마다 DB 연결을 쓰므로 승인 슬롯과 합쳐 DB 연결 풀보다 작게 둔다.
+    # 처리 트랜잭션마다 DB 연결을 쓰므로 승인 슬롯·Outbox 발행과 합쳐 DB 연결 풀을 넘지 않게 둔다.
     concurrency: ${PAYMENT_REQUEST_CONCURRENCY:3}
     batch-size: 100
     # 선점 뒤 처리 결과나 실패를 기록하기 전까지 다른 처리기가 같은 요청을 다시 잡지 않는 시간.
@@ -160,6 +162,7 @@ app:
     # PAYMENT_ROLE=worker에서만 동작한다. 커밋된 결제 이벤트를 Kafka로 발행한다.
     enabled: false
     recovery-interval-ms: 1000
-    max-in-flight: 8
+    # 동시에 보내는 이벤트 수. 전송 결과를 기다리는 동안 DB 연결을 쥐지 않는다.
+    max-in-flight: ${PAYMENT_OUTBOX_MAX_IN_FLIGHT:32}
     lease-ms: 240000
     max-attempts: 10
