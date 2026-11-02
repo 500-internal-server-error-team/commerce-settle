@@ -122,6 +122,7 @@ cd commerce-settle
 git switch develop
 python3 scripts/init_env.py
 ./gradlew --continue clean build
+python3 scripts/sync_redis_run_id.py
 docker compose up -d --build --wait --wait-timeout 300
 python3 scripts/smoke.py
 ```
