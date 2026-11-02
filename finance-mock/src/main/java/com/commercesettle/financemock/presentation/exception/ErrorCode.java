@@ -6,6 +6,8 @@ import org.springframework.http.HttpStatusCode;
 /** 공통 오류 계약의 code 목록. 상수 이름이 응답 code 값이다. */
 enum ErrorCode {
   COMMON_VALIDATION_FAILED(HttpStatus.BAD_REQUEST, "입력값을 확인해 주세요."),
+  COMMON_AUTHENTICATION_REQUIRED(HttpStatus.UNAUTHORIZED, "인증이 필요합니다."),
+  COMMON_ROLE_FORBIDDEN(HttpStatus.FORBIDDEN, "이 작업을 수행할 권한이 없습니다."),
   COMMON_RESOURCE_NOT_FOUND(HttpStatus.NOT_FOUND, "요청한 대상을 찾을 수 없습니다."),
   COMMON_IDEMPOTENCY_CONFLICT(
       HttpStatus.CONFLICT, "같은 업무 키의 다른 요청이 있거나 처리 중입니다. 같은 본문이면 원거래를 조회해 주세요."),
@@ -36,6 +38,8 @@ enum ErrorCode {
   static ErrorCode forStatus(HttpStatusCode status) {
     return switch (status.value()) {
       case 400 -> COMMON_VALIDATION_FAILED;
+      case 401 -> COMMON_AUTHENTICATION_REQUIRED;
+      case 403 -> COMMON_ROLE_FORBIDDEN;
       case 404 -> COMMON_RESOURCE_NOT_FOUND;
       case 503 -> COMMON_TEMPORARILY_UNAVAILABLE;
       default -> COMMON_INTERNAL_ERROR;
