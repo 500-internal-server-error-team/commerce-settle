@@ -13,14 +13,17 @@ import org.springframework.web.client.RestClient;
 
 @Configuration
 public class PayoutWorkerConfiguration {
-  /** 잘못된 조합(HTTP 제한 시간 ≥ 임대 시간 등)이면 기동을 멈춘다. */
+  /** 잘못된 조합(HTTP 제한 시간 ≥ 임대 시간, 복구 전용 슬롯 ≥ 전체 슬롯 등)이면 기동을 멈춘다. */
   @Bean
   PayoutWorkerSettings payoutWorkerSettings(
       @Value("${settlement.payout-worker.lease-duration}") Duration leaseDuration,
       @Value("${settlement.payout-worker.http-timeout}") Duration httpTimeout,
       @Value("${settlement.payout-worker.unconfirmed-retry-delay}") Duration retryDelay,
-      @Value("${settlement.payout-worker.max-attempts}") int maxAttempts) {
-    return new PayoutWorkerSettings(leaseDuration, httpTimeout, retryDelay, maxAttempts);
+      @Value("${settlement.payout-worker.max-attempts}") int maxAttempts,
+      @Value("${settlement.payout-worker.max-concurrency}") int maxConcurrency,
+      @Value("${settlement.payout-worker.recovery-slots}") int recoverySlots) {
+    return new PayoutWorkerSettings(
+        leaseDuration, httpTimeout, retryDelay, maxAttempts, maxConcurrency, recoverySlots);
   }
 
   @Bean

@@ -86,6 +86,9 @@ settlement:
     unconfirmed-retry-delay: 5m
     max-attempts: 10
     max-jobs-per-poll: 8
+    # 인스턴스당 동시 실행 상한과 그중 결과 조회·중단 복구 전용 슬롯(ADR 0005). 새 지급은 나머지만 쓴다.
+    max-concurrency: 8
+    recovery-slots: 2
   inbox-processor:
     # 선행 결제를 기다리는 구매확정(WAITING)을 짧은 주기로 다시 판정한다(ADR 0007).
     enabled: ${SETTLEMENT_INBOX_PROCESSOR_ENABLED:true}

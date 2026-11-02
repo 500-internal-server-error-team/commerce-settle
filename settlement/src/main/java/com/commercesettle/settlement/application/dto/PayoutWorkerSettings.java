@@ -10,9 +10,16 @@ import java.util.Objects;
  * @param httpTimeout 대역 호출 한 번의 전체 제한 시간. 임대 시간보다 짧아야 한다
  * @param unconfirmedRetryDelay 결과를 확인하지 못했을 때 원거래를 다시 조회하기까지의 간격
  * @param maxAttempts 회수를 포함한 자동 시도 상한. 넘으면 운영 확인으로 넘긴다
+ * @param maxConcurrency 인스턴스 하나가 동시에 실행하는 작업 상한(ADR 0005)
+ * @param recoverySlots 그중 결과 조회·중단 복구에만 쓰는 슬롯 수. 새 지급에 빌려주지 않는다
  */
 public record PayoutWorkerSettings(
-    Duration leaseDuration, Duration httpTimeout, Duration unconfirmedRetryDelay, int maxAttempts) {
+    Duration leaseDuration,
+    Duration httpTimeout,
+    Duration unconfirmedRetryDelay,
+    int maxAttempts,
+    int maxConcurrency,
+    int recoverySlots) {
   public PayoutWorkerSettings {
     Objects.requireNonNull(leaseDuration, "leaseDuration");
     Objects.requireNonNull(httpTimeout, "httpTimeout");
@@ -24,6 +31,9 @@ public record PayoutWorkerSettings(
     }
     if (unconfirmedRetryDelay.isNegative() || maxAttempts <= 0) {
       throw new IllegalArgumentException("retry delay and max attempts must be positive");
+    }
+    if (recoverySlots <= 0 || recoverySlots >= maxConcurrency) {
+      throw new IllegalArgumentException("0 < recoverySlots < maxConcurrency is required");
     }
   }
 }
