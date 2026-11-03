@@ -226,8 +226,7 @@ class SellerCouponIntegrationTest {
 
   @Test
   @DisplayName(
-      "발급 종료는 새 발급만 막고(COUPON_CAMPAIGN_NOT_ISSUABLE), 버전이 다르면 버전 충돌이며 다시 종료해도 발급 불가로 거절하고 이미 발급한"
-          + " 쿠폰은 그대로다")
+      "발급 종료는 새 발급만 막고(COUPON_CAMPAIGN_NOT_ISSUABLE), 버전이 다르면 버전 충돌이며 다시 종료해도 발급 불가로 거절하고 이미 발급한 쿠폰은 그대로다")
   void closesCampaignForNewIssues() {
     Shop shop = shop();
     UUID template = campaign(shop, 10, 30_000);
@@ -547,10 +546,9 @@ class SellerCouponIntegrationTest {
   private Shop shop() {
     UUID seller = UUID.randomUUID();
     jdbc.update(
-        "insert into"
-            + " commerce.seller_accounts(id,email_normalized,password_hash,display_name,status,"
-            + "payout_account_ref,created_at,updated_at,version) values"
-            + " (?,?,'hash','seller','ACTIVE','test-account',now(),now(),0)",
+        "insert into commerce.seller_accounts(id,email_normalized,password_hash,display_name,status,"
+            + "payout_account_ref,created_at,updated_at,version)"
+            + " values (?,?,'hash','seller','ACTIVE','test-account',now(),now(),0)",
         seller,
         seller + "@example.com");
     return new Shop(seller, product(seller));
