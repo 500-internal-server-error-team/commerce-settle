@@ -46,14 +46,6 @@ Commerce의 `/internal/coupon-issue-runs`에서 월간 회차 목록·단건을 
 
 성공은 `201`과 새 회차의 Location이며 발급 완료가 아닙니다. 동일 키·본문은 상태·버전 검사보다 먼저 기존 결과를 반환하고 다른 본문은 409입니다. 새 runId·replacesRunId와 원회차의 replacementRunId로 연결하며 Scheduler가 이후 발급을 시작합니다. 저장 제약은 [회차 모델](data-model.md#coupon_issue_runs)을 따릅니다.
 
-| 조건 | 응답 |
-| --- | --- |
-| 발급 이력 있음, EXPIRED/CANCELLED, 이미 교정된 다른 요청 | `409 COUPON_RUN_NOT_REPLACEABLE` |
-| STARTING/STARTED/STOPPING 등 활성 실행·미종료 작업 | `409 COUPON_RUN_EXECUTION_ACTIVE` |
-| expectedVersion 불일치 | `409 COUPON_RUN_VERSION_CONFLICT` |
-| 원래 발급 기한 경과 | `409 COUPON_RUN_EXPIRED` |
-| 실행자 부재·마감 원자료·저장 정책·발급 이력 정합성 확인 불가 | `503 COUPON_RUN_STATE_UNVERIFIED` |
-
 ## 주문·환불 사용 순서
 
 1. 상품·이벤트·쿠폰·마일리지를 조회하고 order-quotes로 서버 계산을 미리 확인합니다. 미리보기는 재고·마일리지를 예약하지 않습니다.

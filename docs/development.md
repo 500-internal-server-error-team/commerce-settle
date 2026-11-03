@@ -183,9 +183,9 @@ Payment 내부 조회와 운영 종결은 `service:payment`·`operator:<식별�
 
 운영 종결의 HTTP·DB 시험은 [개발·검증](#개발검증)을 따릅니다. 증빙 조회 대역·계약 fixture를 사용한 시험과 실제 원환불·예약 해제·주문 복구 왕복을 구분해 기록합니다.
 
-쿠폰·이벤트 예약/복구는 `OrderBenefitsService`가 주문 트랜잭션 안에서 처리합니다. 쿠폰 만료 설정은 `app.coupons.expiry-*`이며 실제 발급·사용 조건은 [쿠폰 정책](policies.md#쿠폰)을 따릅니다. Payment·Settlement의 회차 재접수·마일리지 재예약·승인 차단·원환불/예약 해제·주문 복구는 실제 소유 서비스와 함께 검증합니다. 미연결 금융 결과를 성공으로 반환하지 않습니다. 알림은 [모의 거래 알림](#모의-거래-알림), 접수 제한은 [금융 관측과 접수 복구](#금융-관측과-접수-복구)를 따릅니다.
+쿠폰·이벤트 예약/복구는 주문 트랜잭션 안에서 처리합니다. 쿠폰 만료 설정은 `app.coupons.expiry-*`이며 실제 발급·사용 조건은 [쿠폰 정책](policies.md#쿠폰)을 따릅니다. Payment·Settlement의 회차 재접수·마일리지 재예약·승인 차단·원환불/예약 해제·주문 복구는 실제 소유 서비스와 함께 검증합니다. 미연결 금융 결과를 성공으로 반환하지 않습니다. 알림은 [모의 거래 알림](#모의-거래-알림), 접수 제한은 [금융 관측과 접수 복구](#금융-관측과-접수-복구)를 따릅니다.
 
-월간 우수고객은 매월 1일 00:10 KST부터 10분마다 `app.coupons.grade-scheduler-enabled` 스케줄러가 `gradeCouponJob`을 실행합니다. 이전 월의 미완료 회차도 먼저 처리하며 원래 발급 기한이 지났으면 새 발급 없이 EXPIRED로 종결합니다. 실행은 전용 `grade-coupon-` 스레드에 넘기며 앞 실행이 끝나지 않았으면 중복 확인을 건너뜁니다. 런처는 회차별 PostgreSQL advisory lock을 확보하고, `app.coupons.grade-stale-after`(기본 10분)보다 오래 갱신되지 않은 잔류 실행을 FAILED로 정리한 뒤 같은 회차로 재시작합니다. 운영 조회·교정은 [월간 혜택 API](api.md#월간-혜택-운영-조회와-오류-교정), 선정·발급·교정 조건은 [혜택 정책](policies.md#발급-대상주기예산)을 따릅니다.
+월간 우수고객은 매월 1일 00:10 KST부터 10분마다 `app.coupons.grade-scheduler-enabled`로 실행합니다. 이전 월의 미완료 회차도 먼저 처리하며 원래 기한 뒤에는 발급 없이 EXPIRED로 종결합니다. 같은 회차의 중복 실행을 차단하고, 마지막 갱신이 `app.coupons.grade-stale-after`(기본 10분)보다 오래된 잔류 실행만 FAILED로 정리한 뒤 같은 회차로 재시작합니다. [운영 조회·교정](api.md#월간-혜택-운영-조회와-오류-교정)과 [혜택 정책](policies.md#발급-대상주기예산)을 따릅니다.
 
 ```bash
 ./gradlew :commerce:test --tests '*OrderWorkflow*' --tests '*OrderIntegrationTest' --tests '*PaymentAcceptedIntegrationTest'
@@ -410,7 +410,7 @@ Payment API와 Worker는 같은 `payment` 모듈로 빌드합니다. Gradle 모�
 
 강제 종료로 STARTED가 남으면 실행자 잠금을 얻은 뒤 Job·Step의 마지막 갱신이 `settlement.daily-batch.stale-after`(기본 10분)보다 오래된 경우에만 FAILED로 정리하고 같은 날짜로 한 번 재시작합니다. 확인할 수 없으면 정리하지 않으며 일시적인 조회·잠금 오류는 재확인합니다. 다음 날짜를 임의로 성공 처리하거나 새 날짜로 실패 회차를 덮어쓰지 않습니다.
 
-판매자 한 명이 chunk 한 건이며 대상·합계·지급·작업을 판매자 단위 트랜잭션으로 커밋합니다. chunk는 DB 트랜잭션을 열지 않아 커머스 컨텍스트 HTTP 대기 중 연결을 점유하지 않습니다. 재시작은 Batch 실행 위치 대신 업무 DB의 미선점 PAYABLE 항목을 seller ID 순 keyset으로 다시 읽으므로 완료한 판매자를 중복 지급하지 않습니다. 판매자별 검증·잠금 경합은 그 판매자를 건너뛰고 DB 자원 오류·공통 컨텍스트 조회 장애는 Step을 실패시켜 복구 후 재개합니다.
+판매자별 대상·합계·지급·작업은 한 트랜잭션에 저장하고 커머스 컨텍스트 HTTP 대기 중에는 DB 연결을 점유하지 않습니다. 재시작은 seller ID 순으로 미선점 PAYABLE 항목만 다시 처리해 완료한 판매자를 중복 지급하지 않습니다. 판매자별 검증·잠금 경합은 그 판매자를 건너뛰고 DB 자원 오류·공통 컨텍스트 조회 장애는 Step을 실패시켜 복구 후 재개합니다.
 
 ### Kafka 전달 기반
 
@@ -455,11 +455,11 @@ docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap
 
 Payment 원문 격리는 새 빈 DB의 초기 SQL을 검증한 뒤 `app.kafka.quarantine.enabled=true`로 켭니다. 기본값은 false입니다. 해석 불가·미지원 입력의 원문과 DLT 작업을 함께 커밋한 뒤 ACK하며, DB 저장 실패는 ACK 없이 Listener를 중단합니다. 같은 eventId의 본문 충돌은 기존 `inbox_conflicts`에서 확인합니다.
 
-`QuarantineRelay`는 한 번에 하나만 임대하고 전용 실행기에서 Kafka 응답을 기다립니다. 공통 예약 스레드와 DB 트랜잭션을 점유하지 않으며 중복 신호는 합칩니다. 기본 주기는 1초, 주기당 최대 32개, 임대 240초, 결과 대기 125초입니다. `max.block.ms`와 결과 대기의 합은 임대보다 짧아야 합니다. 발행 실패는 1초부터 최대 60초 간격으로 10회까지 재시도하고, 소진하면 원문과 작업을 REVIEW_REQUIRED로 보존합니다.
+Payment 격리 발행은 한 번에 하나만 임대하며 Kafka 응답 대기 중 공통 예약 스레드와 DB 트랜잭션을 점유하지 않습니다. 기본 주기는 1초, 주기당 최대 32개, 임대 240초, 결과 대기 125초입니다. `max.block.ms`와 결과 대기의 합은 임대보다 짧아야 합니다. 발행 실패는 1초부터 최대 60초 간격으로 10회까지 재시도하고, 소진하면 원문과 작업을 REVIEW_REQUIRED로 보존합니다.
 
-원인 수정 뒤 인증된 운영 호출자는 `QuarantineService.requestReplay(id,expectedVersion,operator,reasonCode)`로 원래 토픽·키·본문을 재발행합니다. 예상 버전과 활성 재처리 부재를 검사하고 요청자·사유를 기록합니다. REVIEW_REQUIRED 작업은 `resumeDelivery(deliveryId,expectedVersion,operator,reasonCode)`로 상태·버전을 확인하고 이전 시도 수와 재개 이력을 보존하며 재개합니다. DLT 가용성과 독립적으로 요청할 수 있고, 발행 완료가 업무 성공을 뜻하지는 않습니다. 공개 관리 UI·HTTP API는 제공하지 않습니다.
+원인 수정 뒤 인증된 운영 호출자는 내부 재처리 호출로 원래 토픽·키·본문을 재발행합니다. 예상 버전과 활성 재처리 부재를 검사하고 요청자·사유를 기록합니다. REVIEW_REQUIRED 작업은 내부 재개 호출로 상태·버전을 확인하고 이전 시도 수와 재개 이력을 보존하며 재개합니다. DLT 가용성과 독립적으로 요청할 수 있고, 발행 완료가 업무 성공을 뜻하지는 않습니다. 공개 관리 UI·HTTP API는 제공하지 않습니다.
 
-Settlement 원문 격리도 같은 테이블 구조와 `app.kafka.quarantine.enabled`(기본 false)를 사용합니다. `PaymentConfirmed`·`PurchaseConfirmed`의 해석 실패만 격리하고, 반영 중 DB 오류와 격리 저장 실패는 ACK 없이 Listener를 중단합니다. Settlement `QuarantineRelay`는 전용 실행기 없이 공통 예약 스레드(4개)에서 Kafka 응답을 기다리며 주기·묶음·임대·결과 대기·재시도 규칙은 Payment와 같습니다. 대상 토픽은 `commerce-settle.settlement.v1.dlt`입니다. 운영 재처리·재개(`requestReplay`·`resumeDelivery`)도 Payment와 같은 검사·기록으로 원래 수신 토픽(`commerce-settle.payment.v1`·`commerce-settle.commerce.v1`)에 재발행합니다. 이 토픽은 Commerce·Payment·알림 소비 그룹도 읽으므로, 다른 그룹이 같은 원문을 이미 처리했는지 확인한 뒤 요청합니다. 같은 eventId·bytes 재전달은 각 Inbox가 중복으로 끝냅니다.
+Settlement 원문 격리도 같은 테이블 구조와 `app.kafka.quarantine.enabled`(기본 false)를 사용합니다. `PaymentConfirmed`·`PurchaseConfirmed`의 해석 실패만 격리하고, 반영 중 DB 오류와 격리 저장 실패는 ACK 없이 Listener를 중단합니다. Settlement 격리 발행은 공통 예약 스레드(4개)에서 Kafka 응답을 기다리며 주기·묶음·임대·결과 대기·재시도 규칙은 Payment와 같습니다. 대상 토픽은 `commerce-settle.settlement.v1.dlt`입니다. 운영 재처리·재개도 Payment와 같은 검사·기록으로 원래 수신 토픽(`commerce-settle.payment.v1`·`commerce-settle.commerce.v1`)에 재발행합니다. 이 토픽은 Commerce·Payment·알림 소비 그룹도 읽으므로, 다른 그룹이 같은 원문을 이미 처리했는지 확인한 뒤 요청합니다. 같은 eventId·bytes 재전달은 각 Inbox가 중복으로 끝냅니다.
 
 Settlement 발행 Outbox는 Payment와 같은 Relay 규칙(커밋 후·결과 반영 후·시작 시 깨움, 1초 복구 조회, 미완료 발행 최대 8건, 임대 240초, 10회 소진 REVIEW_REQUIRED)을 따르며 `app.outbox.enabled`(`APP_OUTBOX_ENABLED`, 기본 false)로 켭니다. 환불 SAGA 응답과 판매자 알림 요청은 스위치와 관계없이 업무 트랜잭션에서 저장합니다. 일배치와 지급 결과 반영도 Outbox에 쓰므로 `settlement.outbox`가 없는 기존 개발 DB에서는 일배치가 실패합니다. 새 초기 SQL을 적용한 DB에서 실행합니다.
 
@@ -503,8 +503,8 @@ Gateway 자체 오류는 `application/problem+json`과 실제 추적의 `traceId
 | 발신자 → 대상 | 받는 쪽 변수 | 보내는 쪽 |
 | --- | --- | --- |
 | `gateway` → 커머스·Payment·Settlement | `<대상>_GATEWAY_CREDENTIAL`(`_PREVIOUS`) | Gateway가 대상별 값을 붙임 |
-| `service:settlement` → Finance Mock | `FINANCE_MOCK_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 지급 Worker의 `HttpPayoutGateway` |
-| `service:settlement` → 커머스 | `COMMERCE_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 일배치의 `HttpProductSettlementContextReader`(상품 지급 컨텍스트) |
+| `service:settlement` → Finance Mock | `FINANCE_MOCK_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 지급 Worker |
+| `service:settlement` → 커머스 | `COMMERCE_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 일배치의 상품 지급 컨텍스트 조회 |
 | `service:payment` → Finance Mock | `FINANCE_MOCK_PAYMENT_CREDENTIAL`(`_PREVIOUS`) | PG 승인·환불·조회 HTTP 클라이언트. Compose는 Payment Worker에만 현재 값을 전달 |
 
 자격을 교체할 때는 받는 쪽 `_PREVIOUS`에 이전 값을 보존하고 새 현재 값을 설정한 뒤 받는 앱과 보내는 앱을 재기동합니다. 전환 후 `_PREVIOUS`를 비우고 받는 앱을 다시 기동합니다.
@@ -514,7 +514,7 @@ Gateway 자체 오류는 `application/problem+json`과 실제 추적의 `traceId
 새 서비스·운영자 호출을 연결할 때는 아래 항목을 함께 설정합니다.
 
 1. 받는 쪽: `application.yml`의 `app.internal-auth.senders`에 발신자를 추가합니다. `:`가 있는 키는 `"[service:payment]"`처럼 대괄호로 감쌉니다.
-2. 보내는 쪽: 해당 클라이언트의 모든 요청에 `Authorization: Bearer <자격>`을 붙이고 `InternalCredentials.requireFormat`으로 기동 때 형식을 확인합니다. 자격 거절 `401`·`403`은 업무 결과로 확정하지 않습니다.
+2. 보내는 쪽: 해당 클라이언트의 모든 요청에 `Authorization: Bearer <자격>`을 붙이고 기동 때 형식을 확인합니다. 자격 거절 `401`·`403`은 업무 결과로 확정하지 않습니다.
 3. 환경: `.env.example`에 `<대상>_<발신자>_CREDENTIAL`·`_PREVIOUS`를 추가하고, Compose에서 받는 쪽에 두 값, 보내는 쪽에 현재 값을 전달합니다. smoke에 실제 호출 경로가 `401`·`403`이 아닌지 추가합니다.
 
 운영자 자격은 API별 운영자 식별자·허용 작업과 함께 설정합니다.

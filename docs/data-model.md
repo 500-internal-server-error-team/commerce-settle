@@ -508,7 +508,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | 낙관적 버전 |
 
-**제약:** target_month·cutoff_at·policy_version·status는 NOT NULL. CHECK(replaces_run_id <> id). UNIQUE(target_month) WHERE status <> 'CANCELLED'; UNIQUE(replaces_run_id) WHERE replaces_run_id IS NOT NULL. target_month는 월 첫날이고 target_count>=0, cutoff_spend>0이다. 세 취소 필드는 CANCELLED일 때 모두 필수이며 다른 상태에서는 모두 null이다. 대체 회차는 같은 월·마감·정책 버전의 CANCELLED 부모 한 개를 참조하며, 부모·자식 연결과 취소를 같은 트랜잭션에 저장한다. 참조·상태는 앱에서 확인하며 물리 FK는 두지 않는다. EXPIRED 또는 발급 이력이 있는 회차는 취소하지 않는다. 집계 오류의 발급0건 COMPLETED는 원래 기한 안에서만 같은 교정 조건을 적용한다.
+**제약:** target_month·cutoff_at·policy_version·status는 NOT NULL. CHECK(replaces_run_id <> id). UNIQUE(target_month) WHERE status <> 'CANCELLED'; UNIQUE(replaces_run_id) WHERE replaces_run_id IS NOT NULL. target_month는 월 첫날이고 target_count>=0, cutoff_spend>0이다. 세 취소 필드는 CANCELLED일 때 모두 필수이며 다른 상태에서는 모두 null이다. 대체 회차는 같은 월·마감·정책 버전의 CANCELLED 부모 한 개를 참조하며, 부모·자식 연결과 취소를 같은 트랜잭션에 저장한다. 참조·상태는 앱에서 확인하며 물리 FK는 두지 않는다. 교정·만료 조건은 [월간 회차 정책](policies.md#월간-회차-검증과-오류-교정)을 따른다.
 
 업무 상태가 ISSUING으로 커밋됐으면 Batch 첫 Step의 완료 이력이 없어도 확정 대상을 재사용합니다. 대상이 없으면 target_count=0/cutoff_spend=null로 완료합니다. 회차 잠금을 교정·실행 등록·대상 저장·발급이 공유하므로 취소와 첫 발급 중 하나만 커밋할 수 있습니다. 대상·원회차 이력은 보존합니다. [선정·교정 조건](policies.md#월간-회차-검증과-오류-교정)과 [Job 실행](architecture.md#월간-혜택-job)을 따릅니다.
 
@@ -532,7 +532,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | 낙관적 버전 |
 
-**제약:** UNIQUE(run_id,buyer_id), UNIQUE(buyer_coupon_id) WHERE buyer_coupon_id IS NOT NULL. template_id는 해당 월·등급의 GRADE 캠페인이며 external_spend>0, 1<=rank_no<=100입니다. 동점자 때문에 행 수가 100을 넘을 수 있습니다. 월별 마감의 불변 확정·취소 이력으로 대상과 합계를 고정합니다. 만료 뒤 재개는 새 쿠폰을 만들지 않고 EXPIRED로 종결합니다. 같은 대상 재시도는 원쿠폰을 재사용하며 PENDING 대상만 이어서 처리합니다. 쿠폰·발급 이력·대상 ISSUED 전이는 같은 DB 트랜잭션으로 반영합니다. 회차 행을 먼저 잠그고 ISSUING·원래 발급 기한을 확인하며 CANCELLED 부모의 대상은 처리하지 않습니다.
+**제약:** UNIQUE(run_id,buyer_id), UNIQUE(buyer_coupon_id) WHERE buyer_coupon_id IS NOT NULL. template_id는 해당 월·등급의 GRADE 캠페인이며 external_spend>0, 1<=rank_no<=100입니다. 동점자 때문에 행 수가 100을 넘을 수 있습니다. 월별 마감의 불변 확정·취소 이력으로 대상과 합계를 고정합니다. 쿠폰·발급 이력·대상 ISSUED 전이는 같은 DB 트랜잭션으로 반영합니다. 회차 행을 먼저 잠그고 ISSUING·원래 발급 기한을 확인하며 CANCELLED 부모의 대상은 처리하지 않습니다.
 
 ## 결제·마일리지
 
