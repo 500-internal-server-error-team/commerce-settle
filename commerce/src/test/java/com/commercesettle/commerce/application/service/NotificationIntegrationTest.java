@@ -1206,7 +1206,7 @@ class NotificationIntegrationTest {
         UUID.randomUUID(),
         "SettlementNoticeRequested",
         1,
-        java.time.OffsetDateTime.now(ZoneOffset.UTC),
+        java.time.OffsetDateTime.parse("2026-11-02T00:00:00Z"),
         UUID.randomUUID(),
         1,
         payload);
