@@ -5,12 +5,7 @@ import os
 import subprocess
 import time
 import uuid
-from smoke import ROOT, compose
-
-
-def require_ci_project():
-    if os.environ.get("CI") != "true" or os.environ.get("COMPOSE_PROJECT_NAME") != "commerce-settle-ci":
-        raise RuntimeError("Retention fixture writes require the disposable commerce-settle-ci project")
+from smoke import ROOT, compose, require_ci_project
 
 
 def sql(database, statement):
