@@ -56,6 +56,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "spring.kafka.admin.auto-create=false",
       "app.internal-auth.senders.gateway.current="
           + SellerSettlementControllerIntegrationTest.GATEWAY,
+      "app.internal-auth.senders[service\\:commerce].current=test-commerce-retention-credential-0123456789abcdef",
       "settlement.payout.mock-credential=test-settlement-credential-0123456789abcdef0123",
       "settlement.daily-batch.schedule-enabled=false",
       "settlement.payout-worker.enabled=false",
