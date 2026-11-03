@@ -5,6 +5,7 @@ import com.commercesettle.commerce.application.event.OrderLifecycleEvents;
 import com.commercesettle.commerce.application.port.AuditLog;
 import com.commercesettle.commerce.application.port.OrderBenefits;
 import com.commercesettle.commerce.application.port.PaymentAcceptanceInbox;
+import com.commercesettle.commerce.domain.exception.InvalidReservationTransitionException;
 import com.commercesettle.commerce.domain.exception.OrderStateException;
 import com.commercesettle.commerce.domain.model.Order;
 import com.commercesettle.commerce.domain.model.OrderRefundRequest;
@@ -88,8 +89,11 @@ public class OrderResultService {
                     inbox.retry(row.id(), "ORDER_PREDECESSOR_NOT_READY", clock.instant());
                     return true;
                   }
-                } catch (OrderStateException | IllegalArgumentException e) {
+                } catch (OrderStateException
+                    | IllegalArgumentException
+                    | InvalidReservationTransitionException e) {
                   // 도메인 검사는 부작용 전에 완료한다. 실패한 변경은 트랜잭션 전체를 롤백한다.
+                  // 예약의 금지된 전이는 다시 실행해도 같은 결과이므로 재시도 없이 수동 확인으로 넘긴다.
                   throw new ResultConflictException();
                 }
                 inbox.applied(row.id(), order.get().getId(), clock.instant());
