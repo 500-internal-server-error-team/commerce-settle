@@ -189,21 +189,24 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
     return invalid(List.of(error(e.field(), e.getMessage())), request);
   }
 
-  /** 발급 수·예산 소진은 전용 코드로, 나머지는 캠페인의 현재 상태와 맞지 않는 요청으로 알린다. */
+  /**
+   * 캠페인 상태 충돌은 다시 시도해도 성공하지 않으므로 버전 충돌과 구분한 전용 코드로 알린다. 소진·중복 발급·발급 불가 기간/종료를 나누고, 발급 불가는 사유를 설명에
+   * 담는다.
+   */
   @ExceptionHandler(CouponCampaignConflictException.class)
   ResponseEntity<Object> couponCampaignConflict(
       CouponCampaignConflictException e, WebRequest request) {
-    String detail =
-        switch (e.reason()) {
-          case EXHAUSTED -> null;
-          case CLOSED -> "신규 발급을 종료한 캠페인입니다.";
-          case NOT_STARTED -> "아직 발급 기간이 아닌 캠페인입니다.";
-          case ENDED -> "발급 기간이 끝난 캠페인입니다.";
-          case ALREADY_ISSUED -> "이미 이 캠페인의 쿠폰을 받은 구매자입니다.";
-        };
-    return detail == null
-        ? respond(ErrorCode.COUPON_BUDGET_EXHAUSTED, request)
-        : respond(ErrorCode.COMMON_VERSION_CONFLICT, detail, null, request);
+    return switch (e.reason()) {
+      case EXHAUSTED -> respond(ErrorCode.COUPON_BUDGET_EXHAUSTED, request);
+      case ALREADY_ISSUED -> respond(ErrorCode.COUPON_ALREADY_ISSUED, request);
+      case CLOSED -> notIssuable("신규 발급을 종료한 캠페인입니다.", request);
+      case NOT_STARTED -> notIssuable("아직 발급 기간이 아닌 캠페인입니다.", request);
+      case ENDED -> notIssuable("발급 기간이 끝난 캠페인입니다.", request);
+    };
+  }
+
+  private ResponseEntity<Object> notIssuable(String detail, WebRequest request) {
+    return respond(ErrorCode.COUPON_CAMPAIGN_NOT_ISSUABLE, detail, null, request);
   }
 
   @ExceptionHandler(CouponRejectedException.class)
