@@ -117,7 +117,8 @@ public class PayoutJobOperationService {
             previousStatus.name(),
             saved.getStatus().name(),
             "OPERATOR_REPLAY",
-            jobId.toString(),
+            // 같은 배치의 생성·재처리 감사를 묶어 볼 수 있게 정산 배치 ID로 추적한다.
+            payout.getBatchId().toString(),
             now));
     return saved;
   }

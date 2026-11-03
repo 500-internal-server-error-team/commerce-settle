@@ -4,6 +4,7 @@ import com.commercesettle.settlement.application.dto.DailySettlementSettings;
 import com.commercesettle.settlement.application.exception.OperationRejectedException;
 import com.commercesettle.settlement.application.exception.OperationRejectedException.Reason;
 import com.commercesettle.settlement.application.port.AuditLog;
+import com.commercesettle.settlement.application.service.SellerSettlementService.Settled;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.commercesettle.settlement.domain.repository.SettlementBatchRepository;
 import java.time.Clock;
@@ -71,14 +72,18 @@ public class SettlementBatchOperationService {
     if (existing.isPresent()) {
       return existing.get();
     }
-    Optional<SettlementBatch> created = sellers.settle(sellerId, batchDate);
-    if (created.isEmpty()) {
+    Optional<Settled> settled = sellers.settleReportingCreation(sellerId, batchDate);
+    if (settled.isEmpty()) {
       // 선점할 항목이 없었다. 같은 판매자를 먼저 처리한 일배치가 커밋했으면 그 배치를 돌려준다.
       return batches
           .find(sellerId, batchDate, policyVersion)
           .orElseThrow(() -> new OperationRejectedException(Reason.NO_ELIGIBLE_ITEMS));
     }
-    SettlementBatch batch = created.get();
+    SettlementBatch batch = settled.get().batch();
+    if (!settled.get().created()) {
+      // 위 조회 뒤 일배치가 먼저 만든 배치다. 이 요청의 생성이 아니므로 감사하지 않는다.
+      return batch;
+    }
     audit.record(
         new AuditLog.Entry(
             "OPERATOR",
