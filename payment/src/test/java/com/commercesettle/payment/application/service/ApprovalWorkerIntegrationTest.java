@@ -17,6 +17,9 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -44,6 +47,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -81,8 +85,15 @@ class ApprovalWorkerIntegrationTest {
     return new JdbcTemplate(dataSource);
   }
 
+  private Connection lockHolder;
+
   @AfterEach
-  void deleteRows() {
+  void deleteRows() throws SQLException {
+    if (lockHolder != null) {
+      lockHolder.rollback();
+      lockHolder.close();
+      lockHolder = null;
+    }
     gateway.reset();
     for (String table :
         List.of(
@@ -333,6 +344,64 @@ class ApprovalWorkerIntegrationTest {
                     Long.class))
         .isEqualTo(24);
     assertThat(maxInFlight.get()).isGreaterThan(1);
+  }
+
+  @Test
+  @DisplayName("결제 행 잠금 경합이 길면 준비 단계는 대기 상한 안에 롤백하고 외부 승인을 호출하지 않는다")
+  void rollsBackPrepareWhenPaymentRowLockIsContended() {
+    request(10_000, 0, "CREDIT_CARD");
+    lockPaymentRow();
+
+    long started = System.nanoTime();
+    assertThatThrownBy(worker::runOnce).isInstanceOf(PessimisticLockingFailureException.class);
+
+    assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+    assertThat(gateway.approvals).isEmpty();
+    assertThat(jdbc().queryForObject("SELECT count(*) FROM payment.payment_attempts", Long.class))
+        .isZero();
+    assertThat(jdbc().queryForObject("SELECT status FROM payment.payments", String.class))
+        .isEqualTo("PENDING");
+  }
+
+  @Test
+  @DisplayName("결과 반영 중 결제 행 잠금 경합이 길면 대기 상한 안에 롤백하고 확정·마일리지 차감·이벤트를 남기지 않는다")
+  void rollsBackRecordWhenPaymentRowLockIsContended() {
+    fundWallet(5_000);
+    request(10_000, 2_000, "CREDIT_CARD");
+    gateway.approve =
+        r -> {
+          lockPaymentRow();
+          return new Result.Succeeded(UUID.randomUUID(), NOW);
+        };
+
+    long started = System.nanoTime();
+    assertThatThrownBy(worker::runOnce).isInstanceOf(PessimisticLockingFailureException.class);
+
+    assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(5));
+    assertThat(gateway.approvals).hasSize(1);
+    assertThat(status()).isEqualTo("PROCESSING");
+    assertThat(jdbc().queryForObject("SELECT status FROM payment.payment_attempts", String.class))
+        .isEqualTo("PROCESSING");
+    assertThat(
+            jdbc()
+                .queryForList(
+                    "SELECT kind FROM payment.mileage_entries ORDER BY kind", String.class))
+        .containsExactly("RESERVE");
+    assertThat(outbox()).containsExactly("PaymentAccepted:0");
+    assertThat(jobStatus()).isEqualTo("RUNNING");
+  }
+
+  /** 다른 트랜잭션에서 결제 행을 잠그고 정리 때까지 놓지 않는다. */
+  private void lockPaymentRow() {
+    try {
+      lockHolder = dataSource.getConnection();
+      lockHolder.setAutoCommit(false);
+      try (Statement statement = lockHolder.createStatement()) {
+        statement.execute("SELECT id FROM payment.payments FOR UPDATE");
+      }
+    } catch (SQLException e) {
+      throw new IllegalStateException(e);
+    }
   }
 
   private String status() {
