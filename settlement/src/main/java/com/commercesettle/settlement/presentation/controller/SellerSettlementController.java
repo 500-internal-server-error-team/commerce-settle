@@ -51,6 +51,27 @@ import org.springframework.web.bind.annotation.RestController;
       content =
           @Content(
               mediaType = "application/problem+json",
+              schema = @Schema(implementation = ProblemResponse.class))),
+  @ApiResponse(
+      responseCode = "409",
+      description = "상태·버전·기한·잔액·멱등 충돌",
+      content =
+          @Content(
+              mediaType = "application/problem+json",
+              schema = @Schema(implementation = ProblemResponse.class))),
+  @ApiResponse(
+      responseCode = "429",
+      description = "요청 제한",
+      content =
+          @Content(
+              mediaType = "application/problem+json",
+              schema = @Schema(implementation = ProblemResponse.class))),
+  @ApiResponse(
+      responseCode = "503",
+      description = "일시적 저장/외부 장애",
+      content =
+          @Content(
+              mediaType = "application/problem+json",
               schema = @Schema(implementation = ProblemResponse.class)))
 })
 @RestController

@@ -2,16 +2,17 @@ package com.commercesettle.settlement.application.service;
 
 import com.commercesettle.settlement.application.dto.PageView;
 import com.commercesettle.settlement.application.dto.PayoutView;
+import com.commercesettle.settlement.application.dto.PayoutWorkerSettings;
 import com.commercesettle.settlement.domain.exception.PayoutNotFoundException;
 import com.commercesettle.settlement.domain.model.Payout;
 import com.commercesettle.settlement.domain.model.PayoutJob;
-import com.commercesettle.settlement.domain.model.PayoutJobStatus;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.commercesettle.settlement.domain.model.SettlementItem;
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository;
 import com.commercesettle.settlement.domain.repository.PayoutRepository;
 import com.commercesettle.settlement.domain.repository.SettlementBatchRepository;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -30,16 +31,22 @@ public class SellerSettlementQueryService {
   private final SettlementBatchRepository batches;
   private final PayoutRepository payouts;
   private final PayoutJobRepository payoutJobs;
+  private final PayoutWorkerSettings workerSettings;
+  private final Clock clock;
 
   public SellerSettlementQueryService(
       SettlementItemRepository items,
       SettlementBatchRepository batches,
       PayoutRepository payouts,
-      PayoutJobRepository payoutJobs) {
+      PayoutJobRepository payoutJobs,
+      PayoutWorkerSettings workerSettings,
+      Clock clock) {
     this.items = items;
     this.batches = batches;
     this.payouts = payouts;
     this.payoutJobs = payoutJobs;
+    this.workerSettings = workerSettings;
+    this.clock = clock;
   }
 
   @Transactional(readOnly = true)
@@ -97,15 +104,24 @@ public class SellerSettlementQueryService {
     return new PageView<>(found, page, size, total);
   }
 
-  /** 다음 자동 시도는 작업이 대기 중일 때만 있다. 완료·확정 거절·운영 확인 대기는 자동 시도가 없고, 실행 중이면 이미 시도하고 있다. */
-  private static PayoutView view(Payout payout, Optional<PayoutJob> job) {
-    Instant next =
-        job.filter(
-                found ->
-                    found.getStatus() == PayoutJobStatus.PENDING
-                        || found.getStatus() == PayoutJobStatus.RETRY)
-            .map(PayoutJob::getNextRunAt)
-            .orElse(null);
-    return new PayoutView(payout, next);
+  /**
+   * 다음 자동 시도. 대기 중(PENDING·RETRY)이면 예정 시각이다. 실행 중이어도 임대가 만료됐으면 Worker가 다음 임대 때 회수해 다시 실행하므로 만료
+   * 시각이다. 단 시도 상한에 닿았으면 회수 때 호출 없이 운영 확인으로 넘어가 다음 시도가 없다. 완료·확정 거절·운영 확인 대기와 임대가 유효한 실행 중은 없다.
+   */
+  private PayoutView view(Payout payout, Optional<PayoutJob> job) {
+    return new PayoutView(payout, job.map(this::nextAttemptAt).orElse(null));
+  }
+
+  private Instant nextAttemptAt(PayoutJob job) {
+    return switch (job.getStatus()) {
+      case PENDING, RETRY -> job.getNextRunAt();
+      case RUNNING ->
+          job.getLeaseUntil() != null
+                  && job.getLeaseUntil().isBefore(clock.instant())
+                  && job.getAttempts() < workerSettings.maxAttempts()
+              ? job.getLeaseUntil()
+              : null;
+      case REVIEW_REQUIRED, DONE -> null;
+    };
   }
 }
