@@ -123,6 +123,35 @@ class SellerCouponIntegrationTest {
   }
 
   @Test
+  @DisplayName("결제수단 목록의 null 원소와 중복 원소는 allowedMethods의 400 입력 오류로 거절하고 캠페인을 저장하지 않는다")
+  void rejectsNullOrDuplicateMethods() {
+    Shop shop = shop();
+    List<List<String>> invalidMethods =
+        List.of(
+            java.util.Arrays.asList((String) null),
+            java.util.Arrays.asList("CREDIT_CARD", null),
+            List.of("CREDIT_CARD", "CREDIT_CARD"));
+
+    for (List<String> methods : invalidMethods) {
+      ObjectNode body = terms(shop, 10, 30_000);
+      var array = body.putArray("allowedMethods");
+      methods.forEach(array::add);
+
+      JsonNode invalid =
+          seller(shop.seller(), "/api/sellers/me/coupon-templates", body, 400, key());
+
+      assertThat(invalid.path("code").asText())
+          .as("%s", methods)
+          .isEqualTo("COMMON_VALIDATION_FAILED");
+      assertThat(invalid.path("errors").findValuesAsText("field"))
+          .as("%s", methods)
+          .isNotEmpty()
+          .allMatch(field -> field.startsWith("allowedMethods"));
+    }
+    assertThat(count("coupon_templates where seller_id = ?", shop.seller())).isZero();
+  }
+
+  @Test
   @DisplayName(
       "발급은 판매자 부담 쿠폰 한 장을 만들고 같은 구매자 새 요청은 COUPON_ALREADY_ISSUED, 같은 키 재요청은 기존 쿠폰, 없는 구매자는 404다")
   void issuesOneCouponPerBuyer() throws Exception {
