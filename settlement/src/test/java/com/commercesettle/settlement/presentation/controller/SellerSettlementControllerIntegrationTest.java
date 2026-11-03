@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.presentation.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.nullValue;
@@ -8,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.commercesettle.settlement.application.dto.PayoutWorkerSettings;
 import com.commercesettle.settlement.domain.model.Payout;
 import com.commercesettle.settlement.domain.model.PayoutJob;
 import com.commercesettle.settlement.domain.model.PayoutRecipient;
@@ -18,10 +20,15 @@ import com.commercesettle.settlement.domain.repository.PayoutJobRepository;
 import com.commercesettle.settlement.domain.repository.PayoutRepository;
 import com.commercesettle.settlement.domain.repository.SettlementBatchRepository;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.InputStream;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
@@ -32,6 +39,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -75,6 +83,8 @@ class SellerSettlementControllerIntegrationTest {
   @Autowired SettlementBatchRepository batches;
   @Autowired PayoutRepository payouts;
   @Autowired PayoutJobRepository payoutJobs;
+  @Autowired PayoutWorkerSettings workerSettings;
+  @Autowired ObjectMapper mapper;
 
   private final AtomicInteger payoutDays = new AtomicInteger();
   private UUID seller;
@@ -174,6 +184,55 @@ class SellerSettlementControllerIntegrationTest {
         .andExpect(jsonPath("$.items[3].holdReason").value(nullValue()))
         .andExpect(jsonPath("$.items[3].nextAttemptAt").value("2026-10-20T10:00:05+09:00"))
         .andExpect(jsonPath("$.items[3].recipientAccountRef").value("acct-" + seller));
+  }
+
+  @Test
+  @DisplayName("임대가 만료된 실행 중 작업은 시도가 남았을 때만 회수 시각을 다음 시도로 알린다")
+  void expiredLeaseIsNextAttemptOnlyWhileAttemptsRemain() throws Exception {
+    Payout expired = payout(seller, T1);
+    Payout exhausted = payout(seller, T2);
+    Payout active = payout(seller, T3);
+    // Worker가 중단돼 임대만 남은 작업은 다음 임대 때 회수돼 다시 실행된다.
+    running(expired, 1, "TIMESTAMPTZ '2026-10-20T01:00:30Z'");
+    // 시도 상한에 닿은 작업은 회수되면 호출 없이 운영 확인으로 넘어간다.
+    running(exhausted, workerSettings.maxAttempts(), "TIMESTAMPTZ '2026-10-20T01:01:30Z'");
+    // 임대가 유효하면 지금 실행 중이라 다음 시도가 없다.
+    running(active, 1, "now() + interval '1 minute'");
+
+    mvc.perform(asSeller(get("/api/sellers/me/payouts")))
+        .andExpect(status().isOk())
+        .andExpect(
+            jsonPath("$.items[*].id").value(contains(id(active), id(exhausted), id(expired))))
+        .andExpect(jsonPath("$.items[0].nextAttemptAt").value(nullValue()))
+        .andExpect(jsonPath("$.items[1].nextAttemptAt").value(nullValue()))
+        .andExpect(jsonPath("$.items[2].nextAttemptAt").value("2026-10-20T10:00:30+09:00"));
+    mvc.perform(asSeller(get("/api/sellers/me/payouts/{id}", expired.getId())))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.nextAttemptAt").value("2026-10-20T10:00:30+09:00"));
+  }
+
+  @Test
+  @DisplayName("Gateway가 보여 주는 런타임 명세의 응답 코드는 docs/openapi.json과 같다")
+  void runtimeResponsesMatchContract() throws Exception {
+    JsonNode runtime =
+        mapper.readTree(
+            mvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString());
+    JsonNode contract;
+    try (InputStream in = new ClassPathResource("contracts/openapi.json").getInputStream()) {
+      contract = mapper.readTree(in);
+    }
+    for (String path :
+        List.of(
+            "/api/sellers/me/settlement-items",
+            "/api/sellers/me/settlement-batches",
+            "/api/sellers/me/payouts",
+            "/api/sellers/me/payouts/{payoutId}")) {
+      assertThat(responseCodes(runtime, path)).as(path).isEqualTo(responseCodes(contract, path));
+    }
   }
 
   @Test
@@ -285,6 +344,29 @@ class SellerSettlementControllerIntegrationTest {
         jobStatus,
         Timestamp.from(nextRunAt),
         payout.getId());
+  }
+
+  private void running(Payout payout, int attempts, String leaseUntilSql) {
+    jdbc.update(
+        "UPDATE settlement.payout_jobs SET status = 'RUNNING', attempts = ?, lease_owner = 'w',"
+            + " lease_token = gen_random_uuid(), lease_until = "
+            + leaseUntilSql
+            + " WHERE payout_id = ?",
+        attempts,
+        payout.getId());
+  }
+
+  private static Set<String> responseCodes(JsonNode document, String path) {
+    Set<String> codes = new TreeSet<>();
+    document
+        .path("paths")
+        .path(path)
+        .path("get")
+        .path("responses")
+        .fieldNames()
+        .forEachRemaining(codes::add);
+    assertThat(codes).as(path).isNotEmpty();
+    return codes;
   }
 
   private static String id(SettlementItem item) {

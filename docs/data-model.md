@@ -867,7 +867,7 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(payout_id), UNIQUE(business_key). 지급 항목 선점·금액·작업 생성 원자 저장. next_run_at은 Payout 응답의 nextAttemptAt 원천입니다. 주말·공휴일도 같은 실행·재시도 규칙을 적용하며 확정 거절은 REVIEW_REQUIRED입니다.
+**제약:** UNIQUE(payout_id), UNIQUE(business_key). 지급 항목 선점·금액·작업 생성 원자 저장. next_run_at은 Payout 응답의 nextAttemptAt 원천입니다. 임대가 만료된 RUNNING 작업은 시도가 상한 미만이면 lease_until을 nextAttemptAt으로 냅니다(다음 임대 때 회수돼 다시 실행). 상한에 닿았으면 회수 때 운영 확인으로 넘어가므로 null입니다. 주말·공휴일도 같은 실행·재시도 규칙을 적용하며 확정 거절은 REVIEW_REQUIRED입니다.
 
 Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건을 적용합니다. 금융 결과와 지급 항목·Job을 함께 반영하고, 만료된 실행자의 결과는 모두 롤백합니다. 호출·조회·원키 재개는 [공통 복구](policies.md#공통-복구)를 따릅니다.
 
