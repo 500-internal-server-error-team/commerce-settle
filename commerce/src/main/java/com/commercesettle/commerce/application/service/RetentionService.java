@@ -106,7 +106,7 @@ public class RetentionService {
     refresh(List.of(delivery), true);
   }
 
-  private void refresh(List<UUID> deliveries, boolean requireCachedClosure) {
+  private void refresh(List<UUID> deliveries, boolean requireAllSources) {
     var refs = transactions.execute(status -> store.sourceBatches(deliveries));
     var pending =
         refs.stream()
@@ -118,18 +118,21 @@ public class RetentionService {
     if (pending.isEmpty()) return;
     var closures = settlement.lookup(pending.keySet());
     Set<UUID> seen = new HashSet<>();
+    Set<UUID> unverified = new HashSet<>();
     for (var closure : closures) {
-      if (closure == null
-          || !pending.containsKey(closure.batchId())
-          || !pending.get(closure.batchId()).equals(closure.sellerId())
-          || !seen.add(closure.batchId())
-          || closure.closedAt() != null && closure.closedAt().isAfter(clock.instant()))
+      if (closure == null || !pending.containsKey(closure.batchId()))
         throw new SettlementRetentionGateway.UnavailableException();
+      if (!seen.add(closure.batchId())
+          || !pending.get(closure.batchId()).equals(closure.sellerId())
+          || closure.closedAt() != null && closure.closedAt().isAfter(clock.instant()))
+        unverified.add(closure.batchId());
     }
-    if (!seen.equals(pending.keySet())) throw new SettlementRetentionGateway.UnavailableException();
-    var cached = transactions.execute(status -> store.cacheClosures(closures, clock.instant()));
-    if (requireCachedClosure
-        && closures.stream().anyMatch(c -> c.closedAt() != null && !cached.contains(c.batchId())))
+    var verified = closures.stream().filter(c -> !unverified.contains(c.batchId())).toList();
+    if (requireAllSources && verified.size() != pending.size())
+      throw new SettlementRetentionGateway.UnavailableException();
+    var cached = transactions.execute(status -> store.cacheClosures(verified, clock.instant()));
+    if (requireAllSources
+        && verified.stream().anyMatch(c -> c.closedAt() != null && !cached.contains(c.batchId())))
       throw new SettlementRetentionGateway.UnavailableException();
   }
 
