@@ -649,7 +649,7 @@
 
 **제약:** UNIQUE(refund_id). 금융 성공/마일리지 복원/원장 상쇄/주문 복구를 별도 추적. 완료 ack 전 전체 완료 금지.
 
-`step`은 RESERVATION_REQUESTED → EXTERNAL_REFUND_PENDING → MILEAGE_RESTORE_PENDING → LEDGER_REVERSAL_PENDING → ORDER_RESTORE_PENDING → COMPLETED이며, 외부 확정 거절은 RELEASE_PENDING → FAILED, 예약 거절은 RESERVATION_REQUESTED → FAILED입니다. 원장 상쇄 확인 때 `RefundCompleted`를 저장하고, `RefundOrderRestored`를 반영해야 환불이 COMPLETED가 됩니다. Settlement 응답(예약 결과·원장 상쇄·예약 해제)은 Settlement 토픽 수신기가 [inbox](#inbox)에 넘기고 결제 요청 처리기가 `RefundSettlementReplyService`로 반영합니다. 반영하지 않은 응답은 Inbox `REVIEW_REQUIRED`(`REFUND_SETTLEMENT_REPLY_REJECTED`)로 남깁니다.
+`step`은 RESERVATION_REQUESTED → EXTERNAL_REFUND_PENDING → MILEAGE_RESTORE_PENDING → LEDGER_REVERSAL_PENDING → ORDER_RESTORE_PENDING → COMPLETED이며, 외부 확정 거절은 RELEASE_PENDING → FAILED, 예약 거절은 RESERVATION_REQUESTED → FAILED입니다. 원장 상쇄 확인 때 `RefundCompleted`를 저장하고, `RefundOrderRestored`를 반영해야 환불이 COMPLETED가 됩니다. Settlement 응답(예약 결과·원장 상쇄·예약 해제)은 Settlement 토픽 수신기가 [inbox](#inbox)에 넘기고 결제 요청 처리기가 반영합니다. 반영하지 않은 응답은 Inbox `REVIEW_REQUIRED`(`REFUND_SETTLEMENT_REPLY_REJECTED`)로 남깁니다.
 
 **인덱스:** (step,updated_at,id).
 
@@ -1334,7 +1334,7 @@ Commerce의 `result_ref`는 주문 ID입니다. 주문 연결·결과 반영과 
 
 Payment는 운영 작업 재처리에 `actor_kind=OPERATOR`, `actor_id`=확인한 운영자 발신자 ID, `operation=REPLAY_PAYMENT_JOB`, `resource_id`=작업 ID, `response_status`=202로 만료 없이 저장합니다. `request_hash`는 작업 ID·예상 버전·사유 코드의 SHA-256입니다.
 
-Finance Mock 준비 API의 운영자 범위는 [시험 데이터 준비 정책](policies.md#시험-데이터-준비)의 길이별 발신자 표현을 사용합니다. `actor_id` 컬럼을 늘리지 않으며 기존 운영자의 완료 키를 보존합니다.
+Finance Mock 준비 API는 `actor_kind=OPERATOR`, `operation=MOCK:ACCOUNT:CREATE` 또는 `MOCK:SCENARIO:CREATE`를 사용합니다. `actor_id`는 검증한 발신자 ID가 100자 이하면 원문, 초과하면 `sha256:`과 전체 ID의 SHA-256 64자리 16진수입니다. `key_hash`는 `Idempotency-Key`의 SHA-256이며 만료시키지 않습니다. 기존 짧은 운영자 ID의 키 범위와 완료 기록을 보존합니다.
 
 구매자 가입은 서버가 `actor_kind=PUBLIC`, `actor_id=BUYER_REGISTRATION`, `operation=REGISTER`로 고정해 계정 생성 전에도 같은 키를 찾습니다. 기존 테이블을 사용하며 `request_hash`는 가입 본문의 서버 키 기반 HMAC-SHA256, `resource_id`는 생성한 구매자 계정 ID, `response_status`는 201입니다. 계정·웰컴 발급·이 기록의 COMPLETED 전이는 같은 트랜잭션이며 별도 가입 테이블을 만들지 않습니다. 재요청·충돌·만료의 기준은 [구매자 가입 재시도](policies.md#구매자-가입-재시도)를 따릅니다.
 
