@@ -20,6 +20,7 @@ import com.commercesettle.settlement.domain.repository.PayoutRepository;
 import com.commercesettle.settlement.domain.repository.SettlementBatchRepository;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
 import com.jayway.jsonpath.JsonPath;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -222,6 +223,62 @@ class SettlementOperationControllerIntegrationTest {
     assertThat(count("payout_job_replays")).isZero();
     assertThat(count("idempotency_records")).isZero();
     assertThat(count("audit_logs")).isZero();
+  }
+
+  @Test
+  @DisplayName("다른 트랜잭션이 작업 행을 잠그고 있으면 상한 안에 503으로 끝나고 아무것도 바꾸지 않으며, 풀린 뒤 같은 키로 다시 열 수 있다")
+  void replayGivesUpOnLockedJob() throws Exception {
+    Payout payout = payout(T1);
+    stop(payout, "UNKNOWN", "UNKNOWN");
+    long version = jobVersion(payout);
+    String body = replay(version, "대역 장애 복구 확인");
+    CountDownLatch locked = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    try {
+      Future<?> holder =
+          executor.submit(
+              () ->
+                  transactions.executeWithoutResult(
+                      status -> {
+                        jdbc.queryForList(
+                            "SELECT id FROM settlement.payout_jobs WHERE payout_id = ? FOR UPDATE",
+                            payout.getId());
+                        locked.countDown();
+                        await(release);
+                      }));
+      assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+      long started = System.nanoTime();
+      Future<ResultActions> request =
+          executor.submit(() -> replay(payout, "replay-key-0008", body));
+      // 상한이 없으면 잠금이 풀릴 때까지 기다리므로 여기서 시간 초과로 실패한다.
+      request
+          .get(5, TimeUnit.SECONDS)
+          .andExpect(status().isServiceUnavailable())
+          .andExpect(jsonPath("$.code").value("COMMON_TEMPORARILY_UNAVAILABLE"));
+      assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(3));
+      release.countDown();
+      holder.get(10, TimeUnit.SECONDS);
+    } finally {
+      release.countDown();
+      executor.shutdownNow();
+    }
+
+    assertThat(jobVersion(payout)).isEqualTo(version);
+    assertThat(batchStatus(payout)).isEqualTo("REVIEW_REQUIRED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM settlement.payouts WHERE id = ?", String.class, payout.getId()))
+        .isEqualTo("UNKNOWN");
+    assertThat(count("payout_job_replays")).isZero();
+    assertThat(count("idempotency_records")).isZero();
+    assertThat(count("audit_logs")).isZero();
+
+    // 실패한 요청은 멱등 기록을 남기지 않아 같은 키로 다시 요청할 수 있다.
+    replay(payout, "replay-key-0008", body)
+        .andExpect(status().isAccepted())
+        .andExpect(jsonPath("$.version").value(version + 1));
+    assertThat(count("payout_job_replays")).isEqualTo(1);
   }
 
   @Test

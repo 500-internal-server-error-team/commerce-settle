@@ -50,6 +50,9 @@ class JpaPayoutJobRepository implements PayoutJobRepository {
 
   @Override
   public Optional<PayoutJob> findByIdForUpdate(UUID id) {
+    // 다른 트랜잭션이 잡은 작업 잠금은 상한까지만 기다린다. 넘으면 호출한 트랜잭션 전체를 롤백한다.
+    jdbc.queryForList(
+        "SELECT set_config('lock_timeout', '1000', true)", new MapSqlParameterSource());
     return repository.findByIdForUpdate(id);
   }
 
