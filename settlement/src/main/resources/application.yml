@@ -14,7 +14,7 @@ spring:
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
     hikari:
-      # JDBC를 쓰는 JVM당 10(ADR 0005). 지급 Worker 8건은 외부 호출 중에는 연결을 쥐지 않는다.
+      # JDBC를 쓰는 JVM당 10. 지급 Worker 8건은 외부 호출 중에는 연결을 쥐지 않는다.
       maximum-pool-size: 10
       minimum-idle: 1
   jpa:
@@ -33,7 +33,7 @@ spring:
         size: 4
   batch:
     job:
-      # 기동 시 자동 실행하지 않고 스케줄러가 batchDate로 실행한다(ADR 0007 D7).
+      # 기동 시 자동 실행하지 않고 스케줄러가 batchDate로 실행한다.
       enabled: false
     jdbc:
       # 메타데이터 테이블은 settlement 초기 SQL이 만든다.
@@ -69,14 +69,14 @@ settlement:
   commerce:
     # 지급 생성 전 상품·판매자 지급 컨텍스트를 조회하는 커머스 내부 API.
     base-url: ${COMMERCE_URL:http://commerce:8080}
-    # 커머스가 service:settlement로 확인하는 내부 호출 자격(ADR 0010). 없거나 43자 미만이면 기동하지 않는다.
+    # 커머스가 service:settlement로 확인하는 내부 호출 자격. 없거나 43자 미만이면 기동하지 않는다.
     credential: ${COMMERCE_SETTLEMENT_CREDENTIAL}
     # 지급 생성 트랜잭션 안에서 호출하므로 짧게 둔다. 넘기면 그 판매자는 이번 실행에서 건너뛴다.
     http-timeout: 5s
   daily-batch:
     policy-version: delivery-daily-v1
     schedule-enabled: ${SETTLEMENT_DAILY_BATCH_ENABLED:true}
-    # 실행 중으로 남은 실행을 강제 종료 잔류로 볼 마지막 갱신 경과 시간(ADR 0007 D7). 판매자 한 명 처리보다 충분히 길게 둔다.
+    # 실행 중으로 남은 실행을 강제 종료 잔류로 볼 마지막 갱신 경과 시간. 판매자 한 명 처리보다 충분히 길게 둔다.
     stale-after: 10m
   payout:
     # finance-mock 지급 대역의 재원 계정·금융 실행 시나리오. 지급 생성 때 지급에 고정한다.
@@ -85,7 +85,7 @@ settlement:
     # 원거래 조회에 쓰는 조회 통신 시나리오. 원거래의 금융 실행 버전과 별개다.
     lookup-scenario-version: ${PAYOUT_LOOKUP_SCENARIO_VERSION:payout-normal-v1}
     mock-base-url: ${FINANCE_MOCK_URL:http://finance-mock:8080}
-    # Finance Mock이 service:settlement로 확인하는 내부 호출 자격(ADR 0010). 없거나 43자 미만이면 기동하지 않는다.
+    # Finance Mock이 service:settlement로 확인하는 내부 호출 자격. 없거나 43자 미만이면 기동하지 않는다.
     mock-credential: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL}
   payout-worker:
     enabled: ${SETTLEMENT_PAYOUT_WORKER_ENABLED:true}
@@ -95,11 +95,11 @@ settlement:
     http-timeout: 5s
     unconfirmed-retry-delay: 5m
     max-attempts: 10
-    # 인스턴스당 동시 실행 상한과 그중 결과 조회·중단 복구 전용 슬롯(ADR 0005). 새 지급은 나머지만 쓴다.
+    # 인스턴스당 동시 실행 상한과 그중 결과 조회·중단 복구 전용 슬롯. 새 지급은 나머지만 쓴다.
     max-concurrency: 8
     recovery-slots: 2
   inbox-processor:
-    # 선행 결제를 기다리는 구매확정(WAITING)을 짧은 주기로 다시 판정한다(ADR 0007).
+    # 선행 결제를 기다리는 구매확정(WAITING)을 짧은 주기로 다시 판정한다.
     enabled: ${SETTLEMENT_INBOX_PROCESSOR_ENABLED:true}
     interval-ms: 1000
     batch-size: 100
@@ -151,7 +151,7 @@ app:
     max-attempts: 10
   internal-auth:
     service: settlement
-    # Gateway의 내부 호출 자격(ADR 0010). 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
+    # Gateway의 내부 호출 자격. 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
     senders:
       "[service:commerce]":
         current: ${SETTLEMENT_COMMERCE_CREDENTIAL}

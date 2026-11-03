@@ -29,10 +29,10 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 
 /**
- * Payment·Commerce 토픽에서 Settlement가 처리하는 이벤트만 고른다. 처리 여부는 토픽이 아니라 eventType으로 정하고(ADR 0005), 대상이 아닌
- * 종류는 저장 없이 ack한다. 대상은 결제확정·구매확정과 환불 SAGA 요청이다. 대상 이벤트는 Payment Listener와 같은 엄격한 규칙으로 해석한다. 해석할 수
- * 없으면 격리가 켜져 있을 때 원문과 DLT 작업을 저장한 뒤 ack하고, 꺼져 있으면 ack하지 않고 예외를 던져 컨테이너를 멈춘다. 반영 중 오류는 격리하지 않는다.
- * Inbox 저장과 반영이 커밋된 뒤에만 ack한다.
+ * Payment·Commerce 토픽에서 Settlement가 처리하는 이벤트만 고른다. 처리 여부는 토픽이 아니라 eventType으로 정하고, 대상이 아닌 종류는 저장 없이
+ * ack한다. 대상은 결제확정·구매확정과 환불 SAGA 요청이다. 대상 이벤트는 Payment Listener와 같은 엄격한 규칙으로 해석한다. 해석할 수 없으면 격리가 켜져
+ * 있을 때 원문과 DLT 작업을 저장한 뒤 ack하고, 꺼져 있으면 ack하지 않고 예외를 던져 컨테이너를 멈춘다. 반영 중 오류는 격리하지 않는다. Inbox 저장과 반영이
+ * 커밋된 뒤에만 ack한다.
  */
 public class SettlementEventListener {
   static final String PAYMENT_TOPIC = "commerce-settle.payment.v1";

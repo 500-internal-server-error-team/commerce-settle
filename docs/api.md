@@ -1,6 +1,6 @@
 # 기능 API
 
-기계 판독 기준은 [OpenAPI 3.1.1 명세](openapi.json)입니다. 요청/응답 필드·필수값·타입·오류·권한·멱등 헤더를 포함합니다. 이 문서는 API를 찾는 방법과 서비스 간 사용 순서를 설명합니다. 명세에는 구현 전 계약도 포함하므로 제공 여부는 소유 서비스의 Controller와 실행 설정을 확인합니다. [업무 정책](policies.md)과 [ERD](data-model.md)를 함께 적용합니다.
+기계 판독 기준은 [OpenAPI 3.1.1 명세](openapi.json)입니다. 요청/응답 필드·필수값·타입·오류·권한·멱등 헤더를 포함합니다. 이 문서는 API를 찾는 방법과 서비스 간 사용 순서를 설명합니다. 선택 기능의 활성화·연결 조건은 [개발 환경](development.md)을 따릅니다. [업무 정책](policies.md)과 [ERD](data-model.md)를 함께 적용합니다.
 
 API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CONTRIBUTING.md#api-경로와-명세)을 따릅니다.
 
@@ -146,7 +146,7 @@ PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반�
 - `occurredAt≤cutoffAt`인 `PaymentConfirmed`·`RefundFinancialCompleted`를 **발행 여부와 무관하게** 제공합니다. E·M·P·B·F·N은 원거래에 고정한 금액이며 환불 이벤트도 양수 원금액을 반환합니다. 대조 측은 이벤트 종류에 따라 최초 반영·상쇄를 구분합니다. 이후 환불·정책 변경으로 과거 금액을 다시 계산하지 않습니다.
 - 내부 대조는 회차를 이어 읽는 이벤트 피드이므로 `createdAt DESC,eventId DESC`의 keyset cursor를 사용합니다. 응답은 공통 목록의 `items/page/size/totalElements/totalPages`와 `cutoffAt/snapshotAt/nextCursor`를 반환합니다. 최초 조회의 snapshotAt·원천 조회 경계·cutoffAt·size를 cursor에 묶고, 이후 요청에서는 같은 cutoffAt·size와 cursor를 사용합니다. 기준선 이벤트 집합·금융 값은 불변이며 발행 위치만 진행에 따라 달라질 수 있습니다. 잘못된 cursor·다른 조건의 재사용은 400입니다.
 - `publicationState=PENDING`은 미발행 또는 ack 뒤 위치 저장 전 중단을 포함합니다. `topic`은 고정된 원천 토픽이며 `partition/offset/publishedAt`은 함께 null입니다. `PUBLISHED`이면 세 필드가 모두 있고 위치는 ack 결과입니다. null을 0으로 바꾸거나 미발행 이벤트를 페이지에서 제외하지 않습니다.
-- Settlement는 `eventId`로 자기 Inbox를 먼저 확인합니다. 이미 APPLIED인 이벤트는 재발행 위치가 더 뒤로 옮겨져도 원장을 대조합니다. 수신 기록이 없는 위치 미확정 건은 발행 대기로 남깁니다. 자기 Consumer 그룹의 커밋 offset·Inbox·격리 기록에 따른 나머지 판정은 [정산 대조 결정](decisions/0007-settlement-batch-scope-and-schedule.md#d6-정산-대조)을 따릅니다.
+- Settlement는 `eventId`로 자기 Inbox를 먼저 확인합니다. 이미 APPLIED인 이벤트는 재발행 위치가 더 뒤로 옮겨져도 원장을 대조합니다. 수신 기록이 없는 위치 미확정 건은 발행 대기로 남깁니다. 자기 Consumer 그룹의 커밋 offset·Inbox·격리 기록에 따른 나머지 판정은 [정산 대조](policies.md#정산-대조)을 따릅니다.
 
 ### 격리 원문 운영
 
@@ -198,11 +198,10 @@ PG A/B/C의 카드와 EASY_PAY의 시험 지갑에 승인·전액 환불을 제�
 | QUARANTINE_REPLAY_ACTIVE / QUARANTINE_DELIVERY_NOT_RESUMABLE |409|같은 격리 원문의 REPLAY가 발행 중·REVIEW_REQUIRED가 아닌 발행 작업 재개|
 | COMMON_RATE_LIMITED / COMMON_TEMPORARILY_UNAVAILABLE |429/503|제한·의존 저장소 장애·변경 중/누락된 인증 가드·인증 복구 차단|
 
-구조 검증은 JSON·로컬 ref·경로 변수·operationId·명시 권한/오류·DTO 검사를 다룹니다. 컨트롤러·Gateway·DB·금융 동시성 검증은 구현 단계에서 별도로 수행합니다. OpenAPI 형식 기준은 [공식 OAS3.1.1](https://spec.openapis.org/oas/v3.1.1.html)입니다.
+구조 검증은 JSON·로컬 ref·경로 변수·operationId·명시 권한/오류·DTO 검사를 다룹니다. HTTP·Gateway·DB·금융 동시성은 [개발·검증](development.md#개발검증)의 해당 시험으로 확인합니다. OpenAPI 형식 기준은 [공식 OAS3.1.1](https://spec.openapis.org/oas/v3.1.1.html)입니다.
 
 주문에 연결된 알림의 운영 재처리는 [보존 기한](policies.md#보존과-삭제) 안에서만 허용합니다. 기한 초과는 기존 상태 충돌 409이며 보존 보류가 재처리 기한을 연장하지 않습니다. 이미 정리한 알림은 조회에서 404이고 늦은 원업무 중복 수신으로 본문·발송을 다시 만들지 않습니다.
 정산·지급 알림은 Settlement 소유 배치 종결 시각을 내부 묶음 조회로 확인합니다. 미종결은 closedAt=null이며, 없는 ID는 결과에서 생략합니다. Commerce는 미확인 원천의 재처리를 503으로 중단하고 기존에 완료된 동일 멱등 요청은 재사용합니다. 배치별 알림 보존 보류는 Commerce가 삭제와 직렬화하며 지급의 금융 보류를 바꾸지 않습니다.
-
 
 ### 실패 환불의 운영 종결
 

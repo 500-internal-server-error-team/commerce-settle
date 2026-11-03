@@ -86,7 +86,7 @@
     <use href="#logo-springboot" x="780.0" y="135" width="22" height="22" aria-hidden="true" />
     <use href="#logo-springbatch" x="810.0" y="135" width="22" height="22" aria-hidden="true" />
     <text x="844.0" y="139.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" dominant-baseline="central">정산·지급</text>
-    <text x="844.0" y="155.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">원장·대조</text>
+    <text x="844.0" y="155.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">원장 반영</text>
   </g>
   <g id="finance-mock" data-node="true" data-container="finance-mock" data-logo="springboot" data-tech="spring-boot" data-box="948.0,114.0,168.0,64.0" data-align-content="vertical-center" data-content-center-y="146">
     <title>금융 모의 서버 · finance-mock</title>

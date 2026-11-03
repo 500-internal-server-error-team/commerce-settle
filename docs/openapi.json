@@ -4456,7 +4456,7 @@
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
         "x-implemented": true,
-        "description": "주문·주소 사본·재고/혜택 예약·영구 멱등 기록·OrderPaymentRequested Outbox를 원자 저장한다. 쿠폰과 선착순 이벤트는 OrderBenefits 구현이 같은 트랜잭션에서 예약하며 한 주문에 쿠폰 한 장과 이벤트를 함께 쓸 수 있다. 쿠폰의 최소 주문금액은 이벤트 가격을 반영한 상품대금으로 판단하고, 쿠폰과 마일리지는 함께 쓸 수 없다. 결제 결과는 영속 Inbox를 통해 반영한다. 마일리지 예약·외부 승인은 Payment 책임이다. 신규 접수 용량 gate는 구현 전이다.",
+        "description": "주문·주소 사본·재고/혜택 예약·영구 멱등 기록·OrderPaymentRequested Outbox를 원자 저장한다. 쿠폰과 선착순 이벤트는 OrderBenefits 구현이 같은 트랜잭션에서 예약하며 한 주문에 쿠폰 한 장과 이벤트를 함께 쓸 수 있다. 쿠폰의 최소 주문금액은 이벤트 가격을 반영한 상품대금으로 판단하고, 쿠폰과 마일리지는 함께 쓸 수 없다. 결제 결과는 영속 Inbox를 통해 반영한다. 마일리지 예약·외부 승인은 Payment 책임이다. 신규 접수는 용량 부족 시 503 COMMON_CAPACITY_EXCEEDED와 Retry-After: 30으로 제한된다.",
         "security": [
           {
             "accountSession": []
@@ -4871,7 +4871,7 @@
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
         "x-implemented": true,
-        "description": "확정 거절 뒤 원래 대기 기한 전 모든 주문 측 예약을 새 회차로 재확보하고 같은 주문 사본·결제 구성으로 OrderPaymentRequested를 저장한다. 미확정·취소 대기 재시도는 409다. Payment의 회차 재접수·마일리지 재예약은 실제 연결 검증이 필요하며 신규 접수 용량 gate는 구현 전이다.",
+        "description": "확정 거절 뒤 원래 대기 기한 전 모든 주문 측 예약을 새 회차로 재확보하고 같은 주문 사본·결제 구성으로 OrderPaymentRequested를 저장한다. 미확정·취소 대기 재시도는 409다. 신규 접수는 용량 부족 시 503 COMMON_CAPACITY_EXCEEDED와 Retry-After: 30으로 제한된다. 이 API는 주문 측 예약·이벤트 생성까지 제공한다. Payment는 동일 주문의 다른 결제 회차를 거절하므로 새 회차 결제·마일리지 재예약까지의 재시도 흐름은 지원하지 않는다.",
         "security": [
           {
             "accountSession": []

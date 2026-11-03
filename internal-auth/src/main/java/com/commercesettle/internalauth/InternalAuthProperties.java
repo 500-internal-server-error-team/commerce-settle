@@ -6,7 +6,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
- * 서비스가 받는 내부 호출의 판정 설정(ADR 0010). 값이 없거나 잘못되면 기동하지 않는다.
+ * 서비스가 받는 내부 호출의 판정 설정. 값이 없거나 잘못되면 기동하지 않는다.
  *
  * @param service 명세 {@code x-owner-service}와 같은 소유 서비스 이름
  * @param requiredSender 반드시 자격을 설정해야 하는 발신자 ID. 사용자 요청을 받는 서비스는 {@code gateway}다.

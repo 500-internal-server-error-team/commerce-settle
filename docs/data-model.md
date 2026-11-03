@@ -173,7 +173,7 @@
 
 ## Redis 인증 데이터
 
-소유: 커머스 인증 영역. Gateway는 읽기 전용으로 검증하며 [세션 정책](policies.md#인증공통-api-기준)을 따른다. 아래 구조는 PostgreSQL 테이블이 아니며 시간은 UTC epoch 밀리초 정수, 인증 버전은 0 이상의 정수다. 토큰 원문은 저장하지 않는다. 검증과 조건부 변경은 [Lua 스크립트](decisions/0003-redis-sessions.md#원자-검증에-lua-스크립트를-쓰는-이유)로 원자 실행한다.
+소유: 커머스 인증 영역. Gateway는 읽기 전용으로 검증하며 [세션 정책](policies.md#인증공통-api-기준)을 따른다. 아래 구조는 PostgreSQL 테이블이 아니며 시간은 UTC epoch 밀리초 정수, 인증 버전은 0 이상의 정수다. 토큰 원문은 저장하지 않는다. 검증과 조건부 변경은 [인증 정책](policies.md#인증공통-api-기준)로 원자 실행한다.
 
 ### 로그인 세션
 
@@ -1164,7 +1164,7 @@ UNIQUE(consumer,source_topic,source_partition,source_offset)로 재전달 중복
 
 ![메시지·멱등성·감사 ERD](diagrams/erd-integration.svg)
 
-Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보존·삭제 초기값](decisions/0005-kafka-event-delivery-and-capacity.md#보존과-삭제-초기값)을 따릅니다. 첫 구현은 이 DB 기록의 자동 삭제를 비활성화하며 일반 관리·가입의 기존 만료 정책은 유지합니다. 해석 불가 메시지는 원본 bytes·topic·partition·offset·실패 사유를 같은 소비자 DB에 보존해야 합니다. Payment·Settlement는 아래 `inbox_quarantines`·`inbox_quarantine_deliveries`·`inbox_quarantine_resumes`로 원문·발행 작업·재개 이력을 분리합니다. 정상 Inbox나 업무 eventId를 참조하지 않으며, 활성화와 ACK·재처리 경계는 [Kafka 전달 기반](development.md#kafka-전달-기반)을 따릅니다.
+Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보존과 삭제](policies.md#보존과-삭제)을 따릅니다. 이 DB 기록의 자동 삭제는 비활성이며 일반 관리·가입의 기존 만료 정책은 유지합니다. 해석 불가 메시지는 원본 bytes·topic·partition·offset·실패 사유를 같은 소비자 DB에 보존해야 합니다. Payment·Settlement는 아래 `inbox_quarantines`·`inbox_quarantine_deliveries`·`inbox_quarantine_resumes`로 원문·발행 작업·재개 이력을 분리합니다. 정상 Inbox나 업무 eventId를 참조하지 않으며, 활성화와 ACK·재처리 경계는 [Kafka 전달 기반](development.md#kafka-전달-기반)을 따릅니다.
 
 ### outbox
 
@@ -1374,7 +1374,7 @@ Finance Mock 준비 API의 운영자 범위는 [시험 데이터 준비 정책](
 - 정산 원장은 SOURCE(E/M/P)와 ALLOCATION(판매자/수수료)의 두 측을 분리한다. 각 측의 합계가 B이고 환불 뒤 0으로 상쇄된다. 두 측을 합쳐 매출을 두 배로 세지 않는다. reversal_of는 원원장 항목당 한 번이다.
 - outbox/inbox/idempotency_records 정의는 commerce/payment/settlement/finance_mock 각각에 적용한다. 서비스 간 공유 테이블이나 SQL join은 만들지 않는다. inbox의 event_id는 발신 outbox id와 논리적으로 대응하며 여러 consumer가 각각 수신할 수 있다.
 - 로컬 주문 전이·알림 항목, 외부 알림 Inbox·항목은 각각 커머스 한 트랜잭션에 저장한다. 알림 모의 수신은 별도 트랜잭션으로 기록하고 금융 DB를 갱신하지 않는다.
-- PK/UNIQUE/CHECK는 DB 제약으로, 합계·참조·다중 행 전이는 행 잠금/조건부 갱신·동일 트랜잭션으로 구현한다. ERD의 관계선은 FK constraint가 있다는 뜻이 아니다. FK 미사용의 보완책과 재검토 조건은 [FK 미사용 결정](decisions/0006-no-foreign-keys-within-service.md)을 따른다.
+- PK/UNIQUE/CHECK는 DB 제약으로, 합계·참조·다중 행 전이는 행 잠금/조건부 갱신·동일 트랜잭션으로 구현한다. ERD의 관계선은 FK constraint가 있다는 뜻이 아니다. FK 미사용의 보완책과 재검토 조건은 [내부 참조 검증](data-model.md#내부-참조-대조)을 따른다.
 
 ## 저장 상태와 전이
 
@@ -1406,3 +1406,18 @@ DDL의 enum·부분 유니크·CHECK·인덱스를 실제 PostgreSQL에서 검�
 `settlement.settlement_batches.closed_at`은 실제 COMPLETED 전이에만 필수이며 마이크로초로 고정하고 다시 열지 않습니다. payout의 succeeded_at이나 batch의 cutoff_at·updated_at으로 대신하지 않습니다.
 
 `commerce.notification_retention_batches`는 batch_id PK, seller_id, nullable closed_at, nullable hold_reason을 저장합니다. closed_at은 원천의 불변 완료 사실 캐시이며, 알림 보존 보류는 Commerce가 소유합니다. 항목 payload의 batchId 인덱스로 연결을 찾고 배치 행→delivery 행→업무 멱등키 순서로 잠급니다. 보류와 삭제·재처리는 같은 행에서 직렬화합니다. SETTLEMENT 종류의 보류·해제 이력도 retention_history에 남기며 금융 배치·원장·Job은 지우지 않습니다.
+
+### 내부 참조 대조
+
+엔티티 참조는 식별자로 저장하며 JPA 연관관계·cascade를 사용하지 않습니다. 부모를 같은 로컬 트랜잭션에서 잠그고 검증한 뒤 자식·상태·감사·Outbox를 저장합니다. 예약은 부모의 조건부 상태 갱신이 성공한 뒤 만들고, 상쇄는 원원장을 읽어 반대 부호로 저장합니다. 배치·지급·지급 작업·항목 배정은 함께 커밋하며 금융 부모 이력은 삭제하지 않습니다. 수동 정정처럼 쓰기 경계를 우회한 오류는 다음 대조로 탐지합니다.
+
+| Settlement 참조 | 검사 |
+| --- | --- |
+| `payouts.batch_id` | 배치 존재·seller 일치 |
+| `settlement_items.payout_id` | 지급 존재·seller 일치 |
+| `settlement_entries.item_id` | 항목 존재·payment 일치 |
+| `settlement_entries.reversal_of` | 원원장 존재·동일 item |
+| `settlement_reservations.item_id`, `payout_id` | 항목·지급 존재 |
+| `payout_jobs.payout_id` | 지급 존재 |
+
+모든 항목 0건이 검사 완료 조건입니다. 위 항목은 부하 시험·장애 정합 복구 후 적용할 기준이며 자동 정산 대조 Job은 지원하지 않습니다. 실행 범위·기준 시각·전달 대기 판정은 [정산 대조](policies.md#정산-대조)를 따릅니다. 고아 참조가 발견되거나 부모 검증을 우회하는 쓰기를 추가하면 참조 검증 경계와 DB 제약을 재검토합니다.

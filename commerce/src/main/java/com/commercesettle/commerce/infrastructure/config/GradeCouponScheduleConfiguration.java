@@ -9,7 +9,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
-/** 월간 우수고객 스케줄러. 기본으로 켜며 실행은 전용 스레드에 넘긴다(ADR 0008, 정산 일배치와 같은 방식). */
+/** 월간 우수고객 스케줄러. 기본으로 켜며 실행은 전용 스레드에 넘긴다. */
 @Configuration
 @EnableScheduling
 @ConditionalOnProperty(

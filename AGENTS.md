@@ -6,7 +6,6 @@
 | --- | --- |
 | 모든 변경 | [협업 규칙과 변경 판단](CONTRIBUTING.md) |
 | 프로젝트 목적·목표 기능·성능 목표 | [프로젝트 소개](README.md) |
-| 우선순위·역할 배분·후속 계획 | [프로젝트 계획](docs/project-plan.md) |
 | 포함·제외 범위·업무 흐름·가정·검증 조건 | [업무 설계](docs/design.md) |
 | 기능 API·요청/응답·권한·이벤트 | [API 명세](docs/api.md), [OpenAPI](docs/openapi.json) |
 | ERD·컬럼·제약·인덱스·상태 | [데이터 모델](docs/data-model.md) |

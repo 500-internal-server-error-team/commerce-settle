@@ -23,8 +23,7 @@ import org.springframework.stereotype.Component;
 /**
  * batchDate를 식별 파라미터로 일배치를 실행한다. 직전 실행이 실패·중단이면 Spring Batch가 같은 JobInstance를 이어서 재시작하고, 이미 완료됐으면
  * 새로 실행하지 않고 완료로 돌려준다(저장된 배치가 결과다). 같은 batchDate의 실행자 잠금을 쥔 채 실행하며, 다른 실행자가 쥐고 있으면 시작하지 않고 실행 중으로
- * 돌려준다. 잠금을 잡았는데 실행 중으로 남은 실행이 있으면 강제 종료 잔류로 보고, 정체됐을 때만 정리한 뒤 한 번 다시 실행한다(ADR 0007 D7). 실행자 ID는
- * 비식별 파라미터로 남긴다.
+ * 돌려준다. 잠금을 잡았는데 실행 중으로 남은 실행이 있으면 강제 종료 잔류로 보고, 정체됐을 때만 정리한 뒤 한 번 다시 실행한다. 실행자 ID는 비식별 파라미터로 남긴다.
  */
 @Component
 public class DailySettlementLauncher {

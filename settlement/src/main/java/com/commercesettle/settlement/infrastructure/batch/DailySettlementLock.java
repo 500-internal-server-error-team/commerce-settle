@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 
 /**
  * batchDate별 일배치 실행자 잠금. PostgreSQL 세션 advisory lock을 전용 연결에 잡고 Job이 끝날 때까지 쥔다. 실행 프로세스가 죽어 연결이 끊기면
- * DB가 잠금을 풀어 주므로, 잠금을 잡을 수 있다는 것은 그 batchDate를 실행 중인 실행자가 없다는 뜻이다(ADR 0007 D7).
+ * DB가 잠금을 풀어 주므로, 잠금을 잡을 수 있다는 것은 그 batchDate를 실행 중인 실행자가 없다는 뜻이다.
  */
 @Component
 class DailySettlementLock {

@@ -14,8 +14,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.PlatformTransactionManager;
 
 /**
- * 월간 우수고객 Job(ADR 0008). 첫 Step이 대상 확정·자동 검증을, 둘째 Step이 고정한 대상 발급을 맡는다. 둘째 Step의 tasklet은 반복마다 대상 한
- * 명을 처리해 커밋하므로 중단 뒤 같은 식별자로 재시작하면 남은 대상부터 이어서 처리한다. 진행 위치는 업무 DB의 대상 상태가 원본이다.
+ * 월간 우수고객 Job. 첫 Step이 대상 확정·자동 검증을, 둘째 Step이 고정한 대상 발급을 맡는다. 둘째 Step의 tasklet은 반복마다 대상 한 명을 처리해
+ * 커밋하므로 중단 뒤 같은 식별자로 재시작하면 남은 대상부터 이어서 처리한다. 진행 위치는 업무 DB의 대상 상태가 원본이다.
  */
 @Configuration
 class GradeCouponJobConfiguration {

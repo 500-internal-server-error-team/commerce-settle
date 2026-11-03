@@ -45,7 +45,7 @@ gateway:
     session-epoch: ${AUTH_SESSION_EPOCH}
     # 승인한 Redis 실행 식별자(INFO server의 run_id). 커머스와 같은 값이며 없거나 형식이 틀리면 기동하지 않는다.
     redis-run-id: ${AUTH_REDIS_RUN_ID}
-  # 상류 Authorization을 대신하는 대상별 Gateway 내부 호출 자격(ADR 0010). 없거나 43자 미만이면 기동하지 않는다.
+  # 상류 Authorization을 대신하는 대상별 Gateway 내부 호출 자격. 없거나 43자 미만이면 기동하지 않는다.
   internal-credentials:
     commerce: ${COMMERCE_GATEWAY_CREDENTIAL}
     payment: ${PAYMENT_GATEWAY_CREDENTIAL}
