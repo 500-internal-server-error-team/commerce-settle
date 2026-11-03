@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -16,6 +17,11 @@ SERVICES = [
     "gateway", "commerce", "payment-api", "payment-worker",
     "settlement", "finance-mock",
 ]
+
+
+def require_ci_project():
+    if os.environ.get("CI") != "true" or os.environ.get("COMPOSE_PROJECT_NAME") != "commerce-settle-ci":
+        raise RuntimeError("Stack changes require the disposable commerce-settle-ci project")
 
 
 def compose(*args, input_text=None, check=True):

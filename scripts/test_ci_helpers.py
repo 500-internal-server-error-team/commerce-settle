@@ -1,12 +1,19 @@
 """Keep CI optimizations from weakening production rules or topic checks."""
 
+from copy import deepcopy
+import json
+import os
 from pathlib import Path
+import re
+import subprocess
+import textwrap
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import smoke
 import smoke_retention
+import smoke_restart
 from test_observability import integration_rules
 
 
@@ -15,9 +22,10 @@ class CiHelpersTest(unittest.TestCase):
         for environment in [{"CI": "false", "COMPOSE_PROJECT_NAME": "commerce-settle-ci"},
                             {"CI": "true", "COMPOSE_PROJECT_NAME": "commerce-settle"}]:
             with self.subTest(environment=environment), patch.dict("os.environ", environment), \
-                    patch.object(smoke_retention, "compose") as cli, self.assertRaises(RuntimeError):
+                    patch.object(smoke_retention, "sql", side_effect=AssertionError("CI guard not checked")) as sql, \
+                    self.assertRaises(RuntimeError):
                 smoke_retention.run()
-            cli.assert_not_called()
+            sql.assert_not_called()
 
     def description(self):
         lines = []
@@ -71,6 +79,104 @@ class CiHelpersTest(unittest.TestCase):
     def test_accelerates_other_group_intervals_without_changing_expressions(self):
         production = "groups:\n  - name: other\n    interval: 30s\n    rules:\n      - record: sample\n        expr: rate(sample_total[15s])\n"
         self.assertEqual(integration_rules(production), production.replace("interval: 30s", "interval: 1s"))
+
+
+class RestartHelpersTest(unittest.TestCase):
+    def setUp(self):
+        self.before = {
+            "seller_accounts": {"seller": {"id": "seller", "payout_account_ref": "original"}},
+            "buyer_accounts": {"buyer": {"id": "buyer", "display_name": "original"}},
+            "buyer_coupons": {"coupon": {"id": "coupon", "discount_amount": 3000}},
+        }
+
+    def test_refuses_non_ci_or_another_project_before_touching_the_stack(self):
+        for environment in [{"CI": "false", "COMPOSE_PROJECT_NAME": "commerce-settle-ci"},
+                            {"CI": "true", "COMPOSE_PROJECT_NAME": "commerce-settle"}]:
+            with self.subTest(environment=environment), patch.dict("os.environ", environment), \
+                    patch.object(smoke_restart, "read_business_data",
+                                 side_effect=AssertionError("CI guard not checked")) as read, \
+                    self.assertRaises(RuntimeError):
+                smoke_restart.run()
+            read.assert_not_called()
+
+    def test_refuses_empty_business_data_before_stopping_the_stack(self):
+        for table in self.before:
+            before = deepcopy(self.before)
+            before[table] = {}
+            with self.subTest(table=table), patch.dict("os.environ", {
+                "CI": "true", "COMPOSE_PROJECT_NAME": "commerce-settle-ci",
+            }), patch.object(smoke_restart, "read_business_data", return_value=before), \
+                    patch.object(smoke_restart.subprocess, "run") as cli, \
+                    patch.object(smoke_restart.sync_redis_run_id, "main") as approve, \
+                    self.assertRaises(AssertionError):
+                smoke_restart.run()
+            cli.assert_not_called()
+            approve.assert_not_called()
+
+    def test_preserves_existing_records_and_allows_additional_records(self):
+        for additional in (False, True):
+            actual = deepcopy(self.before)
+            if additional:
+                for records in actual.values():
+                    records["new"] = {"id": "new"}
+            with self.subTest(additional=additional), patch.object(
+                smoke_restart, "read_business_data", return_value=actual,
+            ):
+                smoke_restart.verify_preserved(self.before)
+
+    def test_rejects_missing_ids_and_changed_business_values(self):
+        for table, field, value in [
+            ("seller_accounts", "payout_account_ref", "changed"),
+            ("buyer_accounts", "display_name", "changed"),
+            ("buyer_coupons", "discount_amount", 4000),
+        ]:
+            for missing in (False, True):
+                actual = deepcopy(self.before)
+                record_id = next(iter(actual[table]))
+                if missing:
+                    del actual[table][record_id]
+                else:
+                    actual[table][record_id][field] = value
+                with self.subTest(table=table, missing=missing), patch.object(
+                    smoke_restart, "read_business_data", return_value=actual,
+                ), self.assertRaisesRegex(AssertionError, table):
+                    smoke_restart.verify_preserved(self.before)
+
+
+class CiGateTest(unittest.TestCase):
+    def setUp(self):
+        self.workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
+        gate = self.workflow.split("\n  build-and-smoke:\n", 1)[1]
+        self.script = textwrap.dedent(gate.split("        run: |\n", 1)[1])
+        self.results = {name: {"result": "success"} for name in
+                        ("checks", "package", "tests", "observability", "integration")}
+
+    def result(self, jobs):
+        return subprocess.run(["bash", "-e", "-c", self.script],
+                              env={**os.environ, "JOB_RESULTS": json.dumps(jobs)},
+                              capture_output=True, text=True, timeout=10).returncode
+
+    def test_requires_every_job_and_every_module(self):
+        gate = self.workflow.split("\n  build-and-smoke:\n", 1)[1]
+        self.assertIn("    if: always()\n", gate)
+        names = re.search(r"^    needs: \[([^\]]+)\]$", gate, re.MULTILINE).group(1)
+        self.assertEqual({name.strip() for name in names.split(",")}, set(self.results))
+        tests = self.workflow.split("\n  tests:\n", 1)[1].split("\n  observability:\n", 1)[0]
+        self.assertEqual(set(re.findall(r":([a-z-]+):test\b", tests)),
+                         {"commerce", "payment", "settlement", "finance-mock", "gateway", "internal-auth"})
+        self.assertIn("scenario: [smoke, redis, retention, admission]", self.workflow)
+        self.assertRegex(self.workflow, r"Verify source-backed notification retention\n"
+                         r"\s+if: matrix.scenario == 'retention'")
+        self.assertIn("run: python3 -B scripts/smoke_restart.py", self.workflow)
+        self.assertEqual(self.result(self.results), 0)
+
+    def test_rejects_failure_cancellation_skip_and_no_results(self):
+        for name in self.results:
+            for status in ("failure", "cancelled", "skipped"):
+                with self.subTest(job=name, status=status):
+                    jobs = {**self.results, name: {"result": status}}
+                    self.assertNotEqual(self.result(jobs), 0)
+        self.assertNotEqual(self.result({}), 0)
 
 
 if __name__ == "__main__":
