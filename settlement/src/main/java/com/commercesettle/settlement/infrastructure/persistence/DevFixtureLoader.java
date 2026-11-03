@@ -71,8 +71,8 @@ public class DevFixtureLoader {
    * 실행 결과 대신 항목으로 확인한다.
    */
   public boolean hasUnsettledItemsBefore(Instant cutoffAt) {
-    return IntStream.range(0, 8)
-        .mapToObj(i -> items.findByPaymentId(id("payment-settlement-" + i)))
+    return itemIds().stream()
+        .map(items::findById)
         .flatMap(Optional::stream)
         .anyMatch(
             item ->

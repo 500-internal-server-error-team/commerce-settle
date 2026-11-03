@@ -81,7 +81,7 @@ class HttpProductSettlementContextReaderTest {
   }
 
   @Test
-  @DisplayName("상품 부재 코드가 없는 404는 경로·배포 오류일 수 있어 조회 실패다")
+  @DisplayName("상품 부재 코드가 없는 404는 커머스의 답으로 보지 않고 조회 실패다")
   void rejectsNotFoundWithoutCode() {
     server.expect(requestTo(URL)).andRespond(withStatus(HttpStatus.NOT_FOUND));
 
@@ -105,6 +105,25 @@ class HttpProductSettlementContextReaderTest {
   @DisplayName("요청과 다른 상품의 응답은 믿지 않는다")
   void rejectsMismatchedProduct() {
     server.expect(requestTo(URL)).andRespond(context(UUID.randomUUID(), "ACTIVE"));
+
+    assertThatThrownBy(() -> reader.read(SELLER, Set.of(PRODUCT)))
+        .isInstanceOf(ProductSettlementContextUnavailableException.class);
+  }
+
+  @Test
+  @DisplayName("필수 판매자 버전이 빠진 응답은 0으로 보지 않고 조회 실패다")
+  void rejectsMissingSellerVersion() {
+    server
+        .expect(requestTo(URL))
+        .andRespond(
+            withStatus(HttpStatus.OK)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(
+                    """
+                    {"productId":"%s","sellerId":"%s","payoutAccountRef":"seller-account",
+                     "sellerStatus":"ACTIVE"}
+                    """
+                        .formatted(PRODUCT, SELLER)));
 
     assertThatThrownBy(() -> reader.read(SELLER, Set.of(PRODUCT)))
         .isInstanceOf(ProductSettlementContextUnavailableException.class);

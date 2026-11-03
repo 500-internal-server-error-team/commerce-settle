@@ -18,8 +18,9 @@ import org.springframework.web.client.RestClientException;
  * 커머스 {@code GET /internal/products/{productId}/settlement-context}의 HTTP 구현. 모든 요청에 커머스용 {@code
  * service:settlement} 내부 호출 자격(ADR 0010)을 붙인다.
  *
- * <p>커머스가 상품 부재 코드로 답한 404만 결과에서 뺀다. 그 밖의 오류·자격 거절·타임아웃·응답 불일치는 판매자를 지급 가능으로 보지 않고 예외로 알려 그 판매자의 지급
- * 생성을 롤백한다. 판매자 상태는 ACTIVE일 때만 지급 가능이며, 모르는 값도 지급 불가로 본다.
+ * <p>커머스가 상품 부재 코드로 답한 404만 결과에서 빼 지급 전 검증에서 거절되게 한다. 커머스는 명세에 없는 경로도 같은 코드로 답하므로 경로 불일치도 여기에 포함된다.
+ * 코드 없는 404 등 그 밖의 오류·자격 거절·타임아웃·응답 불일치는 조회 실패 예외로 알린다. 판매자 상태는 ACTIVE일 때만 지급 가능이며, 모르는 값도 지급 불가로
+ * 본다.
  */
 public class HttpProductSettlementContextReader implements ProductSettlementContextReader {
   private static final String SENDER = "service:settlement";
@@ -44,7 +45,9 @@ public class HttpProductSettlementContextReader implements ProductSettlementCont
       if (body == null) {
         continue;
       }
-      if (!productId.equals(body.productId()) || body.sellerId() == null) {
+      if (!productId.equals(body.productId())
+          || body.sellerId() == null
+          || body.sellerVersion() == null) {
         throw new ProductSettlementContextUnavailableException(
             "settlement context does not match the requested product");
       }
@@ -98,7 +101,7 @@ public class HttpProductSettlementContextReader implements ProductSettlementCont
       UUID productId,
       UUID sellerId,
       String payoutAccountRef,
-      long sellerVersion,
+      Long sellerVersion,
       String sellerStatus) {}
 
   @JsonIgnoreProperties(ignoreUnknown = true)
