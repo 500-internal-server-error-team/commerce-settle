@@ -1,15 +1,21 @@
 package com.commercesettle.settlement.infrastructure.persistence;
 
+import com.commercesettle.settlement.application.dto.PageView;
 import com.commercesettle.settlement.application.port.QuarantineStore;
 import java.nio.charset.StandardCharsets;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcOperations;
 import org.springframework.stereotype.Repository;
@@ -240,6 +246,151 @@ class JdbcQuarantineStore implements QuarantineStore {
         == 1;
   }
 
+  @Override
+  public PageView<QuarantineView> findPage(String deliveryStatus, int page, int size) {
+    applyTransactionLimits();
+    var params =
+        new MapSqlParameterSource()
+            .addValue("status", deliveryStatus, Types.VARCHAR)
+            .addValue("size", size)
+            .addValue("offset", (long) page * size);
+    String filter =
+        """
+        WHERE CAST(:status AS varchar) IS NULL OR EXISTS (
+          SELECT 1 FROM settlement.inbox_quarantine_deliveries d
+          WHERE d.quarantine_id=q.id AND d.status=:status)
+        """;
+    Long total =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM settlement.inbox_quarantines q " + filter, params, Long.class);
+    List<QuarantineRow> rows =
+        jdbc.query(
+            QUARANTINE_COLUMNS
+                + filter
+                + " ORDER BY q.created_at DESC, q.id DESC LIMIT :size OFFSET :offset",
+            params,
+            JdbcQuarantineStore::quarantineRow);
+    return new PageView<>(withDeliveries(rows), page, size, total == null ? 0 : total);
+  }
+
+  @Override
+  public Optional<QuarantineView> find(UUID quarantineId) {
+    applyTransactionLimits();
+    List<QuarantineRow> rows =
+        jdbc.query(
+            QUARANTINE_COLUMNS + " WHERE q.id=:id",
+            new MapSqlParameterSource("id", quarantineId),
+            JdbcQuarantineStore::quarantineRow);
+    return withDeliveries(rows).stream().findFirst();
+  }
+
+  @Override
+  public Optional<DeliveryView> findDelivery(UUID deliveryId) {
+    applyTransactionLimits();
+    return deliveries("d.id=:id", new MapSqlParameterSource("id", deliveryId)).stream().findFirst();
+  }
+
+  /** 원문·키 bytes는 읽지 않고 크기와 해시만 DB에서 계산한다. */
+  private static final String QUARANTINE_COLUMNS =
+      """
+      SELECT q.id,q.consumer,q.source_topic,q.source_partition,q.source_offset,q.error_code,
+        octet_length(q.raw_body) AS body_size,encode(sha256(q.raw_body),'hex') AS body_sha256,
+        q.version,q.created_at
+      FROM settlement.inbox_quarantines q
+      """;
+
+  private List<QuarantineView> withDeliveries(List<QuarantineRow> rows) {
+    if (rows.isEmpty()) {
+      return List.of();
+    }
+    Map<UUID, List<DeliveryView>> byQuarantine =
+        deliveries(
+                "d.quarantine_id IN (:ids)",
+                new MapSqlParameterSource("ids", rows.stream().map(QuarantineRow::id).toList()))
+            .stream()
+            .collect(Collectors.groupingBy(DeliveryView::quarantineId));
+    return rows.stream()
+        .map(row -> row.view(byQuarantine.getOrDefault(row.id(), List.of())))
+        .toList();
+  }
+
+  private List<DeliveryView> deliveries(String where, MapSqlParameterSource params) {
+    List<DeliveryRow> rows =
+        jdbc.query(
+            """
+            SELECT d.id,d.quarantine_id,d.kind,d.topic,d.status,d.attempts,d.next_run_at,
+              d.lease_until,d.operator_id,d.reason_code,d.version,d.created_at,d.updated_at
+            FROM settlement.inbox_quarantine_deliveries d
+            """
+                + " WHERE "
+                + where
+                + " ORDER BY d.created_at, d.id",
+            params,
+            (rs, row) ->
+                new DeliveryRow(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("quarantine_id", UUID.class),
+                    rs.getString("kind"),
+                    rs.getString("topic"),
+                    rs.getString("status"),
+                    rs.getInt("attempts"),
+                    instant(rs, "next_run_at"),
+                    instant(rs, "lease_until"),
+                    rs.getString("operator_id"),
+                    rs.getString("reason_code"),
+                    rs.getLong("version"),
+                    instant(rs, "created_at"),
+                    instant(rs, "updated_at")));
+    if (rows.isEmpty()) {
+      return List.of();
+    }
+    Map<UUID, List<ResumeView>> resumes =
+        jdbc
+            .query(
+                """
+                SELECT id,delivery_id,expected_version,previous_attempts,operator_id,reason_code,
+                  created_at
+                FROM settlement.inbox_quarantine_resumes WHERE delivery_id IN (:ids)
+                ORDER BY created_at, id
+                """,
+                new MapSqlParameterSource("ids", rows.stream().map(DeliveryRow::id).toList()),
+                (rs, row) ->
+                    Map.entry(
+                        rs.getObject("delivery_id", UUID.class),
+                        new ResumeView(
+                            rs.getObject("id", UUID.class),
+                            rs.getLong("expected_version"),
+                            rs.getInt("previous_attempts"),
+                            rs.getString("operator_id"),
+                            rs.getString("reason_code"),
+                            instant(rs, "created_at"))))
+            .stream()
+            .collect(
+                Collectors.groupingBy(
+                    Map.Entry::getKey,
+                    Collectors.mapping(Map.Entry::getValue, Collectors.toList())));
+    return rows.stream().map(row -> row.view(resumes.getOrDefault(row.id(), List.of()))).toList();
+  }
+
+  private static QuarantineRow quarantineRow(ResultSet rs, int row) throws SQLException {
+    return new QuarantineRow(
+        rs.getObject("id", UUID.class),
+        rs.getString("consumer"),
+        rs.getString("source_topic"),
+        rs.getInt("source_partition"),
+        rs.getLong("source_offset"),
+        rs.getString("error_code"),
+        rs.getObject("body_size", Integer.class),
+        rs.getString("body_sha256"),
+        rs.getLong("version"),
+        instant(rs, "created_at"));
+  }
+
+  private static Instant instant(ResultSet rs, String column) throws SQLException {
+    Timestamp value = rs.getTimestamp(column);
+    return value == null ? null : value.toInstant();
+  }
+
   private static byte[] keyBytes(String key) {
     return key == null ? null : key.getBytes(StandardCharsets.UTF_8);
   }
@@ -268,4 +419,64 @@ class JdbcQuarantineStore implements QuarantineStore {
   private record Original(UUID id, String key, byte[] body) {}
 
   private record Exhausted(int attempts, long version, String status) {}
+
+  private record QuarantineRow(
+      UUID id,
+      String consumer,
+      String sourceTopic,
+      int sourcePartition,
+      long sourceOffset,
+      String errorCode,
+      Integer bodySize,
+      String bodySha256,
+      long version,
+      Instant createdAt) {
+    QuarantineView view(List<DeliveryView> deliveries) {
+      return new QuarantineView(
+          id,
+          consumer,
+          sourceTopic,
+          sourcePartition,
+          sourceOffset,
+          errorCode,
+          bodySize,
+          bodySha256,
+          version,
+          createdAt,
+          deliveries);
+    }
+  }
+
+  private record DeliveryRow(
+      UUID id,
+      UUID quarantineId,
+      String kind,
+      String topic,
+      String status,
+      int attempts,
+      Instant nextRunAt,
+      Instant leaseUntil,
+      String operatorId,
+      String reasonCode,
+      long version,
+      Instant createdAt,
+      Instant updatedAt) {
+    DeliveryView view(List<ResumeView> resumes) {
+      return new DeliveryView(
+          id,
+          quarantineId,
+          kind,
+          topic,
+          status,
+          attempts,
+          nextRunAt,
+          leaseUntil,
+          operatorId,
+          reasonCode,
+          version,
+          createdAt,
+          updatedAt,
+          resumes);
+    }
+  }
 }

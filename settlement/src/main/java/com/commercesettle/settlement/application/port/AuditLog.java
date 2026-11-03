@@ -38,6 +38,8 @@ public interface AuditLog {
   /** 허용한 행위 목록. 새 행위는 감사 계약과 함께 추가한다. */
   enum Action {
     PAYOUT_JOB_REPLAYED,
-    SETTLEMENT_BATCH_CREATED
+    SETTLEMENT_BATCH_CREATED,
+    QUARANTINE_REPLAY_REQUESTED,
+    QUARANTINE_DELIVERY_RESUMED
   }
 }

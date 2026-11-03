@@ -5,6 +5,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -20,6 +21,18 @@ public final class OperationRequests {
   public record Replay(
       @JsonProperty(required = true) @NotNull @Min(0) Long expectedVersion,
       @JsonProperty(required = true) @NotBlank @Size(max = 200) String reason) {}
+
+  @Schema(
+      name = "QuarantineReplayRequest",
+      description = "원 topic/key/bytes 고정. 예상 버전과 사유 코드만 받는다.",
+      additionalProperties = Schema.AdditionalPropertiesValue.FALSE)
+  public record QuarantineReplay(
+      @JsonProperty(required = true) @NotNull @Min(0) Long expectedVersion,
+      @Schema(pattern = "^[A-Z][A-Z0-9_]{0,79}$")
+          @JsonProperty(required = true)
+          @NotBlank
+          @Pattern(regexp = "[A-Z][A-Z0-9_]{0,79}", message = "대문자·숫자·밑줄 코드여야 합니다.")
+          String reasonCode) {}
 
   @Schema(name = "BatchCreate", additionalProperties = Schema.AdditionalPropertiesValue.FALSE)
   public record BatchCreate(

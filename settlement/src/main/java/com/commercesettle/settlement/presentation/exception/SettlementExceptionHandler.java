@@ -3,6 +3,7 @@ package com.commercesettle.settlement.presentation.exception;
 import com.commercesettle.settlement.application.exception.IdempotencyConflictException;
 import com.commercesettle.settlement.application.exception.OperationRejectedException;
 import com.commercesettle.settlement.application.exception.ProductSettlementContextUnavailableException;
+import com.commercesettle.settlement.application.exception.QuarantineNotFoundException;
 import com.commercesettle.settlement.domain.exception.PayoutJobNotFoundException;
 import com.commercesettle.settlement.domain.exception.PayoutNotAllowedException;
 import com.commercesettle.settlement.domain.exception.PayoutNotFoundException;
@@ -70,6 +71,11 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
     return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "지급 작업을 찾을 수 없습니다.", null, request);
   }
 
+  @ExceptionHandler(QuarantineNotFoundException.class)
+  ResponseEntity<Object> quarantineNotFound(QuarantineNotFoundException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "격리 기록을 찾을 수 없습니다.", null, request);
+  }
+
   @ExceptionHandler(OperationRejectedException.class)
   ResponseEntity<Object> operationRejected(OperationRejectedException e, WebRequest request) {
     ErrorCode code =
@@ -80,6 +86,8 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
           case BATCH_NOT_DUE -> ErrorCode.SETTLEMENT_BATCH_NOT_DUE;
           case POLICY_UNSUPPORTED -> ErrorCode.SETTLEMENT_POLICY_UNSUPPORTED;
           case NO_ELIGIBLE_ITEMS -> ErrorCode.SETTLEMENT_NO_ELIGIBLE_ITEMS;
+          case QUARANTINE_REPLAY_ACTIVE -> ErrorCode.QUARANTINE_REPLAY_ACTIVE;
+          case QUARANTINE_DELIVERY_NOT_RESUMABLE -> ErrorCode.QUARANTINE_DELIVERY_NOT_RESUMABLE;
         };
     return respond(code, request);
   }
