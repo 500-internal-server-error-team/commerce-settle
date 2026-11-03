@@ -1282,6 +1282,8 @@ Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원
 
 **제약:** UNIQUE(consumer,source_topic,source_partition,source_offset). 같은 위치의 같은 원문은 기존 기록에 연결하고 다른 bytes는 거절합니다. 원문·키·출처는 수정·자동 삭제하지 않습니다. 원문과 최초 DLT 발행 작업을 함께 커밋한 뒤 ACK합니다. DB 실패는 ACK하지 않습니다.
 
+**인덱스:** Settlement는 운영 목록 정렬용 (created_at,id)를 둡니다.
+
 ### inbox_quarantine_deliveries
 
 소유: `payment`·`settlement`. 격리 원문의 DLT 발행과 운영 재처리 작업입니다. 원문은 위 행을 참조하며 별도로 복제하지 않습니다.
@@ -1297,7 +1299,7 @@ Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원
 
 **제약:** 격리당 DLT 작업 하나. 격리당 활성 REPLAY(PENDING/RUNNING/RETRY) 하나. RUNNING일 때만 임대가 존재합니다. REPLAY는 DLT 가용성과 독립적으로 예상 원문 버전을 확인하고 원문 행 버전 증가·요청자·사유·작업을 원자 저장합니다. 기존 작업을 삭제하거나 재처리 요청 이력을 덮어쓰지 않습니다. 발행은 최대 10회·최대 60초 간격이며 소진하면 REVIEW_REQUIRED로 보존합니다. PUBLISHED는 Kafka 발행 완료이며 업무 성공을 뜻하지 않습니다. 원본 위치를 DLT 헤더로 전달하고, 재처리에서도 원래 bytes·key를 다시 검증합니다.
 
-**인덱스:** (status,next_run_at,lease_until,id). DLT와 활성 REPLAY 유일성은 부분 UNIQUE로 보호합니다.
+**인덱스:** (status,next_run_at,lease_until,id). DLT와 활성 REPLAY 유일성은 부분 UNIQUE로 보호합니다. Settlement는 운영 조회용 (quarantine_id,created_at,id)를 추가로 둡니다.
 
 ### inbox_quarantine_resumes
 

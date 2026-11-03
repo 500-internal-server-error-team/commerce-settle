@@ -499,7 +499,7 @@ Prometheus는 신규 격리·재시도 소진을 CRITICAL, 도래 후 5분/15분
 
 1. 신규 격리는 원본 위치·오류 코드를 확인하고 생산자/스키마 원인을 조사합니다. 원문을 Slack·일반 로그에 붙이지 않습니다.
 2. 발행 지연·REVIEW_REQUIRED는 Kafka 가용성, 발행 작업 상태·시도 수·임대를 확인합니다. DLT가 비어 있어도 DB 발행 대기를 확인합니다.
-3. 원인 수정 뒤 위의 `requestReplay` 또는 `resumeDelivery`로 재처리하며 발행 완료와 실제 Inbox·업무 결과를 따로 대조합니다. 인증된 운영 호출 수단과 Inbox 업무 실패의 수동 재개는 별도 구현 대상입니다.
+3. 원인 수정 뒤 위의 `requestReplay` 또는 `resumeDelivery`로 재처리하며 발행 완료와 실제 Inbox·업무 결과를 따로 대조합니다. Settlement는 [격리 원문 운영 API](api.md#격리-원문-운영)로 호출합니다. Payment의 운영 HTTP와 Inbox 업무 실패의 수동 재개는 별도 구현 대상입니다.
 
 기본 수신처는 Alertmanager 화면입니다. 팀 Incoming Webhook을 연결할 때만 비밀 URL을 저장소 밖 파일에 두고 다음 overlay를 사용합니다. 해당 Webhook의 채널이 수신처이며 실제 채널로 시험 메시지를 자동 발송하지 않습니다.
 
@@ -543,7 +543,7 @@ Gateway 자체 오류는 `application/problem+json`과 실제 추적의 `traceId
 
 운영자 자격은 첫 운영 API를 구현할 때 운영자 식별자와 배포 방식을 함께 정합니다.
 
-Settlement의 운영 API(`/internal/payout-jobs`·`/internal/settlement-batches`)는 `operator:<식별자>` 자격만 받습니다. Payment 운영 종결과 같이 인스턴스의 `app.internal-auth.senders`에 `"[operator:<식별자>]"` 키로 설정하며 Compose와 `.env.example`에는 넣지 않았습니다. 재처리·배치 생성은 `Idempotency-Key`(8~128자)가 필요하고, 감사는 `settlement.audit_logs`, 재처리 사유는 `settlement.payout_job_replays`에 남습니다.
+Settlement의 운영 API(`/internal/payout-jobs`·`/internal/settlement-batches`·`/internal/settlement-quarantines`·`/internal/settlement-quarantine-deliveries`)는 `operator:<식별자>` 자격만 받습니다. Payment 운영 종결과 같이 인스턴스의 `app.internal-auth.senders`에 `"[operator:<식별자>]"` 키로 설정하며 Compose와 `.env.example`에는 넣지 않았습니다. 재처리·재개·배치 생성은 `Idempotency-Key`(8~128자)가 필요하고, 감사는 `settlement.audit_logs`, 재처리 사유는 `settlement.payout_job_replays`·`inbox_quarantine_deliveries`·`inbox_quarantine_resumes`에 남습니다.
 
 컨테이너 상태·로그는 아래처럼 확인합니다.
 
