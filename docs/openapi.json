@@ -15691,7 +15691,8 @@
           "sellerVersion": {
             "type": "integer",
             "format": "int64",
-            "minimum": 0
+            "minimum": 0,
+            "description": "판매자 계정 행의 버전. 표시명 등 수취 계정 밖의 변경에도 증가한다."
           },
           "sellerStatus": {
             "type": "string",
