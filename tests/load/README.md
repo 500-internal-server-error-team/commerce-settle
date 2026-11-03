@@ -31,6 +31,8 @@ python3 tests/load/payment_load.py reconcile          # 원장 ↔ Payment ↔ f
 - `replay`는 시험 스택의 `payment-api`에만 운영자 자격(`operator:load`)을 설정합니다. 자격은 `tests/load/work/operator.credential`에 무작위로 만듭니다.
 - 주입 원장·표본·요약·대조 결과는 Git에서 제외한 `tests/load/work/<실행 이름>/`에 남습니다. 정리는 `docker compose -p commerce-settle-load -f compose.yml -f tests/load/compose.load.yml down -v`입니다.
 
+도구의 대조·재처리 회귀 검사는 `python3 -B -m unittest discover -s tests/load -p 'test_payment_load.py'`로 실행하며 CI에도 포함합니다. 메모리 SQLite의 대조 쿼리와 재처리 API 대역을 사용하므로 실제 PostgreSQL·PG의 부하·복구 시험을 대신하지 않습니다.
+
 ### 대조 항목
 
 `reconcile`은 현재 스택에서 넣은 요청 원장을 기준으로 다음을 확인하고, 하나라도 어긋나면 실패로 끝납니다.
@@ -62,7 +64,7 @@ Windows 11, Docker Desktop 한 대. 앱 컨테이너는 메모리 512MiB, JVM CP
 
 측정 5의 수신→확정 p99는 50·100·200/초에서 3.1·1.4·2.3초입니다. 400/초에서는 처리 대기가 쌓여 44초입니다. Kafka lag는 200/초까지 14건 이하, 400/초에서 최대 309건입니다.
 
-**지속 가능 결제 확정 TPS: 약 200(이 환경).** 목표 1,000 TPS에는 미달합니다.
+**60초 단계별 시험에서 관측한 결제 확정 처리량: 약 200 TPS(이 환경).** 목표 1,000 TPS에는 미달하며, ADR 0002의 15분 지속 가능 TPS 판정은 아직 수행하지 않았습니다.
 
 ### 찾은 병목과 수정
 
