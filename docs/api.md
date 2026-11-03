@@ -25,7 +25,7 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 | 계정·세션·주소·상품·재고·이벤트 | Commerce | [인증·역할](architecture.md#사용자-인증과-내부-신원-전달), [일반 주문](development.md#일반-주문-api) |
 | 쿠폰 발급·조회·월간 혜택 | Commerce | [쿠폰 사용](#쿠폰-사용-순서), [월간 혜택 운영](#월간-혜택-운영-조회와-오류-교정) |
 | 주문·견적·발송·취소·반품 | Commerce | [주문·환불](#주문환불-사용-순서), [실패 환불 종결](#실패-환불의-운영-종결) |
-| 결제·마일리지·금융 환불 | Payment | [이벤트 연동](#이벤트-연동), [정산 대조](#정산-대조-조회) |
+| 결제·마일리지·금융 환불·격리 운영 | Payment | [이벤트 연동](#이벤트-연동), [정산 대조](#정산-대조-조회), [격리 운영](#payment-격리-원문-운영) |
 | 정산·지급·배치·지급 작업·격리 운영 | Settlement | [환불 SAGA](#settlement-환불-saga), [정산 정책](policies.md#정산재처리), [격리 운영](#격리-원문-운영) |
 | 거래 알림·발송 이력·재처리 | Commerce | [거래 알림](#거래-알림-사용-순서) |
 | PG·간편결제·지급 대역·시험 계정·장애 설정 | Finance Mock | [금융 대역](#금융-대역-조회와-장애-설정) |
@@ -118,6 +118,15 @@ Order는 deliveryBusinessDays·deliveryCalendarVersion·shippedAt·deliveryDueAt
 
 PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반영합니다. MockApproval의 fundingAccountRef는 Payment 서버 설정이며 원승인에 고정합니다. MockTransaction의 pgReceiptDueAt·pgReceivedAt·pgReceivedAmount로 예정/실제 입금과 입금 전 환불 상쇄를 조회합니다. 선지급 재원은 항상 충분하며 시험 전에 전체 지급·환불 자금을 준비합니다. [현금·복구 정책](policies.md#선지급-재원과-pg-회수)을 따릅니다.
 
+### Payment 격리 원문 운영
+
+Payment 격리 원문 API(`/internal/payment-quarantines/**`·`/internal/payment-quarantine-deliveries/**`)는 `operator:<식별자>` 자격만 받고 Gateway에 공개하지 않습니다. Settlement [격리 원문 운영](#격리-원문-운영)과 같은 요청·응답 모양·오류·멱등·감사 규칙이며, 경로 접두사와 응답 스키마 이름(`Payment` 접두사)만 다릅니다. 요청 본문은 같은 `QuarantineReplayRequest`입니다.
+
+- 조회는 원문·키 bytes 대신 수신 위치, 오류 코드, 원문 크기와 SHA-256만 반환합니다. 원문 확인은 DB 권한 경로로 합니다.
+- 재처리는 원문 `version`, 재개는 발행 작업 `version`을 `expectedVersion`으로 받고, `reasonCode`는 `^[A-Z][A-Z0-9_]{0,79}$`입니다. 재처리는 원래 topic·key·bytes 그대로 REPLAY 작업을 만들고, 재개는 시도를 다 쓴 같은 작업을 PENDING·시도 수 0으로 되돌립니다. 202는 발행 접수일 뿐이며 Kafka 발행 완료(`PUBLISHED`)와 업무 반영은 따로 확인합니다.
+- 원문·작업 버전이 다르면 `409 COMMON_VERSION_CONFLICT`, 같은 원문의 REPLAY가 발행 중이면 `409 QUARANTINE_REPLAY_ACTIVE`, REVIEW_REQUIRED가 아닌 작업의 재개는 `409 QUARANTINE_DELIVERY_NOT_RESUMABLE`, 없는 원문·작업은 404입니다.
+- 같은 `Idempotency-Key`·본문 재요청은 처음 결과의 현재 상태를 돌려주고, 같은 키 다른 본문은 `409 COMMON_IDEMPOTENCY_CONFLICT`입니다. 멱등 기록은 운영 결제 작업 재처리와 같은 `payment.idempotency_records`에 남고, 같은 운영자·작업·키의 요청은 직렬화되어 동시 재요청도 한 번만 반영됩니다. 요청자·사유는 작업·재개 이력과 `payment.audit_logs`에 남습니다(correlation은 격리 ID).
+
 ### 정산 대조 조회
 
 `GET /internal/payment-reconciliation-events`는 Payment가 소유하며 Settlement 전용 서비스 자격만 허용합니다. 사용자·Gateway·일반 운영자 자격으로 호출하지 않고 Gateway에 공개하지 않습니다. 다른 서비스 DB 직접 조회를 대체하는 읽기 전용 계약이며 금융 실행 API가 아닙니다.
@@ -130,7 +139,7 @@ PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반�
 
 ### 격리 원문 운영
 
-Settlement 격리 원문 API는 `operator:<식별자>` 자격만 받고 Gateway에 공개하지 않습니다. 조회는 원문·키 bytes 대신 수신 위치, 오류 코드, 원문 크기와 SHA-256만 반환합니다. 원문 확인은 DB 권한 경로로 합니다. 재처리는 원문 `version`, 재개는 발행 작업 `version`을 `expectedVersion`으로 받고, `reasonCode`는 `^[A-Z][A-Z0-9_]{0,79}$`입니다. 재처리는 원래 topic·key·bytes 그대로 REPLAY 작업을 만들고, 재개는 시도를 다 쓴 같은 작업을 시도 수 0으로 되돌립니다. 202는 발행 접수일 뿐이며 Kafka 발행 완료(`PUBLISHED`)와 업무 반영은 따로 확인합니다. 같은 `Idempotency-Key`·본문 재요청은 처음 결과의 현재 상태를 돌려주고, 요청자·사유는 작업·재개 이력과 `audit_logs`에 남습니다(correlation은 격리 ID).
+Settlement 격리 원문 API는 `operator:<식별자>` 자격만 받고 Gateway에 공개하지 않습니다. 조회는 원문·키 bytes 대신 수신 위치, 오류 코드, 원문 크기와 SHA-256만 반환합니다. 원문 확인은 DB 권한 경로로 합니다. 재처리는 원문 `version`, 재개는 발행 작업 `version`을 `expectedVersion`으로 받고, `reasonCode`는 `^[A-Z][A-Z0-9_]{0,79}$`입니다. 재처리는 원래 topic·key·bytes 그대로 REPLAY 작업을 만들고, 재개는 시도를 다 쓴 같은 작업을 시도 수 0으로 되돌립니다. 202는 발행 접수일 뿐이며 Kafka 발행 완료(`PUBLISHED`)와 업무 반영은 따로 확인합니다. 같은 `Idempotency-Key`·본문 재요청은 처음 결과의 현재 상태를 돌려주고, 요청자·사유는 작업·재개 이력과 `audit_logs`에 남습니다(correlation은 격리 ID). Payment도 같은 요청·응답 모양을 씁니다([Payment 격리 원문 운영](#payment-격리-원문-운영)).
 
 ### 금융 대역 조회와 장애 설정
 
