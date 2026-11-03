@@ -3,6 +3,7 @@ package com.commercesettle.payment.application.service;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.commercesettle.payment.application.event.RefundLedgerReversedPayload;
+import com.commercesettle.payment.application.event.RefundReservationReleasedPayload;
 import com.commercesettle.payment.application.event.RefundReservationResultPayload;
 import com.commercesettle.payment.application.service.RefundSettlementReplyService.Outcome;
 import com.commercesettle.payment.domain.model.Payment;
@@ -12,7 +13,6 @@ import com.commercesettle.payment.domain.model.RefundSaga;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
 import com.commercesettle.payment.domain.repository.RefundRepository;
 import com.commercesettle.payment.domain.repository.RefundSagaRepository;
-import com.commercesettle.payment.infrastructure.messaging.StubSettlementRefundResponder;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -66,10 +66,6 @@ class RefundSettlementReplyIntegrationTest {
   @Autowired private ObjectMapper mapper;
   @Autowired private DataSource dataSource;
 
-  private StubSettlementRefundResponder stub() {
-    return new StubSettlementRefundResponder(replies, Clock.fixed(NOW, ZoneOffset.UTC), 20);
-  }
-
   @AfterEach
   void deleteRows() {
     JdbcTemplate jdbc = jdbc();
@@ -81,19 +77,27 @@ class RefundSettlementReplyIntegrationTest {
   }
 
   @Test
-  @DisplayName("stub 예약 성공을 반영하면 외부 환불 작업을 하나만 만든다")
+  @DisplayName("예약 성공을 반영하면 외부 환불 작업을 하나만 만들고 같은 결과의 재전달은 무변경이다")
   void createsRefundJobOnceReserved() {
-    Refund refund = accepted(confirmed(new PaymentAmounts(10_000, 0, 0, 2_000)));
+    Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 2_000));
+    Refund refund = accepted(payment);
+    UUID reservationId = UUID.randomUUID();
+    var reserved =
+        new RefundReservationResultPayload(
+            refund.getId(),
+            payment.getId(),
+            RefundReservationResultPayload.Result.RESERVED,
+            reservationId,
+            null);
 
-    stub().run();
-    stub().run();
+    assertThat(replies.applyReservationResult(reserved)).isEqualTo(Outcome.APPLIED);
+    assertThat(replies.applyReservationResult(reserved)).isEqualTo(Outcome.ALREADY_APPLIED);
 
     assertThat(jdbc().queryForMap("SELECT status FROM payment.refunds"))
         .containsEntry("status", "EXTERNAL_PENDING");
     assertThat(jdbc().queryForMap("SELECT step, reservation_ref FROM payment.refund_sagas"))
         .containsEntry("step", "EXTERNAL_REFUND_PENDING")
-        .extractingByKey("reservation_ref")
-        .isNotNull();
+        .containsEntry("reservation_ref", reservationId);
     assertThat(
             jdbc()
                 .queryForList(
@@ -148,14 +152,18 @@ class RefundSettlementReplyIntegrationTest {
     refund.reserved(NOW);
     refund.externalSucceeded(UUID.randomUUID(), NOW);
     refund.mileageRestored(NOW);
-    saga.reserved(UUID.randomUUID(), NOW);
+    UUID reservationId = UUID.randomUUID();
+    saga.reserved(reservationId, NOW);
     saga.externalSettled(NOW);
     saga.mileageRestored(NOW);
     refunds.save(refund);
     sagas.save(saga);
+    var reversed =
+        new RefundLedgerReversedPayload(
+            refund.getId(), payment.getId(), reservationId, NOW.atOffset(ZoneOffset.UTC));
 
-    stub().run();
-    stub().run();
+    assertThat(replies.applyLedgerReversed(reversed)).isEqualTo(Outcome.APPLIED);
+    assertThat(replies.applyLedgerReversed(reversed)).isEqualTo(Outcome.ALREADY_APPLIED);
 
     assertThat(jdbc().queryForObject("SELECT status FROM payment.refunds", String.class))
         .isEqualTo("INTERNAL_PENDING");
@@ -204,12 +212,16 @@ class RefundSettlementReplyIntegrationTest {
     RefundSaga saga = RefundSaga.start(refund, NOW);
     refund.reserved(NOW);
     refund.externalDeclined(NOW);
-    saga.reserved(UUID.randomUUID(), NOW);
+    UUID reservationId = UUID.randomUUID();
+    saga.reserved(reservationId, NOW);
     saga.externalDeclined("REFUND_EXTERNAL_DECLINED", NOW);
     refunds.save(refund);
     sagas.save(saga);
+    var released =
+        new RefundReservationReleasedPayload(refund.getId(), payment.getId(), reservationId);
 
-    stub().run();
+    assertThat(replies.applyReservationReleased(released)).isEqualTo(Outcome.APPLIED);
+    assertThat(replies.applyReservationReleased(released)).isEqualTo(Outcome.ALREADY_APPLIED);
 
     assertThat(jdbc().queryForObject("SELECT status FROM payment.refunds", String.class))
         .isEqualTo("DECLINED");

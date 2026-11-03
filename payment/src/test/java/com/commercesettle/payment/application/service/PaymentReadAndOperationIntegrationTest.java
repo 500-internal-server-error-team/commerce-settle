@@ -805,6 +805,7 @@ class PaymentReadAndOperationIntegrationTest {
     PaymentNotices.class,
     RefundEventHandler.class,
     RefundEvents.class,
+    RefundSettlementReplyService.class,
     ApprovalWorker.class,
     ApprovalResultRecorder.class,
     MileageQueryService.class,

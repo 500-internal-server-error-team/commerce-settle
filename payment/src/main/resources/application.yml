@@ -105,6 +105,10 @@ app:
     order-payment-requested:
       # 개발용 초기 SQL 적용과 신규 그룹 offset 초기화 후에만 활성화한다.
       enabled: false
+    settlement-replies:
+      # Settlement 환불 응답(commerce-settle.settlement.v1) 수신. 토픽이 없으면 기동하지 않으므로
+      # Settlement가 토픽을 만들고 이 그룹의 offset을 준비한 뒤에만 켠다. 반영은 payment-request-processor가 맡는다.
+      enabled: false
   payment-request-processor:
     # PAYMENT_ROLE=worker에서만 동작한다. WAITING 결제 요청을 결제·승인 작업으로 처리한다.
     # 실패는 최대 10회까지 1~60초 간격으로 재시도한 뒤 REVIEW_REQUIRED로 남긴다.
@@ -139,8 +143,8 @@ app:
     # finance-mock에 이 이름의 PG 시나리오가 있어야 한다. 없으면 대역이 503으로 답하고 승인은 미확정으로 남는다.
     scenario-version: ${PAYMENT_SCENARIO_VERSION:pg-normal-v1}
   refund:
-    # PAYMENT_ROLE=worker에서만 동작한다. 정산금 예약이 확인된 환불의 외부 환불·마일리지 복원 Worker와
-    # 정산 응답 stub을 켠다. RefundApproved·RefundOrderRestored 반영은 payment-request-processor가 맡는다.
+    # PAYMENT_ROLE=worker에서만 동작한다. 정산금 예약이 확인된 환불의 외부 환불·마일리지 복원 Worker를 켠다.
+    # RefundApproved·RefundOrderRestored와 Settlement 환불 응답 반영은 payment-request-processor가 맡는다.
     enabled: false
     # stub: 즉시 성공하는 개발용 외부 환불. finance-mock 환불 연동은 아직 없다.
     gateway: ${PAYMENT_REFUND_GATEWAY:stub}
@@ -150,11 +154,6 @@ app:
     lease-duration: 30s
     http-timeout: 5s
     max-attempts: 10
-    settlement-stub:
-      # Settlement 환불 예약·원장 상쇄·예약 해제 응답을 즉시 성공으로 대신한다.
-      # Settlement 수신기를 연결하면 false로 끈다.
-      enabled: true
-      batch-size: 20
   payment-reconciliation:
     # 마감 뒤 이 시간이 지나야 대조 기준선을 고정한다. 결제 업무 트랜잭션의 최대 시간보다 길어야 한다.
     safety-margin: PT10M
