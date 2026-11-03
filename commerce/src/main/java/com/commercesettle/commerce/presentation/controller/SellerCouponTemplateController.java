@@ -2,7 +2,9 @@ package com.commercesettle.commerce.presentation.controller;
 
 import com.commercesettle.commerce.application.service.SellerCouponService;
 import com.commercesettle.commerce.application.service.SellerCouponService.Terms;
+import com.commercesettle.commerce.domain.exception.InvalidCouponTermsException;
 import com.commercesettle.commerce.domain.model.CouponTemplate;
+import com.commercesettle.commerce.domain.model.Order;
 import com.commercesettle.commerce.presentation.dto.BuyerCouponResponse;
 import com.commercesettle.commerce.presentation.dto.CouponTemplatePageResponse;
 import com.commercesettle.commerce.presentation.dto.CouponTemplateResponse;
@@ -18,6 +20,8 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import java.net.URI;
 import java.util.EnumSet;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -66,7 +70,7 @@ public class SellerCouponTemplateController {
                 request.validUntil().toInstant(),
                 request.totalBudget(),
                 request.minSellerNetAmount(),
-                EnumSet.copyOf(request.allowedMethods())));
+                distinctMethods(request.allowedMethods())));
     return ResponseEntity.created(
             URI.create("/api/sellers/me/coupon-templates/" + template.getId()))
         .body(CouponTemplateResponse.from(template));
@@ -119,5 +123,14 @@ public class SellerCouponTemplateController {
         .body(
             BuyerCouponResponse.from(
                 coupons.issue(seller.id(), templateId, idempotencyKey, request.buyerId())));
+  }
+
+  /** 명세의 uniqueItems대로 같은 결제수단을 두 번 보내면 거절한다. null 원소는 요청 검증이 먼저 막는다. */
+  private static Set<Order.ExternalMethod> distinctMethods(List<Order.ExternalMethod> methods) {
+    EnumSet<Order.ExternalMethod> distinct = EnumSet.copyOf(methods);
+    if (distinct.size() != methods.size()) {
+      throw new InvalidCouponTermsException("allowedMethods", "같은 결제수단을 두 번 보낼 수 없습니다.");
+    }
+    return distinct;
   }
 }

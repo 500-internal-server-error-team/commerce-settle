@@ -21,4 +21,4 @@ public record CreateCouponTemplateRequest(
     @NotNull OffsetDateTime validUntil,
     @NotNull @Min(1) Long totalBudget,
     @NotNull @Min(0) @Max(10_000_000) Long minSellerNetAmount,
-    @NotNull @Size(min = 1, max = 3) List<Order.ExternalMethod> allowedMethods) {}
+    @NotNull @Size(min = 1, max = 3) List<Order.@NotNull ExternalMethod> allowedMethods) {}
