@@ -1,5 +1,6 @@
 package com.commercesettle.commerce.application.service;
 
+import static com.commercesettle.commerce.support.ConcurrentTransactions.holdTransaction;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.commercesettle.commerce.application.event.EventEnvelope;
@@ -7,6 +8,7 @@ import com.commercesettle.commerce.domain.model.ProductStatus;
 import com.commercesettle.commerce.domain.model.SaleEvent;
 import com.commercesettle.commerce.domain.model.ShippingAddress;
 import com.commercesettle.commerce.infrastructure.messaging.PaymentAcceptedListener;
+import com.commercesettle.commerce.support.ConcurrentTransactions.HeldTransaction;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -31,6 +33,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -69,6 +72,7 @@ class EventOrderIntegrationTest {
   @Autowired OrderResultService results;
   @Autowired PaymentAcceptedService accepted;
   @Autowired CouponService coupons;
+  @Autowired TransactionTemplate tx;
   @MockitoBean OrderAdmissionService admission;
 
   @Test
@@ -97,6 +101,28 @@ class EventOrderIntegrationTest {
             jdbc.queryForObject(
                 "select status from commerce.buyer_coupons where id = ?", String.class, coupon))
         .isEqualTo("USED");
+  }
+
+  @Test
+  @DisplayName("남은 수량이 없는 이벤트는 다른 트랜잭션이 이벤트 행을 잠그고 있어도 그 커밋을 기다리지 않고 EVENT_ADMISSION_CLOSED로 거절한다")
+  void rejectsWithoutWaitingOnLockedEventRow() throws Exception {
+    Sale sale = openSale(1);
+    order(sale, buyer(), 201);
+    Buyer late = buyer();
+
+    JsonNode rejected;
+    try (HeldTransaction held =
+        holdTransaction(
+            tx,
+            () ->
+                jdbc.queryForList(
+                    "select id from commerce.sale_events where id = ? for update",
+                    sale.eventId()))) {
+      rejected = order(sale, late, 409);
+    }
+
+    assertThat(rejected.path("code").asText()).isEqualTo("EVENT_ADMISSION_CLOSED");
+    assertSlots(sale, 0, 1);
   }
 
   @Test
