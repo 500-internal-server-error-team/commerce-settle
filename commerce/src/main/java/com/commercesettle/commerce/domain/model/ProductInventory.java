@@ -129,6 +129,23 @@ public class ProductInventory extends AuditableEntity {
     return change(movementId, operation, businessRef, quantity, 0, 0, -quantity, reason, now);
   }
 
+  /** 재판매 불가로 검수한 반품 입고: 순판매 수량만 줄이고 가용 재고에는 더하지 않는다. */
+  InventoryMovement disposeReturn(UUID movementId, UUID businessRef, int quantity, Instant now) {
+    if (soldQuantity < quantity) {
+      throw new IllegalStateException("sold quantity is less than disposal: " + productId);
+    }
+    return change(
+        movementId,
+        InventoryOperation.RETURN_DISPOSE,
+        businessRef,
+        0,
+        0,
+        0,
+        -quantity,
+        "재판매 불가 반품 입고",
+        now);
+  }
+
   /** 이벤트 공개 때 한정 수량을 가용에서 이벤트 배정으로 옮긴다. 가용 수량이 부족하면 공개하지 않는다. */
   InventoryMovement allocateToEvent(UUID movementId, UUID eventId, long quantity, Instant now) {
     if (availableQuantity < quantity) {

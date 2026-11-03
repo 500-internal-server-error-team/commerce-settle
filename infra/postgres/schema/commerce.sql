@@ -117,12 +117,14 @@ CREATE TABLE commerce.order_refund_requests (
     refund_id uuid,
     decision_at timestamptz,
     received_at timestamptz,
+    receipt_resalable boolean,
     closed_reason varchar(200),
     closure_evidence_ref varchar(200),
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
     version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
     CHECK (received_at IS NULL OR kind = 'RETURN'),
+    CHECK ((received_at IS NULL) = (receipt_resalable IS NULL)),
     CHECK (status <> 'CLOSED' OR (closed_reason IS NOT NULL AND closure_evidence_ref IS NOT NULL))
 );
 CREATE UNIQUE INDEX uq_order_refund_active ON commerce.order_refund_requests(order_id)
@@ -254,7 +256,7 @@ CREATE TABLE commerce.inventory_reservations (
     CONSTRAINT uq_inventory_reservations_order UNIQUE (order_id),
     CONSTRAINT ck_inventory_reservations_quantity CHECK (quantity > 0),
     CONSTRAINT ck_inventory_reservations_status
-        CHECK (status IN ('RESERVED', 'CONSUMED', 'RELEASED', 'RESTORED'))
+        CHECK (status IN ('RESERVED', 'CONSUMED', 'RELEASED', 'RESTORED', 'DISPOSED'))
 );
 CREATE INDEX ix_inventory_reservations_status_expires
     ON commerce.inventory_reservations (status, expires_at, id);

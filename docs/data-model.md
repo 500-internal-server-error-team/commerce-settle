@@ -164,7 +164,8 @@
 | `SELLER_ADJUSTMENT` | 판매자 조정 요청의 멱등 기록 ID |
 | `ORDER_RESERVE`, `ORDER_CONSUME`, `ORDER_RELEASE` | 예약의 결제 회차 `cycle_id`. 재시도마다 새 값 |
 | `REFUND_RESTORE` | 미발송 주문 복구의 원환불 `refundId` |
-| `RETURN_RESTORE` | 반품 입고한 `order_refund_requests.id` |
+| `RETURN_RESTORE` | 재판매 가능으로 입고한 `order_refund_requests.id` |
+| `RETURN_DISPOSE` | 재판매 불가로 입고한 `order_refund_requests.id`. 판매만 줄이고 가용은 바꾸지 않음 |
 | `EVENT_ALLOCATE`, `EVENT_RETURN` | `sale_events.id` |
 
 선착순 주문의 확정과 이벤트 종료 뒤 해제는 재고 행이 바뀌므로 `ORDER_CONSUME`·`ORDER_RELEASE`로 기록합니다. 선착순 예약과 이벤트 진행 중 해제는 이벤트의 `R`만 바뀌므로 이 이력을 남기지 않고 event_participations가 참여 기록을 맡습니다.
@@ -322,13 +323,14 @@
 | `refund_id` | `uuid?` | 외부Payment참조 |
 | `decision_at` | `timestamptz?` | — |
 | `received_at` | `timestamptz?` | — |
+| `receipt_resalable` | `boolean?` | 입고 검수 결과. 입고 때 함께 기록 |
 | `closed_reason` | `varchar(200)?` | — |
 | `closure_evidence_ref` | `varchar(200)?` | — |
 | `created_at` | `timestamptz` | — |
 | `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** 부분 UNIQUE(order_id) WHERE status IN (PENDING_SELLER,APPROVED,REFUNDING,COMPLETED,FAILED_REVIEW). status=PENDING_SELLER/APPROVED/REFUNDING/COMPLETED/REJECTED/WITHDRAWN/FAILED_REVIEW/CLOSED. 재고 재입고는 received_at과 원복 유일성으로 보호.
+**제약:** 부분 UNIQUE(order_id) WHERE status IN (PENDING_SELLER,APPROVED,REFUNDING,COMPLETED,FAILED_REVIEW). status=PENDING_SELLER/APPROVED/REFUNDING/COMPLETED/REJECTED/WITHDRAWN/FAILED_REVIEW/CLOSED. received_at과 receipt_resalable은 함께 NULL이거나 함께 값이 있음. 재고 재입고·폐기는 received_at과 원복 유일성으로 보호.
 
 **인덱스:** (order_id,created_at,id); (seller_id,status,created_at,id); UNIQUE(refund_id) WHERE refund_id IS NOT NULL.
 
@@ -361,7 +363,7 @@
 | `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(order_id). quantity>0. status=RESERVED/CONSUMED/RELEASED/RESTORED. 기한만으로 RELEASED 전이 금지.
+**제약:** UNIQUE(order_id). quantity>0. status=RESERVED/CONSUMED/RELEASED/RESTORED/DISPOSED. 기한만으로 RELEASED 전이 금지.
 
 | 전이 | 근거 | 조건 |
 | --- | --- | --- |
@@ -369,7 +371,8 @@
 | RESERVED→CONSUMED | 결제 확정 | 결과의 결제 회차가 `cycle_id`와 같음 |
 | RESERVED→RELEASED | 확정 거절·승인 차단된 취소 | 결과의 결제 회차가 `cycle_id`와 같음 |
 | RELEASED→RESERVED | 확정 거절 뒤 재시도 | 새 회차로 수량을 다시 확보하고 `cycle_id` 교체 |
-| CONSUMED→RESTORED | 미발송 주문의 환불 복구 또는 발송 주문의 반품 입고 | 주문당 한 번 |
+| CONSUMED→RESTORED | 미발송 주문의 환불 복구 또는 발송 주문의 재판매 가능 반품 입고 | 주문당 한 번 |
+| CONSUMED→DISPOSED | 발송 주문의 재판매 불가 반품 입고 | 주문당 한 번. RESTORED와 함께 판매 종결 상태이며 서로 바뀌지 않음 |
 
 재시도도 같은 행을 갱신하므로 주문당 예약 행은 하나입니다. 회차가 다른 늦은 결과와 이미 반영된 결과는 상태를 바꾸지 않습니다. 금지된 전이는 수량·이력을 바꾸지 않고 거절합니다. 수량 증감과 복원 시점은 [재고 예약과 복원](policies.md#재고-예약과-복원)을 따릅니다.
 

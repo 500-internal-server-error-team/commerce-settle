@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * 주문 재고 예약. 주문당 한 행이며 재시도도 같은 행을 갱신한다. 상태 전이와 {@link ProductInventory} 수량 변경을 한 메서드에서 함께 수행해 둘이
@@ -139,7 +140,7 @@ public class InventoryReservation extends AuditableEntity {
         moveTo(InventoryReservationStatus.CONSUMED, now);
         yield Result.applied(movement);
       }
-      case CONSUMED, RESTORED -> Result.unchanged(Outcome.ALREADY_APPLIED);
+      case CONSUMED, RESTORED, DISPOSED -> Result.unchanged(Outcome.ALREADY_APPLIED);
       case RELEASED -> throw rejected(InventoryReservationStatus.CONSUMED);
     };
   }
@@ -158,7 +159,7 @@ public class InventoryReservation extends AuditableEntity {
         yield Result.applied(movement);
       }
       case RELEASED -> Result.unchanged(Outcome.ALREADY_APPLIED);
-      case CONSUMED, RESTORED -> throw rejected(InventoryReservationStatus.RELEASED);
+      case CONSUMED, RESTORED, DISPOSED -> throw rejected(InventoryReservationStatus.RELEASED);
     };
   }
 
@@ -196,6 +197,16 @@ public class InventoryReservation extends AuditableEntity {
     return restoreSold(inventory, operation, businessRef, movementId, now, () -> {});
   }
 
+  /**
+   * 발송 주문에서 재판매 불가로 검수한 반품의 입고(RETURN_DISPOSE, 반품 요청 ID): 판매 −q. 가용 재고에는 더하지 않는다. 복원과 같이 주문당 한 번이며
+   * 이후 복원·폐기 요청은 수량을 바꾸지 않는다.
+   */
+  public Result dispose(
+      ProductInventory inventory, UUID businessRef, UUID movementId, Instant now) {
+    requireGeneral(inventory);
+    return disposeSold(inventory, businessRef, movementId, now, () -> {});
+  }
+
   /** 선착순 주문의 결제 확정: R−1, S+1, 배정 재고 −1·판매 +1. 참여는 확정 상태가 된다. */
   public Result consumeForEvent(
       ProductInventory inventory,
@@ -215,7 +226,7 @@ public class InventoryReservation extends AuditableEntity {
         moveTo(InventoryReservationStatus.CONSUMED, now);
         yield Result.applied(movement);
       }
-      case CONSUMED, RESTORED -> Result.unchanged(Outcome.ALREADY_APPLIED);
+      case CONSUMED, RESTORED, DISPOSED -> Result.unchanged(Outcome.ALREADY_APPLIED);
       case RELEASED -> throw rejected(InventoryReservationStatus.CONSUMED);
     };
   }
@@ -241,7 +252,7 @@ public class InventoryReservation extends AuditableEntity {
         yield movement.map(Result::applied).orElseGet(Result::appliedWithoutMovement);
       }
       case RELEASED -> Result.unchanged(Outcome.ALREADY_APPLIED);
-      case CONSUMED, RESTORED -> throw rejected(InventoryReservationStatus.RELEASED);
+      case CONSUMED, RESTORED, DISPOSED -> throw rejected(InventoryReservationStatus.RELEASED);
     };
   }
 
@@ -282,6 +293,18 @@ public class InventoryReservation extends AuditableEntity {
         inventory, operation, businessRef, movementId, now, () -> participation.refund(now));
   }
 
+  /** 선착순 주문의 재판매 불가 반품 입고: 판매 −1. 이벤트 S·게이지와 참여 한도는 되돌리지 않는다. */
+  public Result disposeForEvent(
+      ProductInventory inventory,
+      SaleEvent event,
+      EventParticipation participation,
+      UUID businessRef,
+      UUID movementId,
+      Instant now) {
+    requireEvent(inventory, event, participation);
+    return disposeSold(inventory, businessRef, movementId, now, () -> participation.refund(now));
+  }
+
   /** 주문당 한 번만 복원하며 이후 복원 요청은 출처와 관계없이 수량을 바꾸지 않는다. */
   private Result restoreSold(
       ProductInventory inventory,
@@ -290,16 +313,41 @@ public class InventoryReservation extends AuditableEntity {
       UUID movementId,
       Instant now,
       Runnable alsoApply) {
+    return endSale(
+        InventoryReservationStatus.RESTORED,
+        () -> inventory.restore(movementId, operation, businessRef, quantity, now),
+        alsoApply,
+        now);
+  }
+
+  private Result disposeSold(
+      ProductInventory inventory,
+      UUID businessRef,
+      UUID movementId,
+      Instant now,
+      Runnable alsoApply) {
+    return endSale(
+        InventoryReservationStatus.DISPOSED,
+        () -> inventory.disposeReturn(movementId, businessRef, quantity, now),
+        alsoApply,
+        now);
+  }
+
+  /** 확정 판매를 복원 또는 폐기로 끝낸다. 이미 둘 중 하나로 끝났으면 출처와 관계없이 수량을 바꾸지 않는다. */
+  private Result endSale(
+      InventoryReservationStatus target,
+      Supplier<InventoryMovement> change,
+      Runnable alsoApply,
+      Instant now) {
     return switch (status) {
       case CONSUMED -> {
-        InventoryMovement movement =
-            inventory.restore(movementId, operation, businessRef, quantity, now);
+        InventoryMovement movement = change.get();
         alsoApply.run();
-        moveTo(InventoryReservationStatus.RESTORED, now);
+        moveTo(target, now);
         yield Result.applied(movement);
       }
-      case RESTORED -> Result.unchanged(Outcome.ALREADY_APPLIED);
-      case RESERVED, RELEASED -> throw rejected(InventoryReservationStatus.RESTORED);
+      case RESTORED, DISPOSED -> Result.unchanged(Outcome.ALREADY_APPLIED);
+      case RESERVED, RELEASED -> throw rejected(target);
     };
   }
 

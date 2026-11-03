@@ -276,14 +276,14 @@ public class OrderWorkflowController {
   @PostMapping("/api/sellers/me/refund-requests/{requestId}/receipt")
   @Operation(
       operationId = "post_api_sellers_me_refund_requests_requestId_receipt",
-      summary = "재판매 가능 반품 입고·재고 복원")
+      summary = "반품 입고·검수 결과 확정")
   public OrderWorkflowResponses.Refund receive(
       @Parameter(hidden = true) AuthenticatedSeller seller,
       @PathVariable UUID requestId,
       @RequestHeader("Idempotency-Key") @Size(min = 8, max = 128) String key,
-      @Valid @RequestBody OrderWorkflowRequests.Version r) {
+      @Valid @RequestBody OrderWorkflowRequests.ReturnReceipt r) {
     return OrderWorkflowResponses.Refund.from(
-        refunds.receive(seller.id(), requestId, key, r.expectedVersion()));
+        refunds.receive(seller.id(), requestId, key, r.expectedVersion(), r.resalable()));
   }
 
   @ApiResponse(responseCode = "200", description = "조회·처리 완료", useReturnTypeSchema = true)
