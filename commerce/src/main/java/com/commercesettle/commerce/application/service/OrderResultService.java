@@ -248,9 +248,8 @@ public class OrderResultService {
         || p.required("sellerCouponAmount").longValue() != a.sellerCouponAmount()
         || p.required("platformCouponAmount").longValue() != a.platformCouponAmount()
         || p.required("settlementBaseAmount").longValue() != a.settlementBaseAmount()
-        || p.required("feeAmount").longValue() != a.settlementBaseAmount() * 15 / 100
-        || p.required("sellerNetAmount").longValue()
-            != a.settlementBaseAmount() - a.settlementBaseAmount() * 15 / 100) throw conflict();
+        || p.required("feeAmount").longValue() != a.feeAmount()
+        || p.required("sellerNetAmount").longValue() != a.sellerNetAmount()) throw conflict();
   }
 
   private static UUID id(JsonNode p, String field) {

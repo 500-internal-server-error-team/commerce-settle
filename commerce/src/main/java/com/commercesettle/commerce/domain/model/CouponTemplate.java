@@ -45,9 +45,6 @@ public class CouponTemplate extends AuditableEntity {
   /** SELLER 쿠폰은 할인 후 상품대금이 이 금액 이상이 되도록 설정한다. */
   public static final long SELLER_MIN_AFTER_DISCOUNT = 20_000;
 
-  /** 판매자에게 부과하는 PG·부가세 포함 수수료율(%)이며 기준액은 판매자 쿠폰을 뺀 B다. */
-  static final long FEE_PERCENT = 15;
-
   /** 등급·판매자 쿠폰이 최소 주문금액에서도 남겨야 하는 보수적 잔여액 H의 하한. */
   static final long PROFIT_FLOOR = 500;
 
@@ -136,7 +133,7 @@ public class CouponTemplate extends AuditableEntity {
       throw new InvalidCouponTermsException(
           "minOrderAmount", "할인 후 상품대금이 20,000원 이상이 되도록 최소 주문금액을 정해 주세요.");
     }
-    long fee = base * FEE_PERCENT / 100;
+    long fee = OrderAmounts.feeOf(base);
     if (base - fee < minSellerNetAmount) {
       throw new InvalidCouponTermsException(
           "minSellerNetAmount", "최소 주문금액에서의 판매자 정산액이 승인한 최소 정산액보다 작습니다.");
