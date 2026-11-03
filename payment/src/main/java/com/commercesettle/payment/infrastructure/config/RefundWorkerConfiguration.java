@@ -16,9 +16,8 @@ public class RefundWorkerConfiguration {
   RefundWorkerSettings refundWorkerSettings(
       @Value("${app.refund.lease-duration:30s}") Duration leaseDuration,
       @Value("${app.refund.http-timeout:5s}") Duration httpTimeout,
-      @Value("${app.refund.unconfirmed-retry-delay:5s}") Duration retryDelay,
       @Value("${app.refund.max-attempts:10}") int maxAttempts) {
-    return new RefundWorkerSettings(leaseDuration, httpTimeout, retryDelay, maxAttempts);
+    return new RefundWorkerSettings(leaseDuration, httpTimeout, maxAttempts);
   }
 
   /** 지금은 즉시 성공하는 {@code stub}만 제공한다. finance-mock 환불 연동을 추가하기 전에는 다른 값으로 기동하지 않는다. */

@@ -42,6 +42,8 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
@@ -223,6 +225,7 @@ class RefundSagaIntegrationTest {
     assertThat(walletBalance(payment)).isZero();
 
     gateway.nextLookup(new Result.Succeeded(UUID.randomUUID(), Instant.now()));
+    makeRefundDue();
     worker.runOnce();
 
     assertThat(gateway.refunds).hasSize(1);
@@ -230,6 +233,68 @@ class RefundSagaIntegrationTest {
     assertThat(refundStatus()).isEqualTo("INTERNAL_PENDING");
     assertThat(walletBalance(payment)).isEqualTo(2_000);
     assertThat(restoreEntries()).isEqualTo(1);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"1, 1", "2, 2", "3, 4", "7, 60", "9, 60"})
+  @DisplayName("미확정 환불은 시도 횟수에 따라 지수 재시도하고 예약과 업무 키를 유지한다")
+  void reschedulesUnconfirmedRefundWithExponentialDelay(int attempt, long delaySeconds)
+      throws Exception {
+    Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 2_000), 500);
+    approve(payment, UUID.randomUUID());
+    inboxProcessor.processNext();
+    stub().run();
+    UUID businessKey =
+        jdbc().queryForObject("SELECT business_key FROM payment.payment_jobs", UUID.class);
+    jdbc().update("UPDATE payment.payment_jobs SET attempts = ?", attempt - 1);
+    gateway.nextRefund(new Result.Unconfirmed("provider unavailable"));
+    Instant before = clock.instant();
+
+    assertThat(worker.runOnce()).isTrue();
+
+    Instant after = clock.instant();
+    Instant nextRunAt =
+        jdbc()
+            .queryForObject("SELECT next_run_at FROM payment.payment_jobs", OffsetDateTime.class)
+            .toInstant();
+    assertThat(nextRunAt)
+        .isBetween(before.plusSeconds(delaySeconds), after.plusSeconds(delaySeconds));
+    assertThat(
+            jdbc().queryForMap("SELECT status, attempts, business_key FROM payment.payment_jobs"))
+        .containsEntry("status", "RETRY")
+        .containsEntry("attempts", attempt)
+        .containsEntry("business_key", businessKey);
+    assertThat(refundStatus()).isEqualTo("UNKNOWN");
+    assertThat(jdbc().queryForObject("SELECT step FROM payment.refund_sagas", String.class))
+        .isEqualTo("EXTERNAL_REFUND_PENDING");
+    assertThat(walletBalance(payment)).isEqualTo(500);
+    assertThat(restoreEntries()).isZero();
+    assertThat(eventTypes(payment)).containsExactly("RefundAccepted", "RefundReservationRequested");
+  }
+
+  @Test
+  @DisplayName("미확정 환불은 열 번째 시도 뒤 예약을 유지한 확인 대상으로 남기고 자동 실행하지 않는다")
+  void requiresReviewAfterTenUnconfirmedAttempts() throws Exception {
+    Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 2_000), 500);
+    approve(payment, UUID.randomUUID());
+    inboxProcessor.processNext();
+    stub().run();
+    jdbc().update("UPDATE payment.payment_jobs SET attempts = 9");
+    gateway.nextRefund(new Result.Unconfirmed("provider unavailable"));
+
+    assertThat(worker.runOnce()).isTrue();
+
+    assertThat(jdbc().queryForMap("SELECT status, attempts FROM payment.payment_jobs"))
+        .containsEntry("status", "REVIEW_REQUIRED")
+        .containsEntry("attempts", 10);
+    assertThat(refundStatus()).isEqualTo("UNKNOWN");
+    assertThat(jdbc().queryForObject("SELECT step FROM payment.refund_sagas", String.class))
+        .isEqualTo("EXTERNAL_REFUND_PENDING");
+    assertThat(walletBalance(payment)).isEqualTo(500);
+    assertThat(restoreEntries()).isZero();
+    assertThat(worker.runOnce()).isFalse();
+    assertThat(gateway.refunds).hasSize(1);
+    assertThat(gateway.lookups).isEmpty();
   }
 
   @Test
@@ -243,6 +308,7 @@ class RefundSagaIntegrationTest {
     worker.runOnce();
 
     gateway.nextLookup(new Result.NotFound());
+    makeRefundDue();
     worker.runOnce();
 
     assertThat(gateway.lookups).hasSize(1);
@@ -490,6 +556,11 @@ class RefundSagaIntegrationTest {
     return new JdbcTemplate(dataSource);
   }
 
+  /** 테스트가 실제 재시도 간격을 기다리지 않고 같은 작업의 다음 실행을 검증한다. */
+  private void makeRefundDue() {
+    jdbc().update("UPDATE payment.payment_jobs SET next_run_at = clock_timestamp()");
+  }
+
   /** 다음 결과를 고를 수 있는 외부 환불 대역. 정하지 않으면 성공한다. 호출 본문을 기록하고, 응답 전 동작을 끼울 수 있다. */
   static final class FakeRefundGateway implements RefundGateway {
     final List<RefundRequest> refunds = new ArrayList<>();
@@ -593,11 +664,9 @@ class RefundSagaIntegrationTest {
       return new TransactionTemplate(manager);
     }
 
-    // 미확정 재조회를 기다리지 않도록 재시도 간격을 0으로 둔다.
     @Bean
     RefundWorkerSettings refundWorkerSettings() {
-      return new RefundWorkerSettings(
-          Duration.ofSeconds(30), Duration.ofSeconds(5), Duration.ZERO, 10);
+      return new RefundWorkerSettings(Duration.ofSeconds(30), Duration.ofSeconds(5), 10);
     }
 
     @Bean
