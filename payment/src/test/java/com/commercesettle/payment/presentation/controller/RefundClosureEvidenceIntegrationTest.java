@@ -20,6 +20,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -39,6 +40,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
   RefundClosureEvidenceIntegrationTest.Beans.class
 })
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class RefundClosureEvidenceIntegrationTest {
   static final String GATEWAY = "test-gateway-credential-0123456789abcdef0123";
   static final String COMMERCE = "test-commerce-credential-0123456789abcdef0123";

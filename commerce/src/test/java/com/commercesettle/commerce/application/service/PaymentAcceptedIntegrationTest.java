@@ -49,6 +49,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -74,6 +75,7 @@ import org.testcontainers.kafka.KafkaContainer;
       "spring.kafka.consumer.auto-offset-reset=earliest"
     })
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @Timeout(90)
 @Import(PaymentAcceptedIntegrationTest.TestBeans.class)
 class PaymentAcceptedIntegrationTest {

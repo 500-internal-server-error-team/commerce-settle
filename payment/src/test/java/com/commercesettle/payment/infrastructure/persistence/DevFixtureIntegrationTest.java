@@ -19,6 +19,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -33,6 +34,7 @@ import org.testcontainers.kafka.KafkaContainer;
       "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123"
     })
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class DevFixtureIntegrationTest {
   @Container @ServiceConnection
   static final PostgreSQLContainer<?> POSTGRES =

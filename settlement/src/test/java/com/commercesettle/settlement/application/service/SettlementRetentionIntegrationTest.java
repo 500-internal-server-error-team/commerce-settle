@@ -23,6 +23,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -42,6 +43,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "settlement.inbox-processor.enabled=false"
     })
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class SettlementRetentionIntegrationTest {
   static final String CREDENTIAL = "test-commerce-retention-credential-0123456789abcdef";
   private static final Instant CLOSED = Instant.parse("2026-08-02T01:00:00.123456789Z");

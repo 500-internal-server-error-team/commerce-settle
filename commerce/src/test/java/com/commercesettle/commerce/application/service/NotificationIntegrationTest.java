@@ -42,6 +42,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -61,6 +62,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "app.internal-auth.senders[operator\\:test].current=" + NotificationIntegrationTest.OPERATOR
     })
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class NotificationIntegrationTest {
   static final String GATEWAY = "test-gateway-credential-0123456789abcdef0123";
   static final String OPERATOR = "test-operator-credential-0123456789abcdef0123";

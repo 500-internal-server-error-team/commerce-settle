@@ -55,6 +55,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -74,6 +75,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     })
 @Import(MockPaymentIntegrationTest.TimeConfiguration.class)
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @Timeout(30)
 class MockPaymentIntegrationTest {
   static final String SETTLEMENT = "test-settlement-credential-0123456789abcdef0123";

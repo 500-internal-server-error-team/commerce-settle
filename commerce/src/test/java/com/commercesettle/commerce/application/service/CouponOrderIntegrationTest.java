@@ -36,6 +36,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -58,6 +59,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "app.internal-auth.senders[service\\:payment].current=" + CouponOrderIntegrationTest.PAYMENT
     })
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class CouponOrderIntegrationTest {
   static final String GATEWAY = "test-gateway-credential-0123456789abcdef0123";
   static final String PAYMENT = "test-payment-credential-0123456789abcdef0123";
