@@ -143,8 +143,8 @@ CREATE TABLE settlement.payout_jobs (
 );
 
 CREATE INDEX ix_payout_jobs_due ON settlement.payout_jobs (status, next_run_at, lease_until, id);
+CREATE INDEX ix_payout_jobs_created ON settlement.payout_jobs (created_at, id);
 
--- 항목별 환불·지급 예약. 한 항목에는 ACTIVE 예약이 하나뿐이라 환불과 지급이 배타적이다.
 -- 운영 재처리 이력. 원업무 키·금액·계정은 지급에 그대로 두고, 누가 어떤 버전에서 왜 다시 열었는지와 이전 시도 수만 남긴다.
 CREATE TABLE settlement.payout_job_replays (
     id                uuid         PRIMARY KEY,
@@ -158,6 +158,7 @@ CREATE TABLE settlement.payout_job_replays (
     UNIQUE (job_id, expected_version)
 );
 
+-- 항목별 환불·지급 예약. 한 항목에는 ACTIVE 예약이 하나뿐이라 환불과 지급이 배타적이다.
 CREATE TABLE settlement.settlement_reservations (
     id                   uuid        PRIMARY KEY,
     item_id              uuid        NOT NULL,
@@ -421,7 +422,6 @@ CREATE INDEX ix_audit_logs_aggregate
     ON settlement.audit_logs (aggregate_type, aggregate_id, occurred_at, id);
 CREATE INDEX ix_audit_logs_actor ON settlement.audit_logs (actor_kind, actor_ref, occurred_at, id);
 CREATE INDEX ix_audit_logs_correlation ON settlement.audit_logs (correlation_id);
-
 
 -- Spring Batch 5.2 메타데이터. 라이브러리의 schema-postgresql.sql에서 서비스 내부 FK만 뺐다(ADR 0006).
 -- Spring Batch가 시각을 LocalDateTime으로 쓰므로 원본의 timestamp를 유지한다.

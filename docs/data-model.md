@@ -871,7 +871,7 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 
 Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건을 적용합니다. 금융 결과와 지급 항목·Job을 함께 반영하고, 만료된 실행자의 결과는 모두 롤백합니다. 호출·조회·원키 재개는 [공통 복구](policies.md#공통-복구)를 따릅니다.
 
-**인덱스:** (status,next_run_at,lease_until,id).
+**인덱스:** (status,next_run_at,lease_until,id); (created_at,id) 운영 작업 목록.
 
 ### payout_job_replays
 
@@ -888,7 +888,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 | `reason` | `varchar(200)` | 운영자가 입력한 재처리 사유 |
 | `created_at` | `timestamptz` | NOT NULL |
 
-**제약:** UNIQUE(job_id,expected_version). 작업 행 잠금 아래 작업·배치 전이·멱등 기록·감사 행과 같은 트랜잭션에 저장합니다.
+**제약:** UNIQUE(job_id,expected_version). 작업 행 잠금 아래 작업·배치 전이·멱등 기록·감사 행과 같은 트랜잭션에 저장합니다. Settlement 운영 감사(재처리·배치 생성)의 `audit_logs.correlation_id`는 정산 배치 ID라 한 배치의 생성과 재처리를 함께 조회합니다.
 
 ### settlement_reservations
 
