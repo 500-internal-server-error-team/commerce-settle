@@ -53,8 +53,9 @@ class PaymentRequestProcessorTest {
             }
             allStarted.countDown();
             try {
-              // 세 슬롯이 모두 들어올 때까지 기다린다. 순차 실행이면 시간 초과로 false가 된다.
-              return allStarted.await(5, TimeUnit.SECONDS);
+              // 세 슬롯이 제한 시간 안에 모두 진입해야 한다. 순차 실행의 시간 초과도 실패로 처리한다.
+              assertThat(allStarted.await(5, TimeUnit.SECONDS)).isTrue();
+              return true;
             } catch (InterruptedException e) {
               Thread.currentThread().interrupt();
               return false;

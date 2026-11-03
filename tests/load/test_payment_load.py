@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import sqlite3
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 
 SOURCE = Path(os.environ.get("PAYMENT_LOAD_SOURCE", Path(__file__).with_name("payment_load.py")))
@@ -158,6 +158,71 @@ class ReplayNormalTest(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as output:
             load.cmd_replay(argparse.Namespace(reason="LOAD_TEST_RECOVERY"))
         self.assertIn("replayed 1 jobs", output.getvalue())
+
+
+class RestartRegressionTest(unittest.TestCase):
+    def ramp(self, fail_on=None, skip_restart=False, stages="100:60"):
+        class InlineThread:
+            def __init__(self, target, daemon):
+                self.target = target
+
+            def start(self):
+                if skip_restart and self.target.__name__ == "kill_worker":
+                    return
+                try:
+                    self.target()
+                except BaseException:
+                    # 실제 보조 스레드처럼 예외를 호출자에게 직접 전달하지 않는다.
+                    pass
+
+            def is_alive(self):
+                return False
+
+            def join(self):
+                pass
+
+        def compose(*args, **kwargs):
+            if args[0] == fail_on:
+                raise SystemExit(f"{fail_on} failed")
+            return ""
+
+        sample = {k: 0 for k in ("received", "confirmed", "declined", "unfinished", "waiting",
+                                  "kafkaLag", "outboxPending", "jobsReview", "inboxReview")}
+        sample["at"] = "2026-11-03T00:00:00Z"
+        work = MagicMock()
+        args = argparse.Namespace(stages=stages, run="restart", mix="card", offset=0,
+                                  interval=1, drain=1, kill_after=25, scenario="normal")
+        with patch("threading.Thread", InlineThread), patch("builtins.open", mock_open()), \
+                patch.object(load, "time") as clock, patch.object(load, "WORK", work), \
+                patch.object(load, "produce"), patch.object(load, "remember_run"), \
+                patch.object(load, "snapshot", return_value=sample), \
+                patch.object(load, "compose", side_effect=compose), \
+                patch.object(load, "compose_env", return_value={}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            clock.monotonic.side_effect = range(100)
+            load.cmd_ramp(args)
+        return json.loads(work.__truediv__.return_value.__truediv__.return_value.write_text.call_args.args[0])
+
+    def test_kill_failure_is_propagated(self):
+        with self.assertRaisesRegex(SystemExit, "kill failed"):
+            self.ramp(fail_on="kill")
+
+    def test_restart_failure_is_propagated(self):
+        with self.assertRaisesRegex(SystemExit, "up failed"):
+            self.ramp(fail_on="up")
+
+    def test_missing_restart_completion_is_rejected(self):
+        with self.assertRaisesRegex(SystemExit, "restart did not complete"):
+            self.ramp(skip_restart=True)
+
+    def test_rejects_fault_after_injection_ends(self):
+        with self.assertRaisesRegex(SystemExit, "earlier than the end"):
+            self.ramp(stages="100:10")
+
+    def test_successful_restart_is_recorded(self):
+        fault = self.ramp()["fault"]
+        self.assertIn("killedAt", fault)
+        self.assertIn("restartedAt", fault)
 
 
 if __name__ == "__main__":
