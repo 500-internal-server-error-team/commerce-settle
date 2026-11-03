@@ -244,25 +244,25 @@ Payment 내부 조회와 운영 종결은 ADR 0010의 `service:payment`·`operat
 
 ## 주문·결제·정산·환불 왕복
 
-세 서비스의 금융 소비자·발행기는 기본으로 꺼져 있습니다. 실제 왕복은 덮어쓰기 파일 `compose.financial-flow.yml`로 켭니다. 이 파일은 Commerce의 Outbox·결제 결과 수신·처리기, Payment Worker의 주문 요청 수신·처리기·승인·환불 Worker·Settlement 응답 수신·Outbox, Settlement의 이벤트 수신·Inbox 처리기·Outbox를 켭니다. PG 승인과 외부 환불은 즉시 성공하는 stub이고 알림 소비는 켜지 않습니다. 기본 `compose.yml`과 `.env`는 바꾸지 않습니다.
+세 서비스의 금융 소비자·발행기는 기본으로 꺼져 있습니다. 실제 왕복은 덮어쓰기 파일 `compose.financial-flow.yml`로 켭니다. 이 파일은 Commerce의 Outbox·결제 결과 수신·처리기, Payment Worker의 주문 요청 수신·처리기·승인·환불 Worker·Settlement 응답 수신·Outbox, Settlement의 이벤트 수신·Inbox 처리기·Outbox를 켭니다. PG 승인·외부 환불은 Finance Mock HTTP로 선택하고 정상 시나리오·지급 재원·개발 fixture를 준비합니다. 알림 소비는 켜지 않습니다. 기본 `compose.yml`과 `.env`는 바꾸지 않습니다.
 
 소비자는 토픽과 그룹 offset이 있어야 시작합니다. 빈 볼륨에서는 기본 설정으로 먼저 올려 세 서비스가 자기 토픽을 만들게 하고, [신규 그룹 offset 준비](#금융-관측과-접수-복구)를 마친 뒤 앱만 재생성합니다.
 
 ```bash
 docker compose up -d --build --wait
 # commerce.v1·payment.v1·settlement.v1 그룹의 offset 준비(위 절의 명령)
-docker compose -f compose.yml -f compose.financial-flow.yml up -d --wait commerce payment-worker settlement
+docker compose -f compose.yml -f compose.financial-flow.yml up -d --wait commerce payment-worker settlement finance-mock
 ```
 
-`python3 -B scripts/smoke_financial_flow.py`는 이 순서를 새 Compose 프로젝트·빈 볼륨에서 실행하고 소유 리소스만 지웁니다. 순서는 다음과 같습니다.
+`python3 -B scripts/smoke_financial_flow.py`는 이 순서를 새 Compose 프로젝트·빈 시험용 tmpfs 데이터 볼륨에서 실행하고 소유 리소스만 지웁니다. PostgreSQL·Kafka의 실제 데이터와 저장공간 관측은 이 전용 파일시스템을 사용하므로 다른 Docker 프로젝트의 디스크 점유와 격리됩니다. 앱 재기동 동안에는 같은 볼륨을 유지합니다. 순서는 다음과 같습니다.
 
-1. 주문 접수 gate가 열리면 시험 구매자·판매자·상품·재고와 Payment 마일리지 지갑을 넣습니다.
-2. 1,000원 중 마일리지 300원을 쓴 주문을 Gateway로 냅니다. Commerce `PAID`와 Settlement 정산 항목을 확인한 뒤 미발송 `CANCEL`로 환불을 요청합니다.
-3. 환불·SAGA `COMPLETED`, 주문 `REFUNDED`, 외부 환불 700원·마일리지 복원 300원 각 한 번, 환불 작업 1건, Settlement 항목 `REFUNDED`·예약 `CONSUMED`·결제별 원장 합 0을 대조합니다.
-4. 두 번째 주문은 결제 확정 뒤 `settlement`를 멈추고 취소합니다. 15초 동안 환불이 `RESERVING`(`RESERVATION_REQUESTED`)에 머무는지 보고, 다시 켠 뒤 같은 대조로 완료를 확인합니다.
-5. 세 서비스 Inbox에 `REVIEW_REQUIRED`가 없고 Outbox가 모두 발행됐는지, 지갑·재고가 원래 값인지 확인합니다.
+1. 시험 구매자·판매자·상품·재고와 Payment 마일리지 지갑을 넣고, HTTP 승인 → Kafka 정산 항목 → 취소 → 외부 HTTP 환불 → 마일리지 복원 → 원장 상쇄 → 주문 복구를 실행합니다.
+2. 카드·혼합·전액 마일리지·간편결제를 대조합니다. 1,000원 중 마일리지 300원이면 외부 환불은 700원이며, 전액 마일리지는 외부 HTTP 호출이 0회여야 합니다. 원장 상쇄는 최초 5 leg 각각에 반대 부호로 한 줄씩 대응하고 복원·금융 완료 이벤트도 한 번이어야 합니다.
+3. 실제 입금 작업이 현금을 받은 뒤 환불 차감을 확인합니다. 입금 전 환불은 예정 입금 0원, 간편결제 지갑은 원잔액으로 복원되며 최종 현금 원장·재원 잔액도 대조합니다.
+4. Settlement 중단 중 예약 대기, 환불 확정 거절 뒤 실제 예약 해제, 응답 유실·조회 불가 중 UNKNOWN·예약 유지, 외부 성공 직후 Payment 강제 종료·재기동과 만료 임대 인계, 늦은 응답의 토큰 차단을 확인합니다.
+5. 호출 전 중단(REQUESTED지만 외부 거래 없음)과 PROCESSING은 격리 DB fixture로 주입합니다. 실제 HTTP 조회에서 각각 거래 부재 뒤 같은 키 재전송·처리 중 예약 유지를 확인하며, Finance Mock이 자연스럽게 PROCESSING을 반환한 시험으로 표시하지 않습니다. 마지막에는 Inbox·Outbox와 지갑·재고·외부 거래 중복을 대조합니다.
 
-CI는 `financial-flow` 시나리오로 실행합니다. 지급 배정 뒤 예약 거절(`PAYOUT_RESERVED`)은 구매확정(도착+168시간)과 지급 선점이 먼저 필요해 실시간으로 만들 수 없습니다. 이 경로는 Settlement `RefundPayoutExclusionIntegrationTest`와 Payment `RefundSagaIntegrationTest`로 검증합니다. 외부 환불 확정 거절 뒤 예약 해제도 stub이 항상 성공하므로 서비스 시험으로만 확인합니다.
+CI는 같은 `financial-flow` 시나리오를 25분 상한으로 실행하며 다른 통합 시나리오는 기존 15분 상한을 유지합니다. 이 시험의 계정·시나리오·시각·임대 변경과 무작위 루프백 포트는 새 시험 프로젝트에만 적용하며 기존 DB·사용자 데모에는 적용하지 않습니다. 지급 배정 뒤 예약 거절(`PAYOUT_RESERVED`)은 구매확정(도착+168시간)과 지급 선점이 먼저 필요하므로 Settlement `RefundPayoutExclusionIntegrationTest`와 Payment `RefundSagaIntegrationTest`로 별도 검증합니다. 실제 PG·카카오 알림까지 포함한 최종 통합 판정은 #120에서 유지합니다.
 
 ## 모의 거래 알림
 
@@ -498,7 +498,7 @@ Payment의 `AcceptOrderPaymentRequestService`는 Inbox의 `WAITING`·`next_run_a
 
 `app.outbox.enabled`와 `app.kafka.order-payment-requested.enabled`는 기본 `false`입니다. 빈 개발 DB에 서비스별 초기 SQL을 적용하고 아래 신규 그룹 초기화를 마친 뒤 각각 활성화합니다. 수신 구현 Bean이 없으면 활성화한 Listener는 시작에 실패합니다. 테스트 대역을 운영 구현으로 등록하지 않습니다. 기존 개발 컨테이너에 초기 SQL을 재실행하거나 볼륨을 임의로 초기화하지 않습니다.
 
-Payment 환불 SAGA는 `PAYMENT_ROLE=worker`에서 `app.refund.enabled=true`로 켭니다(기본 `false`). `RefundApproved`·`RefundOrderRestored` 반영은 결제 요청 처리기(`app.payment-request-processor.enabled`)가 맡고, 이 설정은 외부 환불·마일리지 복원 Worker를 켭니다. Settlement 응답은 `app.kafka.settlement-replies.enabled`(기본 `false`)로 켠 수신기가 같은 Inbox에 넘기고 결제 요청 처리기가 반영하므로, 이 수신을 켜지 않으면 환불은 정산 응답 대기 단계에 머뭅니다. 수신 토픽 `commerce-settle.settlement.v1`은 Settlement가 만들며 없으면 Payment가 기동하지 않습니다. Settlement가 토픽을 만든 뒤 `payment.v1` 그룹에 아래 신규 그룹 초기화를 이 토픽에도 적용하고 켭니다. 외부 환불(`app.refund.gateway`)은 즉시 성공하는 `stub`만 제공합니다. 환불 준비·결과 반영·Settlement 응답 반영은 환불 행을 잠그기 전에 잠금 대기 1초·SQL 실행 5초 상한을 걸고, 시간 초과 시 트랜잭션 전체를 롤백합니다. Worker는 잠근 뒤와 외부 호출 직전에 임대가 호출 제한 시간만큼 남았는지 다시 확인합니다. 새 테이블(`refunds`·`refund_sagas`)은 빈 개발 DB에 초기 SQL을 적용해야 생깁니다.
+Payment 환불 SAGA는 `PAYMENT_ROLE=worker`에서 `app.refund.enabled=true`로 켭니다(기본 `false`). `RefundApproved`·`RefundOrderRestored` 반영은 결제 요청 처리기(`app.payment-request-processor.enabled`)가 맡고, 이 설정은 외부 환불·마일리지 복원 Worker를 켭니다. Settlement 응답은 `app.kafka.settlement-replies.enabled`(기본 `false`)로 켠 수신기가 같은 Inbox에 넘기고 결제 요청 처리기가 반영하므로, 이 수신을 켜지 않으면 환불은 정산 응답 대기 단계에 머뭅니다. 수신 토픽 `commerce-settle.settlement.v1`은 Settlement가 만들며 없으면 Payment가 기동하지 않습니다. Settlement가 토픽을 만든 뒤 `payment.v1` 그룹에 아래 신규 그룹 초기화를 이 토픽에도 적용하고 켭니다. 외부 환불은 `app.refund.gateway`(`PAYMENT_REFUND_GATEWAY`, 기본 `stub`)로 `http`를 선택합니다. 승인과 같은 `app.payment-approval.mock-base-url`(`FINANCE_MOCK_URL`)·`mock-credential`(`FINANCE_MOCK_PAYMENT_CREDENTIAL`)을 사용하며, 환불의 연결·응답 제한 시간은 `app.refund.http-timeout`입니다. HTTP 선택 때 자격이 없거나 짧으면 기동하지 않습니다. 승인 당시 provider·외부 거래·시나리오 버전·외부 금액과 환불 업무 키를 보존하므로, 기존 stub 승인 데이터는 HTTP 환불 검증에 사용하지 않습니다. 환불 준비·결과 반영·Settlement 응답 반영은 환불 행을 잠그기 전에 잠금 대기 1초·SQL 실행 5초 상한을 걸고, 시간 초과 시 트랜잭션 전체를 롤백합니다. Worker는 잠근 뒤와 외부 호출 직전에 임대가 호출 제한 시간만큼 남았는지 다시 확인합니다. 새 테이블(`refunds`·`refund_sagas`)은 빈 개발 DB에 초기 SQL을 적용해야 생깁니다.
 
 기술용 Outbox·Inbox 저장은 같은 DataSource의 JdbcTemplate로 bytea 원문·조건부 갱신·SKIP LOCKED를 다룹니다. 트랜잭션은 응용 서비스에서 시작하며 운영 앱의 JpaTransactionManager에 참여합니다. 별도 운영 트랜잭션 매니저나 공유 DB를 추가하지 않습니다. Commerce Outbox DB 시험은 HikariCP·JpaTransactionManager로 JDBC의 트랜잭션 참여와 롤백을 확인합니다. Payment Inbox 시험은 DataSourceTransactionManager를 사용하므로 Payment의 운영 JpaTransactionManager 참여까지 검증한 것은 아닙니다.
 
@@ -576,7 +576,7 @@ Gateway 자체 오류는 `application/problem+json`과 실제 추적의 `traceId
 | `gateway` → 커머스·Payment·Settlement | `<대상>_GATEWAY_CREDENTIAL`(`_PREVIOUS`) | Gateway가 대상별 값을 붙임 |
 | `service:settlement` → Finance Mock | `FINANCE_MOCK_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 지급 Worker의 `HttpPayoutGateway` |
 | `service:settlement` → 커머스 | `COMMERCE_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 일배치의 `HttpProductSettlementContextReader`(상품 지급 컨텍스트) |
-| `service:payment` → Finance Mock | `FINANCE_MOCK_PAYMENT_CREDENTIAL`(`_PREVIOUS`) | PG 수신 경계·로컬 시험 연결. Compose는 Payment Worker에 현재 값을 전달하며 실제 승인·환불 Worker 클라이언트는 구현 전 |
+| `service:payment` → Finance Mock | `FINANCE_MOCK_PAYMENT_CREDENTIAL`(`_PREVIOUS`) | PG 승인·환불·조회 HTTP 클라이언트. Compose는 Payment Worker에만 현재 값을 전달 |
 
 변수 이름은 `<대상>_<발신자>_CREDENTIAL`이며 `init_env.py`가 `.env.example`의 빈 값을 256비트 URL-safe 값으로 채웁니다. `_PREVIOUS`는 교체 중에만 받는 쪽에 둡니다. 값이 없거나 43자 미만이면 받는 쪽과 보내는 쪽 모두 기동하지 않습니다. 거절은 `internal_auth_rejections_total{sender,status}` 지표와 `<서비스>.internal-auth` 경고 로그로 확인하며, 자격 원문은 남기지 않습니다.
 

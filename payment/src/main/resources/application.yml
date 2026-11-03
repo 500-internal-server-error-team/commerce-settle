@@ -124,7 +124,7 @@ app:
   payment-approval:
     # PAYMENT_ROLE=worker에서만 동작한다. 외부 결제액이 있는 결제의 승인 작업을 PG 대역에 보내고 결과를 반영한다.
     enabled: false
-    # stub: 즉시 승인하는 개발용 대역(finance-mock PG 대역 #121 병합 전), http: finance-mock PG 대역
+    # stub: 즉시 승인하는 개발용 대역, http: finance-mock PG 대역
     gateway: ${PAYMENT_APPROVAL_GATEWAY:stub}
     mock-base-url: ${FINANCE_MOCK_URL:http://finance-mock:8080}
     # http일 때 finance-mock에 보내는 service:payment 자격(ADR 0010). Worker에만 주입한다.
@@ -146,7 +146,8 @@ app:
     # PAYMENT_ROLE=worker에서만 동작한다. 정산금 예약이 확인된 환불의 외부 환불·마일리지 복원 Worker를 켠다.
     # RefundApproved·RefundOrderRestored와 Settlement 환불 응답 반영은 payment-request-processor가 맡는다.
     enabled: false
-    # stub: 즉시 성공하는 개발용 외부 환불. finance-mock 환불 연동은 아직 없다.
+    # stub: 즉시 성공하는 개발용 외부 환불, http: 원승인 Finance Mock 환불·조회.
+    # HTTP 주소·자격은 payment-approval.mock-*와 공유하며 환불 제한 시간을 쓴다.
     gateway: ${PAYMENT_REFUND_GATEWAY:stub}
     poll-interval-ms: 1000
     max-jobs-per-poll: 20

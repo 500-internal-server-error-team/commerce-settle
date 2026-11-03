@@ -55,7 +55,7 @@ def prepare_offsets(compose):
 
 
 @contextmanager
-def stack(prefix="cs-admission-"):
+def stack(prefix="cs-admission-", *, memory_storage=False):
     project = prefix + secrets.token_hex(5)
     directory = Path(tempfile.mkdtemp(prefix=project + "-"))
     settings = directory / "override.json"
@@ -74,14 +74,21 @@ def stack(prefix="cs-admission-"):
     try:
         shutil.copyfile(ROOT / ".env.example", directory / ".env.example")
         initialize(directory)
-        settings.write_text(json.dumps({"services": {
+        overrides = {"services": {
             "commerce": {"environment": {"APP_OUTBOX_ENABLED": "true", "APP_ORDER_STUB_ENABLED": "false",
                 "APP_KAFKA_PAYMENT_ACCEPTED_ENABLED": "false", "APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED": "false"}},
             "payment-worker": {"environment": {"APP_OUTBOX_ENABLED": "false", "APP_KAFKA_ORDER_PAYMENT_REQUESTED_ENABLED": "false",
                 "APP_PAYMENT_REQUEST_PROCESSOR_ENABLED": "false"}},
             "settlement": {"environment": {"APP_OUTBOX_ENABLED": "false", "APP_KAFKA_SETTLEMENT_EVENTS_ENABLED": "false",
                 "SETTLEMENT_INBOX_PROCESSOR_ENABLED": "false", "SETTLEMENT_PAYOUT_WORKER_ENABLED": "false", "SETTLEMENT_DAILY_BATCH_ENABLED": "false"}}
-        }}))
+        }}
+        if memory_storage:
+            # This test's real data filesystems have their own capacity, independent of other projects.
+            overrides["volumes"] = {
+                name: {"driver_opts": {"type": "tmpfs", "device": "tmpfs", "o": f"size=2g,uid={uid},gid={uid}"}}
+                for name, uid in [("postgres-data", 999), ("kafka-data", 1000)]
+            }
+        settings.write_text(json.dumps(overrides))
         for line in (directory / ".env").read_text().splitlines():
             if "=" in line and not line.startswith("#"):
                 environment.pop(line.split("=", 1)[0], None)
