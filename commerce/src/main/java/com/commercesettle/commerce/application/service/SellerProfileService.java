@@ -5,10 +5,8 @@ import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.model.Account;
 import com.commercesettle.commerce.domain.model.AccountStatus;
 import com.commercesettle.commerce.domain.model.ActorKind;
-import com.commercesettle.commerce.domain.model.Product;
 import com.commercesettle.commerce.domain.model.SellerAccount;
 import com.commercesettle.commerce.domain.repository.AccountRepository;
-import com.commercesettle.commerce.domain.repository.ProductRepository;
 import java.time.Clock;
 import java.util.List;
 import java.util.UUID;
@@ -16,21 +14,21 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 판매자 본인 프로필과 Settlement용 지급 컨텍스트. 프로필 변경은 멱등 기록과 함께 한 트랜잭션에 저장하고, 판매 상태를 바꾸지 않는다. 지급 컨텍스트는 상품의 소유
- * 판매자와 그 판매자의 상태·수취 계정·버전을 같은 조회 시점에서 돌려준다.
+ * 판매자 본인 프로필과 Settlement용 지급 컨텍스트. 프로필 변경은 멱등 기록과 함께 한 트랜잭션에 저장하고, 판매 상태를 바꾸지 않는다. 지급 컨텍스트는 상품 영역이
+ * 확인한 소유 판매자와 그 판매자의 상태·수취 계정·버전을 같은 조회 시점에서 돌려준다.
  */
 @Service
 public class SellerProfileService {
   private static final String SELLER = "SELLER";
 
   private final AccountRepository accounts;
-  private final ProductRepository products;
+  private final ProductCatalogService products;
   private final IdempotentRequests idempotency;
   private final Clock clock;
 
   public SellerProfileService(
       AccountRepository accounts,
-      ProductRepository products,
+      ProductCatalogService products,
       IdempotentRequests idempotency,
       Clock clock) {
     this.accounts = accounts;
@@ -81,27 +79,31 @@ public class SellerProfileService {
   }
 
   /**
-   * 상품의 소유 판매자와 지급 판단에 필요한 판매자 정보. 지난 판매의 지급을 막지 않도록 논리삭제한 상품도 조회하며, 삭제·정지 판매자는 해당 상태를 그대로 돌려준다.
+   * 상품의 소유 판매자와 지급 판단에 필요한 판매자 정보. 논리삭제 상품도 포함하며({@link ProductCatalogService#settlementOwner}),
+   * 삭제·정지 판매자는 해당 상태를 그대로 돌려준다.
    *
    * @throws ProductNotFoundException 상품이 없으면
    */
   @Transactional(readOnly = true)
   public SettlementContext settlementContext(UUID productId) {
-    Product product =
-        products.findById(productId).orElseThrow(() -> new ProductNotFoundException(productId));
+    UUID sellerId = products.settlementOwner(productId);
     SellerAccount seller =
         accounts
-            .findSellerIncludingDeleted(product.getSellerId())
+            .findSellerIncludingDeleted(sellerId)
             .orElseThrow(() -> new IllegalStateException("product seller is missing"));
     return new SettlementContext(
-        product.getId(),
+        productId,
         seller.getId(),
         seller.getPayoutAccountRef(),
         seller.getVersion(),
         seller.getStatus());
   }
 
-  /** 상품 한 건의 지급 컨텍스트. */
+  /**
+   * 상품 한 건의 지급 컨텍스트.
+   *
+   * @param sellerVersion 판매자 계정 행의 버전. 표시명 등 수취 계정 밖의 변경에도 증가한다
+   */
   public record SettlementContext(
       UUID productId,
       UUID sellerId,
