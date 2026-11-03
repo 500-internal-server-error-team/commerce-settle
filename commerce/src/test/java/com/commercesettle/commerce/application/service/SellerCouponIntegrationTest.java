@@ -225,6 +225,37 @@ class SellerCouponIntegrationTest {
         .containsEntry("consumed_budget", DISCOUNT);
   }
 
+  @Test
+  @DisplayName("발급 종료 뒤 전액 환불도 원쿠폰을 약속액으로 되돌리고, 기한이 지난 뒤 환불은 EXPIRED로 두고 사용액만 상쇄해 미사용 예산으로 돌린다")
+  void restoresSellerCouponsAfterClosureAndDeadline() throws Exception {
+    Shop shop = shop();
+    UUID template = campaign(shop, 10, 30_000);
+    Buyer keptBuyer = buyer();
+    Buyer lateBuyer = buyer();
+    UUID kept =
+        UUID.fromString(issue(shop, template, keptBuyer.id(), 201, key()).path("id").asText());
+    UUID late =
+        UUID.fromString(issue(shop, template, lateBuyer.id(), 201, key()).path("id").asText());
+    JsonNode keptOrder = order(keptBuyer, shop.product(), kept, 201);
+    JsonNode lateOrder = order(lateBuyer, shop.product(), late, 201);
+    UUID keptPayment = confirm(keptOrder);
+    UUID latePayment = confirm(lateOrder);
+    seller(shop.seller(), path(template) + "/closure", version(0), 200, key());
+    jdbc.update(
+        "update commerce.buyer_coupons set expires_at = now() - interval '1 second' where id = ?",
+        late);
+
+    refund(keptBuyer, keptOrder, keptPayment);
+    refund(lateBuyer, lateOrder, latePayment);
+
+    assertThat(couponStatus(kept)).isEqualTo("ISSUED");
+    assertThat(couponStatus(late)).isEqualTo("EXPIRED");
+    assertThat(totals(template))
+        .containsEntry("issued_count", 2)
+        .containsEntry("committed_budget", DISCOUNT)
+        .containsEntry("consumed_budget", 0L);
+  }
+
   private UUID campaign(Shop shop, int limit, long budget) {
     return UUID.fromString(
         seller(
@@ -289,8 +320,8 @@ class SellerCouponIntegrationTest {
     return send("BUYER", buyer.id(), "/api/orders", body, expected, key());
   }
 
-  /** 결제 확정 결과를 수신 경로로 넣고 바로 반영한다. */
-  private void confirm(JsonNode order) throws Exception {
+  /** 결제 확정 결과를 수신 경로로 넣고 바로 반영한다. 결제 ID를 돌려준다. */
+  private UUID confirm(JsonNode order) throws Exception {
     UUID id = UUID.fromString(order.path("id").asText());
     HttpHeaders internal = new HttpHeaders();
     internal.setBearerAuth(PAYMENT);
@@ -321,15 +352,47 @@ class SellerCouponIntegrationTest {
         .put(
             "confirmedAt",
             Instant.now().atZone(ZoneId.of("Asia/Seoul")).toOffsetDateTime().toString());
+    receive("PaymentConfirmed", p, payment);
+    return payment;
+  }
+
+  /** 구매자 취소 요청과 Payment의 환불 접수·완료를 차례로 반영한다. */
+  private void refund(Buyer buyer, JsonNode order, UUID payment) throws Exception {
+    String id = order.path("id").asText();
+    JsonNode current = send("BUYER", buyer.id(), "/api/orders/" + id, null, 200, key());
+    JsonNode request =
+        send(
+            "BUYER",
+            buyer.id(),
+            "/api/orders/" + id + "/refund-requests",
+            version(current.path("version").asLong()).put("kind", "CANCEL").put("reason", "시험 취소"),
+            201,
+            key());
+    UUID refundId = UUID.randomUUID();
+    ObjectNode refund =
+        mapper
+            .createObjectNode()
+            .put("orderId", id)
+            .put("paymentId", payment.toString())
+            .put("refundId", refundId.toString());
+    receive(
+        "RefundAccepted",
+        refund.deepCopy().put("requestId", request.path("id").asText()),
+        refundId);
+    receive("RefundCompleted", refund, refundId);
+  }
+
+  private void receive(String type, ObjectNode payload, UUID aggregate) throws Exception {
+    UUID payment = UUID.fromString(payload.path("paymentId").asText());
     var event =
         new EventEnvelope<JsonNode>(
             UUID.randomUUID(),
-            "PaymentConfirmed",
+            type,
             1,
             Instant.now().atZone(ZoneId.of("Asia/Seoul")).toOffsetDateTime(),
-            payment,
+            aggregate,
             0,
-            p);
+            payload);
     AtomicBoolean ack = new AtomicBoolean();
     new PaymentAcceptedListener(mapper, accepted, results)
         .receive(
@@ -342,6 +405,12 @@ class SellerCouponIntegrationTest {
             () -> ack.set(true));
     assertThat(ack).isTrue();
     assertThat(results.processEvent(event.eventId())).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "select status from commerce.inbox where event_id = ?",
+                String.class,
+                event.eventId()))
+        .isEqualTo("APPLIED");
   }
 
   private Shop shop() {
