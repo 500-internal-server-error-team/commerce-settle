@@ -78,6 +78,10 @@ CREATE INDEX ix_orders_delivery_due ON commerce.orders (fulfillment_status, deli
 CREATE INDEX ix_orders_refund_deadline ON commerce.orders (status, refund_deadline_at, id);
 CREATE INDEX ix_orders_payment_wait ON commerce.orders (status, payment_wait_until, id);
 CREATE UNIQUE INDEX uq_orders_payment ON commerce.orders (payment_id) WHERE payment_id IS NOT NULL;
+-- 월간 우수고객 선정은 전월 구매확정 주문의 구매자별 외부 결제액 합계를 기간으로 읽는다.
+-- 구매확정은 종결 상태라 부분 인덱스 행이 바뀌지 않고, 합계에 쓰는 값을 포함해 테이블을 읽지 않는다.
+CREATE INDEX ix_orders_purchase_confirmed ON commerce.orders (purchase_confirmed_at)
+    INCLUDE (buyer_id, external_amount) WHERE status = 'PURCHASE_CONFIRMED';
 
 -- 구매자 의사와 종결에 사용한 소유 서비스 증빙은 추가 전용으로 보존한다.
 CREATE TABLE commerce.refund_closure_confirmations (

@@ -305,7 +305,7 @@
 
 배송 소요일·seed·달력 사본은 생성 후 불변입니다. 발송/도착 예정 시각은 함께 설정하고 발송 재요청으로 바꾸지 않습니다. 배송완료 시 delivered_at=delivery_due_at, refund_deadline_at=delivered_at+168시간을 함께 저장합니다. 배송 전 deadline은 NULL이며 진행 중 취소·반품·환불은 자동 구매확정을 막습니다. 늦은 배송 작업과 환불 접수도 같은 주문 잠금으로 기한을 검사합니다.
 
-**인덱스:** (buyer_id,created_at,id); (seller_id,created_at,id); (fulfillment_status,delivery_due_at,id); (status,refund_deadline_at,id); (status,payment_wait_until,id); UNIQUE(payment_id) WHERE payment_id IS NOT NULL.
+**인덱스:** (buyer_id,created_at,id); (seller_id,created_at,id); (fulfillment_status,delivery_due_at,id); (status,refund_deadline_at,id); (status,payment_wait_until,id); UNIQUE(payment_id) WHERE payment_id IS NOT NULL; 월간 우수고객 집계용 (purchase_confirmed_at) INCLUDE(buyer_id,external_amount) WHERE status=PURCHASE_CONFIRMED.
 
 ### order_refund_requests
 
