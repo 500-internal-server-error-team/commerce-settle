@@ -108,6 +108,13 @@ VALUES ('{uuid.uuid4()}','{buyer}',{2 * MILEAGE},0,now(),now(),0);
                                      {"kind": "CANCEL", "reason": "financial flow test", "expectedVersion": order["version"]})
             assert status == 201, (status, refund)
 
+        def inventory():
+            return sql("commerce", f"""select available_qty || '/' || reserved_qty || '/' || sold_qty
+from commerce.product_inventory where product_id='{product}'""")
+
+        def reservation(order_id):
+            return sql("commerce", f"select status from commerce.inventory_reservations where order_id='{order_id}'")
+
         def refund_state(payment):
             return sql("payment", f"""
 select r.status || '/' || s.step from payment.refunds r join payment.refund_sagas s on s.refund_id = r.id
@@ -117,6 +124,8 @@ where r.payment_id='{payment}'""")
             until(lambda: refund_state(payment) == "COMPLETED/COMPLETED", "refund SAGA did not complete", 240)
             until(lambda: sql("commerce", f"select status from commerce.orders where id='{order_id}'") == "REFUNDED",
                   "Commerce did not restore the refunded order")
+            # The order's own reservation ends restored, so a matching total cannot hide another order's stock.
+            assert reservation(order_id) == "RESTORED", reservation(order_id)
             refund = sql("payment", f"select id || '/' || external_amount || '/' || mileage_amount from payment.refunds where payment_id='{payment}'")
             refund_id, external, mileage = refund.split("/")
             assert (int(external), int(mileage)) == (PRICE - MILEAGE, MILEAGE), refund
@@ -130,7 +139,8 @@ join settlement.settlement_items i on i.id = r.item_id where i.payment_id='{paym
             return refund_id
 
         try:
-            first_refund, second_refund = scenarios(paid_order, cancel, refund_state, completed, compose)
+            first_refund, second_refund = scenarios(paid_order, cancel, refund_state, completed, inventory, reservation,
+                                                    compose)
         except BaseException:
             print(compose("logs", "--no-color", "--tail=120", *APPS), flush=True)
             raise
@@ -140,14 +150,14 @@ join settlement.settlement_items i on i.id = r.item_id where i.payment_id='{paym
             until(lambda: sql(database, f"select count(*) from {database}.outbox where status<>'PUBLISHED'") == "0",
                   database + " outbox was not drained", 60)
         assert sql("payment", f"select balance || '/' || reserved_amount from payment.mileage_wallets where buyer_id='{buyer}'") == f"{2 * MILEAGE}/0"
-        assert sql("commerce", f"select available_qty || '/' || sold_qty from commerce.product_inventory where product_id='{product}'") == "10/0"
+        assert inventory() == "10/0/0", inventory()
         print(json.dumps({"result": "PASS", "refunds": [first_refund, second_refund],
                           "externalRefund": PRICE - MILEAGE, "mileageRestored": MILEAGE,
                           "scope": "actual Commerce, Payment and Settlement over Kafka/Inbox/Outbox with stub PG and external refund"}),
               flush=True)
 
 
-def scenarios(paid_order, cancel, refund_state, completed, compose):
+def scenarios(paid_order, cancel, refund_state, completed, inventory, reservation, compose):
     # 1. Normal round trip.
     first_order, first_payment = paid_order()
     cancel(first_order)
@@ -160,6 +170,9 @@ def scenarios(paid_order, cancel, refund_state, completed, compose):
     until(lambda: refund_state(second_payment) == "RESERVING/RESERVATION_REQUESTED", "refund was not accepted by Payment")
     time.sleep(15)
     assert refund_state(second_payment) == "RESERVING/RESERVATION_REQUESTED", refund_state(second_payment)
+    # Commerce restores stock only after the refund completes, not when the cancellation is accepted.
+    assert inventory() == "9/0/1", inventory()
+    assert reservation(second_order) == "CONSUMED", reservation(second_order)
     compose("start", "settlement")
     second_refund = completed(second_order, second_payment)
     return first_refund, second_refund
