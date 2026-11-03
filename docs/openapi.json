@@ -3118,8 +3118,8 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "본인에게 발급된 쿠폰을 발급 시각 내림차순으로 조회합니다. 기한이 지난 미사용 쿠폰은 EXPIRED로 표시합니다.",
         "security": [
           {
             "accountSession": []
