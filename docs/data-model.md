@@ -1219,7 +1219,7 @@ Payment Inbox는 처리 시도를 추적하는 `attempts`(`integer`, 0 이상, �
 
 Payment·Commerce는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니다.
 
-Settlement는 `PaymentConfirmed`·`PurchaseConfirmed`를 Listener 트랜잭션에서 `RECEIVED`로 저장하고 같은 트랜잭션에 반영해 `APPLIED`(`result_ref`=정산 항목 ID) 또는 `REVIEW_REQUIRED`로 남긴 뒤 ACK합니다. 선행 결제 항목이 없는 구매확정만 `WAITING`으로 두고 1초 주기 처리기가 다시 판정합니다. Commerce와 같은 `attempts`·`last_error_code`를 두어 1~60초 지수 대기로 최대 10회 판정하고, 소진하면 같은 UPDATE에서 `REVIEW_REQUIRED`·`PAYMENT_NOT_ARRIVED`로 남깁니다. 소진 뒤 결제확정이 와도 자동으로 다시 판정하지 않습니다. Listener와 처리기가 같은 항목을 동시에 바꿔 버전이 충돌하면 Listener가 새 트랜잭션으로 한 번 다시 판정합니다. Settlement도 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니다.
+Settlement는 `PaymentConfirmed`·`PurchaseConfirmed`를 Listener 트랜잭션에서 `RECEIVED`로 저장하고 같은 트랜잭션에 반영해 `APPLIED`(`result_ref`=정산 항목 ID) 또는 `REVIEW_REQUIRED`로 남긴 뒤 ACK합니다. 선행 결제 항목이 없는 구매확정만 `WAITING`으로 두고 1초 주기 처리기가 다시 판정합니다. Commerce와 같은 `attempts`·`last_error_code`를 두어 1~60초 지수 대기로 최대 10회 판정하고, 소진하면 같은 UPDATE에서 `REVIEW_REQUIRED`·`PAYMENT_NOT_ARRIVED`로 남깁니다. 소진 뒤 결제확정이 와도 자동으로 다시 판정하지 않습니다. Listener와 처리기가 같은 항목을 동시에 바꿔 버전이 충돌하면 Listener가 새 트랜잭션으로 한 번 다시 판정합니다. Settlement도 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니다. 같은 환불의 원요청 조회를 위해 `RefundReservationRequested` 행의 (consumer,payload의 refundId uuid,created_at,id)도 부분 인덱싱합니다.
 
 Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원자 저장하고 `result_ref`에 주문 ID를 남깁니다. Commerce Inbox에는 `attempts integer NOT NULL DEFAULT 0 CHECK (attempts>=0)`와 `last_error_code varchar(80)?`를 추가해 선행 주문 미도착·반영 실패를 1~60초 지수 대기로 최대 10회 처리하고 소진 시 REVIEW_REQUIRED로 보존합니다. 이전 회차·버전·상태·다른 결제 ID는 즉시 확인 대상으로 남기며 주문을 덮어쓰지 않습니다. 원문·최초 출처·기존 처리 결과와 충돌 이력은 재시작·중복 인계에도 유지합니다. Payment의 재시도 컬럼·처리 변경은 별도 #76 범위입니다.
 

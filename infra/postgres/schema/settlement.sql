@@ -241,6 +241,10 @@ CREATE TABLE settlement.inbox (
 );
 CREATE INDEX inbox_state ON settlement.inbox(status, created_at, id);
 CREATE INDEX inbox_waiting ON settlement.inbox(consumer, next_run_at, id) WHERE status = 'WAITING';
+-- 같은 환불의 원요청 조회(먼저 받은 같은 refundId의 예약 요청). Listener가 refundId 형식을 검사한 뒤 저장한다.
+CREATE INDEX inbox_refund_request_lookup ON settlement.inbox
+    (consumer, ((payload->'payload'->>'refundId')::uuid), created_at, id)
+    WHERE event_type = 'RefundReservationRequested';
 
 CREATE TABLE settlement.inbox_conflicts (
     id uuid PRIMARY KEY,
