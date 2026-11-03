@@ -7,6 +7,7 @@ import com.commercesettle.settlement.domain.model.SettlementAmounts;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.commercesettle.settlement.domain.model.SettlementItem;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
+import com.commercesettle.settlement.support.FixedProductSettlementContexts;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -30,6 +31,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.ApplicationContext;
+import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.TaskScheduler;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -51,6 +53,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "settlement.payout-worker.enabled=false",
       "settlement.inbox-processor.enabled=false"
     })
+@Import(FixedProductSettlementContexts.class)
 @Testcontainers
 class DailySettlementRecoveryIntegrationTest {
   @Container @ServiceConnection

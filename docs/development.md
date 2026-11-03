@@ -101,7 +101,7 @@ docker compose up -d --build --wait --wait-timeout 300
 
 Payment는 API 역할에서만 기동 시나리오를 실행합니다. Kafka의 별도 `commerce-settle.fixture.payment.v1`의 실제 발행 결과를 Inbox 출처로 저장하고, 지정 이벤트만 기존 접수 처리기로 처리합니다. 일반 WAITING 작업·정식 Commerce 토픽·Kafka consumer offset을 변경하지 않습니다. 이벤트 이름은 `request-event-0`~`3`, 주문은 `request-order-0`~`3`, 회차는 `request-cycle-0`~`3`입니다. 각각 외부·혼합·전액 마일리지·잔액 부족입니다. 승인 Worker·결과 Outbox·PG 실행은 구현되지 않아 PENDING 승인 작업을 임의 완료하지 않습니다.
 
-정산 스냅샷의 주문·결제 이름은 `order-settlement-0`~`7`·`payment-settlement-0`~`7`이며 Payment와 ID·당사자·상품·금액을 맞춥니다. 실제 PG 승인이나 서비스 간 이벤트 전달 결과는 아닙니다. `order-settlement-*`는 Commerce DB 주문과 별개인 합성 금융 참조입니다. Settlement의 기존 기본 지급 재원·시나리오(`payout-funding-default`·`payout-normal-v1`)를 사용하며, 일배치가 실제 Batch 메타데이터를 기록합니다. fixture 항목 ID도 Job 식별 파라미터에 포함해 일반 일배치 실행과 구분합니다. 동일 파라미터의 완료된 실행은 다시 만들지 않으며, 다른 인스턴스가 이미 실행 중이면 그 실행에 맡깁니다. 동일 판매자·날짜의 일반 정산 항목이 함께 선점되면 그 판매자 트랜잭션을 롤백하고 실행을 실패시켜 기존 데이터를 보존합니다.
+정산 스냅샷의 주문·결제 이름은 `order-settlement-0`~`7`·`payment-settlement-0`~`7`이며 Payment와 ID·당사자·상품·금액을 맞춥니다. 실제 PG 승인이나 서비스 간 이벤트 전달 결과는 아닙니다. `order-settlement-*`는 Commerce DB 주문과 별개인 합성 금융 참조입니다. Settlement의 기존 기본 지급 재원·시나리오(`payout-funding-default`·`payout-normal-v1`)를 사용하며, 일배치가 실제 Batch 메타데이터를 기록합니다. fixture 항목 ID도 Job 식별 파라미터에 포함해 일반 일배치 실행과 구분합니다. 동일 파라미터의 완료된 실행은 다시 만들지 않으며, 다른 인스턴스가 이미 실행 중이면 그 실행에 맡깁니다. 동일 판매자·날짜의 일반 정산 항목이 함께 선점되면 그 판매자 트랜잭션을 롤백하고 실행을 실패시켜 기존 데이터를 보존합니다. 지급 전 커머스 fixture의 상품·판매자 지급 컨텍스트를 조회하므로 Compose는 커머스가 healthy가 된 뒤 Settlement를 기동합니다. 조회 실패는 Batch를 FAILED로 끝내 기동을 실패시키고, 지급 전 검증 거절로 판매자를 건너뛰어 마감 전 fixture 항목이 남으면 Batch 결과가 COMPLETED여도 기동을 실패시킵니다. 같은 파라미터는 다시 실행하지 않으므로 원인을 해결한 뒤 [초기화 명령](#종료재실행초기화)으로 개발 볼륨을 지우고 다시 시작합니다.
 
 모의 지급 업무 키 이름은 `mock-payout-0`~`3`입니다. 모의 지급은 내부 `/mock/payouts` API로도 실행·조회할 수 있으며 Gateway에 공개하지 않습니다. 응답 유실 설정에서 새 업무 키의 최초 POST는 504, 저장 결과 GET은 200입니다. 기동 시나리오가 이미 생성한 고정 키의 POST는 재요청이므로 202이며, 조회 장애 설정의 GET은 503입니다. 같은 업무 키 재요청은 기존 거래를 반환해 추가 차감하지 않습니다. 이 기록은 별도 모의 지급 예제입니다. #88의 지급 Worker로 이미 생성한 정산 작업을 처리하려면 fixture 옵션을 끄고 Worker를 명시적으로 켭니다. 기존 비활성 상태의 조회 fixture와 금융 처리 실행을 구분합니다.
 
@@ -434,7 +434,7 @@ python3 scripts/smoke.py
 
 운영·테스트 Java 코드의 포맷·Checkstyle, 단위·통합·ArchUnit 테스트와 패키징을 검사합니다. `spotlessApply`는 로컬 수정용이며 CI는 `spotlessCheck`로 위반을 차단합니다. 테스트 추가 기준은 [테스트 작성](../CONTRIBUTING.md#테스트-작성)을 따릅니다.
 
-Python 테스트는 환경 초기화가 기존 설정을 보존하는지 확인합니다. smoke는 각 실행의 DB·Redis 연결·메트릭, Gateway 문서 라우팅·관리 경로 차단, 자격 없는 커머스·Payment·Settlement·Finance Mock 직접 호출과 Gateway 자격의 Finance Mock 호출의 `401`, Settlement 자격의 Finance Mock 원지급 조회, Payment 자격의 PG 조회와 두 자격의 교차 호출 `403`, DB 간 접근 거부, 앱별 Redis ACL(커머스의 인증 키 쓰기·스크립트 실행과 `SCRIPT`·`FUNCTION`·키 목록·DB 전환 거절, Gateway의 `EVALSHA_RO` 검증과 쓰기·`EVAL`·`SCRIPT` 거절, 나머지 앱의 인증 키 거절), Kafka·Redis 왕복과 Zipkin의 Gateway→Commerce 추적 전파를 검사합니다. 임시 Kafka 토픽·Redis 키는 삭제합니다. CI는 낮은 부하의 k6 실행도 확인합니다. 결제·SAGA의 정합성과 성능은 업무 시나리오로 검증합니다.
+Python 테스트는 환경 초기화가 기존 설정을 보존하는지 확인합니다. smoke는 각 실행의 DB·Redis 연결·메트릭, Gateway 문서 라우팅·관리 경로 차단, 자격 없는 커머스·Payment·Settlement·Finance Mock 직접 호출과 Gateway 자격의 Finance Mock 호출의 `401`, Settlement 자격의 Finance Mock 원지급 조회, Payment 자격의 PG 조회와 두 자격의 교차 호출 `403`, Settlement 자격의 커머스 지급 컨텍스트 조회와 Gateway 자격의 같은 조회 `403`, DB 간 접근 거부, 앱별 Redis ACL(커머스의 인증 키 쓰기·스크립트 실행과 `SCRIPT`·`FUNCTION`·키 목록·DB 전환 거절, Gateway의 `EVALSHA_RO` 검증과 쓰기·`EVAL`·`SCRIPT` 거절, 나머지 앱의 인증 키 거절), Kafka·Redis 왕복과 Zipkin의 Gateway→Commerce 추적 전파를 검사합니다. 임시 Kafka 토픽·Redis 키는 삭제합니다. CI는 낮은 부하의 k6 실행도 확인합니다. 결제·SAGA의 정합성과 성능은 업무 시나리오로 검증합니다.
 
 정적 검사만 실행할 때는 `./gradlew spotlessCheck checkstyleMain checkstyleTest`, 테스트만 실행할 때는 `./gradlew test`를 사용합니다. `build`는 이 검사들을 포함하므로 별도 실행이 필수는 아닙니다.
 
@@ -527,11 +527,12 @@ Gateway 자체 오류는 `application/problem+json`과 실제 추적의 `traceId
 | --- | --- | --- |
 | `gateway` → 커머스·Payment·Settlement | `<대상>_GATEWAY_CREDENTIAL`(`_PREVIOUS`) | Gateway가 대상별 값을 붙임 |
 | `service:settlement` → Finance Mock | `FINANCE_MOCK_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 지급 Worker의 `HttpPayoutGateway` |
+| `service:settlement` → 커머스 | `COMMERCE_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 일배치의 `HttpProductSettlementContextReader`(상품 지급 컨텍스트) |
 | `service:payment` → Finance Mock | `FINANCE_MOCK_PAYMENT_CREDENTIAL`(`_PREVIOUS`) | PG 수신 경계·로컬 시험 연결. Compose는 Payment Worker에 현재 값을 전달하며 실제 승인·환불 Worker 클라이언트는 구현 전 |
 
 변수 이름은 `<대상>_<발신자>_CREDENTIAL`이며 `init_env.py`가 `.env.example`의 빈 값을 256비트 URL-safe 값으로 채웁니다. `_PREVIOUS`는 교체 중에만 받는 쪽에 둡니다. 값이 없거나 43자 미만이면 받는 쪽과 보내는 쪽 모두 기동하지 않습니다. 거절은 `internal_auth_rejections_total{sender,status}` 지표와 `<서비스>.internal-auth` 경고 로그로 확인하며, 자격 원문은 남기지 않습니다.
 
-남은 서비스·운영자 쌍(Payment→커머스, Settlement→커머스·Payment, 운영자→전체)과 Payment→Finance Mock의 실제 Worker 클라이언트는 호출을 구현하는 PR에서 아래 미연결 항목을 추가합니다.
+남은 서비스·운영자 쌍(Payment→커머스, Settlement→Payment, 운영자→전체)과 Payment→Finance Mock의 실제 Worker 클라이언트는 호출을 구현하는 PR에서 아래 미연결 항목을 추가합니다.
 
 1. 받는 쪽: `application.yml`의 `app.internal-auth.senders`에 발신자를 추가합니다. `:`가 있는 키는 `"[service:payment]"`처럼 대괄호로 감쌉니다.
 2. 보내는 쪽: 해당 클라이언트의 모든 요청에 `Authorization: Bearer <자격>`을 붙이고 `InternalCredentials.requireFormat`으로 기동 때 형식을 확인합니다. 자격 거절 `401`·`403`은 업무 결과로 확정하지 않습니다.
@@ -551,7 +552,7 @@ docker compose exec -T payment-api curl --fail http://localhost:9091/actuator/he
 
 ## Redis 세션 검증과 복구
 
-아래는 [Redis 세션 정책](policies.md#인증공통-api-기준)을 구현할 때의 검증·운영 기준입니다. 현재는 앱별 Redis ACL, Gateway의 세션 검증, 커머스의 로그인 세션 발급·로그아웃·로그인/복구 요청 제한, 비밀번호 재설정의 가드 차단·확정이 있습니다. `init_env.py`가 인증 세대 `AUTH_SESSION_EPOCH`, 요청 제한 키와 구매자 가입 본문 비교용 `AUTH_RATE_LIMIT_HMAC_KEY`, 복구 토큰 전달 암호문용 `AUTH_RESET_DELIVERY_KEY`를 생성합니다. 세대를 바꾸면 기존 세션이 모두 무효가 되고, HMAC 키를 바꾸면 진행 중인 제한 시간창이 초기화되고 24시간 안의 구매자 가입 재요청이 본문 충돌 409가 되며, 전달 키를 바꾸면 아직 전달하지 않은 복구 토큰을 열 수 없습니다. Gateway·커머스는 승인한 Redis 실행 식별자 `AUTH_REDIS_RUN_ID`로 사용자 인증 게이트를 판정하며, 미확정 인증 변경의 재조정은 아직 없습니다. smoke는 판매자 가입·로그인·Gateway 경유 조회·로그아웃 뒤 401, 계정 존재 여부와 관계없이 같은 복구 요청 응답, 쓸 수 없는 복구 토큰의 401과, Redis에 직접 넣은 세션의 역할 403·변경 중 가드 503, Gateway 경유 구매자 가입의 같은 키 재요청·본문 충돌 409·웰컴 쿠폰 1장과, 그 계정의 로그인 세션으로 주소 등록·재요청·목록·삭제를 확인합니다. CI의 `smoke_redis_restart.py`는 Redis 재시작과 같은 run_id를 유지하는 연결 단절 뒤 이전 세션과 새 로그인의 503, 새 세대로 앱을 재기동한 뒤 이전 세션의 401과 새 로그인 성공을 확인합니다. Redis와 Gateway·커머스를 다시 띄우므로 다른 사람이 쓰는 스택에서는 실행하지 않습니다. 폐기·복구 흐름의 검증 완료로 간주하지 않습니다.
+아래는 [Redis 세션 정책](policies.md#인증공통-api-기준)을 구현할 때의 검증·운영 기준입니다. 현재는 앱별 Redis ACL, Gateway의 세션 검증, 커머스의 로그인 세션 발급·로그아웃·로그인/복구 요청 제한, 비밀번호 재설정의 가드 차단·확정이 있습니다. `init_env.py`가 인증 세대 `AUTH_SESSION_EPOCH`, 요청 제한 키와 구매자 가입 본문 비교용 `AUTH_RATE_LIMIT_HMAC_KEY`, 복구 토큰 전달 암호문용 `AUTH_RESET_DELIVERY_KEY`를 생성합니다. 세대를 바꾸면 기존 세션이 모두 무효가 되고, HMAC 키를 바꾸면 진행 중인 제한 시간창이 초기화되고 24시간 안의 구매자 가입 재요청이 본문 충돌 409가 되며, 전달 키를 바꾸면 아직 전달하지 않은 복구 토큰을 열 수 없습니다. Gateway·커머스는 승인한 Redis 실행 식별자 `AUTH_REDIS_RUN_ID`로 사용자 인증 게이트를 판정하며, 미확정 인증 변경의 재조정은 아직 없습니다. smoke는 판매자 가입·로그인·Gateway 경유 조회·본인 판매자 정보 변경(같은 키 재요청·버전 충돌 409)·로그아웃 뒤 401, 계정 존재 여부와 관계없이 같은 복구 요청 응답, 쓸 수 없는 복구 토큰의 401과, Redis에 직접 넣은 세션의 역할 403·변경 중 가드 503, Gateway 경유 구매자 가입의 같은 키 재요청·본문 충돌 409·웰컴 쿠폰 1장과, 그 계정의 로그인 세션으로 주소 등록·재요청·목록·삭제를 확인합니다. CI의 `smoke_redis_restart.py`는 Redis 재시작과 같은 run_id를 유지하는 연결 단절 뒤 이전 세션과 새 로그인의 503, 새 세대로 앱을 재기동한 뒤 이전 세션의 401과 새 로그인 성공을 확인합니다. Redis와 Gateway·커머스를 다시 띄우므로 다른 사람이 쓰는 스택에서는 실행하지 않습니다. 폐기·복구 흐름의 검증 완료로 간주하지 않습니다.
 
 인증 게이트는 기동 직후 확인 전 상태로 사용자 인증을 503으로 거절하고, 연결한 Redis의 `INFO server` run_id가 `AUTH_REDIS_RUN_ID`와 같을 때만 엽니다. Redis가 앱보다 늦게 떠도 1초 간격으로 다시 확인합니다. 연 뒤 연결이 끊기거나 run_id가 다르면 닫고, 재연결이나 스크립트 재적재가 성공해도 재기동 전까지 다시 열지 않습니다. 첫 확인에서 run_id가 다르면 앱은 기동한 채 닫힌 상태로 둡니다. 닫히면 Gateway는 보호 작업을, 커머스는 세션 발급·로그아웃·비밀번호 복구 요청·재설정·인증 관련 계정 변경을 Redis를 쓰지 않고 503으로 거절합니다. 공개 작업, 서비스·운영자 자격과 Worker는 영향을 받지 않습니다. 닫은 사유(`RUN_ID_MISMATCH`·`DISCONNECTED`)와 시각은 `auth.redis-gate` ERROR 로그로 확인합니다. 짧은 단절에도 닫히는 것은 [ADR 0003](decisions/0003-redis-sessions.md)이 감수한 가용성 비용입니다.
 

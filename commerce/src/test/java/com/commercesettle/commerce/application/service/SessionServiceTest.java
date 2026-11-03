@@ -158,6 +158,11 @@ class SessionServiceTest {
     }
 
     @Override
+    public Optional<SellerAccount> findSellerIncludingDeleted(UUID id) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
     public boolean existsByEmail(ActorKind kind, String emailNormalized) {
       return findByEmail(kind, emailNormalized).isPresent();
     }

@@ -185,3 +185,7 @@ app:
       gateway:
         current: ${COMMERCE_GATEWAY_CREDENTIAL}
         previous: ${COMMERCE_GATEWAY_CREDENTIAL_PREVIOUS:}
+      # Settlement의 지급 컨텍스트 조회(GET /internal/products/{productId}/settlement-context).
+      "[service:settlement]":
+        current: ${COMMERCE_SETTLEMENT_CREDENTIAL}
+        previous: ${COMMERCE_SETTLEMENT_CREDENTIAL_PREVIOUS:}

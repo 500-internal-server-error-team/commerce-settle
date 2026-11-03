@@ -12,6 +12,7 @@ import com.commercesettle.settlement.domain.repository.PayoutJobRepository.Lease
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository.LeasedJob;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
 import com.commercesettle.settlement.support.EventContract;
+import com.commercesettle.settlement.support.FixedProductSettlementContexts;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -43,6 +44,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -64,6 +66,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "settlement.payout-worker.unconfirmed-retry-delay=0s",
       "settlement.payout-worker.max-attempts=3"
     })
+@Import(FixedProductSettlementContexts.class)
 @Testcontainers
 class PayoutWorkerIntegrationTest {
   @Container @ServiceConnection

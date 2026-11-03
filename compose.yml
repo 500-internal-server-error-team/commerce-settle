@@ -198,6 +198,8 @@ services:
       ADDRESS_ENCRYPTION_KEY: ${ADDRESS_ENCRYPTION_KEY:?Run python3 scripts/init_env.py}
       COMMERCE_GATEWAY_CREDENTIAL: ${COMMERCE_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
       COMMERCE_GATEWAY_CREDENTIAL_PREVIOUS: ${COMMERCE_GATEWAY_CREDENTIAL_PREVIOUS:-}
+      COMMERCE_SETTLEMENT_CREDENTIAL: ${COMMERCE_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
+      COMMERCE_SETTLEMENT_CREDENTIAL_PREVIOUS: ${COMMERCE_SETTLEMENT_CREDENTIAL_PREVIOUS:-}
       APP_DEV_FIXTURES_ENABLED: ${APP_DEV_FIXTURES_ENABLED:-false}
       DEV_FIXTURE_PASSWORD: ${DEV_FIXTURE_PASSWORD:-}
       APP_ORDER_STUB_ENABLED: ${APP_ORDER_STUB_ENABLED:-false}
@@ -283,11 +285,15 @@ services:
       SETTLEMENT_COMMERCE_CREDENTIAL: ${SETTLEMENT_COMMERCE_CREDENTIAL:?Run python3 scripts/init_env.py}
       SETTLEMENT_COMMERCE_CREDENTIAL_PREVIOUS: ${SETTLEMENT_COMMERCE_CREDENTIAL_PREVIOUS:-}
       FINANCE_MOCK_SETTLEMENT_CREDENTIAL: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
+      COMMERCE_SETTLEMENT_CREDENTIAL: ${COMMERCE_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
     depends_on:
       <<: *app-deps
       postgres:
         condition: service_healthy
       kafka:
+        condition: service_healthy
+      # 기동 직후 fixture 일배치가 커머스 지급 컨텍스트를 조회한다.
+      commerce:
         condition: service_healthy
 
   finance-mock:

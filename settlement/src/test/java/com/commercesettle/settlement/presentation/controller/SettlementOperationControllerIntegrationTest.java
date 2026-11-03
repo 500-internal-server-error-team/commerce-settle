@@ -8,10 +8,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.commercesettle.settlement.application.exception.ProductSettlementContextUnavailableException;
+import com.commercesettle.settlement.application.port.ProductSettlementContextReader;
 import com.commercesettle.settlement.application.service.SellerSettlementService;
 import com.commercesettle.settlement.domain.model.Payout;
 import com.commercesettle.settlement.domain.model.PayoutJob;
 import com.commercesettle.settlement.domain.model.PayoutRecipient;
+import com.commercesettle.settlement.domain.model.ProductSettlementContext;
 import com.commercesettle.settlement.domain.model.SettlementAmounts;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.commercesettle.settlement.domain.model.SettlementItem;
@@ -20,12 +23,15 @@ import com.commercesettle.settlement.domain.repository.PayoutRepository;
 import com.commercesettle.settlement.domain.repository.SettlementBatchRepository;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
 import com.jayway.jsonpath.JsonPath;
+import com.zaxxer.hikari.HikariDataSource;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -33,13 +39,18 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -68,6 +79,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     })
 @AutoConfigureMockMvc
 @Testcontainers
+@Import(SettlementOperationControllerIntegrationTest.Contexts.class)
 class SettlementOperationControllerIntegrationTest {
   static final String GATEWAY = "test-gateway-credential-0123456789abcdef0123";
   static final String OPERATOR = "test-operator-credential-0123456789abcdef0123";
@@ -89,11 +101,15 @@ class SettlementOperationControllerIntegrationTest {
   @Autowired PayoutJobRepository payoutJobs;
   @Autowired SellerSettlementService sellers;
   @Autowired TransactionTemplate transactions;
+  @Autowired DataSource dataSource;
+  @Autowired FakeContextReader contexts;
 
   private final AtomicInteger batchDays = new AtomicInteger();
 
   @AfterEach
   void deleteRows() {
+    contexts.unavailable = false;
+    contexts.duringRead = () -> {};
     for (String table :
         List.of(
             "settlement_items",
@@ -337,6 +353,38 @@ class SettlementOperationControllerIntegrationTest {
   }
 
   @Test
+  @DisplayName("커머스 지급 컨텍스트 조회 실패는 변경 없이 503이고, 같은 키의 재요청은 DB 연결을 쥐지 않고 조회한 뒤 배치를 만든다")
+  void contextUnavailableRespondsTemporarilyUnavailable() throws Exception {
+    UUID seller = UUID.randomUUID();
+    SettlementItem item = payable(seller);
+    String body = batch(seller, DUE_DATE, "delivery-daily-v1");
+    contexts.unavailable = true;
+
+    createBatch("batch-key-0007", body)
+        .andExpect(status().isServiceUnavailable())
+        .andExpect(jsonPath("$.code").value("COMMON_TEMPORARILY_UNAVAILABLE"));
+    assertThat(count("settlement_batches")).isZero();
+    assertThat(count("idempotency_records")).isZero();
+    assertThat(count("audit_logs")).isZero();
+    assertThat(itemStatus(item)).isEqualTo("PAYABLE");
+
+    contexts.unavailable = false;
+    HikariDataSource pool = dataSource.unwrap(HikariDataSource.class);
+    List<Integer> activeDuringRead = new ArrayList<>();
+    contexts.duringRead =
+        () -> activeDuringRead.add(pool.getHikariPoolMXBean().getActiveConnections());
+
+    createBatch("batch-key-0007", body)
+        .andExpect(status().isAccepted())
+        .andExpect(jsonPath("$.status").value("RESERVED"));
+    // 요청 트랜잭션이 조회 전에 열렸다면 연결 하나를 쥐고 있다.
+    assertThat(activeDuringRead).containsExactly(0);
+    assertThat(count("settlement_batches")).isEqualTo(1);
+    assertThat(count("idempotency_records")).isEqualTo(1);
+    assertThat(count("audit_logs")).isEqualTo(1);
+  }
+
+  @Test
   @DisplayName("같은 판매자를 일배치가 먼저 선점하는 동안 요청하면 기다렸다가 그 배치를 돌려주고 항목은 한 배치에만 들어간다")
   void concurrentDailyBatchReturnsCommittedBatch() throws Exception {
     UUID seller = UUID.randomUUID();
@@ -478,6 +526,11 @@ class SettlementOperationControllerIntegrationTest {
         payout.getBatchId());
   }
 
+  private String itemStatus(SettlementItem item) {
+    return jdbc.queryForObject(
+        "SELECT status FROM settlement.settlement_items WHERE id = ?", String.class, item.getId());
+  }
+
   private long count(String table) {
     return jdbc.queryForObject("SELECT count(*) FROM settlement." + table, Long.class);
   }
@@ -508,6 +561,34 @@ class SettlementOperationControllerIntegrationTest {
         return;
       }
       Thread.sleep(10);
+    }
+  }
+
+  /** 커머스를 띄우지 않고 지급 가능 컨텍스트를 돌려준다. 조회 실패와 조회 중 관찰을 주입할 수 있다. */
+  static class FakeContextReader implements ProductSettlementContextReader {
+    volatile boolean unavailable;
+    volatile Runnable duringRead = () -> {};
+
+    @Override
+    public List<ProductSettlementContext> read(UUID sellerId, Set<UUID> productIds) {
+      duringRead.run();
+      if (unavailable) {
+        throw new ProductSettlementContextUnavailableException("injected failure");
+      }
+      return productIds.stream()
+          .map(
+              productId ->
+                  new ProductSettlementContext(productId, sellerId, true, "account-" + sellerId, 1))
+          .toList();
+    }
+  }
+
+  @TestConfiguration(proxyBeanMethods = false)
+  static class Contexts {
+    @Bean
+    @Primary
+    FakeContextReader fakeContextReader() {
+      return new FakeContextReader();
     }
   }
 }

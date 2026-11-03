@@ -8,6 +8,7 @@ import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
 import com.commercesettle.settlement.application.port.InboxStore;
 import com.commercesettle.settlement.application.port.InboxStore.Source;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
+import com.commercesettle.settlement.support.FixedProductSettlementContexts;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
@@ -38,6 +39,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -59,6 +61,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       // 대기 건을 바로 다시 판정할 수 있게 한다.
       "settlement.inbox-processor.interval-ms=0"
     })
+@Import(FixedProductSettlementContexts.class)
 @Testcontainers
 class SettlementEventServiceIntegrationTest {
   @Container @ServiceConnection

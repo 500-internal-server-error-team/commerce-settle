@@ -20,8 +20,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 상품·재고 유즈케이스. 판매자 작업은 인증된 판매자와 상품 소유자를 대조하며, 타인·삭제 상품은 존재하지 않는 상품과 같게 취급한다. 쓰기 작업은 멱등 기록·업무 변경을 한
- * 트랜잭션에 저장한다.
+ * 상품·재고 유즈케이스. 판매자 작업은 인증된 판매자와 상품 소유자를 대조하며, 타인·삭제 상품은 존재하지 않는 상품과 같게 취급한다. 예외로 지급 컨텍스트용 소유자 조회는
+ * 논리삭제 상품도 포함한다. 쓰기 작업은 멱등 기록·업무 변경을 한 트랜잭션에 저장한다.
  */
 @Service
 public class ProductCatalogService {
@@ -70,6 +70,19 @@ public class ProductCatalogService {
   @Transactional(readOnly = true)
   public Product sellerProduct(UUID sellerId, UUID productId) {
     return ownedProduct(sellerId, productId);
+  }
+
+  /**
+   * 지급 컨텍스트용 소유 판매자. 지난 판매의 지급을 막지 않도록 논리삭제 상품도 소유자를 돌려준다. 상품의 판매자는 등록 뒤 바뀌지 않는다.
+   *
+   * @throws ProductNotFoundException 상품이 없으면
+   */
+  @Transactional(readOnly = true)
+  public UUID settlementOwner(UUID productId) {
+    return products
+        .findById(productId)
+        .map(Product::getSellerId)
+        .orElseThrow(() -> new ProductNotFoundException(productId));
   }
 
   /** 상품과 모든 수량이 0인 재고 행을 함께 만든다. */

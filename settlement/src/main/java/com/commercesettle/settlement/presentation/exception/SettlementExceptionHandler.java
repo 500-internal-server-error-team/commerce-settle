@@ -2,6 +2,7 @@ package com.commercesettle.settlement.presentation.exception;
 
 import com.commercesettle.settlement.application.exception.IdempotencyConflictException;
 import com.commercesettle.settlement.application.exception.OperationRejectedException;
+import com.commercesettle.settlement.application.exception.ProductSettlementContextUnavailableException;
 import com.commercesettle.settlement.domain.exception.PayoutJobNotFoundException;
 import com.commercesettle.settlement.domain.exception.PayoutNotAllowedException;
 import com.commercesettle.settlement.domain.exception.PayoutNotFoundException;
@@ -112,7 +113,12 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
     return respond(ErrorCode.COMMON_IDEMPOTENCY_CONFLICT, request);
   }
 
-  @ExceptionHandler({DataAccessException.class, CannotCreateTransactionException.class})
+  /** 저장소와 커머스 지급 컨텍스트 조회의 일시 장애. 변경을 남기지 않았으므로 같은 멱등 키로 다시 요청할 수 있다. */
+  @ExceptionHandler({
+    DataAccessException.class,
+    CannotCreateTransactionException.class,
+    ProductSettlementContextUnavailableException.class
+  })
   ResponseEntity<Object> temporarilyUnavailable(RuntimeException e, WebRequest request) {
     LOGGER
         .atWarn()
@@ -120,7 +126,7 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
         .addKeyValue("errorCode", ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE.name())
         .addKeyValue("errorType", e.getClass().getName())
         .addKeyValue("traceId", traceId())
-        .log("Storage is temporarily unavailable");
+        .log("Dependency is temporarily unavailable");
     return respond(ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE, "일시적으로 처리할 수 없습니다.", null, request);
   }
 

@@ -192,6 +192,25 @@ def check_internal_credentials():
         "smoke", pg_lookup,
     ).stdout.strip()
     assert settlement_to_pg == "403", settlement_to_pg
+    # Settlement reaches the Commerce settlement context (404 means no product); Gateway cannot.
+    settlement_context = ("http://commerce:8080/internal/products/" + str(uuid.uuid4())
+                          + "/settlement-context")
+    lookup = compose(
+        "exec", "-T", "settlement", "sh", "-c",
+        'exec curl --silent --write-out "\\n%{http_code}" '
+        '-H "Authorization: Bearer $COMMERCE_SETTLEMENT_CREDENTIAL" "$1"',
+        "smoke", settlement_context,
+    ).stdout.strip()
+    body, _, status = lookup.rpartition("\n")
+    assert status == "404", lookup
+    assert json.loads(body)["code"] == "COMMON_RESOURCE_NOT_FOUND", body
+    gateway_to_context = compose(
+        "exec", "-T", "gateway", "sh", "-c",
+        'exec curl --silent --output /dev/null --write-out "%{http_code}" '
+        '-H "Authorization: Bearer $COMMERCE_GATEWAY_CREDENTIAL" "$1"',
+        "smoke", settlement_context,
+    ).stdout.strip()
+    assert gateway_to_context == "403", gateway_to_context
 
 
 def check_login_flow(base):
@@ -215,6 +234,18 @@ def check_login_flow(base):
     assert status == 200 and me["id"] == account["id"], (status, me)
     status, problem = gateway_json(base, "GET", "/api/buyers/me/coupons", token=token)
     assert (status, problem.get("code")) == (403, "COMMON_ROLE_FORBIDDEN"), status
+    status, profile = gateway_json(base, "GET", "/api/sellers/me", token=token)
+    assert status == 200 and profile["payoutAccountRef"] == "smoke", (status, profile)
+    update = {"displayName": "smoke-renamed", "payoutAccountRef": "smoke-2",
+              "expectedVersion": profile["version"]}
+    key = {"Idempotency-Key": "smoke-" + uuid.uuid4().hex}
+    status, changed = gateway_json(base, "PUT", "/api/sellers/me", update, token, key)
+    assert status == 200 and changed["version"] == profile["version"] + 1, (status, changed)
+    status, replay = gateway_json(base, "PUT", "/api/sellers/me", update, token, key)
+    assert status == 200 and replay["version"] == changed["version"], (status, replay)
+    status, problem = gateway_json(base, "PUT", "/api/sellers/me", update, token,
+                                   {"Idempotency-Key": "smoke-" + uuid.uuid4().hex})
+    assert (status, problem.get("code")) == (409, "COMMON_VERSION_CONFLICT"), status
     status, _ = gateway_json(base, "DELETE", "/api/sessions/current", token=token)
     assert status == 204, status
     status, problem = gateway_json(base, "GET", "/api/accounts/me", token=token)
@@ -260,9 +291,9 @@ def check_session_auth(config, base):
                 "purpose", "SESSION", "authVersion", "0", "issuedAt", str(now),
                 "expiresAt", str(now + 60_000))
         compose(*admin, "HSET", guard, "authVersion", "0", "state", "ACTIVE")
-        status, _ = gateway_status(base, "GET", "/api/sellers/me", token)
-        # Commerce has no seller profile controller yet, so any non-auth status shows the request passed.
-        assert status < 500 and status not in (401, 403), status
+        # The seller account row does not exist, so use a seller path that needs only the identity.
+        status, _ = gateway_status(base, "GET", "/api/sellers/me/products", token)
+        assert status == 200, status
         status, problem = gateway_status(base, "GET", "/api/buyers/me/coupons", token)
         assert (status, problem.get("code")) == (403, "COMMON_ROLE_FORBIDDEN"), status
 
@@ -413,7 +444,8 @@ def main():
     print("PASS Gateway session: 401 without a session, Redis session pass, role 403, pending guard 503")
 
     check_login_flow(base)
-    print("PASS Commerce login: seller signup, Gateway-verified session, logout then 401")
+    print("PASS Commerce login: seller signup, Gateway-verified session, profile change, "
+          "logout then 401")
 
     check_password_reset(base)
     print("PASS Commerce password reset: same request response for unknown accounts, bad token 401")

@@ -1,11 +1,18 @@
 package com.commercesettle.settlement.infrastructure.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anySet;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.commercesettle.settlement.domain.model.SettlementAmounts;
 import com.commercesettle.settlement.domain.model.SettlementItem;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
 import com.commercesettle.settlement.infrastructure.batch.DailySettlementLauncher;
+import com.commercesettle.settlement.infrastructure.config.DevFixtureConfiguration;
+import com.commercesettle.settlement.support.FixedProductSettlementContexts;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -14,8 +21,12 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.DefaultApplicationArguments;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -33,6 +44,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "settlement.payout-worker.enabled=false",
       "settlement.inbox-processor.enabled=false"
     })
+@Import(FixedProductSettlementContexts.class)
 @Testcontainers
 class DevFixtureIntegrationTest {
   @Container @ServiceConnection
@@ -83,8 +95,11 @@ class DevFixtureIntegrationTest {
     assertThat(items.findById(foreign.getId()).orElseThrow().getStatus().name())
         .isEqualTo("PAYABLE");
     jdbc.update("DELETE FROM settlement.settlement_items WHERE id=?", foreign.getId());
+    Instant cutoff = Instant.parse("2026-09-01T01:00:00Z");
+    assertThat(loader.hasUnsettledItemsBefore(cutoff)).isTrue();
     assertThat(launcher.runFixture(LocalDate.of(2026, 9, 1), loader.itemIds()))
         .isEqualTo(BatchStatus.COMPLETED);
+    assertThat(loader.hasUnsettledItemsBefore(cutoff)).isFalse();
     assertThat(count("settlement_batches")).isEqualTo(2);
     assertThat(count("payouts")).isEqualTo(2);
     assertThat(count("payout_jobs")).isEqualTo(2);
@@ -155,6 +170,31 @@ class DevFixtureIntegrationTest {
                             c.getBean(org.springframework.boot.ApplicationRunner.class)
                                 .run(new org.springframework.boot.DefaultApplicationArguments()))
                     .doesNotThrowAnyException());
+  }
+
+  @Test
+  void rejectsCompletedRunThatSkippedFixtureSellers() {
+    var launcher = mock(DailySettlementLauncher.class);
+    when(launcher.runFixture(any(), anySet())).thenReturn(BatchStatus.COMPLETED);
+    var loader = mock(DevFixtureLoader.class);
+    when(loader.hasUnsettledItemsBefore(Instant.parse("2026-09-01T01:00:00Z"))).thenReturn(true);
+    new ApplicationContextRunner()
+        .withUserConfiguration(DevFixtureConfiguration.class)
+        .withBean(DevFixtureLoader.class, () -> loader)
+        .withBean(DailySettlementLauncher.class, () -> launcher)
+        .withPropertyValues(
+            "app.dev-fixtures.enabled=true",
+            "app.dev-fixtures.run-scenarios=true",
+            "settlement.daily-batch.schedule-enabled=false",
+            "settlement.payout-worker.enabled=false")
+        .run(
+            c ->
+                assertThatThrownBy(
+                        () ->
+                            c.getBean(ApplicationRunner.class)
+                                .run(new DefaultApplicationArguments()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("skipped sellers"));
   }
 
   private int count(String table) {
