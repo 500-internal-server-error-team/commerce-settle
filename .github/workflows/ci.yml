@@ -31,6 +31,7 @@ jobs:
       - name: Verify Python helpers
         run: |
           python3 scripts/test_init_env.py
+          python3 -B scripts/test_compose.py
           python3 scripts/test_sync_redis_run_id.py
           python3 scripts/test_pr_body.py
           python3 -B -m unittest discover -s scripts -p 'test_storage_metrics.py'
