@@ -6,9 +6,10 @@ import java.time.Clock;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
-/** 월간 우수고객 스케줄러. 기본으로 켠다. */
+/** 월간 우수고객 스케줄러. 기본으로 켜며 실행은 전용 스레드에 넘긴다(ADR 0008, 정산 일배치와 같은 방식). */
 @Configuration
 @EnableScheduling
 @ConditionalOnProperty(
@@ -18,6 +19,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 public class GradeCouponScheduleConfiguration {
   @Bean
   GradeCouponScheduler gradeCouponScheduler(GradeCouponLauncher launcher, Clock clock) {
-    return new GradeCouponScheduler(launcher, clock);
+    return new GradeCouponScheduler(launcher, clock, new SimpleAsyncTaskExecutor("grade-coupon-"));
   }
 }
