@@ -201,7 +201,10 @@ public class MockPreparationService {
   }
 
   private static IdempotencyStore.Scope scope(String caller, String operation, String key) {
-    return new IdempotencyStore.Scope("OPERATOR", caller, operation, MockPayoutService.sha256(key));
+    // 기존 운영자의 완료 키는 유지한다. 해시 접두사는 유효한 원발신자(operator:...)와 겹치지 않는다.
+    String actorId = caller.length() <= 100 ? caller : "sha256:" + MockPayoutService.sha256(caller);
+    return new IdempotencyStore.Scope(
+        "OPERATOR", actorId, operation, MockPayoutService.sha256(key));
   }
 
   private static String hash(Object... values) {

@@ -1338,6 +1338,8 @@ Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원
 
 Payment는 운영 작업 재처리에 `actor_kind=OPERATOR`, `actor_id`=확인한 운영자 발신자 ID, `operation=REPLAY_PAYMENT_JOB`, `resource_id`=작업 ID, `response_status`=202로 만료 없이 저장합니다. `request_hash`는 작업 ID·예상 버전·사유 코드의 SHA-256입니다.
 
+Finance Mock 준비 API의 운영자 범위는 [시험 데이터 준비 정책](policies.md#시험-데이터-준비)의 길이별 발신자 표현을 사용합니다. `actor_id` 컬럼을 늘리지 않으며 기존 운영자의 완료 키를 보존합니다.
+
 구매자 가입은 서버가 `actor_kind=PUBLIC`, `actor_id=BUYER_REGISTRATION`, `operation=REGISTER`로 고정해 계정 생성 전에도 같은 키를 찾습니다. 기존 테이블을 사용하며 `request_hash`는 가입 본문의 서버 키 기반 HMAC-SHA256, `resource_id`는 생성한 구매자 계정 ID, `response_status`는 201입니다. 계정·웰컴 발급·이 기록의 COMPLETED 전이는 같은 트랜잭션이며 별도 가입 테이블을 만들지 않습니다. 재요청·충돌·만료의 기준은 [구매자 가입 재시도](policies.md#구매자-가입-재시도)를 따릅니다.
 
 **인덱스:** (expires_at); (resource_id).

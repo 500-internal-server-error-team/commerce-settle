@@ -174,7 +174,7 @@ RESERVED이거나 금융 결과 미확정인 쿠폰은 만료 시각이 지났�
 
 운영자 자격으로 `/mock/accounts`·`/mock/scenarios`를 생성하고 `/mock/accounts/{accountId}`에서 현재 잔액을 조회합니다. Payment·Settlement·Gateway 자격은 준비 API에 사용할 수 없으며, 운영자 자격에 사용자 신원 헤더를 붙인 요청도 거절합니다. 검증한 발신자 식별자로만 멱등 범위를 정합니다.
 
-계정은 `providerId+accountRef+purpose`, 시나리오는 `providerId+scenarioVersion`마다 하나이며 새 키로 기존 자원을 덮어쓸 수 없습니다. 리소스 생성과 `actor_kind=OPERATOR`·`actor_id=검증한 operator:<식별자>`·`operation=MOCK:ACCOUNT:CREATE` 또는 `MOCK:SCENARIO:CREATE`의 완료 키를 한 트랜잭션으로 보존합니다. 준비 키는 `Idempotency-Key`의 SHA-256이며 만료시키지 않습니다. 같은 키·정규화한 본문은 최초 생성 결과, 다른 본문은 409입니다. 같은 수치의 확률 표기 차이는 충돌로 보지 않습니다. 경합 중 잠금 상한을 넘긴 요청은 409로 끝나며, 같은 키·본문 재시도로 원결과를 확인합니다. 저장 중단은 미커밋 자원·키를 함께 롤백하고 커밋 뒤 응답 유실은 원키 재시도로 복구합니다.
+계정은 `providerId+accountRef+purpose`, 시나리오는 `providerId+scenarioVersion`마다 하나이며 새 키로 기존 자원을 덮어쓸 수 없습니다. 리소스 생성과 `actor_kind=OPERATOR`·`operation=MOCK:ACCOUNT:CREATE` 또는 `MOCK:SCENARIO:CREATE`의 완료 키를 한 트랜잭션으로 보존합니다. `actor_id`는 검증한 전체 발신자 ID가 100자 이하면 원문을 유지하고, 더 길면 `sha256:` 뒤에 전체 ID의 SHA-256 64자리 16진수를 저장합니다. 기존 짧은 ID의 키 범위를 유지하며, 긴 ID도 운영자별로 구분해 DB의 100자 한도 안에 저장합니다. 준비 키는 `Idempotency-Key`의 SHA-256이며 만료시키지 않습니다. 같은 키·정규화한 본문은 최초 생성 결과, 다른 본문은 409입니다. 같은 수치의 확률 표기 차이는 충돌로 보지 않습니다. 경합 중 잠금 상한을 넘긴 요청은 409로 끝나며, 같은 키·본문 재시도로 원결과를 확인합니다. 저장 중단은 미커밋 자원·키를 함께 롤백하고 커밋 뒤 응답 유실은 원키 재시도로 복구합니다.
 
 계정 생성의 `balance`는 불변 기초잔액입니다. POST 재요청은 불변 계정 정보와 기초잔액으로 최초 응답을 복원하고, 실제 잔액·예약·버전은 GET에서 읽습니다. 시나리오는 기존 승인/PAYOUT·환불·조회 프로필과 seed를 보존하며 생성 이후 바꾸지 않습니다. 확률은 0~1·소수점 7자리까지 검증해 DB 저장 시 반올림으로 실행 값이 달라지지 않게 합니다. PG/EASY_PAY에는 입금 지연·환불 설정이 필수이고 PAYOUT에는 모두 null입니다. 새 버전을 등록해도 원승인·환불의 금융 버전과 지급 당시 계정 사본은 바뀌지 않습니다.
 

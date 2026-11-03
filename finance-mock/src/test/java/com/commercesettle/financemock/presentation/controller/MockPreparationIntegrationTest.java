@@ -40,6 +40,8 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -69,6 +71,21 @@ class MockPreparationIntegrationTest {
   static final String SETTLEMENT = "test-settlement-credential-0123456789abcdef0123";
   static final String PAYMENT = "test-payment-credential-0123456789abcdef0123456";
   static final String GATEWAY = "test-gateway-credential-0123456789abcdef0123456";
+  private static final String MAX_CALLER = "operator:" + "a".repeat(91);
+  private static final String LONG_CALLER = "operator:" + "a".repeat(92);
+  private static final String OTHER_LONG_CALLER = "operator:" + "b".repeat(92);
+  private static final Map<String, String> BOUNDARY_CREDENTIALS =
+      Map.of(
+          MAX_CALLER, "boundary-operator-credential-0123456789abcdef01",
+          LONG_CALLER, "long-operator-credential-0123456789abcdef0123456",
+          OTHER_LONG_CALLER, "other-long-operator-credential-0123456789abcdef0");
+
+  @DynamicPropertySource
+  static void registerBoundaryOperators(DynamicPropertyRegistry properties) {
+    BOUNDARY_CREDENTIALS.forEach(
+        (caller, credential) ->
+            properties.add("app.internal-auth.senders[" + caller + "].current", () -> credential));
+  }
 
   @Container @ServiceConnection
   static final PostgreSQLContainer<?> POSTGRES =
@@ -160,6 +177,34 @@ class MockPreparationIntegrationTest {
                 String.class,
                 sha(key)))
         .containsExactly("operator:other", "operator:test");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"accounts", "scenarios"})
+  @DisplayName("100·101자 운영자 ID도 저장 한도를 지키며 같은 키를 운영자별로 구분하고 재요청을 복원한다")
+  void preservesOperatorScopesAtActorStorageBoundary(String resource) throws Exception {
+    String key = key();
+    String path = "/mock/" + resource;
+    var ids = new ArrayList<String>();
+    for (String caller : List.of(MAX_CALLER, LONG_CALLER, OTHER_LONG_CALLER)) {
+      var body = "accounts".equals(resource) ? account("PAYOUT") : scenario("PAYOUT");
+      String credential = BOUNDARY_CREDENTIALS.get(caller);
+      var original = json(post(path, key, body, credential, false), 201);
+      ids.add(original.path("id").asText());
+      assertThat(json(post(path, key, body, credential, false), 201)).isEqualTo(original);
+      body.put("accounts".equals(resource) ? "balance" : "seed", 2000);
+      json(post(path, key, body, credential, false), 409);
+    }
+
+    assertThat(ids).doesNotHaveDuplicates();
+    var actors =
+        jdbc.queryForList(
+            "SELECT actor_id FROM finance_mock.idempotency_records WHERE actor_kind='OPERATOR' AND key_hash=?",
+            String.class,
+            sha(key));
+    assertThat(actors).hasSize(3).doesNotHaveDuplicates().contains(MAX_CALLER);
+    assertThat(actors).allSatisfy(actor -> assertThat(actor.length()).isLessThanOrEqualTo(100));
+    assertThat(actors.stream().filter(actor -> actor.startsWith("sha256:")).toList()).hasSize(2);
   }
 
   @Test

@@ -443,7 +443,7 @@ curl http://localhost:18083/mock/accounts/ACCOUNT_ID \
 
 계정은 `201`의 `Location`으로 조회합니다. 같은 키·본문의 POST는 잔액 변경 뒤에도 원생성 응답이며 현재 잔액은 GET에서 확인합니다. 기존 계정 참조·시나리오 버전의 재등록은 409이므로 새 시험에는 새 참조·버전을 사용합니다. PAYOUT 시나리오는 입금 지연·환불 4필드를 명시적으로 null로 보냅니다. 시나리오의 `Location`은 식별 URI이며 GET은 제공하지 않습니다.
 
-`./gradlew :finance-mock:build`의 `MockPreparationIntegrationTest`는 실제 HTTP·전용 PostgreSQL에서 세 준비 API, 입력·권한·출처, 중복·경합, 잠금 상한, 저장 중단 롤백·재시도와 새 앱 인스턴스의 원결과 재사용을 검사합니다. 기존 금융 거래 시험과 함께 실행하며 실제 금융기관·전체 서비스 왕복의 판정은 #120에서 수행합니다. 테이블·컬럼 추가 없이 기존 DDL을 재사용하므로 이 API 추가를 위해 공유 DB·볼륨을 초기화하지 않습니다.
+`./gradlew :finance-mock:build`의 `MockPreparationIntegrationTest`는 실제 HTTP·전용 PostgreSQL에서 세 준비 API, 입력·권한·출처, 중복·경합, 잠금 상한, 저장 중단 롤백·재시도와 새 앱 인스턴스의 원결과 재사용을 검사합니다. 전체 운영자 ID 100/101자 경계에서 두 생성 API의 성공·재요청·본문 충돌·운영자별 키 격리와 저장 길이도 확인합니다. 기존 금융 거래 시험과 함께 실행하며 실제 금융기관·전체 서비스 왕복의 판정은 #120에서 수행합니다. 테이블·컬럼 추가 없이 기존 DDL을 재사용하므로 이 API 추가를 위해 공유 DB·볼륨을 초기화하지 않습니다.
 
 ## 개발·검증
 
