@@ -1,6 +1,7 @@
 package com.commercesettle.settlement.infrastructure.batch;
 
 import com.commercesettle.settlement.application.exception.FixtureBatchConflictException;
+import com.commercesettle.settlement.application.exception.ProductSettlementContextUnavailableException;
 import com.commercesettle.settlement.application.service.SellerSettlementService;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import java.time.LocalDate;
@@ -29,6 +30,7 @@ import org.springframework.batch.item.database.JdbcPagingItemReader;
 import org.springframework.batch.item.database.Order;
 import org.springframework.batch.item.database.builder.JdbcPagingItemReaderBuilder;
 import org.springframework.batch.item.database.support.PostgresPagingQueryProvider;
+import org.springframework.batch.support.transaction.ResourcelessTransactionManager;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -36,10 +38,10 @@ import org.springframework.dao.NonTransientDataAccessResourceException;
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.dao.RecoverableDataAccessException;
 import org.springframework.dao.TransientDataAccessException;
-import org.springframework.transaction.PlatformTransactionManager;
 
 /**
- * 정산 일배치 Job. item은 판매자 한 명이고 chunk 크기는 1이라, 판매자 한 명의 대상·합계·지급·작업이 한 트랜잭션에 커밋된다(ADR 0007 D4 제안안).
+ * 정산 일배치 Job. item은 판매자 한 명이고 chunk 크기는 1이며, 판매자 한 명의 대상·합계·지급·작업은 {@link SellerSettlementService}의
+ * 판매자 단위 트랜잭션에 커밋된다(ADR 0007 D4 제안안). chunk는 DB 트랜잭션을 열지 않아 커머스 지급 컨텍스트를 기다리는 동안 DB 연결을 쥐지 않는다.
  * reader는 마감 전 지급 대상이 있는 판매자를 seller_id 순 keyset으로 읽는다. 커밋한 판매자의 항목은 선점돼 조회 조건에서 빠지므로, 재시작 위치는 실행
  * 문맥에 저장하지 않고 업무 DB를 다시 조회해 정한다.
  */
@@ -59,21 +61,22 @@ class DailySettlementJobConfiguration {
   /**
    * 판매자 한 명의 처리 오류는 그 판매자만 건너뛴다. 매번 같은 오류가 나는 판매자가 뒤 판매자를 막지 않게 한다. 롤백된 항목은 PAYABLE로 남아 다음 실행에서 다시
    * 고려한다. DB 자원·일시 오류는 모든 판매자에게 같이 일어나므로 Step을 실패시켜 복구 뒤 재시작으로 이어서 처리한다. 항목 잠금 대기 초과는 일시 오류지만 그
-   * 판매자만의 경합이라 건너뛴다.
+   * 판매자만의 경합이라 건너뛴다. 커머스 지급 컨텍스트 조회 실패도 모든 판매자에게 같이 일어나므로 Step을 실패시킨다. 지급 전 검증 거절은 그 판매자만의 상태라
+   * 건너뛴다.
    */
   @Bean
   Step settleSellersStep(
       JobRepository jobRepository,
-      PlatformTransactionManager transactionManager,
       JdbcPagingItemReader<UUID> payableSellerReader,
       ItemWriter<UUID> sellerSettlementWriter) {
     return new StepBuilder("settleSellers", jobRepository)
-        .<UUID, UUID>chunk(1, transactionManager)
+        .<UUID, UUID>chunk(1, new ResourcelessTransactionManager())
         .reader(payableSellerReader)
         .writer(sellerSettlementWriter)
         .faultTolerant()
         .skip(Exception.class)
         .noSkip(FixtureBatchConflictException.class)
+        .noSkip(ProductSettlementContextUnavailableException.class)
         .skip(PessimisticLockingFailureException.class)
         .noSkip(TransientDataAccessException.class)
         .noSkip(NonTransientDataAccessResourceException.class)

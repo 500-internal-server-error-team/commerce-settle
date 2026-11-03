@@ -3,12 +3,14 @@ package com.commercesettle.settlement.infrastructure.batch;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.commercesettle.settlement.application.exception.ProductSettlementContextUnavailableException;
 import com.commercesettle.settlement.application.port.ProductSettlementContextReader;
 import com.commercesettle.settlement.domain.model.ProductSettlementContext;
 import com.commercesettle.settlement.domain.model.SettlementAmounts;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.commercesettle.settlement.domain.model.SettlementItem;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
+import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -16,12 +18,14 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -162,6 +166,81 @@ class DailySettlementJobIntegrationTest {
     assertThat(count("settlement_batches WHERE seller_id = ?", rejected)).isZero();
     assertThat(statusOf(rejectedItem)).isEqualTo("PAYABLE");
     assertThat(count("settlement_reservations WHERE item_id = ?", rejectedItem.getId())).isZero();
+  }
+
+  @Test
+  @DisplayName("커머스 지급 컨텍스트를 기다리는 동안 DB 트랜잭션·연결을 쥐지 않는다")
+  void readsContextsWithoutHoldingConnection() {
+    LocalDate batchDate = LocalDate.of(2026, 9, 9);
+    UUID seller = UUID.randomUUID();
+    SettlementItem item =
+        payable(seller, 10_000, SettlementBatch.cutoffOf(batchDate).minusSeconds(60));
+    HikariDataSource pool;
+    try {
+      pool = dataSource.unwrap(HikariDataSource.class);
+    } catch (SQLException e) {
+      throw new IllegalStateException(e);
+    }
+    List<Integer> activeDuringRead = new ArrayList<>();
+    contexts.duringRead =
+        (s, products) -> activeDuringRead.add(pool.getHikariPoolMXBean().getActiveConnections());
+
+    BatchStatus status = launcher.run(batchDate);
+
+    assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    // 실행자 잠금의 전용 연결만 남는다. chunk·지급 트랜잭션이 연결을 쥐면 2가 된다.
+    assertThat(activeDuringRead).containsExactly(1);
+    assertThat(statusOf(item)).isEqualTo("PAYOUT_RESERVED");
+  }
+
+  @Test
+  @DisplayName("조회와 선점 사이에 검증하지 않은 상품의 항목이 준비되면 그 판매자를 롤백하고 건너뛴다")
+  void skipsSellerWhoseNewProductWasNotVerified() {
+    LocalDate batchDate = LocalDate.of(2026, 9, 10);
+    Instant cutoff = SettlementBatch.cutoffOf(batchDate);
+    UUID seller = UUID.randomUUID();
+    SettlementItem verified = payable(seller, 10_000, cutoff.minusSeconds(60));
+    List<SettlementItem> arrived = new ArrayList<>();
+    contexts.duringRead =
+        (s, products) -> arrived.add(payable(seller, 20_000, cutoff.minusSeconds(30)));
+
+    BatchStatus status = launcher.run(batchDate);
+
+    assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(lastExitCode()).isEqualTo("COMPLETED_WITH_SKIPS");
+    assertThat(count("settlement_batches WHERE seller_id = ?", seller)).isZero();
+    assertThat(statusOf(verified)).isEqualTo("PAYABLE");
+    assertThat(statusOf(arrived.get(0))).isEqualTo("PAYABLE");
+    assertThat(count("settlement_reservations")).isZero();
+  }
+
+  @Test
+  @DisplayName("커머스 지급 컨텍스트 조회 실패는 Step을 실패시키고, 재시작하면 남은 판매자만 처리한다")
+  void contextUnavailableFailsStepAndRestartContinues() {
+    LocalDate batchDate = LocalDate.of(2026, 9, 11);
+    Instant cutoff = SettlementBatch.cutoffOf(batchDate);
+    UUID first = new UUID(0, 1);
+    UUID second = new UUID(0, 2);
+    UUID third = new UUID(0, 3);
+    payable(first, 10_000, cutoff.minusSeconds(60));
+    SettlementItem secondItem = payable(second, 20_000, cutoff.minusSeconds(60));
+    payable(third, 30_000, cutoff.minusSeconds(60));
+    contexts.unavailableOnce.add(second);
+
+    BatchStatus failed = launcher.run(batchDate);
+
+    assertThat(failed).isEqualTo(BatchStatus.FAILED);
+    assertThat(count("settlement_batches WHERE seller_id = ?", first)).isEqualTo(1);
+    assertThat(statusOf(secondItem)).isEqualTo("PAYABLE");
+    assertThat(count("settlement_batches WHERE seller_id = ?", third)).isZero();
+    // skip 판정의 재시도 없이 첫 실패에서 멈춘다.
+    assertThat(contexts.calls.get(second)).isEqualTo(1);
+
+    BatchStatus restarted = launcher.run(batchDate);
+
+    assertThat(restarted).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(count("settlement_batches")).isEqualTo(3);
+    assertThat(contexts.calls.get(first)).isEqualTo(1);
   }
 
   @Test
@@ -343,16 +422,22 @@ class DailySettlementJobIntegrationTest {
         "SELECT count(*) FROM settlement." + tableAndWhere, Long.class, args);
   }
 
-  /** 판매자별로 지급 불가·일회성 DB 자원 장애·매번 나는 오류를 주입하고 호출 횟수를 센다. 계정은 판매자마다 하나다. */
+  /** 판매자별로 지급 불가·일회성 DB 자원 장애·일회성 조회 실패·매번 나는 오류를 주입하고 호출 횟수를 센다. 계정은 판매자마다 하나다. */
   static class FakeContextReader implements ProductSettlementContextReader {
     final Set<UUID> notAllowed = ConcurrentHashMap.newKeySet();
     final Set<UUID> failOnce = ConcurrentHashMap.newKeySet();
     final Set<UUID> failAlways = ConcurrentHashMap.newKeySet();
+    final Set<UUID> unavailableOnce = ConcurrentHashMap.newKeySet();
     final Map<UUID, Integer> calls = new ConcurrentHashMap<>();
+    volatile BiConsumer<UUID, Set<UUID>> duringRead = (sellerId, productIds) -> {};
 
     @Override
     public List<ProductSettlementContext> read(UUID sellerId, Set<UUID> productIds) {
       calls.merge(sellerId, 1, Integer::sum);
+      duringRead.accept(sellerId, productIds);
+      if (unavailableOnce.remove(sellerId)) {
+        throw new ProductSettlementContextUnavailableException("injected failure");
+      }
       if (failOnce.remove(sellerId)) {
         throw new DataAccessResourceFailureException("injected failure");
       }
@@ -376,7 +461,9 @@ class DailySettlementJobIntegrationTest {
       notAllowed.clear();
       failOnce.clear();
       failAlways.clear();
+      unavailableOnce.clear();
       calls.clear();
+      duringRead = (sellerId, productIds) -> {};
     }
   }
 

@@ -32,7 +32,7 @@ public class DevFixtureConfiguration {
         if (result != BatchStatus.COMPLETED && result != BatchStatus.STARTED) {
           throw new IllegalStateException("Fixture daily settlement did not complete");
         }
-        // 커머스 지급 컨텍스트 조회 실패 등으로 판매자를 건너뛰어도 COMPLETED다.
+        // 커머스 지급 컨텍스트 조회 실패는 FAILED지만, 지급 전 검증 거절로 판매자를 건너뛰면 COMPLETED다.
         if (result == BatchStatus.COMPLETED
             && loader.hasUnsettledItemsBefore(SettlementBatch.cutoffOf(batchDate))) {
           throw new IllegalStateException(
