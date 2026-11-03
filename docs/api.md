@@ -279,7 +279,7 @@ Commerce의 기본 MOCK_KAKAO 저장·조회·발송·복구와 명시적 [본�
 | COMMON_RESOURCE_NOT_FOUND |404|없거나 타인 소유|
 | ACCOUNT_EMAIL_DUPLICATED |409|같은 계정 종류에 이미 등록된 이메일. 삭제한 계정 포함|
 | MOCK_TRANSACTION_NOT_FOUND |404|인증된 원대역 GET에서 지정한 provider·operation·businessKey의 거래 기록 없음. 실패 확정·예약 해제 근거가 아님|
-| COMMON_VERSION_CONFLICT / COMMON_IDEMPOTENCY_CONFLICT |409|버전 또는 같은키 다른본문|
+| COMMON_VERSION_CONFLICT / COMMON_IDEMPOTENCY_CONFLICT |409|버전, 동시 요청이 같은 유일 키를 먼저 저장한 경합(업무 전용 코드가 없을 때), 또는 같은키 다른본문|
 | COUPON_EXPIRED / COUPON_NOT_APPLICABLE |409|만료·상품/소유/최소 금액·허용 수단 조건 위반|
 | COUPON_BUDGET_EXHAUSTED |409|판매자 캠페인의 명목 예산 또는 발급 수 소진; 플랫폼 자동 발급·가입에는 적용하지 않음|
 | COUPON_ALREADY_ISSUED |409|같은 판매자 캠페인으로 이미 쿠폰을 받은 구매자에게 새 발급 요청. 같은 멱등키·본문 재요청은 기존 결과를 반환|

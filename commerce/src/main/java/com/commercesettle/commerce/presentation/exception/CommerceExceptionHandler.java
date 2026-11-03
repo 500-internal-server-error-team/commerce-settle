@@ -30,17 +30,20 @@ import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
 import java.net.URI;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
+import org.hibernate.exception.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.TypeMismatchException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.core.MethodParameter;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpHeaders;
@@ -73,6 +76,7 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
   private static final Logger LOGGER = LoggerFactory.getLogger(CommerceExceptionHandler.class);
   private static final String CODE = "code";
+  private static final String UNIQUE_VIOLATION = "23505";
   private static final String ERRORS = "errors";
   private static final String INVALID_FORMAT = "형식이 올바르지 않습니다.";
 
@@ -364,6 +368,39 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
     String state = e.getSQLException().getSQLState();
     if ("55P03".equals(state) || "57014".equals(state)) return temporarilyUnavailable(e, request);
     return unexpected(e, request);
+  }
+
+  /**
+   * 유일 제약 위반(23505)은 동시 요청이 같은 업무 키를 먼저 저장한 경합이므로 409로 알려 최신 상태를 다시 조회하게 한다. 업무 의미가 있는 위반은 서비스·저장소가
+   * 먼저 전용 예외로 바꾸며, 이 처리는 그렇게 바꾸지 않은 경합의 기본값이다. CHECK·NOT NULL 등 다른 무결성 위반은 코드 결함이므로 500을 유지한다. 로그에는
+   * SQL·값 대신 제약 이름만 남긴다.
+   */
+  @ExceptionHandler(DataIntegrityViolationException.class)
+  ResponseEntity<Object> integrityViolation(DataIntegrityViolationException e, WebRequest request) {
+    if (!UNIQUE_VIOLATION.equals(sqlState(e))) return unexpected(e, request);
+    LOGGER
+        .atWarn()
+        .addKeyValue("event", "commerce.request")
+        .addKeyValue("errorCode", ErrorCode.COMMON_VERSION_CONFLICT.name())
+        .addKeyValue("constraint", constraintName(e))
+        .addKeyValue("traceId", traceId())
+        .log("Concurrent request lost a unique constraint race");
+    return respond(ErrorCode.COMMON_VERSION_CONFLICT, request);
+  }
+
+  private static String sqlState(Throwable error) {
+    for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+      if (cause instanceof SQLException sql && sql.getSQLState() != null) return sql.getSQLState();
+    }
+    return null;
+  }
+
+  private static String constraintName(Throwable error) {
+    for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+      if (cause instanceof ConstraintViolationException violation
+          && violation.getConstraintName() != null) return violation.getConstraintName();
+    }
+    return "";
   }
 
   @ExceptionHandler(Exception.class)
