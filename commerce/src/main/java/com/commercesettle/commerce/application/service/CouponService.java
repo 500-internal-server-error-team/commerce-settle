@@ -129,9 +129,12 @@ public class CouponService {
     return new Discount(amount, coupon.getFunder());
   }
 
-  /** 주문 생성·재시도의 예약. 같은 쿠폰을 쓰는 다른 주문은 쿠폰 행 잠금 뒤 상태로 거절된다. */
+  /**
+   * 주문 생성·재시도의 예약. 같은 쿠폰을 쓰는 다른 주문은 쿠폰 행 잠금 뒤 상태로 거절된다. 시각은 주문 트랜잭션이 정한 서버 시각을 받아 견적·주문 생성과 같은 기준으로
+   * 기한을 판단한다.
+   */
   @Transactional(propagation = Propagation.MANDATORY)
-  public void reserve(Order order) {
+  public void reserve(Order order, Instant now) {
     change(
         order,
         coupon ->
@@ -142,26 +145,25 @@ public class CouponService {
                 order.getProductId(),
                 order.getAmounts().grossAmount(),
                 order.getExternalMethod(),
-                clock.instant()));
+                now));
   }
 
   /** 결제 확정. 업무 키는 원결제다. */
   @Transactional(propagation = Propagation.MANDATORY)
-  public void use(Order order) {
-    change(order, coupon -> coupon.use(order.getId(), order.getPaymentId(), clock.instant()));
+  public void use(Order order, Instant now) {
+    change(order, coupon -> coupon.use(order.getId(), order.getPaymentId(), now));
   }
 
   /** 확정 거절·승인 차단된 취소. 업무 키는 결제 회차다. */
   @Transactional(propagation = Propagation.MANDATORY)
-  public void release(Order order) {
-    change(
-        order, coupon -> coupon.release(order.getId(), order.getPaymentCycleId(), clock.instant()));
+  public void release(Order order, Instant now) {
+    change(order, coupon -> coupon.release(order.getId(), order.getPaymentCycleId(), now));
   }
 
   /** 전액 환불의 원쿠폰 복구. 발송 여부와 관계없이 환불 완료 때 한 번 반영한다. */
   @Transactional(propagation = Propagation.MANDATORY)
-  public void restore(Order order) {
-    change(order, coupon -> coupon.restore(order.getId(), order.getPaymentId(), clock.instant()));
+  public void restore(Order order, Instant now) {
+    change(order, coupon -> coupon.restore(order.getId(), order.getPaymentId(), now));
   }
 
   private void change(Order order, Function<BuyerCoupon, Optional<CouponHistory>> transition) {
