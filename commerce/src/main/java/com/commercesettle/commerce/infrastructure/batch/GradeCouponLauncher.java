@@ -57,6 +57,7 @@ public class GradeCouponLauncher {
     CouponIssueRun run = current.get();
     if (run.getStatus() != CouponIssueRunStatus.PREPARING
         && run.getStatus() != CouponIssueRunStatus.ISSUING) {
+      recoverLeftover(run);
       return Optional.of(run.getStatus());
     }
     Optional<CouponIssueRunExecutions.Held> held = executions.tryLock(run.getId());
@@ -89,6 +90,24 @@ public class GradeCouponLauncher {
       logAlreadyRunning(run);
     } catch (JobRestartException | JobParametersInvalidException e) {
       throw new IllegalStateException("grade coupon job cannot be started", e);
+    }
+  }
+
+  /**
+   * 업무가 끝난 회차(대상 0명 완료 등)에 강제 종료로 진행 중 실행만 남았으면, 실행자 잠금을 잡고 정체된 경우에만 FAILED로 정리한다. 업무는 다시 실행하지 않는다.
+   * 남겨 두면 교정이 계속 실행 중으로 거절된다.
+   */
+  private void recoverLeftover(CouponIssueRun run) {
+    if (!executions.hasActiveExecution(run.getId())) {
+      return;
+    }
+    Optional<CouponIssueRunExecutions.Held> held = executions.tryLock(run.getId());
+    if (held.isEmpty()) {
+      logAlreadyRunning(run);
+      return;
+    }
+    try (CouponIssueRunExecutions.Held ignored = held.get()) {
+      executions.recoverIfStale(run.getId());
     }
   }
 
