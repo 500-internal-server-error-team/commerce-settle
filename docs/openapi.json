@@ -9330,8 +9330,8 @@
         ],
         "x-owner-service": "finance-mock",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "검증한 operator:<식별자> 자격만 허용하며 /mock는 Gateway에 공개하지 않습니다. 운영자·작업·Idempotency-Key별 같은 본문은 원생성 결과를 반환하고, 다른 본문이나 기존 자원 식별자는 409입니다. 기존 시험 데이터는 덮어쓰지 않습니다.",
         "security": [
           {
             "serviceCredential": []
@@ -9462,8 +9462,8 @@
         ],
         "x-owner-service": "finance-mock",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "검증한 operator:<식별자> 자격만 허용하며 /mock는 Gateway에 공개하지 않습니다. 현재 잔액·예약액·버전을 반환합니다.",
         "security": [
           {
             "serviceCredential": []
@@ -9573,8 +9573,8 @@
         ],
         "x-owner-service": "finance-mock",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
-        "description": "업무 정책·상태·소유권을 검증하는 구현 예정 계약.",
+        "x-implemented": true,
+        "description": "검증한 operator:<식별자> 자격만 허용하며 /mock는 Gateway에 공개하지 않습니다. 운영자·작업·Idempotency-Key별 같은 본문은 원생성 결과를 반환하고, 다른 본문이나 기존 자원 식별자는 409입니다. 기존 시험 데이터는 덮어쓰지 않습니다.",
         "security": [
           {
             "serviceCredential": []
@@ -9605,7 +9605,7 @@
             },
             "headers": {
               "Location": {
-                "description": "생성 리소스 또는 비동기 처리 조회 경로",
+                "description": "생성 시나리오 식별 URI /mock/scenarios/{id}. GET 조회 API는 제공하지 않습니다. 재요청은 같은 POST 키·본문으로 원결과를 조회합니다.",
                 "schema": {
                   "type": "string",
                   "format": "uri-reference"
@@ -15646,7 +15646,8 @@
           "accountRef",
           "purpose",
           "balance"
-        ]
+        ],
+        "description": "추가 전용 시험 계정. balance를 불변 openingBalance로 저장하며 기존 providerId+accountRef+purpose는 409로 거절합니다."
       },
       "MockAccount": {
         "type": "object",
@@ -15708,7 +15709,8 @@
           "reservedAmount",
           "version",
           "openingBalance"
-        ]
+        ],
+        "description": "생성 POST와 재요청은 balance=openingBalance, reservedAmount=0, version=0인 원생성 결과입니다. GET은 현재 balance·reservedAmount·version을 반환합니다."
       },
       "MockScenarioCreate": {
         "type": "object",
@@ -15743,19 +15745,22 @@
             "type": "number",
             "minimum": 0,
             "maximum": 1,
-            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다."
+            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다.",
+            "multipleOf": 1e-07
           },
           "responseLossRate": {
             "type": "number",
             "minimum": 0,
             "maximum": 1,
-            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다."
+            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다.",
+            "multipleOf": 1e-07
           },
           "lookupFailureRate": {
             "type": "number",
             "minimum": 0,
             "maximum": 1,
-            "description": "GET 조회의 일시 실패확률. 금융 거래 결과를 변경하지 않는다."
+            "description": "GET 조회의 일시 실패확률. 금융 거래 결과를 변경하지 않는다.",
+            "multipleOf": 1e-07
           },
           "seed": {
             "type": "integer",
@@ -15803,7 +15808,8 @@
               {
                 "type": "number",
                 "minimum": 0,
-                "maximum": 1
+                "maximum": 1,
+                "multipleOf": 1e-07
               },
               {
                 "type": "null"
@@ -15816,7 +15822,8 @@
               {
                 "type": "number",
                 "minimum": 0,
-                "maximum": 1
+                "maximum": 1,
+                "multipleOf": 1e-07
               },
               {
                 "type": "null"
@@ -15909,7 +15916,7 @@
             }
           }
         ],
-        "description": "providerId+scenarioVersion별 불변 설정. 승인/PAYOUT·환불·조회 프로필을 구분한다. 각 작업의 maxDelayMs는 대응 minDelayMs 이상인지 도메인에서 검증한다. 환불은 원승인의 버전을 계승한다. GET의 scenarioVersion은 조회 통신만 제어하며 금융 결과를 바꾸지 않는다."
+        "description": "providerId+scenarioVersion별 불변 설정. 승인/PAYOUT·환불·조회 프로필을 구분한다. 각 작업의 maxDelayMs는 대응 minDelayMs 이상인지 도메인에서 검증한다. 환불은 원승인의 버전을 계승한다. GET의 scenarioVersion은 조회 통신만 제어하며 금융 결과를 바꾸지 않는다. 확률은 DB numeric(8,7)에 정확히 저장할 수 있는 소수점 7자리까지 허용합니다."
       },
       "MockScenario": {
         "type": "object",
@@ -15944,19 +15951,22 @@
             "type": "number",
             "minimum": 0,
             "maximum": 1,
-            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다."
+            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다.",
+            "multipleOf": 1e-07
           },
           "responseLossRate": {
             "type": "number",
             "minimum": 0,
             "maximum": 1,
-            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다."
+            "description": "APPROVE 또는 PAYOUT 실행용. 환불·GET 조회에는 적용하지 않는다.",
+            "multipleOf": 1e-07
           },
           "lookupFailureRate": {
             "type": "number",
             "minimum": 0,
             "maximum": 1,
-            "description": "GET 조회의 일시 실패확률. 금융 거래 결과를 변경하지 않는다."
+            "description": "GET 조회의 일시 실패확률. 금융 거래 결과를 변경하지 않는다.",
+            "multipleOf": 1e-07
           },
           "seed": {
             "type": "integer",
@@ -16012,7 +16022,8 @@
               {
                 "type": "number",
                 "minimum": 0,
-                "maximum": 1
+                "maximum": 1,
+                "multipleOf": 1e-07
               },
               {
                 "type": "null"
@@ -16025,7 +16036,8 @@
               {
                 "type": "number",
                 "minimum": 0,
-                "maximum": 1
+                "maximum": 1,
+                "multipleOf": 1e-07
               },
               {
                 "type": "null"
@@ -16120,7 +16132,7 @@
             }
           }
         ],
-        "description": "providerId+scenarioVersion별 불변 설정. 승인/PAYOUT·환불·조회 프로필을 구분한다. 각 작업의 maxDelayMs는 대응 minDelayMs 이상인지 도메인에서 검증한다. 환불은 원승인의 버전을 계승한다. GET의 scenarioVersion은 조회 통신만 제어하며 금융 결과를 바꾸지 않는다."
+        "description": "providerId+scenarioVersion별 불변 설정. 승인/PAYOUT·환불·조회 프로필을 구분한다. 각 작업의 maxDelayMs는 대응 minDelayMs 이상인지 도메인에서 검증한다. 환불은 원승인의 버전을 계승한다. GET의 scenarioVersion은 조회 통신만 제어하며 금융 결과를 바꾸지 않는다. 확률은 DB numeric(8,7)에 정확히 저장할 수 있는 소수점 7자리까지 허용합니다."
       },
       "AddressPage": {
         "type": "object",

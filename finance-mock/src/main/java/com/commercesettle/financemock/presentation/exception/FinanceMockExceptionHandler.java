@@ -2,6 +2,7 @@ package com.commercesettle.financemock.presentation.exception;
 
 import com.commercesettle.financemock.application.exception.IdempotencyConflictException;
 import com.commercesettle.financemock.application.exception.LookupFailedException;
+import com.commercesettle.financemock.application.exception.MockAccountNotFoundException;
 import com.commercesettle.financemock.application.exception.PayoutAccountNotFoundException;
 import com.commercesettle.financemock.application.exception.ScenarioUnavailableException;
 import com.commercesettle.financemock.application.exception.TransactionNotFoundException;
@@ -58,6 +59,11 @@ public class FinanceMockExceptionHandler extends ResponseEntityExceptionHandler 
   @ExceptionHandler(TransactionNotFoundException.class)
   ResponseEntity<Object> transactionNotFound(TransactionNotFoundException e, WebRequest request) {
     return respond(ErrorCode.MOCK_TRANSACTION_NOT_FOUND, null, request);
+  }
+
+  @ExceptionHandler(MockAccountNotFoundException.class)
+  ResponseEntity<Object> accountNotFound(MockAccountNotFoundException e, WebRequest request) {
+    return respond(ErrorCode.MOCK_ACCOUNT_NOT_FOUND, null, request);
   }
 
   @ExceptionHandler(IllegalArgumentException.class)
