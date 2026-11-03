@@ -273,7 +273,7 @@ Commerce의 기본 MOCK_KAKAO 저장·조회·발송·복구와 명시적 [본�
 | COUPON_EXPIRED / COUPON_NOT_APPLICABLE |409|만료·상품/소유/최소 금액·허용 수단 조건 위반|
 | COUPON_BUDGET_EXHAUSTED |409|판매자 캠페인의 명목 예산 또는 발급 수 소진; 플랫폼 자동 발급·가입에는 적용하지 않음|
 | COUPON_ALREADY_ISSUED |409|같은 판매자 캠페인으로 이미 쿠폰을 받은 구매자에게 새 발급 요청. 같은 멱등키·본문 재요청은 기존 결과를 반환|
-| COUPON_CAMPAIGN_NOT_ISSUABLE |409|판매자 캠페인이 발급 종료됐거나 발급 기간 전·후라 새 발급 불가. 이미 종료한 캠페인의 종료 요청 포함. 사유는 detail로 구분|
+| COUPON_CAMPAIGN_NOT_ISSUABLE |409|판매자 캠페인이 발급 종료됐거나 발급 기간 전·후라 새 발급 불가. 이미 종료한 캠페인의 종료 요청 포함. detail은 사람이 읽는 안내이며 분기는 code로 하고, 종료·기간 전후 구분이 필요하면 캠페인 조회의 status·validFrom·validUntil을 사용|
 | INVENTORY_INSUFFICIENT / EVENT_ADMISSION_CLOSED |409|재고/기간/참여한도/매진|
 | PRODUCT_EVENT_IN_PROGRESS |409|공개 후 종료 전 이벤트가 있는 상품의 변경·논리삭제, 같은 상품에 기간이 겹치는 이벤트 공개|
 | MILEAGE_INSUFFICIENT / PAYMENT_STATE_CONFLICT |409|잔액 부족·미확정 재시도 등|
