@@ -249,6 +249,7 @@ services:
     environment:
       <<: *app-env
       PAYMENT_ROLE: worker
+      APP_OUTBOX_ENABLED: ${APP_OUTBOX_ENABLED:-false}
       FINANCE_MOCK_PAYMENT_CREDENTIAL: ${FINANCE_MOCK_PAYMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
       SPRINGDOC_API_DOCS_ENABLED: 'false'
       DB_URL: jdbc:postgresql://postgres:5432/payment
