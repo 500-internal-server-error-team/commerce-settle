@@ -53,8 +53,8 @@ class ApprovalWorkerSchedulerTest {
   }
 
   @Test
-  @DisplayName("한 작업의 예외는 그 슬롯의 다음 작업을 막지 않는다")
-  void continuesAfterJobFailure() throws Exception {
+  @DisplayName("작업 오류가 나면 이번 폴링을 끝내고 다음 폴링에서 다시 실행한다")
+  void endsPollAfterJobFailureAndResumesNextPoll() throws Exception {
     ApprovalWorker worker = mock(ApprovalWorker.class);
     AtomicInteger calls = new AtomicInteger();
     given(worker.runOnce())
@@ -68,10 +68,65 @@ class ApprovalWorkerSchedulerTest {
             });
     ApprovalWorkerScheduler scheduler = new ApprovalWorkerScheduler(worker, 20, 1);
 
-    scheduler.poll();
+    try {
+      scheduler.poll();
 
-    assertThat(calls.get()).isEqualTo(4);
-    scheduler.stop();
+      assertThat(calls.get()).isEqualTo(1);
+      scheduler.poll();
+      assertThat(calls.get()).isEqualTo(4);
+    } finally {
+      scheduler.stop();
+    }
+  }
+
+  @Test
+  @DisplayName("선점 오류가 계속돼도 슬롯마다 한 번 실패한 뒤 폴링을 끝낸다")
+  void endsPollWhenClaimsKeepFailing() throws Exception {
+    ApprovalWorker worker = mock(ApprovalWorker.class);
+    AtomicInteger calls = new AtomicInteger();
+    given(worker.runOnce())
+        .willAnswer(
+            invocation -> {
+              // 기존 구현도 유한하게 반환하도록 실패 횟수를 제한한다.
+              if (calls.incrementAndGet() <= 6) {
+                throw new IllegalStateException("database unavailable");
+              }
+              return false;
+            });
+    ApprovalWorkerScheduler scheduler = new ApprovalWorkerScheduler(worker, 2, 3);
+
+    try {
+      scheduler.poll();
+
+      assertThat(calls.get()).isEqualTo(3);
+    } finally {
+      scheduler.stop();
+    }
+  }
+
+  @Test
+  @DisplayName("다른 슬롯이 처리 상한에 닿아도 오류 뒤에는 이번 폴링을 끝낸다")
+  void endsPollWhenAnotherSlotHitsTheCapAfterFailure() throws Exception {
+    ApprovalWorker worker = mock(ApprovalWorker.class);
+    AtomicInteger calls = new AtomicInteger();
+    given(worker.runOnce())
+        .willAnswer(
+            invocation -> {
+              int call = calls.incrementAndGet();
+              if (call == 1) {
+                throw new IllegalStateException("database unavailable");
+              }
+              return call < 6;
+            });
+    ApprovalWorkerScheduler scheduler = new ApprovalWorkerScheduler(worker, 1, 2);
+
+    try {
+      scheduler.poll();
+
+      assertThat(calls.get()).isEqualTo(2);
+    } finally {
+      scheduler.stop();
+    }
   }
 
   @Test

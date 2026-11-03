@@ -151,7 +151,8 @@ public class ApplyOrderPaymentRequestService {
   private void recordFailure(WaitingInboxEvent claimed, RuntimeException cause) {
     int attempts = claimed.attempts();
     Instant now = clock.instant();
-    Instant retry = attempts < MAX_ATTEMPTS ? now.plus(retryDelay(attempts)) : null;
+    Instant retry =
+        attempts < MAX_ATTEMPTS ? now.plus(PaymentRetryPolicy.delayAfter(attempts)) : null;
     Boolean recorded;
     try {
       recorded =
@@ -175,11 +176,6 @@ public class ApplyOrderPaymentRequestService {
         .addKeyValue("result", result)
         .addKeyValue("errorCode", PROCESSING_FAILED)
         .log("Payment request processing failed");
-  }
-
-  /** n번째 실패 뒤 대기 시간. 1초부터 두 배씩 늘리고 60초를 넘지 않는다. */
-  static Duration retryDelay(int attempts) {
-    return Duration.ofSeconds(Math.min(60, 1L << Math.min(attempts - 1, 6)));
   }
 
   private boolean process(Optional<WaitingInboxEvent> claimed, Instant now) {

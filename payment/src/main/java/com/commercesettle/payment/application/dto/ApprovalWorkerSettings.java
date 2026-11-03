@@ -12,7 +12,6 @@ import java.util.Set;
 public record ApprovalWorkerSettings(
     Duration leaseDuration,
     Duration httpTimeout,
-    Duration unconfirmedRetryDelay,
     int maxAttempts,
     String cardProvider,
     String fundingAccountRef,
@@ -20,11 +19,9 @@ public record ApprovalWorkerSettings(
   public ApprovalWorkerSettings {
     Objects.requireNonNull(leaseDuration, "leaseDuration");
     Objects.requireNonNull(httpTimeout, "httpTimeout");
-    Objects.requireNonNull(unconfirmedRetryDelay, "unconfirmedRetryDelay");
     if (httpTimeout.isZero()
         || httpTimeout.isNegative()
         || httpTimeout.compareTo(leaseDuration) >= 0
-        || unconfirmedRetryDelay.isNegative()
         || maxAttempts < 1
         || !Set.of("PG_A", "PG_B", "PG_C").contains(cardProvider)
         || fundingAccountRef == null

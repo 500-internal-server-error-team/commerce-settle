@@ -204,7 +204,7 @@ class ApprovalResultRecorder {
     release(
         job,
         PaymentJobStatus.RETRY,
-        settings.unconfirmedRetryDelay(),
+        PaymentRetryPolicy.delayAfter(job.attempts()),
         "PAYMENT_APPROVAL_UNCONFIRMED");
     markUnknown(payment, attempt, now);
   }

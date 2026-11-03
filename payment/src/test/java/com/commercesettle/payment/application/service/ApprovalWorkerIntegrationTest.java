@@ -211,6 +211,55 @@ class ApprovalWorkerIntegrationTest {
   }
 
   @Test
+  @DisplayName("미확정 조회는 지수 간격으로 재시도하고 소진해도 거래 키와 마일리지 예약을 유지한다")
+  void backsOffUnconfirmedLookupsUntilAttemptsAreExhausted() {
+    fundWallet(5_000);
+    request(10_000, 2_000, "CREDIT_CARD");
+    gateway.approve = r -> new Result.Unconfirmed("HTTP 503");
+    gateway.lookup = r -> new Result.Unconfirmed("HTTP 503");
+    long[] delays = {1, 2, 4, 8, 16, 32, 60, 60, 60};
+
+    for (int attempt = 1; attempt <= 10; attempt++) {
+      Instant before = databaseNow();
+      assertThat(worker.runOnce()).isTrue();
+      Instant after = databaseNow();
+
+      assertThat(status()).isEqualTo("UNKNOWN");
+      assertThat(jdbc().queryForObject("SELECT attempts FROM payment.payment_jobs", Integer.class))
+          .isEqualTo(attempt);
+      if (attempt < 10) {
+        assertThat(jobStatus()).isEqualTo("RETRY");
+        Instant next =
+            jdbc()
+                .queryForObject(
+                    "SELECT next_run_at FROM payment.payment_jobs",
+                    (rs, row) -> rs.getTimestamp(1).toInstant());
+        assertThat(next)
+            .isBetween(
+                before.plusSeconds(delays[attempt - 1]), after.plusSeconds(delays[attempt - 1]));
+        makeJobDue();
+      }
+    }
+
+    assertThat(jobStatus()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(gateway.approvals).hasSize(1);
+    assertThat(gateway.lookups).hasSize(9);
+    assertThat(new HashSet<>(gateway.lookups)).containsExactly(gateway.approvals.get(0));
+    assertThat(
+            jdbc().queryForObject("SELECT status FROM payment.mileage_reservations", String.class))
+        .isEqualTo("RESERVED");
+    assertThat(jdbc().queryForMap("SELECT balance, reserved_amount FROM payment.mileage_wallets"))
+        .containsEntry("balance", 5_000L)
+        .containsEntry("reserved_amount", 2_000L);
+    assertThat(outbox()).containsExactly("PaymentAccepted:0");
+  }
+
+  private Instant databaseNow() {
+    return jdbc()
+        .queryForObject("SELECT clock_timestamp()", (rs, row) -> rs.getTimestamp(1).toInstant());
+  }
+
+  @Test
   @DisplayName("호출 전 중단 뒤 임대가 끝나면 원거래를 조회하고, 거래가 없으면 같은 업무 키·본문으로 재전송한다")
   void resendsSameRequestWhenTransactionWasNotFound() {
     request(10_000, 0, "CREDIT_CARD");
@@ -575,7 +624,6 @@ class ApprovalWorkerIntegrationTest {
     ApprovalWorkerSettings approvalWorkerSettings() {
       return new ApprovalWorkerSettings(
           Duration.ofSeconds(30),
-          Duration.ofSeconds(5),
           Duration.ofSeconds(5),
           10,
           "PG_A",

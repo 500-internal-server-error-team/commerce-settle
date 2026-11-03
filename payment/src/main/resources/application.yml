@@ -128,7 +128,6 @@ app:
     # 호출 제한 시간은 임대보다 짧아야 한다.
     lease-duration: 30s
     http-timeout: 5s
-    unconfirmed-retry-delay: 5s
     max-attempts: 10
     card-provider: PG_A
     funding-account-ref: ${PAYMENT_FUNDING_ACCOUNT_REF:payout-funding-default}
