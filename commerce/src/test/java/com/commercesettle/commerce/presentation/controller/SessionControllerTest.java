@@ -17,11 +17,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.commercesettle.commerce.application.exception.AuthRateLimitedException;
 import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
 import com.commercesettle.commerce.application.exception.AuthenticationUnavailableException;
+import com.commercesettle.commerce.application.exception.IdempotencyConflictException;
 import com.commercesettle.commerce.application.service.AccountService;
 import com.commercesettle.commerce.application.service.SessionService;
 import com.commercesettle.commerce.domain.exception.DuplicateAccountEmailException;
 import com.commercesettle.commerce.domain.model.AccountStatus;
 import com.commercesettle.commerce.domain.model.ActorKind;
+import com.commercesettle.commerce.domain.model.BuyerAccount;
 import com.commercesettle.commerce.domain.model.SellerAccount;
 import java.time.Instant;
 import java.util.UUID;
@@ -35,6 +37,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 @WebMvcTest(controllers = {SessionController.class, AccountController.class})
 class SessionControllerTest {
@@ -42,6 +45,9 @@ class SessionControllerTest {
       "{\"email\":\"seller@example.com\",\"password\":\"password-123\"}";
   private static final UUID ACTOR_ID = UUID.fromString("00000000-0000-4000-8000-000000000001");
   private static final String HASH = "a".repeat(64);
+  private static final String BUYER_KEY = "signup-key-0001";
+  private static final String BUYER_SIGNUP =
+      "{\"email\":\" buyer@example.com \",\"password\":\"password-123\",\"displayName\":\"구매자\"}";
 
   @Autowired private MockMvc mvc;
   @MockitoBean private SessionService sessions;
@@ -203,6 +209,53 @@ class SessionControllerTest {
   }
 
   @Test
+  @DisplayName("구매자 가입은 멱등키와 공백을 지운 이메일로 가입하고 201·Location·계정을 반환한다")
+  void registersBuyer() throws Exception {
+    BuyerAccount account = buyer();
+    given(accounts.registerBuyer(BUYER_KEY, "buyer@example.com", "password-123", "구매자"))
+        .willReturn(account);
+
+    mvc.perform(buyerSignup().header("Idempotency-Key", BUYER_KEY).content(BUYER_SIGNUP))
+        .andExpect(status().isCreated())
+        .andExpect(header().string("Location", "/api/buyers/" + ACTOR_ID))
+        .andExpect(jsonPath("$.actorKind").value("BUYER"))
+        .andExpect(jsonPath("$.displayName").value("구매자"))
+        .andExpect(jsonPath("$.password").doesNotExist());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"", "short-7"})
+  @DisplayName("구매자 가입의 멱등키가 없거나 8자 미만이면 가입하지 않고 400이다")
+  void rejectsInvalidBuyerSignupKey(String key) throws Exception {
+    var request = buyerSignup().content(BUYER_SIGNUP);
+    if (!key.isEmpty()) {
+      request.header("Idempotency-Key", key);
+    }
+
+    mvc.perform(request)
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.code").value("COMMON_VALIDATION_FAILED"));
+    verifyNoInteractions(accounts);
+  }
+
+  @Test
+  @DisplayName("구매자 가입의 키 충돌·처리 중은 COMMON_IDEMPOTENCY_CONFLICT, 이메일 중복은 ACCOUNT_EMAIL_DUPLICATED다")
+  void mapsBuyerSignupConflicts() throws Exception {
+    given(accounts.registerBuyer(anyString(), anyString(), anyString(), anyString()))
+        .willThrow(new IdempotencyConflictException("same key was used with a different request"));
+    mvc.perform(buyerSignup().header("Idempotency-Key", BUYER_KEY).content(BUYER_SIGNUP))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("COMMON_IDEMPOTENCY_CONFLICT"));
+
+    willThrow(new DuplicateAccountEmailException())
+        .given(accounts)
+        .registerBuyer(anyString(), anyString(), anyString(), anyString());
+    mvc.perform(buyerSignup().header("Idempotency-Key", BUYER_KEY).content(BUYER_SIGNUP))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("ACCOUNT_EMAIL_DUPLICATED"));
+  }
+
+  @Test
   @DisplayName("판매자 가입은 앞뒤 공백이 있는 이메일도 공백을 지운 뒤 검증한다")
   void stripsEmailBeforeValidatingRegistration() throws Exception {
     SellerAccount account = seller();
@@ -229,6 +282,10 @@ class SessionControllerTest {
         .andExpect(status().isServiceUnavailable());
   }
 
+  private static MockHttpServletRequestBuilder buyerSignup() {
+    return post("/api/buyers").contentType(MediaType.APPLICATION_JSON);
+  }
+
   private static HttpHeaders identity(String kind) {
     var headers = new HttpHeaders();
     headers.add("X-Authenticated-Actor-Kind", kind);
@@ -243,6 +300,16 @@ class SessionControllerTest {
     given(account.getId()).willReturn(ACTOR_ID);
     given(account.actorKind()).willReturn(ActorKind.SELLER);
     given(account.getDisplayName()).willReturn("판매자");
+    given(account.getStatus()).willReturn(AccountStatus.ACTIVE);
+    given(account.getVersion()).willReturn(0L);
+    return account;
+  }
+
+  private static BuyerAccount buyer() {
+    BuyerAccount account = mock(BuyerAccount.class);
+    given(account.getId()).willReturn(ACTOR_ID);
+    given(account.actorKind()).willReturn(ActorKind.BUYER);
+    given(account.getDisplayName()).willReturn("구매자");
     given(account.getStatus()).willReturn(AccountStatus.ACTIVE);
     given(account.getVersion()).willReturn(0L);
     return account;

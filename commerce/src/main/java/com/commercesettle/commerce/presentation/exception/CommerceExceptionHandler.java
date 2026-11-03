@@ -7,6 +7,7 @@ import com.commercesettle.commerce.application.exception.AuthenticationUnavailab
 import com.commercesettle.commerce.application.exception.IdempotencyConflictException;
 import com.commercesettle.commerce.application.exception.OrderRequestException;
 import com.commercesettle.commerce.application.exception.OrderStubException;
+import com.commercesettle.commerce.domain.exception.AccountNotFoundException;
 import com.commercesettle.commerce.domain.exception.BuyerAddressNotFoundException;
 import com.commercesettle.commerce.domain.exception.CouponCampaignConflictException;
 import com.commercesettle.commerce.domain.exception.CouponRecipientNotFoundException;
@@ -150,6 +151,11 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
   @ExceptionHandler(BuyerAddressNotFoundException.class)
   ResponseEntity<Object> addressNotFound(BuyerAddressNotFoundException e, WebRequest request) {
     return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "주소를 찾을 수 없습니다.", null, request);
+  }
+
+  @ExceptionHandler(AccountNotFoundException.class)
+  ResponseEntity<Object> accountNotFound(AccountNotFoundException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "계정을 찾을 수 없습니다.", null, request);
   }
 
   @ExceptionHandler({

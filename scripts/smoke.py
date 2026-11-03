@@ -273,55 +273,46 @@ def check_session_auth(config, base):
         compose(*admin, "DEL", session, guard)
 
 
-def check_buyer_addresses(config, base):
-    # Buyer signup waits for the welcome coupon, so the buyer row and session are written directly.
-    epoch = config["services"]["gateway"]["environment"]["AUTH_SESSION_EPOCH"]
-    token = uuid.uuid4().hex
-    buyer_id = str(uuid.uuid4())
-    session = f"commerce-settle:auth:session:{epoch}:{hashlib.sha256(token.encode()).hexdigest()}"
-    guard = f"commerce-settle:auth:subject:{epoch}:BUYER:{buyer_id}"
-    admin = ["exec", "-T", "redis", "sh", "-c",
-             'export REDISCLI_AUTH="$REDIS_PASSWORD"; exec redis-cli --raw "$@"', "redis-smoke"]
-    psql = ["exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "commerce",
-            "-v", "ON_ERROR_STOP=1", "-v", f"buyer={buyer_id}", "-Atq"]
+def check_buyer_signup_and_addresses(base):
+    # A fresh email per run keeps reruns away from the per-email login limit.
+    email = f"smoke-{uuid.uuid4().hex}@example.com"
+    signup = {"email": email, "password": uuid.uuid4().hex, "displayName": "smoke"}
+    signup_key = {"Idempotency-Key": f"smoke-{uuid.uuid4().hex}"}
+    status, account = gateway_json(base, "POST", "/api/buyers", signup, headers=signup_key)
+    assert status == 201 and account["actorKind"] == "BUYER", (status, account)
+    status, replay = gateway_json(base, "POST", "/api/buyers", signup, headers=signup_key)
+    assert status == 201 and replay["id"] == account["id"], (status, replay)
+    status, problem = gateway_json(base, "POST", "/api/buyers",
+                                   {**signup, "displayName": "other"}, headers=signup_key)
+    assert (status, problem.get("code")) == (409, "COMMON_IDEMPOTENCY_CONFLICT"), status
+    status, session = gateway_json(base, "POST", "/api/buyer-sessions",
+                                   {"email": email, "password": signup["password"]})
+    assert status == 200, (status, session)
+    token = session["token"]
+
+    status, coupons = gateway_json(base, "GET", "/api/buyers/me/coupons", token=token)
+    assert status == 200 and coupons["totalElements"] == 1, coupons
+
     address = {"recipient": "smoke", "phone": "010-0000-0000", "postalCode": "00000",
                "addressLine1": "smoke street", "addressLine2": "", "isDefault": False}
-    try:
-        compose(*psql, input_text="""
-INSERT INTO commerce.buyer_accounts
-    (id, email_normalized, password_hash, display_name, status, created_at, updated_at, version)
-VALUES (:'buyer', :'buyer' || '@smoke.local', 'smoke', 'smoke', 'ACTIVE', now(), now(), 0);
-""")
-        seconds, micros = compose(*admin, "TIME").stdout.split()
-        now = int(seconds) * 1000 + int(micros) // 1000
-        compose(*admin, "HSET", session, "actorKind", "BUYER", "actorId", buyer_id,
-                "purpose", "SESSION", "authVersion", "0", "issuedAt", str(now),
-                "expiresAt", str(now + 60_000))
-        compose(*admin, "HSET", guard, "authVersion", "0", "state", "ACTIVE")
-
-        key = {"Idempotency-Key": f"smoke-{uuid.uuid4().hex}"}
-        status, created = gateway_json(base, "POST", "/api/buyers/me/addresses", address,
-                                       token, key)
-        assert status == 201 and created["isDefault"] is True, (status, created)
-        status, replay = gateway_json(base, "POST", "/api/buyers/me/addresses", address,
-                                      token, key)
-        assert status == 201 and replay["id"] == created["id"], (status, replay)
-        status, page = gateway_json(base, "GET", "/api/buyers/me/addresses", token=token)
-        assert status == 200 and [item["id"] for item in page["items"]] == [created["id"]], page
-        status, _ = gateway_json(
-            base, "DELETE",
-            f"/api/buyers/me/addresses/{created['id']}?expectedVersion={created['version']}",
-            token=token, headers={"Idempotency-Key": f"smoke-{uuid.uuid4().hex}"})
-        assert status == 204, status
-        status, page = gateway_json(base, "GET", "/api/buyers/me/addresses", token=token)
-        assert status == 200 and page["totalElements"] == 0, page
-    finally:
-        compose(*admin, "DEL", session, guard)
-        compose(*psql, input_text="""
-DELETE FROM commerce.idempotency_records WHERE actor_kind = 'BUYER' AND actor_id = :'buyer';
-DELETE FROM commerce.buyer_addresses WHERE buyer_id = :'buyer';
-DELETE FROM commerce.buyer_accounts WHERE id = :'buyer';
-""")
+    key = {"Idempotency-Key": f"smoke-{uuid.uuid4().hex}"}
+    status, created = gateway_json(base, "POST", "/api/buyers/me/addresses", address,
+                                   token, key)
+    assert status == 201 and created["isDefault"] is True, (status, created)
+    status, replay = gateway_json(base, "POST", "/api/buyers/me/addresses", address,
+                                  token, key)
+    assert status == 201 and replay["id"] == created["id"], (status, replay)
+    status, page = gateway_json(base, "GET", "/api/buyers/me/addresses", token=token)
+    assert status == 200 and [item["id"] for item in page["items"]] == [created["id"]], page
+    status, _ = gateway_json(
+        base, "DELETE",
+        f"/api/buyers/me/addresses/{created['id']}?expectedVersion={created['version']}",
+        token=token, headers={"Idempotency-Key": f"smoke-{uuid.uuid4().hex}"})
+    assert status == 204, status
+    status, page = gateway_json(base, "GET", "/api/buyers/me/addresses", token=token)
+    assert status == 200 and page["totalElements"] == 0, page
+    status, _ = gateway_json(base, "DELETE", "/api/sessions/current", token=token)
+    assert status == 204, status
 
 
 def check_kafka_topics():
@@ -427,8 +418,8 @@ def main():
     check_password_reset(base)
     print("PASS Commerce password reset: same request response for unknown accounts, bad token 401")
 
-    check_buyer_addresses(config, base)
-    print("PASS Buyer addresses: first address default, idempotent replay, list, delete")
+    check_buyer_signup_and_addresses(base)
+    print("PASS Buyer signup: welcome coupon, idempotent replay/conflict, login, addresses")
 
     trace_id = uuid.uuid4().hex
     parent_id = uuid.uuid4().hex[:16]

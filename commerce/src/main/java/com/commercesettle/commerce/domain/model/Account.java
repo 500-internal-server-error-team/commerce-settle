@@ -28,8 +28,13 @@ public abstract class Account extends AuditableEntity {
   protected Account() {}
 
   protected Account(String email, String passwordHash, String displayName, Instant now) {
+    this(UUID.randomUUID(), email, passwordHash, displayName, now);
+  }
+
+  /** 멱등 기록이 계정 생성 전에 결과 ID를 고정해야 할 때 ID를 받는다. */
+  protected Account(UUID id, String email, String passwordHash, String displayName, Instant now) {
     super(now);
-    this.id = UUID.randomUUID();
+    this.id = Objects.requireNonNull(id, "id");
     this.emailNormalized = normalizeEmail(email);
     this.passwordHash = Objects.requireNonNull(passwordHash, "passwordHash");
     this.displayName = Objects.requireNonNull(displayName, "displayName");
