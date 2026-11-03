@@ -690,7 +690,6 @@ class PaymentReadAndOperationIntegrationTest {
       return new ApprovalWorkerSettings(
           Duration.ofSeconds(30),
           Duration.ofSeconds(5),
-          Duration.ofSeconds(5),
           10,
           "PG_A",
           "payout-funding-default",
