@@ -1,5 +1,6 @@
 package com.commercesettle.commerce.application.service;
 
+import static com.commercesettle.commerce.support.ConcurrentTransactions.holdTransaction;
 import static com.commercesettle.commerce.support.ConcurrentTransactions.runConcurrently;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -10,20 +11,27 @@ import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.exception.SaleEventConflictException;
 import com.commercesettle.commerce.domain.exception.SaleEventConflictException.Reason;
 import com.commercesettle.commerce.domain.exception.SaleEventNotFoundException;
+import com.commercesettle.commerce.domain.exception.VersionConflictException;
 import com.commercesettle.commerce.domain.model.EventAdmission;
 import com.commercesettle.commerce.domain.model.ProductInventory;
 import com.commercesettle.commerce.domain.model.ProductStatus;
 import com.commercesettle.commerce.domain.model.SaleEvent;
 import com.commercesettle.commerce.domain.model.SaleEventStatus;
 import com.commercesettle.commerce.domain.repository.PageResult;
+import com.commercesettle.commerce.support.ConcurrentTransactions.HeldTransaction;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -234,6 +242,83 @@ class SaleEventIntegrationTest {
   }
 
   @Test
+  @Timeout(30)
+  @DisplayName("시작 처리는 다른 트랜잭션이 잡은 이벤트 행을 기다리지 않고 건너뛴 뒤 다음 실행에서 연다")
+  void opensStartedEventsSkippingLockedRows() throws Exception {
+    UUID seller = UUID.randomUUID();
+    Instant started = hoursFromNow(1);
+    Instant ends = started.plus(Duration.ofHours(1));
+    SaleEvent busy =
+        publish(seller, register(seller, stockedProduct(seller, 10), 3, started, ends));
+    SaleEvent quiet =
+        publish(seller, register(seller, stockedProduct(seller, 10), 3, started, ends));
+
+    try (HeldTransaction held =
+        holdTransaction(
+            tx,
+            () ->
+                jdbc.queryForList(
+                    "select id from commerce.sale_events where id = ? for update", busy.getId()))) {
+      events.openStarted(started, 100);
+      assertThat(events.sellerEvent(seller, busy.getId()).getStatus())
+          .isEqualTo(SaleEventStatus.SCHEDULED);
+      assertThat(events.sellerEvent(seller, quiet.getId()).getStatus())
+          .isEqualTo(SaleEventStatus.OPEN);
+    }
+    events.openStarted(started, 100);
+
+    assertThat(events.sellerEvent(seller, busy.getId()).getStatus())
+        .isEqualTo(SaleEventStatus.OPEN);
+  }
+
+  @Test
+  @Timeout(30)
+  @DisplayName("공개가 이벤트 행을 기다리는 사이 미공개 변경이 상품을 바꾸면 버전 충돌로 거절하고 재고를 배정하지 않는다")
+  void rejectsPublishWhenDraftProductChangesWhileWaiting() throws Exception {
+    UUID seller = UUID.randomUUID();
+    UUID first = stockedProduct(seller, 10);
+    UUID second = stockedProduct(seller, 10);
+    SaleEvent draft = register(seller, first, 3, hoursFromNow(1), hoursFromNow(2));
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    Future<Object> publishing;
+
+    try (HeldTransaction held =
+        holdTransaction(
+            tx,
+            () ->
+                events.change(
+                    seller,
+                    draft.getId(),
+                    key(),
+                    second,
+                    draft.getName(),
+                    draft.getEventPrice(),
+                    draft.getQuota(),
+                    draft.getStartsAt(),
+                    draft.getEndsAt(),
+                    draft.getVersion()))) {
+      publishing =
+          executor.submit(
+              () -> {
+                try {
+                  return events.publish(seller, draft.getId(), key(), draft.getVersion());
+                } catch (RuntimeException e) {
+                  return e;
+                }
+              });
+      awaitLockWaiter();
+    }
+    Object result = publishing.get(10, TimeUnit.SECONDS);
+    executor.shutdownNow();
+
+    assertThat(result).isInstanceOf(VersionConflictException.class);
+    assertThat(events.sellerEvent(seller, draft.getId()).getStatus())
+        .isEqualTo(SaleEventStatus.DRAFT);
+    assertThat(catalog.inventory(seller, first).getEventAllocatedQuantity()).isZero();
+    assertThat(catalog.inventory(seller, second).getEventAllocatedQuantity()).isZero();
+  }
+
+  @Test
   @DisplayName("같은 상품의 기간이 겹치는 두 이벤트를 동시에 공개하면 하나만 배정한다")
   void publishesOneOfConcurrentOverlappingEvents() throws Exception {
     UUID seller = UUID.randomUUID();
@@ -379,6 +464,18 @@ class SaleEventIntegrationTest {
                 cycle,
                 Instant.now().plus(Duration.ofMinutes(10))));
     tx.executeWithoutResult(status -> reservations.consume(orderId, cycle));
+  }
+
+  /** 다른 스레드의 요청이 행 잠금을 기다리기 시작할 때까지 확인한다. 잠금 대기 상한 1초 안에 잡은 트랜잭션을 끝내야 한다. */
+  private void awaitLockWaiter() throws InterruptedException {
+    long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+    while (jdbc.queryForObject("select count(*) from pg_locks where not granted", Long.class)
+        == 0) {
+      if (System.nanoTime() > deadline) {
+        throw new IllegalStateException("no transaction is waiting for a lock");
+      }
+      Thread.sleep(5);
+    }
   }
 
   private static Instant hoursFromNow(long hours) {

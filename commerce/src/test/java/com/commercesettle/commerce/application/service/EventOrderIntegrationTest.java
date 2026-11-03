@@ -186,6 +186,30 @@ class EventOrderIntegrationTest {
   }
 
   @Test
+  @DisplayName("거절된 주문을 재시도할 때 같은 구매자의 다른 주문이 참여 중이면 수량을 다시 잡지 않고 EVENT_ADMISSION_CLOSED로 거절한다")
+  void rejectsRetryWhileAnotherOrderParticipates() throws Exception {
+    Sale sale = openSale(5);
+    Buyer buyer = buyer();
+    UUID declined = uuid(order(sale, buyer, 201), "id");
+    receive("PaymentDeclined", result(declined, UUID.randomUUID(), cycle(declined)));
+    UUID other = uuid(order(sale, buyer, 201), "id");
+
+    JsonNode rejected =
+        exchange(
+            buyer.id(),
+            "/api/orders/" + declined + "/payment-retries",
+            version(read(buyer, declined)),
+            409);
+
+    assertThat(rejected.path("code").asText()).isEqualTo("EVENT_ADMISSION_CLOSED");
+    assertThat(rejected.path("detail").asText()).isEqualTo("이미 참여한 이벤트입니다.");
+    assertThat(read(buyer, declined).path("status").asText()).isEqualTo("DECLINED");
+    assertThat(participation(declined)).isEqualTo("RELEASED");
+    assertThat(participation(other)).isEqualTo("RESERVED");
+    assertSlots(sale, 0, 1);
+  }
+
+  @Test
   @DisplayName("미발송 주문의 환불 복구는 판매 1개를 가용으로 돌리고 이벤트 판매량과 참여 한도는 유지한다")
   void restoresUnshippedRefundWithoutReopeningEvent() throws Exception {
     Sale sale = openSale(5);

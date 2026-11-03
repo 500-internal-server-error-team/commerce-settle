@@ -1,5 +1,6 @@
 package com.commercesettle.commerce.domain.repository;
 
+import com.commercesettle.commerce.domain.model.EventAdmission;
 import com.commercesettle.commerce.domain.model.SaleEvent;
 import java.time.Instant;
 import java.util.List;
@@ -25,6 +26,11 @@ public interface SaleEventRepository {
    */
   boolean reserveSlot(UUID eventId, Instant now);
 
+  /**
+   * DB의 현재 행과 서버 시각으로 계산한 신청 상태. 같은 트랜잭션에서 먼저 읽은 이벤트 엔티티가 있어도 그 사본을 쓰지 않는다. 없거나 미공개인 이벤트는 빈 값이다.
+   */
+  Optional<EventAdmission> findAdmission(UUID eventId, Instant now);
+
   /** 공개 후 종료 전(SCHEDULED·OPEN) 이벤트가 있는지. */
   boolean existsInProgressByProductId(UUID productId);
 
@@ -37,7 +43,7 @@ public interface SaleEventRepository {
   /** 공개 목록에 보이는 예정·진행 중(SCHEDULED/OPEN) 이벤트. 종료·매진 이벤트는 단건·게이지 조회로만 제공한다. */
   PageResult<SaleEvent> findPublished(int page, int size);
 
-  /** 시작 시각이 된 SCHEDULED 이벤트를 쓰기 잠금으로 읽는다. */
+  /** 시작 시각이 된 SCHEDULED 이벤트를 쓰기 잠금으로 읽는다. 다른 트랜잭션이 잠근 행은 기다리지 않고 건너뛴다. */
   List<SaleEvent> findStartedForUpdate(Instant now, int limit);
 
   /** 종료 시각이 지난 SCHEDULED·OPEN 이벤트 ID. 종료 시각이 이른 순서다. */

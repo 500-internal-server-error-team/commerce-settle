@@ -36,6 +36,29 @@ interface SpringDataSaleEventRepository extends JpaRepository<SaleEvent, UUID> {
       nativeQuery = true)
   int incrementReservedIfAdmitting(UUID eventId, Instant now);
 
+  /** 엔티티가 아닌 값으로 읽어 영속성 컨텍스트의 사본 대신 DB의 현재 행을 돌려준다. */
+  @Query(
+      """
+      select e.status as status, e.startsAt as startsAt, e.endsAt as endsAt, e.quota as quota,
+        e.soldCount as soldCount, e.reservedCount as reservedCount
+      from SaleEvent e where e.id = :eventId
+      """)
+  Optional<AdmissionRow> findAdmissionRowById(UUID eventId);
+
+  interface AdmissionRow {
+    SaleEventStatus getStatus();
+
+    Instant getStartsAt();
+
+    Instant getEndsAt();
+
+    long getQuota();
+
+    long getSoldCount();
+
+    long getReservedCount();
+  }
+
   boolean existsByProductIdAndStatusIn(UUID productId, Collection<SaleEventStatus> statuses);
 
   @Query(
@@ -55,15 +78,18 @@ interface SpringDataSaleEventRepository extends JpaRepository<SaleEvent, UUID> {
 
   Page<SaleEvent> findByStatusIn(Collection<SaleEventStatus> statuses, Pageable pageable);
 
-  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  /** 참여·종료가 잡고 있는 이벤트 행은 기다리지 않고 건너뛴다. 건너뛴 행은 다음 실행에서 다시 찾는다. */
   @Query(
-      """
-      select e from SaleEvent e
-      where e.status = :status and e.startsAt <= :now and e.endsAt > :now
-      order by e.startsAt, e.id
-      """)
-  List<SaleEvent> findLockedByStatusStartedBefore(
-      SaleEventStatus status, Instant now, Pageable pageable);
+      value =
+          """
+          SELECT * FROM commerce.sale_events
+          WHERE status = 'SCHEDULED' AND starts_at <= :now AND ends_at > :now
+          ORDER BY starts_at, id
+          LIMIT :limit
+          FOR UPDATE SKIP LOCKED
+          """,
+      nativeQuery = true)
+  List<SaleEvent> findStartedSkippingLocked(Instant now, int limit);
 
   @Query(
       """
