@@ -144,7 +144,6 @@ app:
     # 호출 제한 시간은 임대보다 짧아야 한다.
     lease-duration: 30s
     http-timeout: 5s
-    unconfirmed-retry-delay: 5s
     max-attempts: 10
     settlement-stub:
       # Settlement 환불 예약·원장 상쇄·예약 해제 응답을 즉시 성공으로 대신한다.

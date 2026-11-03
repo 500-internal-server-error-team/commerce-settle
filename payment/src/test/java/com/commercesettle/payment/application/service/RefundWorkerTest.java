@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 
 class RefundWorkerTest {
   private static final RefundWorkerSettings SETTINGS =
-      new RefundWorkerSettings(Duration.ofSeconds(30), Duration.ofSeconds(5), Duration.ZERO, 10);
+      new RefundWorkerSettings(Duration.ofSeconds(30), Duration.ofSeconds(5), 10);
 
   @Test
   @DisplayName("준비 뒤 임대에 호출 제한 시간만큼 남지 않았으면 외부 환불을 호출하지 않고 결과도 반영하지 않는다")

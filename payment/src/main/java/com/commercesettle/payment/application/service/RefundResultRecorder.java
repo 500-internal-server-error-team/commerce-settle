@@ -182,8 +182,8 @@ class RefundResultRecorder {
     }
     refunds.save(refund);
     sagas.save(saga);
-    LOG.atInfo()
-        .addKeyValue("event", "payment.refund")
+    var log = refund.getStatus() == RefundStatus.UNKNOWN ? LOG.atWarn() : LOG.atInfo();
+    log.addKeyValue("event", "payment.refund")
         .addKeyValue("refundId", refund.getId())
         .addKeyValue("jobId", job.jobId())
         .addKeyValue("attempt", job.attempts())
@@ -223,7 +223,11 @@ class RefundResultRecorder {
       exhaust(job, refund, now);
       return;
     }
-    release(job, PaymentJobStatus.RETRY, settings.unconfirmedRetryDelay(), EXTERNAL_UNCONFIRMED);
+    release(
+        job,
+        PaymentJobStatus.RETRY,
+        PaymentRetryPolicy.delayAfter(job.attempts()),
+        EXTERNAL_UNCONFIRMED);
     refund.externalUnknown(now);
     saga.recordError(EXTERNAL_UNCONFIRMED, now);
   }
@@ -235,7 +239,7 @@ class RefundResultRecorder {
         && refund.getExternalStatus() == ExternalRefundStatus.REQUESTED) {
       refund.externalUnknown(now);
     }
-    LOG.atWarn()
+    LOG.atError()
         .addKeyValue("event", "payment.refund")
         .addKeyValue("refundId", refund.getId())
         .addKeyValue("jobId", job.jobId())

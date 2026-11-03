@@ -191,7 +191,7 @@ public class RefundEventHandler {
     int attempts = claimed.attempts();
     Instant retry =
         attempts < ApplyOrderPaymentRequestService.MAX_ATTEMPTS
-            ? now.plus(ApplyOrderPaymentRequestService.retryDelay(attempts))
+            ? now.plus(PaymentRetryPolicy.delayAfter(attempts))
             : null;
     inbox.recordFailure(claimed.inboxId(), claimed.version(), PAYMENT_NOT_CONFIRMED, retry, now);
     log(claimed, retry == null ? "REVIEW_REQUIRED" : "WAITING", PAYMENT_NOT_CONFIRMED);
