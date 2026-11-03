@@ -157,6 +157,8 @@ app:
     scheduler-enabled: true
     schedule-interval-ms: 60000
     batch-size: 100
+    # 공개 게이지 조회의 인스턴스 메모리 캐시 TTL. 0이면 캐시하지 않는다. docs/policies.md#선착순-상품-이벤트
+    gauge-cache-ttl: PT1S
   outbox:
     enabled: ${APP_OUTBOX_ENABLED:false}
     recovery-interval-ms: 1000

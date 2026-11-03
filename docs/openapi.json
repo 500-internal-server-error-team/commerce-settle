@@ -4228,7 +4228,7 @@
         "x-owner-service": "commerce",
         "x-actor": "PUBLIC",
         "x-implemented": false,
-        "description": "공개 이력이 있는 이벤트만, DRAFT는404. 매진/종료 이벤트는 상태·게이지 조회 가능.",
+        "description": "공개 이력이 있는 이벤트만, DRAFT는404. 매진/종료 이벤트는 상태·게이지 조회 가능. 인스턴스 메모리에서 1초 캐시하며 asOf는 계산 시각이다. 구매 허용은 주문 때 DB로 판단한다.",
         "security": [],
         "parameters": [
           {

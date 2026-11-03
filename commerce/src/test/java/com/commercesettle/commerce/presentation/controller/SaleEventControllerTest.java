@@ -14,6 +14,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.commercesettle.commerce.application.service.EventGaugeCache;
 import com.commercesettle.commerce.application.service.SaleEventService;
 import com.commercesettle.commerce.application.service.SaleEventService.GaugeView;
 import com.commercesettle.commerce.domain.exception.InsufficientInventoryException;
@@ -66,6 +67,7 @@ class SaleEventControllerTest {
   @Autowired MockMvc mvc;
   @Autowired ObjectMapper mapper;
   @MockitoBean SaleEventService events;
+  @MockitoBean EventGaugeCache gauges;
 
   @BeforeAll
   static void loadContracts() throws Exception {
@@ -210,7 +212,7 @@ class SaleEventControllerTest {
   void servesPublicEventsAndGauge() throws Exception {
     given(events.publishedEvents(0, 20))
         .willReturn(new PageResult<>(List.of(published()), 0, 20, 1));
-    given(events.gauge(EVENT))
+    given(gauges.gauge(EVENT))
         .willReturn(
             new GaugeView(
                 EVENT,
