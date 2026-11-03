@@ -11,6 +11,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.event.Level;
 import org.springframework.stereotype.Service;
 
 /**
@@ -63,7 +64,10 @@ public class ApprovalWorker {
     Result result = call(job, prepared.get());
     try {
       recorder.record(job, result);
-      LOG.atInfo()
+      LOG.atLevel(
+              result instanceof Result.Succeeded || result instanceof Result.Declined
+                  ? Level.INFO
+                  : Level.WARN)
           .addKeyValue("event", "payment.approval")
           .addKeyValue("paymentId", job.paymentId())
           .addKeyValue("jobId", job.jobId())

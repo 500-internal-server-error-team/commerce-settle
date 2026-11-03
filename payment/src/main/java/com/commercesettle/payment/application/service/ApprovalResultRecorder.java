@@ -216,7 +216,7 @@ class ApprovalResultRecorder {
       payment.markUnknown(now);
       payments.save(payment);
     }
-    LOG.atWarn()
+    LOG.atError()
         .addKeyValue("event", "payment.approval")
         .addKeyValue("paymentId", job.paymentId())
         .addKeyValue("jobId", job.jobId())
