@@ -43,14 +43,16 @@ public class ApprovalWorkerConfiguration {
       @Value("${app.payment-approval.mock-credential:}") String credential) {
     return switch (gateway) {
       case "stub" -> new StubPaymentGateway(clock);
-      case "http" -> {
-        HttpClient http = HttpClient.newBuilder().connectTimeout(settings.httpTimeout()).build();
-        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(http);
-        requestFactory.setReadTimeout(settings.httpTimeout());
-        yield new HttpPaymentGateway(
-            builder.baseUrl(baseUrl).requestFactory(requestFactory).build(), credential);
-      }
+      case "http" ->
+          new HttpPaymentGateway(httpClient(builder, settings.httpTimeout(), baseUrl), credential);
       default -> throw new IllegalArgumentException("Unknown payment approval gateway");
     };
+  }
+
+  static RestClient httpClient(RestClient.Builder builder, Duration timeout, String baseUrl) {
+    HttpClient http = HttpClient.newBuilder().connectTimeout(timeout).build();
+    JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(http);
+    requestFactory.setReadTimeout(timeout);
+    return builder.baseUrl(baseUrl).requestFactory(requestFactory).build();
   }
 }

@@ -57,6 +57,11 @@ class ComposeConfigurationTest(unittest.TestCase):
             "settlement": ["APP_OUTBOX_ENABLED", "APP_KAFKA_SETTLEMENT_EVENTS_ENABLED",
                            "SETTLEMENT_INBOX_PROCESSOR_ENABLED"],
         }
+        values = {"PAYMENT_APPROVAL_GATEWAY": "http", "PAYMENT_REFUND_GATEWAY": "http",
+                  "PAYMENT_FUNDING_ACCOUNT_REF": "fixture-payout-funding",
+                  "PAYMENT_SCENARIO_VERSION": "fixture-pg-normal-v1"}
+        expected["payment-worker"] += list(values)
+        expected["finance-mock"] = ["APP_DEV_FIXTURES_ENABLED"]
         for name, service in services.items():
             with self.subTest(service=name):
                 environment = service.get("environment", {})
@@ -65,7 +70,7 @@ class ComposeConfigurationTest(unittest.TestCase):
                 self.assertEqual(switched, sorted(key for key in expected.get(name, [])
                                                   if base[name].get("environment", {}).get(key) != "true"))
                 for key in expected.get(name, []):
-                    self.assertEqual(environment[key], "true")
+                    self.assertEqual(environment[key], values.get(key, "true"))
         # Payment API serves HTTP only; the worker owns every financial consumer and publisher.
         self.assertNotIn("APP_REFUND_ENABLED", services["payment-api"]["environment"])
         self.assertEqual(services["payment-worker"]["environment"]["PAYMENT_ROLE"], "worker")
