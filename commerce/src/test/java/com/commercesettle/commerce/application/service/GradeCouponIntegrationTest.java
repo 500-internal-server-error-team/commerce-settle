@@ -330,10 +330,10 @@ class GradeCouponIntegrationTest {
             + " external_amount, payment_cycle_id, external_method, method_account_ref, status,"
             + " fulfillment_status, simulation_seed, delivery_business_days,"
             + " delivery_calendar_version, delivery_calendar, shipped_at, delivery_due_at,"
-            + " delivered_at, refund_deadline_at, purchase_confirmed_at, payment_wait_until,"
+            + " delivered_at, refund_deadline_at, purchase_confirmed_at, closed_at, payment_wait_until,"
             + " policy_version, created_at, updated_at, version)"
             + " values (?, ?, ?, ?, '시험 상품', ?, 1, ?, 0, 0, 0, ?, ?, 0, ?, ?, 'CREDIT_CARD',"
-            + " 'test-card', ?, ?, 1, 2, 'test', '{}'::jsonb, ?, ?, ?, ?, ?, ?, 'test', ?, ?, 0)",
+            + " 'test-card', ?, ?, 1, 2, 'test', '{}'::jsonb, ?, ?, ?, ?, ?, ?, ?, 'test', ?, ?, 0)",
         UUID.randomUUID(),
         buyer,
         UUID.randomUUID(),
@@ -350,6 +350,7 @@ class GradeCouponIntegrationTest {
         confirmedAt == null ? null : Timestamp.from(delivered),
         confirmedAt == null ? null : Timestamp.from(delivered),
         confirmedAt == null ? null : Timestamp.from(delivered.plusSeconds(168 * 3_600)),
+        confirmedAt == null ? null : Timestamp.from(confirmedAt),
         confirmedAt == null ? null : Timestamp.from(confirmedAt),
         Timestamp.from(created.plusSeconds(600)),
         Timestamp.from(created),
