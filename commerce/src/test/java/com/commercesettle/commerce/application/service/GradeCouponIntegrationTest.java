@@ -3,11 +3,14 @@ package com.commercesettle.commerce.application.service;
 import static com.commercesettle.commerce.support.ConcurrentTransactions.holdTransaction;
 import static com.commercesettle.commerce.support.ConcurrentTransactions.runConcurrently;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 
 import com.commercesettle.commerce.domain.model.CouponFunder;
 import com.commercesettle.commerce.domain.model.CouponIssueRun;
 import com.commercesettle.commerce.domain.model.CouponIssueRunStatus;
 import com.commercesettle.commerce.domain.model.Order;
+import com.commercesettle.commerce.domain.repository.CouponIssueRunRepository;
 import com.commercesettle.commerce.infrastructure.batch.GradeCouponExecutions;
 import com.commercesettle.commerce.infrastructure.batch.GradeCouponLauncher;
 import com.commercesettle.commerce.infrastructure.scheduling.GradeCouponScheduler;
@@ -56,6 +59,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -101,6 +105,8 @@ class GradeCouponIntegrationTest {
   @Autowired GradeCouponExecutions executions;
   @Autowired JobRepository jobs;
   @Autowired TransactionTemplate tx;
+  // 재요청 조회 도중 다른 교정이 커밋되는 시점을 만들려고 대체 회차 조회 앞에 한 번 끼어든다.
+  @MockitoSpyBean CouponIssueRunRepository runRepository;
 
   @Test
   @DisplayName("100위 동점자를 모두 포함해 104명을 고정하고 등급별로 발급하며, 같은 월을 다시 실행해도 바꾸지 않는다")
@@ -582,6 +588,50 @@ class GradeCouponIntegrationTest {
                 run.toString()))
         .isEqualTo(1);
     replace(run, version, 201, key());
+  }
+
+  @Test
+  @Timeout(60)
+  @DisplayName("교정 재요청의 응답은 조회 도중 다음 교정이 커밋돼도 회차 상태와 대체 회차 연결을 같은 시점 값으로 돌려준다")
+  void replaysReplacementFromOneSnapshot() throws Exception {
+    LocalDate month = LocalDate.of(2034, 5, 1);
+    clock.at(month, 0, 20);
+    CouponIssueRun original = grades.currentRun(month).orElseThrow();
+    String key = key();
+    JsonNode created = replace(original.getId(), original.getVersion(), 201, key);
+    UUID second = UUID.fromString(created.path("id").asText());
+    long secondVersion = created.path("version").asLong();
+    AtomicReference<UUID> third = new AtomicReference<>();
+    AtomicReference<Boolean> armed = new AtomicReference<>(true);
+    doAnswer(
+            invocation -> {
+              if (second.equals(invocation.getArgument(0)) && armed.getAndSet(false)) {
+                ExecutorService other = Executors.newSingleThreadExecutor();
+                try {
+                  JsonNode next =
+                      other
+                          .submit(() -> replace(second, secondVersion, 201, key()))
+                          .get(30, TimeUnit.SECONDS);
+                  third.set(UUID.fromString(next.path("id").asText()));
+                } finally {
+                  other.shutdownNow();
+                }
+              }
+              return invocation.callRealMethod();
+            })
+        .when(runRepository)
+        .findReplacementId(any());
+
+    JsonNode replay = replace(original.getId(), original.getVersion(), 201, key);
+
+    assertThat(third.get()).as("재조회 도중 다음 교정이 커밋됐다").isNotNull();
+    assertThat(replay.path("id").asText()).isEqualTo(second.toString());
+    assertThat(replay.path("status").asText()).isEqualTo("PREPARING");
+    assertThat(replay.path("replacementRunId").isNull()).isTrue();
+    matches("CouponIssueRun", replay);
+    JsonNode now = operator(RUNS + "/" + second, null, 200, key());
+    assertThat(now.path("status").asText()).isEqualTo("CANCELLED");
+    assertThat(now.path("replacementRunId").asText()).isEqualTo(third.get().toString());
   }
 
   private String executionStatus(JobExecution execution) {
