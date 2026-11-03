@@ -295,7 +295,7 @@ class GradeCouponIntegrationTest {
     grades.issue(run, grades.pendingTargetIds(run, 1).get(0));
 
     clock.at(november.plusMonths(1), 0, 20);
-    new GradeCouponScheduler(launcher, clock).run();
+    new GradeCouponScheduler(launcher, clock, Runnable::run).run();
 
     assertThat(
             jdbc.queryForObject(
