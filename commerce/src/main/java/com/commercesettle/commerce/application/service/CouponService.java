@@ -154,7 +154,7 @@ public class CouponService {
     change(order, coupon -> coupon.use(order.getId(), order.getPaymentId(), now));
   }
 
-  /** 확정 거절·승인 차단된 취소. 업무 키는 결제 회차다. */
+  /** 승인 차단된 취소의 해제. 업무 키는 결제 회차다. 확정 거절은 재시도를 위해 예약을 유지하므로 호출하지 않는다. */
   @Transactional(propagation = Propagation.MANDATORY)
   public void release(Order order, Instant now) {
     change(order, coupon -> coupon.release(order.getId(), order.getPaymentCycleId(), now));
