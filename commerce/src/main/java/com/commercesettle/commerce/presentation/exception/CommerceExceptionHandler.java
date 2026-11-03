@@ -102,7 +102,7 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
   ResponseEntity<Object> orderFailure(OrderRequestException e, WebRequest request) {
     return switch (e.kind()) {
       case NOT_FOUND -> respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, request);
-      case INVALID_REQUEST -> invalid(List.of(error(e.field(), "입력값의 조합을 확인해 주세요.")), request);
+      case INVALID_REQUEST -> invalid(List.of(error(e.field(), e.reason())), request);
     };
   }
 

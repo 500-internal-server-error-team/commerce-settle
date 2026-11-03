@@ -284,8 +284,10 @@ public class OrderService {
 
   private static void validateRegular(RegularOrderCommand c) {
     if ((c.eventId() == null) != (c.expectedEventVersion() == null)
-        || c.eventId() != null && (c.quantity() != 1 || c.expectedEventVersion() < 0)
-        || c.buyerCouponId() != null && c.mileageAmount() != 0) throw invalid("eventId");
+        || c.eventId() != null && (c.quantity() != 1 || c.expectedEventVersion() < 0))
+      throw invalid("eventId");
+    if (c.buyerCouponId() != null && c.mileageAmount() != 0)
+      throw OrderRequestException.couponWithMileage();
     if (c.productId() == null) {
       throw invalid("productId");
     }

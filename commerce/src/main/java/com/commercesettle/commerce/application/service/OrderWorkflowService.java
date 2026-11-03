@@ -83,11 +83,10 @@ public class OrderWorkflowService {
       long mileage,
       Order.ExternalMethod method) {
     requireAccount(ActorKind.BUYER, buyer);
-    if (quantity < 1
-        || quantity > 10
-        || mileage < 0
-        || couponId != null && mileage != 0
-        || eventId != null && quantity != 1) throw invalid("quantity");
+    if (quantity < 1 || quantity > 10 || eventId != null && quantity != 1)
+      throw invalid("quantity");
+    if (mileage < 0) throw invalid("mileageAmount");
+    if (couponId != null && mileage != 0) throw OrderRequestException.couponWithMileage();
     var product =
         products
             .findById(productId)
