@@ -35,16 +35,20 @@ import com.commercesettle.payment.domain.model.MileageEntryKind;
 import com.commercesettle.payment.domain.model.PaymentAttemptStatus;
 import com.commercesettle.payment.domain.model.PaymentJobStatus;
 import com.commercesettle.payment.domain.model.PaymentStatus;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
@@ -307,6 +311,32 @@ class PaymentContractControllerTest {
     mvc.perform(replay(OPERATOR, "replay-key-0001", "{\"expectedVersion\":4,\"reason\":\"OTHER\"}"))
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.code").value("COMMON_IDEMPOTENCY_CONFLICT"));
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "55P03,503,COMMON_TEMPORARILY_UNAVAILABLE",
+    "57014,503,COMMON_TEMPORARILY_UNAVAILABLE",
+    "42601,500,COMMON_INTERNAL_ERROR"
+  })
+  @DisplayName("잠금·실행 시간 초과는 503으로 응답하고 다른 SQL 결함은 500으로 유지한다")
+  void distinguishesSqlTimeoutFromDefect(String sqlState, int httpStatus, String code)
+      throws Exception {
+    given(jobs.replay("operator:ops-1", JOB, "replay-key-0001", 4, "PG_RECOVERED"))
+        .willThrow(
+            new UncategorizedSQLException(
+                "replay", "internal query", new SQLException("database failure", sqlState)));
+
+    mvc.perform(
+            replay(
+                OPERATOR, "replay-key-0001", "{\"expectedVersion\":4,\"reason\":\"PG_RECOVERED\"}"))
+        .andExpect(status().is(httpStatus))
+        .andExpect(jsonPath("$.code").value(code))
+        .andExpect(
+            jsonPath("$.detail")
+                .value(
+                    org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("internal query"))));
   }
 
   private static MockHttpServletRequestBuilder replay(String credential, String key, String body) {
