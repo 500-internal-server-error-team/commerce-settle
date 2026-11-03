@@ -168,6 +168,28 @@ class EventOrderIntegrationTest {
   }
 
   @Test
+  @DisplayName("예약이 금지된 전이를 요구하는 결제 결과는 재시도하지 않고 바로 수동 확인으로 넘기며 수량을 바꾸지 않는다")
+  void reviewsResultThatNeedsForbiddenReservationTransition() throws Exception {
+    Sale sale = openSale(5);
+    JsonNode order = order(sale, buyer(), 201);
+    UUID id = uuid(order, "id");
+    jdbc.update(
+        "update commerce.inventory_reservations set status = 'RELEASED' where order_id = ?", id);
+
+    UUID eventId = deliver("PaymentConfirmed", confirmation(order));
+
+    assertThat(
+            jdbc.queryForMap(
+                "select status, attempts, last_error_code from commerce.inbox where event_id = ?",
+                eventId))
+        .containsEntry("status", "REVIEW_REQUIRED")
+        .containsEntry("attempts", 1)
+        .containsEntry("last_error_code", "ORDER_RESULT_CONFLICT");
+    assertSlots(sale, 0, 1);
+    assertStock(sale, 5, 5, 0);
+  }
+
+  @Test
   @DisplayName("결제가 거절되면 수량을 풀고 재시도에서 다시 잡으며, 같은 구매자의 다른 주문은 참여 중이라 거절한다")
   void releasesOnDeclineAndRetakesOnRetry() throws Exception {
     Sale sale = openSale(5);
@@ -401,6 +423,13 @@ class EventOrderIntegrationTest {
 
   /** 결제 확정 결과를 반영하고 결제 ID를 돌려준다. */
   private UUID confirm(JsonNode order) throws Exception {
+    ObjectNode p = confirmation(order);
+    receive("PaymentConfirmed", p);
+    return uuid(p, "paymentId");
+  }
+
+  /** 주문의 현재 결제 회차로 결제 확정 결과 payload를 만든다. */
+  private ObjectNode confirmation(JsonNode order) {
     UUID id = uuid(order, "id");
     JsonNode context = internal("/internal/orders/" + id + "/payment-context");
     UUID payment = UUID.randomUUID();
@@ -428,8 +457,7 @@ class EventOrderIntegrationTest {
         .put(
             "confirmedAt",
             Instant.now().atZone(ZoneId.of("Asia/Seoul")).toOffsetDateTime().toString());
-    receive("PaymentConfirmed", p);
-    return payment;
+    return p;
   }
 
   private UUID cycle(UUID orderId) {
@@ -447,6 +475,11 @@ class EventOrderIntegrationTest {
 
   /** Payment 결과를 수신 경로로 넣고 바로 반영한다. */
   private void receive(String type, ObjectNode payload) throws Exception {
+    assertThat(inboxStatus(deliver(type, payload))).isEqualTo("APPLIED");
+  }
+
+  /** Payment 결과를 수신 경로로 넣고 한 번 처리한 뒤 Inbox 이벤트 ID를 돌려준다. */
+  private UUID deliver(String type, ObjectNode payload) throws Exception {
     UUID payment = uuid(payload, "paymentId");
     var event =
         new EventEnvelope<JsonNode>(
@@ -469,12 +502,12 @@ class EventOrderIntegrationTest {
             () -> ack.set(true));
     assertThat(ack).isTrue();
     assertThat(results.processEvent(event.eventId())).isTrue();
-    assertThat(
-            jdbc.queryForObject(
-                "select status from commerce.inbox where event_id = ?",
-                String.class,
-                event.eventId()))
-        .isEqualTo("APPLIED");
+    return event.eventId();
+  }
+
+  private String inboxStatus(UUID eventId) {
+    return jdbc.queryForObject(
+        "select status from commerce.inbox where event_id = ?", String.class, eventId);
   }
 
   private Sale openSale(long quota) {
