@@ -242,6 +242,28 @@ Payment 내부 조회와 운영 종결은 ADR 0010의 `service:payment`·`operat
 
 이 명령은 전용 PostgreSQL·Kafka와 명시적 계약 결과 대역으로 구매자/판매자 HTTP 흐름, 중복·역순·기한 경합·잠금 상한·롤백을 확인합니다. 실제 PG·마일리지·정산 금융 정합성 완료를 뜻하지 않습니다.
 
+## 주문·결제·정산·환불 왕복
+
+세 서비스의 금융 소비자·발행기는 기본으로 꺼져 있습니다. 실제 왕복은 덮어쓰기 파일 `compose.financial-flow.yml`로 켭니다. 이 파일은 Commerce의 Outbox·결제 결과 수신·처리기, Payment Worker의 주문 요청 수신·처리기·승인·환불 Worker·Settlement 응답 수신·Outbox, Settlement의 이벤트 수신·Inbox 처리기·Outbox를 켭니다. PG 승인과 외부 환불은 즉시 성공하는 stub이고 알림 소비는 켜지 않습니다. 기본 `compose.yml`과 `.env`는 바꾸지 않습니다.
+
+소비자는 토픽과 그룹 offset이 있어야 시작합니다. 빈 볼륨에서는 기본 설정으로 먼저 올려 세 서비스가 자기 토픽을 만들게 하고, [신규 그룹 offset 준비](#금융-관측과-접수-복구)를 마친 뒤 앱만 재생성합니다.
+
+```bash
+docker compose up -d --build --wait
+# commerce.v1·payment.v1·settlement.v1 그룹의 offset 준비(위 절의 명령)
+docker compose -f compose.yml -f compose.financial-flow.yml up -d --wait commerce payment-worker settlement
+```
+
+`python3 -B scripts/smoke_financial_flow.py`는 이 순서를 새 Compose 프로젝트·빈 볼륨에서 실행하고 소유 리소스만 지웁니다. 순서는 다음과 같습니다.
+
+1. 주문 접수 gate가 열리면 시험 구매자·판매자·상품·재고와 Payment 마일리지 지갑을 넣습니다.
+2. 1,000원 중 마일리지 300원을 쓴 주문을 Gateway로 냅니다. Commerce `PAID`와 Settlement 정산 항목을 확인한 뒤 미발송 `CANCEL`로 환불을 요청합니다.
+3. 환불·SAGA `COMPLETED`, 주문 `REFUNDED`, 외부 환불 700원·마일리지 복원 300원 각 한 번, 환불 작업 1건, Settlement 항목 `REFUNDED`·예약 `CONSUMED`·결제별 원장 합 0을 대조합니다.
+4. 두 번째 주문은 결제 확정 뒤 `settlement`를 멈추고 취소합니다. 15초 동안 환불이 `RESERVING`(`RESERVATION_REQUESTED`)에 머무는지 보고, 다시 켠 뒤 같은 대조로 완료를 확인합니다.
+5. 세 서비스 Inbox에 `REVIEW_REQUIRED`가 없고 Outbox가 모두 발행됐는지, 지갑·재고가 원래 값인지 확인합니다.
+
+CI는 `financial-flow` 시나리오로 실행합니다. 지급 배정 뒤 예약 거절(`PAYOUT_RESERVED`)은 구매확정(도착+168시간)과 지급 선점이 먼저 필요해 실시간으로 만들 수 없습니다. 이 경로는 Settlement `RefundPayoutExclusionIntegrationTest`와 Payment `RefundSagaIntegrationTest`로 검증합니다. 외부 환불 확정 거절 뒤 예약 해제도 stub이 항상 성공하므로 서비스 시험으로만 확인합니다.
+
 ## 모의 거래 알림
 
 Commerce가 주문 전이와 같은 트랜잭션으로 알림 항목을 저장합니다. 발송은 금융 트랜잭션 밖의 인프로세스 MOCK_KAKAO 어댑터에서 실행하고 수신 원결과만 별도 트랜잭션에 저장합니다. 실제 카카오·전화번호·별도 Mock HTTP 서버는 사용하지 않습니다. 공개 조회는 구매자·판매자의 계정 종류와 ID로 제한하며 모의 수신 확인만 SENT로 표시합니다.
