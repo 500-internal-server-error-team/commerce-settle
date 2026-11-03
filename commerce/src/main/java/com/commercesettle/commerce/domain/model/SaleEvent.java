@@ -207,8 +207,8 @@ public class SaleEvent extends AuditableEntity {
     return gauge(status, startsAt, endsAt, quota, soldCount, reservedCount, now);
   }
 
-  /** 저장 상태가 기간 처리 전이어도 서버 시각으로 시작 전·종료를 판단한다. */
-  static Gauge gauge(
+  /** 저장 상태가 기간 처리 전이어도 서버 시각으로 시작 전·종료를 판단한다. 엔티티 없이 읽은 현재 행에도 같은 규칙을 적용한다. */
+  public static Gauge gauge(
       SaleEventStatus status,
       Instant startsAt,
       Instant endsAt,

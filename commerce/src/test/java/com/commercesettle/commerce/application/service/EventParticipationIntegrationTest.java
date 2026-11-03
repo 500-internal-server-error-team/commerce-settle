@@ -20,6 +20,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -264,6 +266,115 @@ class EventParticipationIntegrationTest {
   }
 
   @Test
+  @DisplayName("주문 트랜잭션이 먼저 읽은 이벤트가 그 뒤 조기 종료됐으면 신청 기간이 아니라고 거절한다")
+  void reportsNotOpenWhenEventClosedAfterRead() {
+    Fixture fixture = openEvent(5);
+    long version = version(fixture);
+
+    assertThatThrownBy(
+            () ->
+                inOrder(
+                    () -> {
+                      events.publishedEvent(fixture.eventId());
+                      CompletableFuture.runAsync(
+                              () ->
+                                  events.close(
+                                      fixture.sellerId(),
+                                      fixture.eventId(),
+                                      key(),
+                                      version,
+                                      "조기 종료"))
+                          .join();
+                      return reserve(fixture, UUID.randomUUID(), UUID.randomUUID());
+                    }))
+        .extracting(e -> ((EventAdmissionClosedException) e).reason())
+        .isEqualTo(Reason.NOT_OPEN);
+    assertSlots(fixture, 0, 0);
+  }
+
+  @Test
+  @DisplayName("신청 기간은 시작 시각을 포함하고 종료 시각을 포함하지 않으며 신규 참여·재시도·게이지가 같은 경계를 쓴다")
+  void admitsFromStartUntilJustBeforeEnd() {
+    UUID seller = UUID.randomUUID();
+    UUID product = stockedProduct(seller, 10);
+    Instant start = hoursFromNow(1);
+    Instant end = start.plus(Duration.ofHours(1));
+    SaleEvent event =
+        events.publish(seller, register(seller, product, 5, start, end).getId(), key(), 0);
+    Fixture fixture = new Fixture(seller, product, event.getId());
+    UUID declined = UUID.randomUUID();
+    UUID cycle = UUID.randomUUID();
+
+    CLOCK.fixAt(start.minus(1, ChronoUnit.MICROS));
+    Reason beforeStart =
+        rejectedReason(() -> reserve(fixture, UUID.randomUUID(), UUID.randomUUID()));
+    CLOCK.fixAt(start);
+    Outcome atStart = inOrder(() -> reserve(fixture, declined, cycle));
+    inOrder(() -> reservations.release(declined, cycle));
+    CLOCK.fixAt(end.minus(1, ChronoUnit.MICROS));
+    Outcome justBeforeEnd = inOrder(() -> reserve(fixture, UUID.randomUUID(), UUID.randomUUID()));
+    CLOCK.fixAt(end);
+    Reason atEnd = rejectedReason(() -> reserve(fixture, UUID.randomUUID(), UUID.randomUUID()));
+    Reason retryAtEnd =
+        rejectedReason(() -> reservations.reserveAgain(declined, UUID.randomUUID(), expires()));
+
+    assertThat(List.of(atStart, justBeforeEnd)).containsOnly(Outcome.APPLIED);
+    assertThat(List.of(beforeStart, atEnd, retryAtEnd)).containsOnly(Reason.NOT_OPEN);
+    assertThat(events.gauge(fixture.eventId()).gauge().admission())
+        .isEqualTo(EventAdmission.CLOSED);
+    assertSlots(fixture, 0, 1);
+  }
+
+  @Test
+  @DisplayName("조기 종료 뒤 도착한 결제 확정도 반영해 배정분을 판매로 옮기고 반환 이력을 더 만들지 않는다")
+  void confirmsReservationAfterEarlyClose() {
+    Fixture fixture = openEvent(5);
+    UUID orderId = UUID.randomUUID();
+    UUID cycle = UUID.randomUUID();
+    inOrder(() -> reserve(fixture, orderId, cycle));
+    events.close(fixture.sellerId(), fixture.eventId(), key(), version(fixture), "조기 종료");
+
+    Outcome consumed = inOrder(() -> reservations.consume(orderId, cycle));
+
+    assertThat(consumed).isEqualTo(Outcome.APPLIED);
+    assertSlots(fixture, 1, 0);
+    assertInventory(fixture, 9, 0, 1);
+    assertThat(participationStatus(orderId)).isEqualTo("CONFIRMED");
+    assertThat(
+            count(
+                "inventory_movements where operation = 'EVENT_RETURN' and business_ref = ?",
+                fixture.eventId()))
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("조기 종료와 참여가 동시에 오면 종료 전에 커밋한 예약만 남고 배정분은 그 예약 수와 같다")
+  void keepsAllocationEqualToReservationsWhenCloseRacesParticipation() throws Exception {
+    Fixture fixture = openEvent(5);
+    long version = version(fixture);
+    AtomicInteger next = new AtomicInteger();
+
+    List<Object> results =
+        runConcurrently(
+            9,
+            () ->
+                next.getAndIncrement() == 0
+                    ? events.close(fixture.sellerId(), fixture.eventId(), key(), version, "조기 종료")
+                    : inOrder(() -> reserve(fixture, UUID.randomUUID(), UUID.randomUUID())));
+
+    long reserved = results.stream().filter(Outcome.APPLIED::equals).count();
+    assertThat(results).filteredOn(SaleEvent.class::isInstance).hasSize(1);
+    assertThat(results)
+        .filteredOn(EventAdmissionClosedException.class::isInstance)
+        .extracting(e -> ((EventAdmissionClosedException) e).reason())
+        .isSubsetOf(Reason.NOT_OPEN, Reason.NO_REMAINING);
+    assertSlots(fixture, 0, reserved);
+    assertInventory(fixture, 10 - reserved, reserved, 0);
+    assertThat(count("event_participations where event_id = ?", fixture.eventId()))
+        .isEqualTo(reserved);
+  }
+
+  @Test
   @DisplayName("시작 전 이벤트는 신청 기간이 아니라고, 미공개 이벤트는 없는 이벤트로 거절한다")
   void rejectsNotStartedAndUnpublishedEvents() {
     UUID seller = UUID.randomUUID();
@@ -336,6 +447,16 @@ class EventParticipationIntegrationTest {
                 "select status, version from commerce.sale_events where id = ?", fixture.eventId()))
         .containsEntry("status", "SCHEDULED")
         .containsEntry("version", publishedVersion);
+  }
+
+  /** 주문 트랜잭션에서 실행해 참여 거절 사유를 돌려준다. */
+  private Reason rejectedReason(Supplier<Outcome> work) {
+    try {
+      inOrder(work);
+    } catch (EventAdmissionClosedException e) {
+      return e.reason();
+    }
+    throw new AssertionError("admission was not rejected");
   }
 
   private Outcome reserve(Fixture fixture, UUID orderId, UUID cycle) {
@@ -417,12 +538,19 @@ class EventParticipationIntegrationTest {
 
   private record Fixture(UUID sellerId, UUID productId, UUID eventId) {}
 
-  // 시스템 시각에 테스트가 정한 만큼 더한 시각을 돌려준다. 스케줄러는 꺼져 있어 시각만 옮긴다.
+  // 시스템 시각에 테스트가 정한 만큼 더한 시각, 또는 고정한 시각을 돌려준다. 스케줄러는 꺼져 있어 시각만 옮긴다.
   private static final class ShiftedClock extends Clock {
     private volatile Duration offset = Duration.ZERO;
+    private volatile Instant fixed;
 
     void shift(Duration offset) {
       this.offset = offset;
+      this.fixed = null;
+    }
+
+    /** 경계 시각을 정확히 재현하도록 시각을 고정한다. shift로 되돌린다. */
+    void fixAt(Instant instant) {
+      this.fixed = instant;
     }
 
     @Override
@@ -437,7 +565,8 @@ class EventParticipationIntegrationTest {
 
     @Override
     public Instant instant() {
-      return Instant.now().plus(offset);
+      Instant at = fixed;
+      return at != null ? at : Instant.now().plus(offset);
     }
   }
 }

@@ -1,5 +1,6 @@
 package com.commercesettle.commerce.infrastructure.persistence;
 
+import com.commercesettle.commerce.domain.model.EventAdmission;
 import com.commercesettle.commerce.domain.model.SaleEvent;
 import com.commercesettle.commerce.domain.model.SaleEventStatus;
 import com.commercesettle.commerce.domain.repository.PageResult;
@@ -63,6 +64,24 @@ class JpaSaleEventRepository implements SaleEventRepository {
   }
 
   @Override
+  public Optional<EventAdmission> findAdmission(UUID eventId, Instant now) {
+    return events
+        .findAdmissionRowById(eventId)
+        .filter(row -> row.getStatus() != SaleEventStatus.DRAFT)
+        .map(
+            row ->
+                SaleEvent.gauge(
+                        row.getStatus(),
+                        row.getStartsAt(),
+                        row.getEndsAt(),
+                        row.getQuota(),
+                        row.getSoldCount(),
+                        row.getReservedCount(),
+                        now)
+                    .admission());
+  }
+
+  @Override
   public boolean existsInProgressByProductId(UUID productId) {
     return events.existsByProductIdAndStatusIn(productId, IN_PROGRESS);
   }
@@ -86,8 +105,7 @@ class JpaSaleEventRepository implements SaleEventRepository {
   @Override
   public List<SaleEvent> findStartedForUpdate(Instant now, int limit) {
     TransactionLimits.apply(jdbc);
-    return events.findLockedByStatusStartedBefore(
-        SaleEventStatus.SCHEDULED, now, PageRequest.ofSize(limit));
+    return events.findStartedSkippingLocked(now.truncatedTo(ChronoUnit.MICROS), limit);
   }
 
   @Override
