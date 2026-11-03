@@ -129,7 +129,8 @@ class ApprovalWorkerIntegrationTest {
         .containsEntry("status", "APPROVED")
         .containsEntry("has_ref", true);
     assertThat(jobStatus()).isEqualTo("DONE");
-    assertThat(outbox()).containsExactly("PaymentAccepted:0", "PaymentConfirmed:2");
+    assertThat(outbox())
+        .containsExactly("PaymentAccepted:0", "PaymentConfirmed:2", "PaymentNoticeRequested:2");
     assertThat(
             jdbc()
                 .queryForObject(
@@ -137,6 +138,10 @@ class ApprovalWorkerIntegrationTest {
                         + " WHERE event_type = 'PaymentConfirmed'",
                     String.class))
         .isEqualTo(orderId.toString());
+    assertThat(notice().path("mileageBalanceAfter").isNull()).isTrue();
+    assertThat(notice().path("walletVersion").isNull()).isTrue();
+    assertThat(notice().path("orderId").asText()).isEqualTo(orderId.toString());
+    assertThat(notice().path("processedAt").asText()).endsWith("+09:00");
     assertThat(gateway.approvals).hasSize(1);
     assertThat(worker.runOnce()).isFalse();
   }
@@ -164,6 +169,12 @@ class ApprovalWorkerIntegrationTest {
                 .queryForList(
                     "SELECT kind FROM payment.mileage_entries ORDER BY kind", String.class))
         .containsExactly("DEBIT", "RESERVE");
+    assertThat(notice().path("mileageBalanceAfter").asLong()).isEqualTo(3000);
+    assertThat(notice().path("walletVersion").asLong())
+        .isEqualTo(
+            jdbc().queryForObject("SELECT version FROM payment.mileage_wallets", Long.class));
+    jdbc().update("UPDATE payment.mileage_wallets SET balance=9999, version=version+1");
+    assertThat(notice().path("mileageBalanceAfter").asLong()).isEqualTo(3000);
   }
 
   @Test
@@ -207,7 +218,8 @@ class ApprovalWorkerIntegrationTest {
     assertThat(status()).isEqualTo("CONFIRMED");
     assertThat(gateway.approvals).hasSize(1);
     assertThat(gateway.lookups).hasSize(1);
-    assertThat(outbox()).containsExactly("PaymentAccepted:0", "PaymentConfirmed:3");
+    assertThat(outbox())
+        .containsExactly("PaymentAccepted:0", "PaymentConfirmed:3", "PaymentNoticeRequested:3");
   }
 
   @Test
@@ -278,7 +290,8 @@ class ApprovalWorkerIntegrationTest {
     assertThat(status()).isEqualTo("CONFIRMED");
     assertThat(gateway.approvals).hasSize(2);
     assertThat(gateway.approvals.get(1)).isEqualTo(gateway.approvals.get(0));
-    assertThat(outbox()).containsExactly("PaymentAccepted:0", "PaymentConfirmed:2");
+    assertThat(outbox())
+        .containsExactly("PaymentAccepted:0", "PaymentConfirmed:2", "PaymentNoticeRequested:2");
   }
 
   @Test
@@ -337,7 +350,12 @@ class ApprovalWorkerIntegrationTest {
     assertThat(status()).isEqualTo("CONFIRMED");
     assertThat(jdbc().queryForObject("SELECT count(*) FROM payment.payment_jobs", Long.class))
         .isZero();
-    assertThat(outbox()).containsExactly("PaymentAccepted:0", "PaymentConfirmed:0");
+    assertThat(outbox())
+        .containsExactly("PaymentAccepted:0", "PaymentConfirmed:0", "PaymentNoticeRequested:0");
+    assertThat(notice().path("mileageBalanceAfter").asLong()).isEqualTo(2000);
+    assertThat(notice().path("walletVersion").asLong())
+        .isEqualTo(
+            jdbc().queryForObject("SELECT version FROM payment.mileage_wallets", Long.class));
     assertThat(worker.runOnce()).isFalse();
   }
 
@@ -450,6 +468,53 @@ class ApprovalWorkerIntegrationTest {
       }
     } catch (SQLException e) {
       throw new IllegalStateException(e);
+    }
+  }
+
+  @Test
+  @DisplayName("알림 Outbox 저장 실패는 차감·확정·원장을 롤백하고 원거래 조회로 한 번만 재개한다")
+  void rollsBackFinancialResultWhenNoticeInsertFails() {
+    fundWallet(5000);
+    request(10000, 2000, "CREDIT_CARD");
+    jdbc()
+        .execute(
+            "ALTER TABLE payment.outbox ADD CONSTRAINT reject_notice CHECK (event_type <> 'PaymentNoticeRequested')");
+    try {
+      assertThatThrownBy(worker::runOnce)
+          .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+      assertThat(status()).isEqualTo("PROCESSING");
+      assertThat(jdbc().queryForObject("SELECT balance FROM payment.mileage_wallets", Long.class))
+          .isEqualTo(5000);
+      assertThat(
+              jdbc()
+                  .queryForObject(
+                      "SELECT count(*) FROM payment.mileage_entries WHERE kind='DEBIT'",
+                      Long.class))
+          .isZero();
+      assertThat(outbox()).containsExactly("PaymentAccepted:0");
+    } finally {
+      jdbc().execute("ALTER TABLE payment.outbox DROP CONSTRAINT reject_notice");
+    }
+    gateway.lookup = r -> new Result.Succeeded(UUID.randomUUID(), NOW);
+    expireLease();
+    worker.runOnce();
+    assertThat(status()).isEqualTo("CONFIRMED");
+    assertThat(notice().path("mileageBalanceAfter").asLong()).isEqualTo(3000);
+    assertThat(gateway.approvals).hasSize(1);
+    assertThat(gateway.lookups).hasSize(1);
+  }
+
+  private com.fasterxml.jackson.databind.JsonNode notice() {
+    try {
+      return mapper
+          .readTree(
+              jdbc()
+                  .queryForObject(
+                      "SELECT payload::text FROM payment.outbox WHERE event_type='PaymentNoticeRequested'",
+                      String.class))
+          .path("payload");
+    } catch (IOException exception) {
+      throw new IllegalStateException(exception);
     }
   }
 
@@ -594,6 +659,7 @@ class ApprovalWorkerIntegrationTest {
       includeFilters = @ComponentScan.Filter(Repository.class))
   @Import({
     ApplyOrderPaymentRequestService.class,
+    PaymentNotices.class,
     RefundEventHandler.class,
     RefundEvents.class,
     ApprovalWorker.class,

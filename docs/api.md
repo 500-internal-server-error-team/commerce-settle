@@ -249,7 +249,7 @@ PG A/B/C의 카드와 EASY_PAY의 시험 지갑에 승인·전액 환불을 제�
 
 ## 거래 알림 사용 순서
 
-Commerce의 기본 MOCK_KAKAO 저장·조회·발송·복구와 명시적 [본인 카카오 시연](development.md#본인-카카오톡-시연)을 구현했습니다. Payment·Settlement의 notice 생산부 연결과 전체 금융 왕복은 [#120](https://github.com/500-internal-server-error-team/commerce-settle/issues/120)에서 추적합니다. 소비·발송 활성화와 격리 복구는 [실행 안내](development.md#모의-거래-알림)를 따릅니다.
+Commerce의 기본 MOCK_KAKAO 저장·조회·발송·복구와 명시적 [본인 카카오 시연](development.md#본인-카카오톡-시연)을 구현했습니다. Payment는 결제 확정·마일리지 복원 트랜잭션에서 `PaymentNoticeRequested`를 생산합니다. 확정 환불 실패 안내는 기존 `RefundFailed` 주문 반영을 사용하며 UNKNOWN은 실패 알림으로 보내지 않습니다. Settlement의 notice 생산부 연결과 전체 금융 왕복은 [#120](https://github.com/500-internal-server-error-team/commerce-settle/issues/120)에서 추적합니다. 소비·발송 활성화와 격리 복구는 [실행 안내](development.md#모의-거래-알림)를 따릅니다.
 
 1. 결제·환불은 Payment의 `PaymentNoticeRequested`, 정산·지급은 Settlement의 `SettlementNoticeRequested`를 기존 생산자 토픽에서 받습니다. 알림 소비 그룹은 `commerce-notifications.v1`이며 기존 금융 소비 그룹과 offset을 공유하지 않습니다. 알림 실패가 금융 이벤트 소비를 막지 않습니다.
 2. 커머스의 발송·배송완료·자동 구매확정·취소·반품 접수/결정/입고 전이는 같은 DB 트랜잭션에 알림 항목을 만듭니다. 외부 요청 이벤트는 Inbox에 저장하고 주문/원환불의 선행 반영이 없으면 영속 대기합니다. 새 알림 요청은 기존 금융 v1 이벤트의 payload를 바꾸지 않습니다.

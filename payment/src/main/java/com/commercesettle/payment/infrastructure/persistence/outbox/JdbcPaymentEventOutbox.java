@@ -5,6 +5,7 @@ import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationResultPayload;
 import com.commercesettle.payment.application.event.PaymentConfirmedPayload;
 import com.commercesettle.payment.application.event.PaymentDeclinedPayload;
+import com.commercesettle.payment.application.event.PaymentNoticeRequestedPayload;
 import com.commercesettle.payment.application.event.RefundAcceptedPayload;
 import com.commercesettle.payment.application.event.RefundCompletedPayload;
 import com.commercesettle.payment.application.event.RefundEventPayload;
@@ -48,6 +49,15 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
     this.jdbc = jdbc;
     this.mapper = mapper;
     this.events = events;
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID appendNoticeRequested(EventEnvelope<PaymentNoticeRequestedPayload> event) {
+    if (!"PaymentNoticeRequested".equals(event.eventType())) {
+      throw new IllegalArgumentException("Invalid payment notice event");
+    }
+    return append(event, event.payload().paymentId());
   }
 
   @Override

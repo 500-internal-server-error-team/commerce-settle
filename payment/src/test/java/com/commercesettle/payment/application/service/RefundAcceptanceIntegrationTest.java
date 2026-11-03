@@ -318,7 +318,12 @@ class RefundAcceptanceIntegrationTest {
       basePackages = "com.commercesettle.payment.infrastructure.persistence",
       useDefaultFilters = false,
       includeFilters = @ComponentScan.Filter(Repository.class))
-  @Import({ApplyOrderPaymentRequestService.class, RefundEventHandler.class, RefundEvents.class})
+  @Import({
+    ApplyOrderPaymentRequestService.class,
+    PaymentNotices.class,
+    RefundEventHandler.class,
+    RefundEvents.class
+  })
   static class Config {
     @Bean
     NamedParameterJdbcTemplate namedParameterJdbcTemplate(DataSource dataSource) {

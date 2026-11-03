@@ -133,8 +133,12 @@ class RefundSagaIntegrationTest {
             "RefundAccepted",
             "RefundReservationRequested",
             "RefundFinancialCompleted",
+            "PaymentNoticeRequested",
             "RefundCompleted");
     assertThat(restoreEntries()).isZero();
+    assertThat(payload(payment, "PaymentNoticeRequested").path("mileageBalanceAfter").isNull())
+        .isTrue();
+    assertThat(payload(payment, "PaymentNoticeRequested").path("walletVersion").isNull()).isTrue();
     assertThat(refundStatus()).isEqualTo("INTERNAL_PENDING");
 
     restoreOrder(refundId, payment);
@@ -160,6 +164,17 @@ class RefundSagaIntegrationTest {
     JsonNode completed = payload(payment, "RefundFinancialCompleted");
     assertThat(completed.path("externalAmount").asLong()).isEqualTo(8_000);
     assertThat(completed.path("mileageAmount").asLong()).isEqualTo(2_000);
+    JsonNode notice = payload(payment, "PaymentNoticeRequested");
+    assertThat(notice.path("kind").asText()).isEqualTo("REFUND_COMPLETED");
+    assertThat(notice.path("businessRef").asText()).isEqualTo(refundId.toString());
+    assertThat(notice.path("paymentCycleId").asText())
+        .isEqualTo(payment.getCurrentCycleId().toString());
+    assertThat(notice.path("mileageBalanceAfter").asLong()).isEqualTo(2500);
+    assertThat(notice.path("walletVersion").asLong())
+        .isEqualTo(
+            jdbc().queryForObject("SELECT version FROM payment.mileage_wallets", Long.class));
+    jdbc().update("UPDATE payment.mileage_wallets SET balance=7777, version=version+1");
+    assertThat(payload(payment, "PaymentNoticeRequested")).isEqualTo(notice);
     assertThat(refundStatus()).isEqualTo("COMPLETED");
   }
 
@@ -420,6 +435,37 @@ class RefundSagaIntegrationTest {
         .isEqualTo("RESERVATION_REQUESTED");
   }
 
+  @Test
+  @DisplayName("알림 저장 실패는 복원·환불 결과를 롤백하고 조회 재개에도 한 건의 사본만 보존한다")
+  void rollsBackRestorationWhenNoticeInsertFails() throws Exception {
+    Payment payment = confirmed(new PaymentAmounts(10000, 0, 0, 2000), 500);
+    approve(payment, UUID.randomUUID());
+    inboxProcessor.processNext();
+    stub().run();
+    jdbc()
+        .execute(
+            "ALTER TABLE payment.outbox ADD CONSTRAINT reject_notice CHECK (event_type <> 'PaymentNoticeRequested')");
+    try {
+      assertThatThrownBy(worker::runOnce)
+          .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+      assertThat(walletBalance(payment)).isEqualTo(500);
+      assertThat(restoreEntries()).isZero();
+      assertThat(refundStatus()).isEqualTo("EXTERNAL_PENDING");
+      assertThat(eventTypes(payment))
+          .containsExactly("RefundAccepted", "RefundReservationRequested");
+    } finally {
+      jdbc().execute("ALTER TABLE payment.outbox DROP CONSTRAINT reject_notice");
+    }
+    jdbc().update("UPDATE payment.payment_jobs SET lease_until=clock_timestamp()-interval '1s'");
+    gateway.nextLookup(new Result.Succeeded(UUID.randomUUID(), clock.instant()));
+    worker.runOnce();
+    assertThat(restoreEntries()).isEqualTo(1);
+    assertThat(payload(payment, "PaymentNoticeRequested").path("mileageBalanceAfter").asLong())
+        .isEqualTo(2500);
+    assertThat(gateway.refunds).hasSize(1);
+    assertThat(gateway.lookups).hasSize(1);
+  }
+
   /** 다른 트랜잭션에서 환불 행을 잠그고 정리 때까지 놓지 않는다. */
   private void lockRefundRow() {
     try {
@@ -633,6 +679,7 @@ class RefundSagaIntegrationTest {
       includeFilters = @ComponentScan.Filter(Repository.class))
   @Import({
     ApplyOrderPaymentRequestService.class,
+    PaymentNotices.class,
     RefundEventHandler.class,
     RefundEvents.class,
     RefundSettlementReplyService.class,

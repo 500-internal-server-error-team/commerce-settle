@@ -27,6 +27,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Objects;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -58,6 +59,7 @@ class RefundResultRecorder {
   private final MileageWalletRepository wallets;
   private final MileageEntryRepository entries;
   private final RefundEvents events;
+  private final PaymentNotices notices;
   private final RefundWorkerSettings settings;
   private final Clock clock;
 
@@ -70,6 +72,7 @@ class RefundResultRecorder {
       MileageWalletRepository wallets,
       MileageEntryRepository entries,
       RefundEvents events,
+      PaymentNotices notices,
       RefundWorkerSettings settings,
       Clock clock) {
     this.jobs = jobs;
@@ -80,6 +83,7 @@ class RefundResultRecorder {
     this.wallets = wallets;
     this.entries = entries;
     this.events = events;
+    this.notices = notices;
     this.settings = settings;
     this.clock = clock;
   }
@@ -193,8 +197,9 @@ class RefundResultRecorder {
 
   /** 사용 마일리지를 원래 지갑에 복원하고 금융 환불 완료를 Settlement에 알린다. 마일리지를 쓰지 않았으면 복원 원장 없이 기록만 한다. */
   private void restore(Refund refund, RefundSaga saga, Payment payment, Instant now) {
+    MileageWallet wallet = null;
     if (refund.getMileageAmount() > 0) {
-      MileageWallet wallet =
+      wallet =
           wallets
               .findByBuyerIdForUpdate(payment.getBuyerId())
               .orElseThrow(() -> new IllegalStateException("Refund mileage wallet is missing"));
@@ -215,6 +220,8 @@ class RefundResultRecorder {
             refund.getMileageAmount(),
             refund.getMileageRestoredAt().atOffset(ZoneOffset.UTC)),
         now);
+    notices.completed(
+        payment, refund.getId(), wallet, now, Objects.requireNonNullElse(payment.getVersion(), 0L));
   }
 
   /** 예약과 업무 키를 유지한 채 같은 원거래를 다시 조회한다. 시도 상한에 닿으면 운영 확인으로 넘긴다. */
