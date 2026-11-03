@@ -1,6 +1,6 @@
 # 서비스와 코드 경계
 
-구조도는 업무·알림·관측 연동을 완성한 목표 구조를 보여줍니다. 실제 구현 상태는 본문에서 설명하며 그림의 선 종류로 구분하지 않습니다. 업무 책임은 [README](../README.md#서비스-설계), 현재 실행 설정은 Compose와 각 앱 설정이 기준입니다.
+구조도는 개발·CI의 서비스 실행·저장·연결 경계를 보여줍니다. 업무 책임은 [업무 설계](design.md#4-서비스-경계와-원천-데이터), 활성화·지원 범위는 본문과 [개발 환경](development.md)이 기준입니다.
 
 [기능 API와 서비스 이벤트](api.md), [서비스별 ERD·컬럼·제약](data-model.md), [업무 정책](policies.md)을 구현 계약으로 사용합니다. ERD는 커머스 계정/주문/쿠폰/알림 뷰·Payment·Settlement·Finance Mock·서비스별 메시지/멱등성/감사 뷰로 나누며 서비스 간 SQL join이나 물리 FK를 추가하지 않습니다.
 
@@ -42,19 +42,19 @@ PostgreSQL·Kafka·Redis는 각각 `postgres-data`·`kafka-data`·`redis-data` �
 
 인증용 Redis 쓰기는 커머스만 허용하며 Gateway에는 세션·가드·실행 식별자 읽기와 읽기 전용 검증만 허용합니다. Payment·Settlement·Mock에는 인증 키 접근 권한을 주지 않습니다. 키 접두사가 아닌 [Compose](../compose.yml)의 앱별 ACL로 경계를 적용하며 `default` 사용자는 앱에 전달하지 않습니다. 커머스의 `EVAL`·`EVALSHA`와 금지 명령은 [Compose ACL](../compose.yml), Gateway의 `EVALSHA_RO`·제한된 재적재 권한은 [인증 정책](policies.md#인증공통-api-기준)을 따릅니다. 로그인·폐기의 가드/버전 전이는 [세션 정책](policies.md#폐기와-저장소-복구), 대상별 서비스 자격 설정은 [내부 호출 자격](development.md#내부-호출-자격)을 따릅니다.
 
-Gateway는 세션 검증을 `EVALSHA_RO`로 실행하며 일반 `EVAL`·`EVALSHA`와 인증 키 쓰기는 허용하지 않습니다. `NOSCRIPT`이면 고정된 검증 스크립트만 다시 적재하고 읽기 전용 호출을 한 번 재시도합니다. 재적재 실패·Redis 오류에는 인증을 503으로 중단합니다. `SCRIPT LOAD`는 이 복구에만 사용하고 임의 스크립트·쓰기 명령을 실행하는 우회 경로로 쓰지 않습니다.
+Gateway는 `EVALSHA_RO`로 세션을 검증합니다. `NOSCRIPT`이면 고정 검증 스크립트를 `EVAL_RO`로 한 번 실행해 재적재하며 다른 Redis 오류는 503으로 중단합니다. 일반 `EVAL`·`EVALSHA`·`SCRIPT LOAD`와 인증 키 쓰기는 허용하지 않습니다.
 
 ### 거래 알림
 
 ![커머스의 거래 알림과 모의 발송](diagrams/notifications.svg)
 
-알림은 `commerce` Spring Boot 앱 안의 응용 서비스·발송 스케줄러·수신 어댑터로 구현합니다. `NotificationGateway`의 기본 구현은 `MockNotificationGateway`이며 명시적 본인 시연에서는 `KakaoSelfNotificationGateway`가 고정한 채널·계정에 따라 모의 또는 공식 self-send HTTP를 선택합니다. 전화번호·새 컨테이너는 사용하지 않습니다. 모의 수신부는 `commerce` DB에 별도 트랜잭션으로 원결과를 저장해 응답 유실·재시작을 재현합니다. 설정의 지연·일시 거절·확정 거절·수신 후 응답 유실은 deliveryId와 고정 seed로 재현하며, 원결과는 설정 변경 뒤에도 유지합니다. 초기값은 지연 0ms·오류 없음입니다.
+알림의 응용 처리·발송·수신 어댑터는 Commerce 앱 안에 둡니다. 기본 모의 발송과 명시적 본인 시연 채널을 구분하며 새 컨테이너·알림 DB는 만들지 않습니다. 모의 수신 원결과는 별도 트랜잭션으로 저장해 응답 유실·재시작을 재현하고, 설정 변경으로 기존 결과를 바꾸지 않습니다. [실행·장애 설정](development.md#모의-거래-알림)을 따릅니다.
 
 Payment·Settlement는 확정 상태와 알림 요청 Outbox를 함께 저장하고 기존 Kafka 생산자 토픽을 사용합니다. `commerce-notifications.v1` 소비자가 자기 Inbox·알림 항목을 저장한 뒤 ack합니다. 커머스 로컬 전이는 같은 DB에 알림을 원자 저장합니다. 발송은 별도 작업이며 알림 업체 장애로 주문·환불·지급을 롤백하지 않습니다. [정책](policies.md#거래-알림)·[API](api.md#거래-알림-사용-순서)·[ERD](data-model.md#거래-알림)가 상세 계약입니다.
 
 ### PG 대역 3종 설계
 
-다음은 `finance-mock` 안에 구현할 논리 PG 3종·간편결제 1종과 지급 기관 대역입니다. 같은 Spring Boot 앱의 거래 영역이며 Compose 컨테이너를 늘리지 않습니다. 신용카드·체크카드는 PG A/B/C 중 한 곳을, 간편결제는 `EASY_PAY`만 호출합니다. [PG 시험 설정](design.md#pg-3종과-장애-시나리오)과 [간편결제 대역](design.md#간편결제-대역)을 따릅니다.
+`finance-mock`은 논리 PG 3종·간편결제 1종과 지급 기관 대역으로 나눕니다. 같은 Spring Boot 앱의 거래 영역이며 Compose 컨테이너를 늘리지 않습니다. 신용카드·체크카드는 PG A/B/C 중 한 곳을, 간편결제는 `EASY_PAY`만 호출합니다. [PG 시험 설정](design.md#pg-3종과-장애-시나리오)과 [간편결제 대역](design.md#간편결제-대역)을 따릅니다.
 
 ![금융 모의 서버의 PG·간편결제·지급 API](diagrams/payment-providers.svg)
 
@@ -70,7 +70,7 @@ Prometheus와 데이터 파일시스템 수집기는 신규 접수 판단에 필
 
 Prometheus·Grafana는 각각 `prometheus-data`·`grafana-data` 볼륨을 사용하고, Zipkin 추적은 재시작하면 사라집니다. 관측 도구의 호스트 포트는 [네트워크와 관측](#네트워크와-관측)을 따르며 모두 루프백에 바인딩됩니다. 앱 관리 포트 9091·DB·Kafka·Redis는 호스트에 게시하지 않습니다.
 
-Prometheus가 금융·격리 경보를 평가하고 Alertmanager가 묶음·중복 억제·복구 통지를 처리합니다. Slack 전송은 비밀 파일 overlay를 적용할 때만 활성화합니다. Commerce·Payment·Settlement는 자기 DB만 2초 제한의 단일 SQL로 관측하고, 요청·scrape 경로에서 DB를 조회하지 않습니다. Kafka Admin은 Commerce의 별도 단일 실행기에서 5초 전체 예산으로 세 금융 그룹의 계약 토픽 전체 파티션을 확인합니다. `data-storage-metrics`는 Kafka·PostgreSQL과 같은 named volume을 읽기 전용으로 마운트해 `statvfs`로 실제 파일시스템을 관측하며 Docker 소켓·DB 자격을 사용하지 않습니다. 여러 데이터 경로를 설정하면 하나의 실패도 그 종류 전체를 무효로 하고 최대 사용률·가장 오래된 수집 시각을 제공합니다. Linux node_exporter·cAdvisor는 자원 수집 후보이며 Mac 호스트 관측과 구분합니다. 현재 Compose에는 이 추가 구성이 없습니다. [운영 알람 정책](policies.md#운영-알람)이 임계값·등급·조치 기준입니다.
+Prometheus가 경보를 평가하고 Alertmanager가 묶음·중복 억제·복구 통지를 처리합니다. 소유 서비스의 DB·Kafka·데이터 볼륨을 별도 수집 경계에서 관측하고 요청·scrape 경로가 DB를 직접 조회하지 않게 합니다. 데이터 볼륨은 읽기 전용이며 Docker 소켓·DB 자격을 사용하지 않습니다. 신호·시효·임계값은 [접수·알람 정책](policies.md#신규-접수-제한과-재개), 연결·검증은 [금융 관측](development.md#금융-관측과-접수-복구)을 따릅니다.
 
 다이어그램의 [SVG와 로고 출처](diagrams/README.md)를 함께 관리합니다.
 
@@ -114,7 +114,7 @@ Compose DNS로 서비스를 찾으며 별도 서비스 레지스트리는 두지
 | 판매 알림 묶음 확정·발송·조회 | `commerce` | 1분 구간 종료 때 묶음 확정, 발송 Worker는 1초마다 도래 작업 임대 | [알림 복구](policies.md#소유권과-복구) |
 | 주문 주소 마스킹·알림 보존 처리 | `commerce` | 보존 기한이 지난 종결 거래를 주기 조회. 보존 보류·살아 있는 발송 제외 | [보존 처리](policies.md#보존과-삭제) |
 | 외부 승인·환불·미확정 조회 | `payment-worker` | 영속 금융 작업을 임대해 실행·조회·복구. `payment-api`에서는 Worker를 활성화하지 않음 | [금융 Worker](policies.md#금융-worker-임대와-결과-반영) |
-| 정산 대상·금액 확정 | `settlement` | 정산 배치가 항목·합계·지급 작업을 저장 | [정산 정책](policies.md#정산재처리), [배치 전략](design.md#spring-batch-도입-전략) |
+| 정산 대상·금액 확정 | `settlement` | 정산 배치가 항목·합계·지급 작업을 저장 | [정산 정책](policies.md#정산재처리), [배치 실행·복구](development.md#정산-일배치-실행과-복구) |
 | 지급 실행·보류 재개·미확정 조회 | `settlement` | 저장된 지급 작업을 Worker가 임대·실행 | [지급 복구](policies.md#정산재처리) |
 | PG 입금 반영 | `finance-mock` | 매분 도래한 미처리 입금을 원승인당 한 번 반영 | [PG 회수](policies.md#선지급-재원과-pg-회수) |
 | Outbox 발행·선행 상태 대기 재처리 | 각 생산·소비 앱 | Commerce Relay는 커밋 후·슬롯 반환·시작 시 깨우고 신호 누락·재시도·만료 임대는 기본 1초 복구 조회로 처리. 소비자는 영속 대기한 원업무를 재판정 | [Kafka 전달·용량 기준](architecture.md#kafka) |
@@ -175,15 +175,15 @@ ArchUnit이 계층 경계와 다른 서비스 구현의 직접 import를 검사�
 | Settlement | 지급 | Payout의 수취/출금 계좌 사본·업무 키·외부 실행·조회·성공 결과 |
 | Finance Mock | 모의 금융 거래·현금 | 대역의 승인·환불·지급·잔액과 mock_cash_entries. 모의 현금의 실제 증감을 자기 DB에 기록 |
 
-같은 서비스의 여러 집계가 주문 예약처럼 한 원자 처리를 요구하면 응용 서비스가 같은 DB 트랜잭션으로 조율합니다. 주문 응용 서비스는 재고·쿠폰·이벤트의 각 규칙을 호출해 함께 저장하고, 해당 상태를 임의로 덮어쓰지 않습니다. 서비스 간 처리는 이벤트·SAGA를 사용합니다. Settlement는 Payment가 확정한 수수료·순액을 검증·기록·상쇄하며 현재 쿠폰·구독 상태로 과거 거래를 재계산하지 않습니다.
+같은 서비스의 여러 집계가 주문 예약처럼 한 원자 처리를 요구하면 응용 서비스가 같은 DB 트랜잭션으로 조율합니다. 주문 응용 서비스는 재고·쿠폰·이벤트의 각 규칙을 호출해 함께 저장하고, 해당 상태를 임의로 덮어쓰지 않습니다. 서비스 간 처리는 이벤트·SAGA를 사용합니다. Settlement는 Payment가 확정한 수수료·순액을 검증·기록·상쇄하며 현재 정책으로 과거 거래를 재계산하지 않습니다.
 
 다른 집계는 ID로 참조하고 다른 서비스 엔티티를 가져오지 않습니다. 불변 금액·정책 사본은 값 객체, 상태 전이는 루트의 동작으로 표현합니다. 모든 테이블을 집계 루트로 만들거나 모든 엔티티마다 Repository를 만들지는 않습니다. Repository는 필요한 루트의 저장 경계를 제공합니다. 검증 책임은 [요청·응용·도메인·DB 경계](../CONTRIBUTING.md#검증-경계)를 따릅니다.
 
 ### 시간 정보와 감사 기록
 
-생성·수정 시각을 가진 가변 엔티티에는 `domain/model/AuditableEntity`를 JPA `@MappedSuperclass`로 둡니다. 각 서비스가 자기 모듈에 둡니다. `createdAt`은 생성 때 고정하고 `updatedAt`은 성공한 상태 변경에만 갱신합니다. 응용 서비스의 `Clock`에서 받은 `Instant`를 마이크로초로 맞춰 생성자·상태 메서드에 전달합니다. public setter·클라이언트 시각·Spring Data 감사 주석으로 도메인을 프레임워크에 연결하지 않습니다. ID·`@Version`·논리삭제는 해당 엔티티에 필요한 경우만 둡니다. 추가 전용 원장·이벤트·감사 행에 수정 가능한 공통 부모를 강제하지 않습니다.
+가변 엔티티의 생성 시각은 고정하고 수정 시각은 성공한 상태 변경에만 갱신합니다. 업무 시계의 `Instant`를 마이크로초로 맞춰 저장하고 [공통 시간 규약](../CONTRIBUTING.md#요청과-응답)을 따르며 클라이언트·프레임워크가 상태 변경을 우회하지 않습니다. 서비스 안에서 공통 매핑을 재사용하되 추가 전용 원장·이벤트·감사 행에는 수정 가능한 부모를 강제하지 않습니다.
 
-시간 정보만으로 누가 무엇을 바꿨는지는 알 수 없습니다. 주요 상태 전이·운영 재처리는 서비스별 `audit_logs`에 행위를 추가 기록합니다. 인증된 계정/서비스 신원과 명시적인 SYSTEM 실행 주체를 응용 경계에서 전달하며, 다른 서비스에서 온 명령의 실행자는 검증한 발신 서비스입니다. 불명확한 원사용자를 추정하지 않습니다. 감사 저장 어댑터는 `infrastructure/persistence/audit`에 두며 기술용 감사 엔티티를 업무 집계와 구분합니다. 업무 변경·감사 행을 같은 서비스 DB 트랜잭션으로 저장하고 다른 서비스 DB나 공통 업무 모듈을 만들지 않습니다. [감사 테이블](data-model.md#audit_logs)이 필드·보존 기준입니다.
+주요 상태 전이·운영 재처리는 인증된 실행 주체와 업무 변경을 서비스별 감사 기록에 함께 커밋합니다. 신뢰한 발신자를 기록하고 원사용자를 추정하지 않습니다. 시간 정보·진단 로그는 행위 감사나 금융 원장을 대신하지 않으며 필드·보존은 [감사 테이블](data-model.md#audit_logs)이 기준입니다.
 
 ## 서비스 내부 분류
 
@@ -194,7 +194,7 @@ ArchUnit이 계층 경계와 다른 서비스 구현의 직접 import를 검사�
 | `presentation/controller` | HTTP 요청 진입점 |
 | `presentation/dto` | 외부 요청·응답 DTO |
 | `presentation/exception` | MVC 예외→ProblemDetail 변환 |
-| `application/service` | 유즈케이스 `CreatePaymentService`, 환불 SAGA 조율 |
+| `application/service` | 유즈케이스·SAGA 조율 |
 | `application/dto` | HTTP·메시징과 독립된 입력·결과가 필요할 때 |
 | `application/port` | PG·캐시·이벤트 발행 등 외부 기능 계약 |
 | `application/event` | 서비스 간 이벤트 envelope·payload. 송수신 서비스가 자기 계약 타입 관리 |
@@ -271,11 +271,7 @@ Gateway는 빌드에 포함한 [OpenAPI](openapi.json)의 `/api/` 작업을 HTTP
 
 ### 로그 수집
 
-현재는 KST 시각과 `+09:00`을 포함한 Spring Boot 콘솔 로그를 `docker compose logs`로 확인합니다. Loki·Alloy와 JSON 출력은 설정하지 않았으며, Prometheus 메트릭·Zipkin 추적과 중앙 로그 수집은 별개입니다. 구현할 형식은 [공통 로그 계약](../CONTRIBUTING.md#로그)을 따릅니다.
-
-중앙 수집 도입안은 **stdout JSON → Grafana Alloy → Loki**, 조회는 기존 Grafana입니다. [Alloy의 Docker 로그 수집](https://grafana.com/docs/alloy/latest/monitor/monitor-docker-containers/)을 사용하며 앱은 수집 서버를 직접 호출하지 않습니다. [Loki 색인 라벨](https://grafana.com/docs/loki/latest/get-started/labels/bp-labels/)은 환경·서비스·역할처럼 값의 종류가 적은 항목으로 제한합니다. 주문·결제·추적 ID, 원본 URL은 라벨로 만들지 않고 JSON 본문에서 검색합니다.
-
-도입 시 보존 기간·디스크 상한·수집기 재시작 후 조회·접근 범위를 정하고 Compose와 구조도를 함께 갱신합니다. 현재 구조도에는 이 후속 도입안을 포함하지 않습니다.
+KST 시각·`+09:00`이 있는 콘솔 로그를 `docker compose logs`로 확인합니다. JSON 출력·중앙 로그 수집은 지원하지 않습니다. 기록 항목·민감값 처리는 [공통 로그 계약](../CONTRIBUTING.md#로그)을 따릅니다.
 
 ## Redis·Zipkin·k6
 
