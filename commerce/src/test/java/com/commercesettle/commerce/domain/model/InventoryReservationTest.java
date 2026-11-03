@@ -8,6 +8,7 @@ import com.commercesettle.commerce.domain.exception.InvalidReservationTransition
 import com.commercesettle.commerce.domain.model.InventoryReservation.Outcome;
 import com.commercesettle.commerce.domain.model.InventoryReservation.Result;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -232,6 +233,44 @@ class InventoryReservationTest {
 
     assertThat(again.outcome()).isEqualTo(Outcome.ALREADY_APPLIED);
     assertQuantities(10, 0, 0);
+  }
+
+  @Test
+  @DisplayName("재판매 불가 반품 입고는 판매만 줄이고 가용 재고에 더하지 않는다")
+  void disposeReducesSoldOnly() {
+    InventoryReservation reservation = consumed(3);
+    UUID request = UUID.randomUUID();
+
+    Result result = reservation.dispose(inventory, request, UUID.randomUUID(), NOW);
+
+    assertThat(result.outcome()).isEqualTo(Outcome.APPLIED);
+    assertThat(reservation.getStatus()).isEqualTo(InventoryReservationStatus.DISPOSED);
+    assertQuantities(7, 0, 0);
+    assertMovement(result.movement(), InventoryOperation.RETURN_DISPOSE, request, 0, 0, -3);
+  }
+
+  @Test
+  @DisplayName("복원과 폐기는 주문당 하나만 반영하고 이후 요청은 수량을 바꾸지 않는다")
+  void endsSaleOnlyOnceAcrossRestoreAndDispose() {
+    InventoryReservation disposed = consumed(3);
+    disposed.dispose(inventory, UUID.randomUUID(), UUID.randomUUID(), NOW);
+    InventoryReservation restored = consumed(2);
+    restored.restore(
+        inventory, InventoryOperation.REFUND_RESTORE, UUID.randomUUID(), UUID.randomUUID(), NOW);
+
+    Result restoreAfterDispose =
+        disposed.restore(
+            inventory,
+            InventoryOperation.RETURN_RESTORE,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            NOW);
+    Result disposeAfterRestore =
+        restored.dispose(inventory, UUID.randomUUID(), UUID.randomUUID(), NOW);
+
+    assertThat(List.of(restoreAfterDispose.outcome(), disposeAfterRestore.outcome()))
+        .containsOnly(Outcome.ALREADY_APPLIED);
+    assertQuantities(7, 0, 0);
   }
 
   @Test

@@ -29,7 +29,8 @@ public interface OrderBenefits {
   /** 원쿠폰과 미발송 이벤트 재고를 복원한다. 발송 상품은 입고에서만 복원한다. */
   void restore(Order order, UUID refundId, Instant now);
 
-  void receiveReturn(Order order, UUID requestId, Instant now);
+  /** 반품 입고의 이벤트 재고. 재판매 가능이면 가용으로 복원하고, 불가면 판매 수량만 줄인다. */
+  void receiveReturn(Order order, UUID requestId, boolean resalable, Instant now);
 
   record Offer(
       long unitPrice, Long eventVersion, long sellerCouponAmount, long platformCouponAmount) {}

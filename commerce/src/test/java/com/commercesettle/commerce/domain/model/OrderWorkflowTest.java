@@ -105,8 +105,10 @@ class OrderWorkflowTest {
       r.fail(NOW);
       assertThat(r.getStatus()).isEqualTo(OrderRefundRequest.Status.FAILED_REVIEW);
       assertThat(o.getStatus()).isEqualTo(Order.Status.REFUND_PENDING);
-      assertThat(r.receive(NOW)).isTrue();
-      assertThat(r.receive(NOW)).isFalse();
+      assertThat(r.receive(true, NOW)).isTrue();
+      assertThat(r.receive(true, NOW)).isFalse();
+      assertThatThrownBy(() -> r.receive(false, NOW)).isInstanceOf(OrderStateException.class);
+      assertThat(r.getReceiptResalable()).isTrue();
       assertThatThrownBy(() -> r.close("종결", "근거", NOW)).isInstanceOf(OrderStateException.class);
     } else assertThat(r.getStatus()).isEqualTo(OrderRefundRequest.Status.REJECTED);
   }

@@ -182,6 +182,22 @@ public class InventoryReservationService {
     return restore(orderId, InventoryOperation.RETURN_RESTORE, refundRequestId);
   }
 
+  /** 발송 주문에서 재판매 불가로 검수한 반품의 입고. 판매 수량만 줄이고 가용 재고에는 더하지 않는다. */
+  public Outcome disposeForReturn(UUID orderId, UUID refundRequestId) {
+    return change(
+        orderId,
+        (reservation, inventory) ->
+            reservation.dispose(inventory, refundRequestId, UUID.randomUUID(), clock.instant()),
+        (reservation, inventory, event, participation) ->
+            reservation.disposeForEvent(
+                inventory,
+                event,
+                participation,
+                refundRequestId,
+                UUID.randomUUID(),
+                clock.instant()));
+  }
+
   private Outcome restore(UUID orderId, InventoryOperation operation, UUID businessRef) {
     return change(
         orderId,

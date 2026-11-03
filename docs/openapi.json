@@ -3371,14 +3371,14 @@
     "/api/sellers/me/refund-requests/{requestId}/receipt": {
       "post": {
         "operationId": "post_api_sellers_me_refund_requests_requestId_receipt",
-        "summary": "반품 입고·재고 복구",
+        "summary": "반품 입고·검수 결과 확정",
         "tags": [
           "commerce"
         ],
         "x-owner-service": "commerce",
         "x-actor": "SELLER",
         "x-implemented": true,
-        "description": "판매자가 승인한 RETURN 상품이 실제 도착하고 재판매 가능 검수를 마쳤음을 명시적으로 확정한다. 금융 환불 결과와 무관하게 재고를 한 번 복원한다. 자동 반품 도착·미입고 기한·재판매 불가 판정 API는 제공하지 않는다.",
+        "description": "판매자가 승인한 RETURN 상품이 실제 도착해 검수를 마쳤음을 명시적으로 확정한다. resalable=true면 판매 수량을 가용 재고로 한 번 복원하고, false면 판매 수량만 줄이며 가용 재고에 더하지 않는다. 금융 환불 결과와 무관하게 한 번 반영한다. 이미 입고한 요청에 같은 검수 결과는 기존 결과를, 다른 결과는 409를 돌려준다. 자동 반품 도착·미입고 기한 API는 제공하지 않는다.",
         "security": [
           {
             "accountSession": []
@@ -3430,7 +3430,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/VersionRequest"
+                "$ref": "#/components/schemas/ReturnReceiptRequest"
               }
             }
           }
@@ -7177,6 +7177,25 @@
           "expectedVersion"
         ]
       },
+      "ReturnReceiptRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "resalable": {
+            "type": "boolean",
+            "description": "재판매 가능 검수 결과. false면 가용 재고에 더하지 않는다."
+          }
+        },
+        "required": [
+          "expectedVersion",
+          "resalable"
+        ]
+      },
       "ReasonRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -9154,6 +9173,17 @@
               }
             ]
           },
+          "receiptResalable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "반품 입고 검수 결과. 입고 전에는 null"
+          },
           "version": {
             "type": "integer",
             "format": "int64",
@@ -9169,6 +9199,7 @@
           "refundId",
           "decisionAt",
           "receivedAt",
+          "receiptResalable",
           "version"
         ]
       },

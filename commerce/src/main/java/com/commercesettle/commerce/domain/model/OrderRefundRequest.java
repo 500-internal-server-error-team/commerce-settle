@@ -38,6 +38,9 @@ public class OrderRefundRequest extends AuditableEntity {
   private Instant decisionAt;
   private Instant receivedAt;
 
+  /** 입고 검수 결과. 입고 전에는 null이다. */
+  private Boolean receiptResalable;
+
   @Column(length = 200)
   private String closedReason;
 
@@ -98,14 +101,19 @@ public class OrderRefundRequest extends AuditableEntity {
     return true;
   }
 
-  public boolean receive(Instant now) {
-    if (receivedAt != null) return false;
+  /** 입고와 검수 결과를 한 번 기록한다. 이미 입고했으면 같은 결과는 false, 다른 결과는 충돌이다. */
+  public boolean receive(boolean resalable, Instant now) {
+    if (receivedAt != null) {
+      if (receiptResalable != resalable) throw conflict();
+      return false;
+    }
     if (kind != Kind.RETURN
         || status != Status.APPROVED
             && status != Status.REFUNDING
             && status != Status.COMPLETED
             && status != Status.FAILED_REVIEW) throw conflict();
     receivedAt = truncate(now);
+    receiptResalable = resalable;
     touch(now);
     return true;
   }
@@ -187,6 +195,10 @@ public class OrderRefundRequest extends AuditableEntity {
 
   public Instant getReceivedAt() {
     return receivedAt;
+  }
+
+  public Boolean getReceiptResalable() {
+    return receiptResalable;
   }
 
   public long getVersion() {

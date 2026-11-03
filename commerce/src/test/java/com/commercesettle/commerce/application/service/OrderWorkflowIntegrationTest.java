@@ -662,7 +662,7 @@ class OrderWorkflowIntegrationTest {
             "SELLER",
             f.seller(),
             "/api/sellers/me/refund-requests/" + rid + "/receipt",
-            version(r),
+            version(r).put("resalable", true),
             200);
     assertStock(f, 2, 0, 0);
     receive(
@@ -1344,21 +1344,21 @@ class OrderWorkflowIntegrationTest {
               "SELLER",
               f.seller(),
               "/api/sellers/me/refund-requests/" + rid + "/receipt",
-              version(approved),
+              version(approved).put("resalable", true),
               200,
               key);
       call(
           "SELLER",
           f.seller(),
           "/api/sellers/me/refund-requests/" + rid + "/receipt",
-          version(approved),
+          version(approved).put("resalable", true),
           200,
           key);
       call(
           "SELLER",
           f.seller(),
           "/api/sellers/me/refund-requests/" + rid + "/receipt",
-          version(received),
+          version(received).put("resalable", true),
           200);
       deliverDue();
 
@@ -1792,7 +1792,7 @@ class OrderWorkflowIntegrationTest {
       record(o, "RESTORE");
     }
 
-    public void receiveReturn(Order o, UUID request, Instant now) {
+    public void receiveReturn(Order o, UUID request, boolean resalable, Instant now) {
       record(o, "RETURN");
     }
   }

@@ -133,9 +133,14 @@ public class OrderBenefitsService implements OrderBenefits {
   }
 
   @Override
-  public void receiveReturn(Order order, UUID requestId, Instant now) {
-    if (order.getEventId() != null) {
+  public void receiveReturn(Order order, UUID requestId, boolean resalable, Instant now) {
+    if (order.getEventId() == null) {
+      return;
+    }
+    if (resalable) {
       inventory.restoreForReturn(order.getId(), requestId);
+    } else {
+      inventory.disposeForReturn(order.getId(), requestId);
     }
   }
 }
