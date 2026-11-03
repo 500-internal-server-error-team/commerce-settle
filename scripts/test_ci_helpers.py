@@ -149,7 +149,7 @@ class CiGateTest(unittest.TestCase):
         gate = self.workflow.split("\n  build-and-smoke:\n", 1)[1]
         self.script = textwrap.dedent(gate.split("        run: |\n", 1)[1])
         self.results = {name: {"result": "success"} for name in
-                        ("checks", "package", "tests", "observability", "integration")}
+                        ("checks", "package", "tests", "observability", "integration", "demo-ui")}
 
     def result(self, jobs):
         return subprocess.run(["bash", "-e", "-c", self.script],
@@ -163,7 +163,7 @@ class CiGateTest(unittest.TestCase):
         self.assertEqual({name.strip() for name in names.split(",")}, set(self.results))
         tests = self.workflow.split("\n  tests:\n", 1)[1].split("\n  observability:\n", 1)[0]
         self.assertEqual(set(re.findall(r":([a-z-]+):test\b", tests)),
-                         {"commerce", "payment", "settlement", "finance-mock", "gateway", "internal-auth"})
+                         {"commerce", "payment", "settlement", "finance-mock", "gateway", "internal-auth", "demo-control"})
         self.assertIn("scenario: [smoke, redis, retention, admission, financial-flow, reconciliation]", self.workflow)
         self.assertRegex(self.workflow, r"if: matrix.scenario == 'financial-flow'\n"
                          r"\s+run: python3 -B scripts/smoke_financial_flow.py")

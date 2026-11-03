@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import sqlite3
 import unittest
+import tempfile
 from unittest.mock import MagicMock, mock_open, patch
 
 
@@ -223,6 +224,43 @@ class RestartRegressionTest(unittest.TestCase):
         fault = self.ramp()["fault"]
         self.assertIn("killedAt", fault)
         self.assertIn("restartedAt", fault)
+
+
+class StopInjectionTest(unittest.TestCase):
+    def test_stop_during_delay_does_not_inject_the_next_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stop = root / 'stop'
+            process = MagicMock()
+            process.returncode = 0
+            marks = []
+            with patch.object(load.subprocess, 'Popen', return_value=process), \
+                    patch.object(load, 'compose_env', return_value={}), \
+                    patch.object(load.time, 'monotonic', return_value=0), \
+                    patch.object(load.time, 'sleep', side_effect=lambda _: stop.write_text('stop')):
+                end = load.produce([(1, 3)], ['card'], root, 7, marks, stop)
+            self.assertEqual(end, 8)
+            self.assertEqual(marks[0]['sent'], 1)
+            self.assertEqual(process.stdin.write.call_count, 1)
+            process.stdin.close.assert_called_once()
+            process.wait.assert_called_once()
+
+    def test_stop_before_injection_closes_the_producer_and_records_zero_sent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stop = root / 'stop'
+            stop.write_text('stop')
+            process = MagicMock()
+            process.returncode = 0
+            marks = []
+            with patch.object(load.subprocess, 'Popen', return_value=process), patch.object(load, 'compose_env', return_value={}):
+                end = load.produce([(100, 30)], ['card'], root, 7, marks, stop)
+            self.assertEqual(end, 7)
+            self.assertEqual(marks[0]['sent'], 0)
+            self.assertTrue(marks[0]['stopped'])
+            process.stdin.write.assert_not_called()
+            process.stdin.close.assert_called_once()
+            process.wait.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,34 @@
+server:
+  address: 127.0.0.1
+  port: ${DEMO_CONTROL_PORT:4174}
+spring:
+  application:
+    name: demo-control
+management:
+  server:
+    port: 0
+  tracing:
+    enabled: false
+demo:
+  repository-root: ${DEMO_REPOSITORY_ROOT:.}
+  gateway: ${DEMO_GATEWAY_URL:http://127.0.0.1:8080}
+  services:
+    commerce: ${DEMO_COMMERCE_URL:http://127.0.0.1:18081}
+    payment: ${DEMO_PAYMENT_URL:http://127.0.0.1:18082}
+    settlement: ${DEMO_SETTLEMENT_URL:http://127.0.0.1:18083}
+    finance-mock: ${DEMO_FINANCE_MOCK_URL:http://127.0.0.1:18084}
+  operator-credentials:
+    commerce: ${DEMO_COMMERCE_OPERATOR_CREDENTIAL:}
+    payment: ${DEMO_PAYMENT_OPERATOR_CREDENTIAL:}
+    settlement: ${DEMO_SETTLEMENT_OPERATOR_CREDENTIAL:}
+    finance-mock: ${DEMO_FINANCE_MOCK_OPERATOR_CREDENTIAL:}
+  load-enabled: ${DEMO_LOAD_ENABLED:false}
+  load-project: ${DEMO_LOAD_PROJECT:commerce-settle-ui-load}
+  monitoring-links:
+    Prometheus: ${DEMO_PROMETHEUS_URL:http://localhost:9090}
+    Zipkin: ${DEMO_ZIPKIN_URL:http://localhost:9411/zipkin/}
+    Grafana: ${DEMO_GRAFANA_URL:http://localhost:3000}/d/commerce-settle-overview
+    Payment-quarantine: ${DEMO_GRAFANA_URL:http://localhost:3000}/d/payment-quarantine
+    Settlement-quarantine: ${DEMO_GRAFANA_URL:http://localhost:3000}/d/settlement-quarantine
+    Kafka-UI: ${DEMO_KAFKA_UI_URL:http://localhost:8081}
+    Alertmanager: ${DEMO_ALERTMANAGER_URL:http://localhost:9093}

@@ -1,0 +1,29 @@
+{
+  "name": "commerce-settle-demo-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "generate": "node scripts/catalog.mjs && openapi-typescript ../docs/openapi.json -o src/generated/api.d.ts",
+    "dev": "npm run generate && vite --host 127.0.0.1",
+    "build": "npm run generate && tsc -b && vite build",
+    "test": "npm run generate && vitest run"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.105.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@testing-library/react": "16.3.3",
+    "@types/node": "^26.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "jsdom": "30.1.3",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vitest": "5.1.0"
+  }
+}

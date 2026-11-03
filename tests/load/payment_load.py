@@ -29,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-WORK = ROOT / "tests" / "load" / "work"
+WORK = Path(os.environ.get("LOAD_WORK_DIR", ROOT / "tests" / "load" / "work")).resolve()
 PROJECT = os.environ.get("LOAD_PROJECT", "commerce-settle-load")
 TOPIC = "commerce-settle.commerce.v1"
 GROUP = "payment.v1"
@@ -242,7 +242,7 @@ def parse_stages(text):
     return stages
 
 
-def produce(stages, mix, directory, offset, marks):
+def produce(stages, mix, directory, offset, marks, stop_file=None):
     """단계별 도착률로 요청을 넣는다. 각 단계의 시작·끝 시각을 marks에 남긴다."""
     producer = subprocess.Popen(
         ["docker", "compose", "-p", PROJECT, "-f", str(ROOT / "compose.yml"),
@@ -259,14 +259,20 @@ def produce(stages, mix, directory, offset, marks):
             begin_wall = datetime.now(timezone.utc)
             begin = time.monotonic()
             behind = 0.0
+            sent = 0
             for step in range(rate * seconds):
+                if stop_file and Path(stop_file).is_file():
+                    break
                 delay = begin + step / rate - time.monotonic()
                 if delay > 0:
                     time.sleep(delay)
                 else:
                     behind = max(behind, -delay)
+                if stop_file and Path(stop_file).is_file():
+                    break
                 order_id, kind, gross, mileage, body = request_event(index, mix)
                 index += 1
+                sent += 1
                 producer.stdin.write(f"{order_id}\t{body}\n")
                 writer.writerow([order_id, kind, gross, mileage, number,
                                  datetime.now(timezone.utc).isoformat()])
@@ -276,9 +282,12 @@ def produce(stages, mix, directory, offset, marks):
             marks.append({"stage": number, "rate": rate, "seconds": seconds,
                           "start": begin_wall.isoformat(),
                           "end": datetime.now(timezone.utc).isoformat(),
-                          "sent": rate * seconds,
+                          "sent": sent,
+                          "stopped": sent < rate * seconds,
                           "elapsed": round(time.monotonic() - begin, 2),
                           "maxBehindSeconds": round(behind, 2)})
+            if sent < rate * seconds:
+                break
         producer.stdin.close()
     producer.wait()
     if producer.returncode != 0:
@@ -355,7 +364,8 @@ def cmd_ramp(args):
 
     def worker():
         try:
-            produce(stages, args.mix.split(","), directory, args.offset, marks)
+            produce(stages, args.mix.split(","), directory, args.offset, marks,
+                    getattr(args, "stop_file", None))
         except BaseException as error:  # noqa: BLE001 - 주 스레드에서 보고한다
             failure.append(error)
 
@@ -693,6 +703,8 @@ def main(argv=None):
             command.add_argument("--rate", type=int, default=10)
             command.add_argument("--seconds", type=int, default=10)
         else:
+            command.add_argument("--stop-file", type=Path,
+                                 help="이 파일이 생기면 추가 주입을 멈추고 이미 접수한 작업을 관측한다")
             command.add_argument("--stages", default="50:60,100:60,200:60",
                                  help="초당 건수:유지 초, 쉼표로 구분")
             command.add_argument("--interval", type=int, default=10, help="기록 간격(초)")

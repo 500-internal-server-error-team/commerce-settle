@@ -114,7 +114,7 @@ class GradeCouponIntegrationTest {
 
   @Test
   @DisplayName("100위 동점자를 모두 포함해 104명을 고정하고 등급별로 발급하며, 같은 월을 다시 실행해도 바꾸지 않는다")
-  void selectsTiesAndIssuesOnce() {
+  void selectsTiesAndIssuesOnce() throws Exception {
     LocalDate month = LocalDate.of(2031, 2, 1);
     List<UUID> ranked = new ArrayList<>();
     for (int i = 0; i < 99; i++) {
@@ -154,6 +154,31 @@ class GradeCouponIntegrationTest {
         .isZero();
     assertThat(gradeOf(ranked.get(0), month)).isEqualTo("GOLD");
     assertThat(gradeOf(ranked.get(98), month)).isEqualTo("BRONZE");
+    JsonNode page =
+        operator(RUNS + "/" + run.getId() + "/targets?page=1&size=100", null, 200, key());
+    assertThat(page.path("totalElements").asInt()).isEqualTo(104);
+    assertThat(page.path("items").size()).isEqualTo(4);
+    for (JsonNode target : page.path("items")) {
+      assertThat(target.path("rankNo").asInt()).isEqualTo(100);
+      assertThat(target.path("externalSpend").asLong()).isEqualTo(10_000L);
+      assertThat(target.path("grade").asText()).isEqualTo("BRONZE");
+      assertThat(target.path("status").asText()).isEqualTo("ISSUED");
+      assertThat(target.has("email")).isFalse();
+    }
+    matches("CouponIssueTargetPage", page);
+    operator(RUNS + "/" + run.getId() + "/targets?size=101", null, 400, key());
+    operator(RUNS + "/" + UUID.randomUUID() + "/targets", null, 404, key());
+    HttpHeaders gatewayHeaders = new HttpHeaders();
+    gatewayHeaders.setBearerAuth("test-gateway-credential-0123456789abcdef0123");
+    assertThat(
+            http.exchange(
+                    RUNS + "/" + run.getId() + "/targets",
+                    HttpMethod.GET,
+                    new HttpEntity<>(gatewayHeaders),
+                    JsonNode.class)
+                .getStatusCode()
+                .value())
+        .isEqualTo(403);
     assertThat(
             jdbc.queryForObject(
                 "select sum(discount_amount) from commerce.buyer_coupons where kind = 'GRADE'"

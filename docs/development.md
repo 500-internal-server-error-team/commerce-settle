@@ -660,3 +660,50 @@ docker compose -f compose.yml -f compose.kakao-self.yml --profile observability 
 `./gradlew :commerce:test`는 PostgreSQL과 loopback HTTP 대역을, `python3 -B scripts/test_kakao_login.py`는 비밀 파일·계정·동의 경계를 검사합니다. 실제 카카오 수신과 구분합니다.
 
 본인 수신 시연에서는 실제 주문·결제·발송 API의 상태 전이, Payment·Settlement의 알림 생산, 발송 이력과 본인 채팅의 수신 내용을 함께 대조합니다. 금융 이벤트를 주입한 시험은 자동 검증으로 따로 표시하며 실제 금융 E2E 성공으로 보고하지 않습니다. API 성공·카카오 수신과 읽음·단말 팝업 확인도 구분합니다.
+
+## 데모·실험 UI
+
+`demo-ui/`는 React·TypeScript·Vite·TanStack Query 기반의 로컬 화면입니다. `demo-control/`은 같은 출처의 UI를 제공하고 명세에 있는 사용자 요청은 Gateway로, 운영 요청은 설정된 소유 서비스로 전달하는 Java 21 실행 앱입니다. 운영 자격은 서버에만 두며 DB를 직접 읽거나 수정하지 않습니다. 기본 Compose에는 이 앱을 추가하지 않습니다.
+
+Node.js 24 이상과 Java 21을 사용합니다. 저장소 루트에서 다음을 실행합니다.
+
+```bash
+npm --prefix demo-ui ci
+npm --prefix demo-ui run build
+./gradlew :demo-control:bootJar
+java -jar demo-control/build/libs/app.jar
+```
+
+[로컬 UI](http://127.0.0.1:4174)를 엽니다. Gateway 기본값은 `http://127.0.0.1:8080`이며 `DEMO_GATEWAY_URL`로 바꿉니다. UI 개발 중에는 제어 서버를 유지하고 `npm --prefix demo-ui run dev`로 [Vite 화면](http://127.0.0.1:5173)을 사용합니다. jar를 다시 빌드할 때는 실행 중인 제어 서버를 종료하고 `npm --prefix demo-ui run build`, 이어서 `:demo-control:bootJar`를 실행한 뒤 새 jar로 시작합니다.
+
+49개 상세 흐름은 기존 `wireframes.html`에서 생성합니다. 각 영역의 실제 명세 입력·요청·응답·목록/금액/상태를 보여주며 탐색 항목 수를 업무 실행 검증 수로 해석하지 않습니다. 구매자·판매자의 세션·조회 캐시·실행 기록은 분리하고 토큰은 메모리에만 보관합니다. ‘로컬 세션 지우기’는 브라우저의 자격만 지우며 서버 로그아웃은 계정 화면의 실제 로그아웃 작업으로 실행합니다. 비밀번호·토큰은 요청/응답 기록에서 가립니다.
+
+### 운영 조회와 명령 연결
+
+운영 자격이 없으면 해당 작업은 사용할 수 없습니다. 제어 서버의 `DEMO_<COMMERCE|PAYMENT|SETTLEMENT|FINANCE_MOCK>_URL`과 `DEMO_<동일 서비스>_OPERATOR_CREDENTIAL`을 소유 서비스 설정과 맞춥니다. 기본 내부 목적지는 루프백 18081~18084입니다. 사용자 Bearer를 운영 자격으로 대신 사용하지 않습니다.
+
+새 전용 스택에는 `compose.demo-ui.yml`을 적용할 수 있습니다. 서비스별로 다른 43자 이상 운영 자격을 비공개 환경에서 공급합니다. overlay는 해당 자격의 `operator:demo-ui`와 인증된 내부 HTTP용 루프백 포트만 추가합니다. 기존 사용자 확인용 `commerce-settle-demo`에는 적용하지 않습니다. 동시에 실행할 스택은 Gateway·Zipkin·Prometheus·관측 도구의 호스트 포트도 기존 환경과 겹치지 않게 선택하고 위 제어 서버 목적지와 함께 맞춥니다. 이 overlay가 금융 Worker·이벤트 연결을 켜거나 fixture를 적재하지는 않습니다. 기존 기능별 활성화 절차를 따릅니다.
+
+모니터링 주소는 `DEMO_PROMETHEUS_URL`, `DEMO_ZIPKIN_URL`, `DEMO_GRAFANA_URL`, `DEMO_KAFKA_UI_URL`, `DEMO_ALERTMANAGER_URL`로 설정합니다. 기본값은 위 접속 표와 같고, 링크가 있다는 것이 도구의 기동을 뜻하지 않습니다. 모니터링의 수집·조회 시각은 실제 시간입니다.
+
+월간 화면은 회차 집계와 `/internal/coupon-issue-runs/{runId}/targets`의 저장된 선정 순위·구매액·혜택·발급 결과를 조회합니다. 웰컴·월간 혜택에 임의 수동 발급 버튼을 추가하지 않습니다. **런타임 업무 시간 이동과 월간 배치 수동 실행은 제공하지 않습니다.** 배송·반품·정산·월간 발급은 실제 기한과 기존 처리기의 준비가 필요합니다. 금융 환불의 stub 사용·지급 단계 제외 등은 [왕복 검증 범위](#주문결제정산환불-왕복)를 그대로 적용합니다.
+
+### 부하 실행과 중지
+
+화면의 부하는 기존 `tests/load/payment_load.py ramp`를 실행합니다. 측정 범위는 **Kafka 직접 주입 → Payment 수신·금융 Mock 승인**이며 주문 API·선착순 경쟁·전체 정산의 부하 시험이 아닙니다. 기존 부하 도구의 [준비·측정·대조 계약](../tests/load/README.md)을 먼저 따릅니다.
+
+전용 프로젝트는 `commerce-settle-ui-load` 또는 그 이름에 짧은 접미사를 붙인 값만 허용합니다. 동일한 `LOAD_PROJECT`와 절대경로 `LOAD_WORK_DIR=<저장소>/tests/load/work/demo-ui/<프로젝트>`로 CLI의 up/prepare/enable을 준비한 후 제어 서버에 `DEMO_LOAD_PROJECT`와 `DEMO_LOAD_ENABLED=true`를 공급합니다. 이 준비는 새 전용 환경에서만 수행하며 기존 개발/시연 프로젝트를 사용하지 않습니다. UI는 기동·DB 준비·Worker 재생성·삭제 명령을 제공하지 않습니다.
+
+한 번에 한 실행, 1~100건/초·1~30초 주입·30초 배출 관측·전체 120초 상한입니다. 중지는 stop 파일로 **추가 주입만 멈추고** 이미 접수한 거래는 계속 관측합니다. `COMPLETED`는 도구의 정상 종료이며 금융 정합성 검증 완료가 아닙니다. summary와 요청 원장으로 기존 reconcile을 수행합니다. 결과는 해당 LOAD_WORK_DIR의 실행 디렉터리에 보존하며 제어 서버 재시작 후에도 파일을 삭제하지 않습니다. 메모리 실행 목록은 최대20건이고 재시작 시 비워집니다. 도구가 소유한 시험 결과·프로젝트 정리는 기존 부하 도구의 종료 절차를 따릅니다.
+
+### UI 검증과 종료
+
+```bash
+npm --prefix demo-ui test
+npm --prefix demo-ui run build
+./gradlew :demo-control:test
+./gradlew :commerce:test --tests '*GradeCouponIntegrationTest'
+python3 -B -m unittest discover -s tests/load -p 'test_payment_load.py'
+```
+
+API/역할 격리·미확정·중복 요청·순위의 권한/페이지·중지 동작과 실제 화면을 확인합니다. UI의 경로·요청 필드는 빌드 시 OpenAPI에서 생성하므로 계약 변경 후 다시 생성·빌드합니다. 프론트 테스트·빌드는 CI 필수 결과에 포함합니다. 종료는 시작한 UI/Java 프로세스만 종료하며 연결된 기존 백엔드·DB·사용자 데모를 함께 종료하지 않습니다.

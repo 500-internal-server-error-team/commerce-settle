@@ -1,3 +1,4 @@
 rootProject.name = 'commerce-settle'
 
 include 'gateway', 'commerce', 'payment', 'settlement', 'finance-mock', 'internal-auth'
+include 'demo-control'
