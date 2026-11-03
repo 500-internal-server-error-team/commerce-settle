@@ -40,6 +40,12 @@ public class MockAccount extends AuditableEntity {
     if (openingBalance < 0) {
       throw new IllegalArgumentException("openingBalance must not be negative");
     }
+    if (!MockScenario.PAYOUT_PROVIDER.equals(providerId)) {
+      PaymentProvider.valueOf(providerId);
+    }
+    if (accountRef == null || accountRef.isBlank() || accountRef.length() > 100) {
+      throw new IllegalArgumentException("accountRef must contain 1..100 characters");
+    }
     this.id = id;
     this.providerId = Objects.requireNonNull(providerId, "providerId");
     this.accountRef = Objects.requireNonNull(accountRef, "accountRef");
@@ -125,5 +131,9 @@ public class MockAccount extends AuditableEntity {
 
   public long getReservedAmount() {
     return reservedAmount;
+  }
+
+  public long getVersion() {
+    return version == null ? 0 : version;
   }
 }

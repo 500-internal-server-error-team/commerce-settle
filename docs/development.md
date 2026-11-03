@@ -377,7 +377,7 @@ Compose는 루프백에만 게시하므로 다른 장비에서 바로 접근할 
 
 ### PG 승인·조회·전액 환불
 
-`APP_DEV_FIXTURES_ENABLED=true`는 기존 지급 fixture와 함께 네 대역에 아래 불변 버전을 준비합니다. 기존 계정 잔액·시나리오는 재기동 때 덮어쓰지 않습니다. 새 관리 API 없이 이 fixture로 시험하며 실제 PG나 사용자 계정을 사용하지 않습니다.
+`APP_DEV_FIXTURES_ENABLED=true`는 기존 지급 fixture와 함께 네 대역에 아래 불변 버전을 준비합니다. 기존 계정 잔액·시나리오는 재기동 때 덮어쓰지 않습니다. 이 fixture를 재사용하거나 아래 준비 API로 새 시험 데이터를 추가하며 실제 PG나 사용자 계정을 사용하지 않습니다.
 
 | 금융 버전 | 승인 | 환불 | 조회 |
 | --- | --- | --- | --- |
@@ -421,6 +421,29 @@ curl -i http://localhost:18083/mock/providers/EASY_PAY/payments/APPROVAL_ID/refu
 입금 작업은 매분 최대 100개 도래 원승인을 처리합니다. `PG_CALENDAR_VERSION`(기본 `weekdays-v1`)과 `PG_CALENDAR_HOLIDAYS`(쉼표로 구분한 ISO 날짜, 기본 공휴일 없음)를 승인 당시 사본·예정일로 저장합니다. `PG_RECEIPTS_ENABLED=false`는 수동 시험용으로 자동 입금을 끄며, 기본값은 true입니다. 입금 전 확정 환불은 예정 입금을 0으로 종결하고, 입금 후에는 같은 재원에서 원외부 결제액만 차감합니다.
 
 `./gradlew :finance-mock:build`는 실제 PostgreSQL·HTTP 시험에서 정상·거절·유실·조회 장애, 동시 멱등·지갑 잔액 경쟁·입금/환불 경합, 현금·잔액·롤백·잠금 상한과 지연 중 DB 커넥션 반환을 검사합니다. Payment 승인 Worker·환불 SAGA·실제 금융기관 정합성이나 전체 사용자 흐름의 완료를 뜻하지 않습니다.
+
+### 시험 계정·장애 시나리오 준비
+
+인스턴스의 `app.internal-auth.senders[operator:<식별자>].current`에 별도의 URL-safe 43자 이상 운영 자격을 설정합니다. 기존 발신자별 설정에 추가하며 값은 Git 밖 비밀 설정으로 주입합니다. 기본 Compose는 운영자 자격을 생성하거나 외부 관리 포트를 열지 않습니다. Payment·Settlement 자격, 사용자 토큰 또는 Gateway 자격을 재사용하지 않습니다. 내부 또는 위 루프백 시험 인스턴스에서만 호출합니다.
+
+```bash
+curl -i http://localhost:18083/mock/accounts \
+  -H "Authorization: Bearer $MOCK_OPERATOR_CREDENTIAL" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: prepare-wallet-demo-001' \
+  -d '{"providerId":"EASY_PAY","accountRef":"demo-wallet","purpose":"WALLET","balance":1000000}'
+
+curl -i http://localhost:18083/mock/scenarios \
+  -H "Authorization: Bearer $MOCK_OPERATOR_CREDENTIAL" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: prepare-scenario-demo-001' \
+  -d '{"providerId":"EASY_PAY","scenarioVersion":"demo-normal-v1","minDelayMs":0,"maxDelayMs":0,"rejectionRate":0,"responseLossRate":0,"lookupFailureRate":0,"seed":20261103,"settlementDelayBusinessDays":5,"refundMinDelayMs":0,"refundMaxDelayMs":0,"refundRejectionRate":0,"refundResponseLossRate":0,"lookupMinDelayMs":0,"lookupMaxDelayMs":0}'
+
+curl http://localhost:18083/mock/accounts/ACCOUNT_ID \
+  -H "Authorization: Bearer $MOCK_OPERATOR_CREDENTIAL"
+```
+
+계정은 `201`의 `Location`으로 조회합니다. 같은 키·본문의 POST는 잔액 변경 뒤에도 원생성 응답이며 현재 잔액은 GET에서 확인합니다. 기존 계정 참조·시나리오 버전의 재등록은 409이므로 새 시험에는 새 참조·버전을 사용합니다. PAYOUT 시나리오는 입금 지연·환불 4필드를 명시적으로 null로 보냅니다. 시나리오의 `Location`은 식별 URI이며 GET은 제공하지 않습니다.
+
+`./gradlew :finance-mock:build`의 `MockPreparationIntegrationTest`는 실제 HTTP·전용 PostgreSQL에서 세 준비 API, 입력·권한·출처, 중복·경합, 잠금 상한, 저장 중단 롤백·재시도와 새 앱 인스턴스의 원결과 재사용을 검사합니다. 기존 금융 거래 시험과 함께 실행하며 실제 금융기관·전체 서비스 왕복의 판정은 #120에서 수행합니다. 테이블·컬럼 추가 없이 기존 DDL을 재사용하므로 이 API 추가를 위해 공유 DB·볼륨을 초기화하지 않습니다.
 
 ## 개발·검증
 

@@ -53,6 +53,9 @@ public class MockScenario {
       Instant now) {
     this.id = UUID.randomUUID();
     this.providerId = Objects.requireNonNull(providerId, "providerId");
+    if (scenarioVersion == null || scenarioVersion.isBlank() || scenarioVersion.length() > 32) {
+      throw new IllegalArgumentException("scenarioVersion must contain 1..32 characters");
+    }
     this.scenarioVersion = Objects.requireNonNull(scenarioVersion, "scenarioVersion");
     this.minDelayMs = delay.minMs();
     this.maxDelayMs = delay.maxMs();
@@ -126,6 +129,62 @@ public class MockScenario {
     return Objects.requireNonNull(settlementDelayBusinessDays, "payment settlement delay");
   }
 
+  public UUID getId() {
+    return id;
+  }
+
+  public Instant getCreatedAt() {
+    return createdAt;
+  }
+
+  public int getMinDelayMs() {
+    return minDelayMs;
+  }
+
+  public int getMaxDelayMs() {
+    return maxDelayMs;
+  }
+
+  public BigDecimal getRejectionRate() {
+    return rejectionRate;
+  }
+
+  public BigDecimal getResponseLossRate() {
+    return responseLossRate;
+  }
+
+  public BigDecimal getLookupFailureRate() {
+    return lookupFailureRate;
+  }
+
+  public int getLookupMinDelayMs() {
+    return lookupMinDelayMs;
+  }
+
+  public int getLookupMaxDelayMs() {
+    return lookupMaxDelayMs;
+  }
+
+  public long getSeed() {
+    return seed;
+  }
+
+  public Integer getRefundMinDelayMs() {
+    return refundMinDelayMs;
+  }
+
+  public Integer getRefundMaxDelayMs() {
+    return refundMaxDelayMs;
+  }
+
+  public BigDecimal getRefundRejectionRate() {
+    return refundRejectionRate;
+  }
+
+  public BigDecimal getRefundResponseLossRate() {
+    return refundResponseLossRate;
+  }
+
   public PayoutOutcome refundOutcome(long resultSeed) {
     SplittableRandom random = new SplittableRandom(resultSeed);
     int delay = Objects.requireNonNull(refundMinDelayMs);
@@ -166,10 +225,13 @@ public class MockScenario {
 
   private static BigDecimal requireRate(BigDecimal rate) {
     Objects.requireNonNull(rate, "rate");
-    if (rate.signum() < 0 || rate.compareTo(BigDecimal.ONE) > 0) {
-      throw new IllegalArgumentException("rate must be between 0 and 1");
+    if (rate.signum() < 0
+        || rate.compareTo(BigDecimal.ONE) > 0
+        || rate.stripTrailingZeros().scale() > 7) {
+      throw new IllegalArgumentException(
+          "rate must be between 0 and 1 with at most 7 decimal places");
     }
-    return rate;
+    return rate.stripTrailingZeros();
   }
 
   private static int drawDelay(int min, int max, RandomGenerator random) {
