@@ -140,20 +140,7 @@ class CouponOrderIntegrationTest {
     assertThat(couponStatus(coupon)).isEqualTo("USED");
     assertTotalsChanged(issued, -DISCOUNT, DISCOUNT);
 
-    JsonNode request =
-        send(
-            buyer.id(),
-            "/api/orders/" + id + "/refund-requests",
-            version(read(buyer, id)).put("kind", "CANCEL").put("reason", "시험 취소"),
-            201);
-    ObjectNode refund =
-        mapper
-            .createObjectNode()
-            .put("orderId", id.toString())
-            .put("paymentId", payment.toString())
-            .put("refundId", UUID.randomUUID().toString());
-    receive("RefundAccepted", refund.deepCopy().put("requestId", request.path("id").asText()));
-    receive("RefundCompleted", refund);
+    receive("RefundCompleted", acceptRefund(buyer, id, payment));
 
     assertThat(couponStatus(coupon)).isEqualTo("ISSUED");
     assertTotalsChanged(issued, 0, 0);
@@ -208,6 +195,83 @@ class CouponOrderIntegrationTest {
     assertThat(couponStatus(coupon)).isEqualTo("EXPIRED");
     assertTotalsChanged(issued, -DISCOUNT, 0);
     assertThat(history(coupon)).containsExactly("ISSUE", "RESERVE", "RELEASE");
+  }
+
+  @Test
+  @DisplayName("기한이 지난 뒤 전액 환불은 원쿠폰을 EXPIRED로 두고 사용액만 상쇄하며, 같은 환불 완료를 다시 받아도 한 번만 반영한다")
+  void restoresOnceAsExpiredAfterDeadline() throws Exception {
+    Buyer buyer = buyer();
+    UUID product = product();
+    UUID coupon = coupons.issueWelcome(buyer.id(), Instant.now()).getId();
+    Map<String, Object> issued = welcomeTotals();
+    JsonNode order = order(buyer, product, coupon, 201);
+    UUID id = uuid(order, "id");
+    UUID payment = confirm(order);
+
+    expire(coupon);
+    ObjectNode refund = acceptRefund(buyer, id, payment);
+    receive("RefundCompleted", refund);
+    receive("RefundCompleted", refund.deepCopy());
+
+    assertThat(couponStatus(coupon)).isEqualTo("EXPIRED");
+    assertTotalsChanged(issued, -DISCOUNT, 0);
+    assertThat(history(coupon)).containsExactly("ISSUE", "RESERVE", "USE", "RESTORE");
+  }
+
+  @Test
+  @DisplayName("미확정인 취소 거절과 재시도 전 회차의 늦은 취소 결과는 쿠폰 예약을 풀지 않는다")
+  void keepsReservationOnUncertainOrStaleResults() throws Exception {
+    Buyer buyer = buyer();
+    UUID product = product();
+    UUID coupon = coupons.issueWelcome(buyer.id(), Instant.now()).getId();
+    UUID id = uuid(order(buyer, product, coupon, 201), "id");
+    UUID payment = UUID.randomUUID();
+    UUID first = cycle(id);
+
+    receive("PaymentCancellationRejected", result(id, payment, first));
+    assertThat(couponStatus(coupon)).isEqualTo("RESERVED");
+    receive("PaymentDeclined", result(id, payment, first));
+    send(buyer.id(), "/api/orders/" + id + "/payment-retries", version(read(buyer, id)), 202);
+    receive("PaymentCancelled", result(id, payment, first));
+
+    assertThat(couponStatus(coupon)).isEqualTo("RESERVED");
+    assertThat(read(buyer, id).path("status").asText()).isEqualTo("PAYMENT_PENDING");
+    assertThat(history(coupon)).containsExactly("ISSUE", "RESERVE");
+  }
+
+  @Test
+  @DisplayName("쿠폰과 마일리지를 함께 쓰면 주문 생성·견적 모두 mileageAmount의 400으로 거절하고 쿠폰을 예약하지 않는다")
+  void rejectsCouponWithMileage() {
+    Buyer buyer = buyer();
+    UUID product = product();
+    UUID coupon = coupons.issueWelcome(buyer.id(), Instant.now()).getId();
+    ObjectNode quote =
+        mapper
+            .createObjectNode()
+            .put("productId", product.toString())
+            .put("quantity", 1)
+            .putNull("eventId")
+            .put("buyerCouponId", coupon.toString())
+            .put("mileageAmount", 1_000)
+            .put("externalMethod", "CREDIT_CARD");
+
+    List<JsonNode> problems =
+        List.of(
+            send(
+                buyer.id(),
+                "/api/orders",
+                body(buyer, product, coupon).put("mileageAmount", 1_000),
+                400),
+            send(buyer.id(), "/api/order-quotes", quote, 400));
+
+    for (JsonNode problem : problems) {
+      assertThat(problem.path("code").asText()).isEqualTo("COMMON_VALIDATION_FAILED");
+      assertThat(problem.path("errors")).hasSize(1);
+      assertThat(problem.path("errors").get(0).path("field").asText()).isEqualTo("mileageAmount");
+      assertThat(problem.path("errors").get(0).path("reason").asText())
+          .isEqualTo("쿠폰과 마일리지는 함께 사용할 수 없습니다.");
+    }
+    assertThat(couponStatus(coupon)).isEqualTo("ISSUED");
   }
 
   @Test
@@ -299,6 +363,24 @@ class CouponOrderIntegrationTest {
         .put("expectedTotalAmount", expectedTotal)
         .put("externalMethod", "CREDIT_CARD")
         .put("methodAccountRef", "test-card");
+  }
+
+  /** 구매자 취소 요청과 Payment의 환불 접수를 반영하고, 이어서 보낼 환불 완료 본문을 돌려준다. */
+  private ObjectNode acceptRefund(Buyer buyer, UUID orderId, UUID payment) throws Exception {
+    JsonNode request =
+        send(
+            buyer.id(),
+            "/api/orders/" + orderId + "/refund-requests",
+            version(read(buyer, orderId)).put("kind", "CANCEL").put("reason", "시험 취소"),
+            201);
+    ObjectNode refund =
+        mapper
+            .createObjectNode()
+            .put("orderId", orderId.toString())
+            .put("paymentId", payment.toString())
+            .put("refundId", UUID.randomUUID().toString());
+    receive("RefundAccepted", refund.deepCopy().put("requestId", request.path("id").asText()));
+    return refund;
   }
 
   /** 시험을 위해 쿠폰 기한을 지금보다 앞으로 옮긴다. */
