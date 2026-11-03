@@ -37,6 +37,7 @@ jobs:
           python3 -B -m unittest discover -s scripts -p 'test_admission_runner.py'
           python3 -B -m unittest discover -s scripts -p 'test_ci_helpers.py'
           python3 -B scripts/test_kakao_login.py
+          python3 -B -m unittest discover -s tests/load -p 'test_payment_load.py'
       - name: Check Java formatting and Checkstyle (main and test)
         run: ./gradlew --daemon --parallel --continue spotlessCheck checkstyleMain checkstyleTest
       - name: Run tests, architecture checks and package all applications

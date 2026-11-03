@@ -518,8 +518,7 @@ def cmd_reconcile(args):
             problem("승인 시도 업무 키·금액 불일치", order)
         transaction = mock.get((provider, key))
         if transaction is None:
-            if status == "CONFIRMED":
-                problem("확정 결제의 대역 거래 누락", order)
+            problem("대역 거래 누락", f"{order} {status}")
             continue
         used.add((provider, key))
         mock_amount, mock_status, _ = transaction
@@ -546,7 +545,8 @@ def cmd_reconcile(args):
               count(*) FILTER (WHERE e.kind = 'RESERVE'),
               count(*) FILTER (WHERE e.kind = 'DEBIT'),
               count(*) FILTER (WHERE e.kind = 'RELEASE')
-            FROM payment.payments p JOIN payment.mileage_entries e ON e.payment_id = p.id
+            FROM payment.payments p LEFT JOIN payment.mileage_entries e ON e.payment_id = p.id
+            WHERE p.mileage_amount > 0
             GROUP BY p.id, p.status""")
     for payment, status, reserve, debit, release in entry_rows:
         counts = (int(reserve), int(debit), int(release))
@@ -629,10 +629,12 @@ def cmd_replay(args):
             "exec", "-T", "payment-api", "curl", "-sS", "-o", "/dev/stdout", "-w", "\n%{http_code}",
             "-X", "POST", f"http://localhost:8080/internal/payment-jobs/{job_id}/replays",
             "-H", f"Authorization: Bearer {credential}",
-            "-H", f"Idempotency-Key: load-replay-{job_id}",
+            "-H", f"Idempotency-Key: load-replay-{job_id}-{version}",
             "-H", "Content-Type: application/json", "-d", body)
         response, _, code = out.rpartition("\n")
         print(job_id, code.strip(), response.strip()[:200])
+        if code.strip() != "202":
+            raise SystemExit(f"replay failed for {job_id}: HTTP {code.strip() or 'missing status'}")
     print(f"replayed {len(jobs)} jobs")
 
 
