@@ -1,7 +1,9 @@
 package com.commercesettle.commerce.application.service;
 
+import static com.commercesettle.commerce.support.ConcurrentTransactions.holdTransaction;
 import static com.commercesettle.commerce.support.ConcurrentTransactions.runConcurrently;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
 import com.commercesettle.commerce.application.event.EventEnvelope;
 import com.commercesettle.commerce.domain.model.ProductStatus;
@@ -21,6 +23,9 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.DisplayName;
@@ -36,6 +41,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -71,6 +77,8 @@ class SellerCouponIntegrationTest {
   @Autowired JdbcTemplate jdbc;
   @Autowired BuyerAddressService addresses;
   @Autowired ProductCatalogService products;
+  @Autowired SellerCouponService sellerCoupons;
+  @Autowired TransactionTemplate tx;
   @Autowired OrderResultService results;
   @Autowired PaymentAcceptedService accepted;
 
@@ -218,7 +226,8 @@ class SellerCouponIntegrationTest {
 
   @Test
   @DisplayName(
-      "발급 종료는 새 발급만 막고(COUPON_CAMPAIGN_NOT_ISSUABLE), 버전이 다르면 버전 충돌이며 다시 종료해도 발급 불가로 거절하고 이미 발급한 쿠폰은 그대로다")
+      "발급 종료는 새 발급만 막고(COUPON_CAMPAIGN_NOT_ISSUABLE), 버전이 다르면 버전 충돌이며 다시 종료해도 발급 불가로 거절하고 이미 발급한"
+          + " 쿠폰은 그대로다")
   void closesCampaignForNewIssues() {
     Shop shop = shop();
     UUID template = campaign(shop, 10, 30_000);
@@ -331,6 +340,51 @@ class SellerCouponIntegrationTest {
         .containsEntry("issued_count", 2)
         .containsEntry("committed_budget", DISCOUNT)
         .containsEntry("consumed_budget", 0L);
+  }
+
+  @Test
+  @DisplayName("종료가 먼저 커밋되면 대기 중인 발급은 예산이 남아도 발급 종료 오류로 거절한다")
+  void reportsClosureWhenCampaignClosesDuringIssue() throws Exception {
+    Shop shop = shop();
+    UUID template = campaign(shop, 10, 30_000);
+    UUID recipient = buyer().id();
+
+    try (var executor = Executors.newSingleThreadExecutor()) {
+      Future<ResponseEntity<JsonNode>> pending;
+      try (var closure =
+          holdTransaction(tx, () -> sellerCoupons.close(shop.seller(), template, key(), 0))) {
+        pending =
+            executor.submit(
+                () ->
+                    call(
+                        "SELLER",
+                        shop.seller(),
+                        path(template) + "/issues",
+                        issueBody(recipient),
+                        key()));
+        await()
+            .pollInterval(Duration.ofMillis(10))
+            .atMost(Duration.ofSeconds(5))
+            .until(
+                () ->
+                    jdbc.queryForObject(
+                            "select count(*) from pg_stat_activity"
+                                + " where datname = current_database() and wait_event_type = 'Lock'"
+                                + " and lower(query) like '%coupon_templates%'",
+                            Integer.class)
+                        > 0);
+      }
+
+      ResponseEntity<JsonNode> rejected = pending.get(10, TimeUnit.SECONDS);
+      assertThat(rejected.getStatusCode().value()).isEqualTo(409);
+      assertThat(rejected.getBody().path("code").asText())
+          .isEqualTo("COUPON_CAMPAIGN_NOT_ISSUABLE");
+    }
+    assertThat(totals(template))
+        .containsEntry("issued_count", 0)
+        .containsEntry("committed_budget", 0L)
+        .containsEntry("consumed_budget", 0L);
+    assertThat(count("buyer_coupons where template_id = ?", template)).isZero();
   }
 
   private UUID campaign(Shop shop, int limit, long budget) {
@@ -493,9 +547,10 @@ class SellerCouponIntegrationTest {
   private Shop shop() {
     UUID seller = UUID.randomUUID();
     jdbc.update(
-        "insert into commerce.seller_accounts(id,email_normalized,password_hash,display_name,status,"
-            + "payout_account_ref,created_at,updated_at,version)"
-            + " values (?,?,'hash','seller','ACTIVE','test-account',now(),now(),0)",
+        "insert into"
+            + " commerce.seller_accounts(id,email_normalized,password_hash,display_name,status,"
+            + "payout_account_ref,created_at,updated_at,version) values"
+            + " (?,?,'hash','seller','ACTIVE','test-account',now(),now(),0)",
         seller,
         seller + "@example.com");
     return new Shop(seller, product(seller));
