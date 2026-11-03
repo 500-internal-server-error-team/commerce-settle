@@ -15,7 +15,7 @@ import org.springframework.stereotype.Service;
 
 /**
  * 외부 승인 Worker. 도래한 승인 작업 하나를 임대해 PG 대역을 호출하고 결과를 반영한다. 처음 실행하는 결제만 승인 요청을 보내고, 결과를 모르는 결제는 원거래
- * 조회부터 한다. 조회가 거래 부재(404)면 임대에 호출 제한 시간만큼 남았는지 다시 확인한 뒤 같은 업무 키·본문으로 재전송한다.
+ * 조회부터 한다. 외부 호출 직전에는 임대에 호출 제한 시간만큼 남았는지 확인한다. 조회가 거래 부재(404)면 같은 확인을 다시 한 뒤 같은 업무 키·본문으로 재전송한다.
  */
 @Service
 public class ApprovalWorker {
@@ -48,6 +48,16 @@ public class ApprovalWorker {
     LeasedJob job = leased.get();
     Optional<ApprovalResultRecorder.Prepared> prepared = recorder.prepare(job);
     if (prepared.isEmpty()) {
+      return true;
+    }
+    // 준비 트랜잭션 커밋까지 걸린 시간만큼 임대가 줄었으므로 외부 호출 직전에 남은 임대를 다시 확인한다.
+    if (!jobs.holdsLease(job.jobId(), job.leaseToken(), settings.httpTimeout())) {
+      LOG.atWarn()
+          .addKeyValue("event", "payment.approval")
+          .addKeyValue("paymentId", job.paymentId())
+          .addKeyValue("jobId", job.jobId())
+          .addKeyValue("result", "LEASE_LOST")
+          .log("Approval was not called because the lease was lost");
       return true;
     }
     Result result = call(job, prepared.get());

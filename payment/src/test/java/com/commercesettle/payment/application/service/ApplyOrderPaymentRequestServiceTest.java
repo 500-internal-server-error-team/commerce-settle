@@ -1136,6 +1136,11 @@ class ApplyOrderPaymentRequestServiceTest {
     }
 
     @Override
+    public Optional<Payment> findByIdForUpdate(UUID id) {
+      return findById(id);
+    }
+
+    @Override
     public Optional<Payment> findByOrderId(UUID orderId) {
       return byId.values().stream().filter(p -> p.getOrderId().equals(orderId)).findFirst();
     }

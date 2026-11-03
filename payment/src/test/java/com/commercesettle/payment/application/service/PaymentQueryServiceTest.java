@@ -109,6 +109,11 @@ class PaymentQueryServiceTest {
     }
 
     @Override
+    public Optional<Payment> findByIdForUpdate(UUID id) {
+      return findById(id);
+    }
+
+    @Override
     public Optional<Payment> findByOrderId(UUID orderId) {
       throw new UnsupportedOperationException();
     }

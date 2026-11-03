@@ -39,7 +39,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 승인 Worker의 로컬 트랜잭션 단계. 대역 호출 전후로 나눠 외부 호출 중에는 DB 트랜잭션을 열어 두지 않는다. 결과 반영은 유효한 임대에서만 하며, 임대를 잃었으면
- * 결제·시도·마일리지·Outbox 변경을 모두 롤백한다.
+ * 결제·시도·마일리지·Outbox 변경을 모두 롤백한다. 준비와 결과 반영은 결제 행을 대기 상한 안에서 먼저 잠그므로, 미결제 취소 등과 경합이 길면 임대가 만료되기 전에
+ * 예외로 롤백한다.
  */
 @Component
 class ApprovalResultRecorder {
@@ -87,11 +88,12 @@ class ApprovalResultRecorder {
    */
   @Transactional
   public Optional<Prepared> prepare(LeasedJob job) {
+    Payment payment = payments.findByIdForUpdate(job.paymentId()).orElseThrow();
+    // 잠금을 기다리는 사이 임대가 만료됐을 수 있어 잠근 뒤 확인한다.
     if (!jobs.holdsLease(job.jobId(), job.leaseToken(), settings.httpTimeout())) {
       return Optional.empty();
     }
     Instant now = clock.instant();
-    Payment payment = payments.findById(job.paymentId()).orElseThrow();
     if (job.attempts() > settings.maxAttempts()) {
       exhaust(job, payment, now);
       return Optional.empty();
@@ -137,7 +139,8 @@ class ApprovalResultRecorder {
   @Transactional
   public void record(LeasedJob job, Result result) {
     Instant now = clock.instant();
-    Payment payment = payments.findById(job.paymentId()).orElseThrow();
+    // 결제 행을 대기 상한 안에서 잠가, 경합이 길면 임대가 만료되기 전에 롤백한다.
+    Payment payment = payments.findByIdForUpdate(job.paymentId()).orElseThrow();
     PaymentAttempt attempt =
         attempts
             .findByPaymentIdAndCycleId(payment.getId(), payment.getCurrentCycleId())
