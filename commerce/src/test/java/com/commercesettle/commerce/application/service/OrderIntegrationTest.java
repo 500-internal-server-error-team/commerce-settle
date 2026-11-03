@@ -36,6 +36,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -55,6 +56,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "app.internal-auth.senders.gateway.current=" + OrderIntegrationTest.GATEWAY_CREDENTIAL
     })
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class OrderIntegrationTest {
   @MockitoBean OrderAdmissionService admission;
   static final String GATEWAY_CREDENTIAL = "test-gateway-credential-0123456789abcdef0123";

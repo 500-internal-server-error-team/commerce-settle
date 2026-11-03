@@ -61,6 +61,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -87,6 +88,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "app.internal-auth.senders[operator\\:test].current=" + GradeCouponIntegrationTest.OPERATOR
     })
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @Import(GradeCouponIntegrationTest.Beans.class)
 class GradeCouponIntegrationTest {
   static final String OPERATOR = "test-operator-credential-0123456789abcdef0123";

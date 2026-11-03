@@ -53,6 +53,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.client.ExpectedCount;
@@ -78,6 +79,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "app.internal-auth.senders[operator\\:test].current=" + OrderWorkflowIntegrationTest.OPERATOR
     })
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @Import(OrderWorkflowIntegrationTest.Beans.class)
 class OrderWorkflowIntegrationTest {
   @MockitoBean OrderAdmissionService admission;

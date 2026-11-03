@@ -30,6 +30,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -52,6 +53,7 @@ import org.testcontainers.kafka.KafkaContainer;
       "spring.kafka.consumer.auto-offset-reset=earliest"
     })
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @Timeout(90)
 @Import(NotificationKafkaIntegrationTest.Topics.class)
 class NotificationKafkaIntegrationTest {
