@@ -16,7 +16,7 @@
       <tspan x="548.0" text-anchor="end" fill="#64748b"> uuid</tspan>
     </text>
     <text x="40.0" y="118" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">recipient_kind / recipient_id</text>
-    <text x="40.0" y="136" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">kind / channel / dedup_key</text>
+    <text x="40.0" y="136" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">kind / channel / channel_account_ref / dedup_key</text>
     <text x="40.0" y="154" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">item_count / total_amount</text>
     <text x="40.0" y="172" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">title / body / template_version</text>
     <text x="40.0" y="190" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">status / retry_count / attempt_count</text>
@@ -27,8 +27,8 @@
       <tspan x="548.0" text-anchor="end" fill="#64748b"> bigint</tspan>
     </text>
     <path d="M40,258h508" stroke="#e2e8f0" />
-    <g data-constraint="UK" data-columns="channel,kind,recipient_kind,recipient_id,dedup_key" data-condition="">
-      <text x="40.0" y="278" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (channel, kind, recipient_kind, recipient_id, dedup_key)</text>
+    <g data-constraint="UK" data-columns="channel,channel_account_ref,kind,recipient_kind,recipient_id,dedup_key" data-condition="NULLS NOT DISTINCT">
+      <text x="40.0" y="273" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key"><tspan x="40">UK (channel, channel_account_ref, kind,</tspan><tspan x="40" dy="14">recipient_kind, recipient_id, dedup_key) · NULLS NOT DISTINCT</tspan></text>
     </g>
   </g>
   <g data-entity="notification_items" data-box="636,24,540,220">

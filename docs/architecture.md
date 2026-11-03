@@ -22,7 +22,7 @@ PostgreSQL·Kafka·Redis와 관측 도구는 별도 인프라입니다. 관측 �
 
 Spring Boot 영역의 여섯 실행은 우리가 빌드하는 애플리케이션입니다. PostgreSQL·Kafka·Redis는 별도 인프라 컨테이너입니다. Gateway를 제외한 다섯 실행에 DB·Kafka 연결이 설정돼 있으며, Redis 연결 설정은 여섯 실행 모두에 전달됩니다.
 
-`payment-api`와 `payment-worker`는 같은 `payment` 모듈의 jar를 각각 실행하고 같은 DB를 사용합니다. `PAYMENT_ROLE`은 메트릭 태그와 역할별 Bean 활성화에 사용합니다. 수신한 결제 요청을 결제·승인 작업으로 처리하는 처리기는 `worker`에서만 실행하며 기본 비활성입니다. 승인 작업 소비·PG 호출은 구현 전입니다. Worker와 `finance-mock`은 Gateway의 공개 라우팅 대상에 포함하지 않습니다.
+`payment-api`와 `payment-worker`는 같은 `payment` 모듈의 jar와 DB를 사용합니다. `PAYMENT_ROLE`은 메트릭 태그와 역할별 Bean 활성화에 사용합니다. 접수와 외부 호출을 실행 역할로 나누며 Worker와 `finance-mock`은 Gateway의 공개 라우팅 대상에서 제외합니다. 활성화 플래그는 각 앱 설정을 확인합니다.
 
 각 앱은 HTTP 요청 외에 배치·스케줄러·이벤트 소비·Worker로도 업무를 시작합니다. 아래 [정기 작업과 비동기 실행](#정기-작업과-비동기-실행)이 작업별 실행 책임을 연결합니다. Spring Batch는 해당 앱에 포함하는 라이브러리이며 별도 서버·DB·컨테이너를 뜻하지 않습니다.
 
@@ -40,7 +40,7 @@ PostgreSQL·Kafka·Redis는 각각 `postgres-data`·`kafka-data`·`redis-data` �
 
 가입·로그인·복구·상품/이벤트 조회의 공개 여부는 OpenAPI의 PUBLIC 작업을 HTTP 메서드·정규화한 경로로 대조합니다. 경로 접두사만으로 공개하지 않으며 백엔드의 Gateway 허용 작업도 같은 기준을 사용합니다. 보호 작업에 검증된 계정 종류·ID가 없거나 로그아웃에 세션 해시가 없으면 `401`로 거절합니다. `/internal`·`/mock`는 Gateway 경로를 만들지 않으며 기존 서비스별/운영자별 자격과 허용 경로를 직접 확인합니다. Worker는 접수된 내부 명령·업무 키로 실행하며 사용자 세션을 재사용하지 않습니다. 컨테이너의 같은 네트워크나 클라이언트가 보낸 계정 ID만으로 호출을 신뢰하지 않습니다.
 
-인증용 Redis 쓰기는 커머스에만 허용합니다. Gateway는 해당 세션·가드의 읽기와 읽기 전용 검증 스크립트, Redis 실행 식별자 확인만 [허용](decisions/0003-redis-sessions.md#gateway의-redis-권한과-스크립트-재적재)하고 Payment·Settlement·Mock에는 인증 키 접근을 허용하지 않습니다. 키 접두사 대신 Redis ACL로 경계를 적용합니다. [Compose](../compose.yml)는 앱별 Redis 사용자를 두어 커머스에 인증 키 쓰기, Gateway에 위 읽기 권한만 주고, Payment·Settlement·Mock에는 아직 키 권한을 주지 않습니다. 키 패턴은 키 인자가 없는 명령을 제한하지 못하므로 커머스에는 `EVAL`·`EVALSHA`만 주고 `SCRIPT`·`FUNCTION`·키 목록(`SCAN`·`RANDOMKEY`·`DBSIZE`)·DB 전환은 허용하지 않습니다. 자기 키가 필요해지는 기능에서 해당 키 패턴을 추가합니다. `default` 사용자는 운영·검사용이며 앱에 전달하지 않습니다. Gateway는 `SessionAuthenticationFilter`에서 PUBLIC 판정·세션 검증·신원 헤더 교체를 수행하고, 세션 계정 종류가 작업의 `x-actor`와 다르면 `403`으로 거절합니다. 커머스는 로그인 때 `issue-session.lua`로 가드와 인증 버전을 확인한 뒤 세션을 저장하고, 로그아웃 때 신원이 같은 세션만 삭제합니다. 비밀번호 재설정은 `block-guard.lua`로 가드를 변경 중으로 막고 DB 커밋 뒤 `confirm-guard.lua`로 같은 변경만 새 인증 버전으로 엽니다. Gateway는 상류 `Authorization`을 커머스·Payment·Settlement별 Gateway 자격으로 교체합니다. 커머스는 `InternalCallerFilter`에서 [판정 순서](decisions/0010-internal-service-credentials.md#백엔드-판정-순서)를 적용하며 현재 Gateway 자격만 설정합니다. Payment·Settlement·Finance Mock도 공유 `internal-auth`로 자격을 판정합니다. Settlement의 지급 클라이언트에는 Finance Mock 자격을 부착합니다. Commerce의 환불 종결 증빙은 `SERVICE:commerce` 전용 읽기와 대상별 클라이언트로 연결하며 [선행 구현·활성화 조건](development.md#주문-업무-흐름)을 따릅니다. Payment의 PG 클라이언트와 그 밖의 미연결 서비스·운영자 호출, 미확정 인증 변경의 재조정은 아직 구현 전입니다.
+인증용 Redis 쓰기는 커머스만 허용하며 Gateway에는 세션·가드·실행 식별자 읽기와 읽기 전용 검증만 허용합니다. Payment·Settlement·Mock에는 인증 키 접근 권한을 주지 않습니다. 키 접두사가 아닌 [Compose](../compose.yml)의 앱별 ACL로 경계를 적용하며 `default` 사용자는 앱에 전달하지 않습니다. 커머스의 `EVAL`·`EVALSHA`와 금지 명령은 [Compose ACL](../compose.yml), Gateway의 `EVALSHA_RO`·제한된 재적재 권한은 [Gateway Redis 계약](decisions/0003-redis-sessions.md#gateway의-redis-권한과-스크립트-재적재)을 따릅니다. 로그인·폐기의 가드/버전 전이는 [세션 정책](policies.md#폐기와-저장소-복구), 대상별 서비스 자격 설정은 [내부 호출 자격](development.md#내부-호출-자격)을 따릅니다.
 
 ### 거래 알림
 
@@ -64,7 +64,7 @@ Payment·Settlement는 확정 상태와 알림 요청 Outbox를 함께 저장하
 
 [Prometheus 설정](../infra/prometheus/prometheus.yml)은 Gateway·Commerce·Payment API·Payment Worker·Settlement·Finance Mock의 `/actuator/prometheus`를 15초마다 수집합니다. Grafana는 [내부 Prometheus 주소](../infra/grafana/provisioning/datasources/prometheus.yml)를 조회합니다.
 
-k6는 브라우저를 조작하지 않는 HTTP 부하 도구입니다. 현재는 Gateway의 Commerce 명세를 반복 조회하며 결제 업무를 실행하지 않습니다. Prometheus와 데이터 파일시스템 수집기는 신규 접수 판단에 필요하므로 기본 Compose에서 실행합니다. Grafana·Alertmanager·Kafka UI는 `observability`, k6는 `tools` 프로필에서 실행합니다.
+Prometheus와 데이터 파일시스템 수집기는 신규 접수 판단에 필요하므로 기본 Compose에서 실행합니다. Grafana·Alertmanager·Kafka UI는 `observability`, k6는 `tools` 프로필에서 실행합니다.
 
 Prometheus·Grafana는 각각 `prometheus-data`·`grafana-data` 볼륨을 사용하고, Zipkin 추적은 재시작하면 사라집니다. 관측 도구의 호스트 포트는 [네트워크와 관측](#네트워크와-관측)을 따르며 모두 루프백에 바인딩됩니다. 앱 관리 포트 9091·DB·Kafka·Redis는 호스트에 게시하지 않습니다.
 
@@ -84,17 +84,15 @@ Prometheus가 금융·격리 경보를 평가하고 Alertmanager가 묶음·중�
 | `settlement` | `settlement` | 원장·예약·정산·지급, `settlement` DB·계정 |
 | `finance-mock` | `finance-mock` | 외부 PG·간편결제·지급 API 모의 서버, `finance_mock` DB·계정 |
 
-Payment 두 실행은 같은 jar·DB를 사용하고 `PAYMENT_ROLE=api|worker`로 메트릭 태그를 구분합니다. 실제 역할별 Bean 활성화와 업무 처리 로직은 구현해야 합니다.
-
 Settlement의 정산·모의 지급은 주말·공휴일 구분 없이 매일 처리합니다. 앱 내부 스케줄러가 정산 Job을 실행하고 영속 지급 작업은 같은 Settlement의 Worker가 맡습니다. 대조 Job은 자기 DB와 [Payment 내부 조회](api.md#정산-대조-조회)·대역 조회·자기 Consumer 그룹 offset을 사용하며 다른 업무 DB에 직접 접근하지 않습니다. 실행·재시작·대조 경계는 [정산 배치 결정](decisions/0007-settlement-batch-scope-and-schedule.md)을 따릅니다. 스케줄러와 Spring Batch는 앱에 포함하며 별도 서버·컨테이너·공통 업무 DB를 만들지 않습니다.
 
-커머스의 모듈·실행·패키지 이름은 `commerce`로 통일합니다. 판매자 업무의 `Seller`·`SELLER`·`sellerId`와 `/api/sellers`는 유지합니다. 배포 전 설계의 물리 DB·계정·스키마도 `commerce`, 비밀번호 변수도 `COMMERCE_DB_PASSWORD`로 맞춥니다. 회원·인증·상품·주문·쿠폰·선착순 이벤트는 같은 커머스 서비스에 두고 주문·재고·쿠폰·이벤트 수량 예약을 같은 DB 트랜잭션으로 처리합니다. 마일리지 잔액·예약·원장은 Payment 안에 두어 금융 결제 상태와 원자 저장합니다. [데이터 소유권](design.md#4-서비스-경계와-원천-데이터)과 [계정·권한](design.md#사용자와-거래-주체)을 따르며 신규 앱·DB는 추가하지 않습니다.
+커머스의 모듈·실행·DB·계정·스키마 이름은 `commerce`, DB 비밀번호 변수는 `COMMERCE_DB_PASSWORD`입니다. 판매자의 `Seller`·`SELLER`·`sellerId`와 `/api/sellers`는 업무 명칭입니다. 주문·재고·쿠폰·이벤트 예약은 커머스에서, 마일리지와 결제 상태는 Payment에서 원자 저장합니다. [데이터 소유권](design.md#4-서비스-경계와-원천-데이터)을 따릅니다.
 
 PostgreSQL 컨테이너 1대에서 DB·계정·스키마를 분리합니다. 계정은 자기 DB에만 연결할 수 있고, 다른 서비스 DB에 대한 CONNECT 권한은 없습니다. 애플리케이션에는 자기 DB 자격만 주며, 스키마 생성·변경 절차는 [DB 정책](migrations.md)을 따릅니다. 개발용 공용 PostgreSQL 컨테이너는 독립 운영 DB의 장애 격리를 제공하지 않습니다.
 
 이는 물리 분산·샤딩이 아닌 논리적 소유권 분리입니다. [DB 변경·삭제·FK 정책](migrations.md)을 함께 확인합니다.
 
-Compose DNS로 서비스를 찾습니다. 초기 구성에 별도 서비스 레지스트리·공통 업무 모듈은 두지 않습니다. 추후 Support/RAG는 구현할 때 독립 모듈로 추가합니다.
+Compose DNS로 서비스를 찾으며 별도 서비스 레지스트리는 두지 않습니다.
 
 ## 정기 작업과 비동기 실행
 
@@ -127,18 +125,9 @@ Compose DNS로 서비스를 찾습니다. 초기 구성에 별도 서비스 레�
 
 ### 월간 혜택 Job
 
-실행 도구·두 Step·취소 교정의 대안과 선택 근거는 [실행 방식 결정](decisions/0008-background-job-execution.md)을 따릅니다.
+`commerce`의 `gradeCouponJob`은 **대상·등급 확정과 자동 검증 → 쿠폰 발급**의 두 Step으로 실행합니다. 업무 회차·대상은 [쿠폰 발급 테이블](data-model.md#coupon_issue_runs)에 보존하며 Batch 실행 이력과 구분합니다. 같은 `targetMonth`·`runId`로 재시작하고 확정한 대상을 재선정하지 않습니다.
 
-월간 실적 집계·등급 결정·쿠폰 발급은 `commerce` 안의 한 업무 흐름입니다. **월간 혜택 등급은 선정자의 쿠폰 혜택을 결정하며 모든 회원의 상시 등급을 갱신하는 기능은 아닙니다.** 월별 기준·동점자·할인 조건은 [혜택 정책](policies.md#발급-대상주기예산)을 그대로 적용합니다.
-
-| 단계 | 저장·재개 경계 |
-| --- | --- |
-| 대상·등급 확정·자동 검증 | 동일 마감 원자료의 실적·순위·등급·월별 템플릿·대상을 고정하고 동점자·중복·할인 합계를 자동 검증. 실패하면 PREPARING을 보존하고 발급하지 않음 |
-| 쿠폰 발급 | 고정한 PENDING 대상만 처리하고 쿠폰·발급 이력·대상의 ISSUED 전이를 같은 Commerce DB 트랜잭션으로 저장 |
-
-업무 회차의 원본은 [coupon_issue_runs·coupon_issue_targets](data-model.md#coupon_issue_runs)입니다. 마감 자료 준비·대상 고정·자동 검증을 마친 뒤에만 ISSUING으로 전이합니다. 업무 전이가 커밋됐지만 첫 Step 완료 이력이 남지 않았어도 저장한 확정 결과를 재사용하고 다시 선정하지 않습니다. 발급 도중 중단되면 현재 구매 실적으로 순위를 다시 매기지 않고 같은 회차의 미완료 대상부터 재개합니다. 예를 들어 대상 104명 중 60명 발급 뒤 중단되면 기존 60장의 쿠폰을 보존하고 나머지만 이어서 처리합니다. 새 Job 실행 이력을 만들더라도 월별 발급 유일성은 업무 DB가 보장합니다.
-
-스케줄러는 매월 1일 00:10 KST부터 targetMonth와 runId를 Job 식별 파라미터로 전달하고, 10분마다 미완료 업무 회차를 확인합니다. 완료한 회차는 기존 결과를 반환하며 새 발급을 시작하지 않습니다. 실패·정상 중단된 실행은 같은 파라미터로 재시작하고, 강제 종료로 실행 이력이 진행 중으로 남았으면 실행자 부재·저장된 진행 상태를 확인한 복구 절차를 거칩니다. 정상 재시작에서 실행 번호·시각을 바꿔 같은 월의 대상을 새로 고정하지 않습니다. 발급 전 집계 오류만 [운영 교정](policies.md#월간-회차-검증과-오류-교정)으로 원회차를 취소하고 새 runId를 만듭니다. 실행자 부재와 발급 0건을 확인하고 취소·첫 발급을 같은 회차 잠금으로 보호합니다. 대체 회차는 원래 월·마감·정책·만료를 보존하며 취소된 회차는 실행하지 않습니다. 만료 뒤 재개는 발급 없이 EXPIRED로 종결합니다. Spring Batch 메타데이터 스키마·자동 기동 실행 설정도 Job 변경과 함께 관리·검증합니다.
+선정·발급·교정 조건은 [월간 혜택 정책](policies.md#발급-대상주기예산), 활성화·기한 경과 처리는 [실행 안내](development.md#주문-업무-흐름), 두 Step을 선택한 이유와 중단 사례는 [실행 방식 결정](decisions/0008-background-job-execution.md)을 따릅니다.
 
 ### 실행·장애·자원 경계
 
@@ -151,7 +140,7 @@ Compose DNS로 서비스를 찾습니다. 초기 구성에 별도 서비스 레�
 
 서비스 간 업무의 진행·완료·보상 책임과 전면 오케스트레이션·전면 코레오그래피의 비교는 [업무 흐름 조율 결정](decisions/0011-service-workflow-coordination.md)을 따릅니다.
 
-루트 패키지는 `com.commercesettle.<commerce|payment|settlement|financemock>`입니다.
+업무 모듈의 루트 패키지는 `com.commercesettle.<commerce|payment|settlement|financemock>`입니다.
 
 `finance-mock`은 모듈·실행 이름입니다. Java 패키지는 `financemock`, DB·계정·스키마는 `finance_mock`, 비밀번호 변수는 `FINANCE_MOCK_DB_PASSWORD`로 표기합니다.
 
@@ -191,30 +180,30 @@ ArchUnit이 계층 경계와 다른 서비스 구현의 직접 import를 검사�
 
 ### 시간 정보와 감사 기록
 
-생성·수정 시각을 가진 가변 엔티티에는 `domain/model/AuditableEntity`를 JPA `@MappedSuperclass`로 둡니다. Payment의 `Payment`부터 적용했으며 각 서비스가 자기 모듈에 둡니다. `createdAt`은 생성 때 고정하고 `updatedAt`은 성공한 상태 변경에만 갱신합니다. 응용 서비스의 `Clock`에서 받은 `Instant`를 마이크로초로 맞춰 생성자·상태 메서드에 전달합니다. public setter·클라이언트 시각·Spring Data 감사 주석으로 도메인을 프레임워크에 연결하지 않습니다. ID·`@Version`·논리삭제는 해당 엔티티에 필요한 경우만 둡니다. 추가 전용 원장·이벤트·감사 행에 수정 가능한 공통 부모를 강제하지 않습니다.
+생성·수정 시각을 가진 가변 엔티티에는 `domain/model/AuditableEntity`를 JPA `@MappedSuperclass`로 둡니다. 각 서비스가 자기 모듈에 둡니다. `createdAt`은 생성 때 고정하고 `updatedAt`은 성공한 상태 변경에만 갱신합니다. 응용 서비스의 `Clock`에서 받은 `Instant`를 마이크로초로 맞춰 생성자·상태 메서드에 전달합니다. public setter·클라이언트 시각·Spring Data 감사 주석으로 도메인을 프레임워크에 연결하지 않습니다. ID·`@Version`·논리삭제는 해당 엔티티에 필요한 경우만 둡니다. 추가 전용 원장·이벤트·감사 행에 수정 가능한 공통 부모를 강제하지 않습니다.
 
-시간 정보만으로 누가 무엇을 바꿨는지는 알 수 없습니다. 주요 상태 전이·운영 재처리는 서비스별 `audit_logs`에 행위를 추가 기록합니다. 인증된 계정/서비스 신원과 명시적인 SYSTEM 실행 주체를 응용 경계에서 전달하며, 다른 서비스에서 온 명령의 실행자는 검증한 발신 서비스입니다. 불명확한 원사용자를 추정하지 않습니다. 감사 저장 어댑터는 `infrastructure/persistence/audit`에 두며 기술용 감사 엔티티를 업무 집계와 구분합니다. 업무 변경·감사 행을 같은 서비스 DB 트랜잭션으로 저장하고 다른 서비스 DB나 공통 업무 모듈을 만들지 않습니다. [감사 테이블](data-model.md#audit_logs)이 필드·보존 기준입니다. 현재는 커머스의 계정 인증 변경(`ACCOUNT_AUTH_CHANGED`)만 기록합니다.
+시간 정보만으로 누가 무엇을 바꿨는지는 알 수 없습니다. 주요 상태 전이·운영 재처리는 서비스별 `audit_logs`에 행위를 추가 기록합니다. 인증된 계정/서비스 신원과 명시적인 SYSTEM 실행 주체를 응용 경계에서 전달하며, 다른 서비스에서 온 명령의 실행자는 검증한 발신 서비스입니다. 불명확한 원사용자를 추정하지 않습니다. 감사 저장 어댑터는 `infrastructure/persistence/audit`에 두며 기술용 감사 엔티티를 업무 집계와 구분합니다. 업무 변경·감사 행을 같은 서비스 DB 트랜잭션으로 저장하고 다른 서비스 DB나 공통 업무 모듈을 만들지 않습니다. [감사 테이블](data-model.md#audit_logs)이 필드·보존 기준입니다.
 
 ## 서비스 내부 분류
 
-루트는 계층별로 나누고, 각 계층 안에서는 아래 역할로 분류합니다. 실제 파일이 필요할 때 패키지를 추가하며 빈 디렉터리·인터페이스·공통 기반 클래스를 미리 만들지 않습니다. 구분할 업무가 늘면 같은 역할 아래 커머스의 `buyer`·`seller`·`catalog`·`order`·`coupon`·`notification`, Payment의 `payment`·`refund` 같은 하위 패키지를 사용합니다. 계층별 구조와 기능별 루트 구조를 서비스마다 혼용하지 않습니다.
+루트는 위 4계층으로 나누고 그 안에서 아래 역할을 사용합니다. 업무가 늘면 `application/service/order`처럼 역할 아래에 도메인 패키지를 둡니다. 빈 패키지·인터페이스·기반 클래스를 미리 만들거나 서비스마다 기능별 루트와 계층별 루트를 혼용하지 않습니다.
 
-| 위치 | 넣을 코드·이름 예시 |
+| 위치 | 책임 |
 | --- | --- |
-| `presentation/controller` | HTTP 경계 `PaymentController` |
-| `presentation/dto` | 외부 요청·응답 `CreatePaymentRequest`, `PaymentResponse` |
-| `presentation/exception` | MVC 예외→ProblemDetail 변환 `PaymentExceptionHandler` |
+| `presentation/controller` | HTTP 요청 진입점 |
+| `presentation/dto` | 외부 요청·응답 DTO |
+| `presentation/exception` | MVC 예외→ProblemDetail 변환 |
 | `application/service` | 유즈케이스 `CreatePaymentService`, 환불 SAGA 조율 |
-| `application/dto` | HTTP·메시징과 독립된 입력·결과가 필요할 때 `CreatePaymentCommand`, `PaymentResult` |
-| `application/port` | PG·캐시·이벤트 발행 등 외부 기능 계약 `PgClient`, `PaymentEventPublisher` |
-| `application/event` | 서비스 간 이벤트 envelope·payload `PaymentApprovedEvent`. 송수신 서비스가 자기 계약 타입 관리 |
-| `domain/model` | 엔티티 `Payment`, 값 객체·상태 `Money`, `PaymentStatus` |
-| `domain/repository` | 업무 저장소 인터페이스 `PaymentRepository`. Spring Data 상속 금지 |
+| `application/dto` | HTTP·메시징과 독립된 입력·결과가 필요할 때 |
+| `application/port` | PG·캐시·이벤트 발행 등 외부 기능 계약 |
+| `application/event` | 서비스 간 이벤트 envelope·payload. 송수신 서비스가 자기 계약 타입 관리 |
+| `domain/model` | 엔티티·값 객체·상태 |
+| `domain/repository` | 업무 저장소 인터페이스. Spring Data 상속 금지 |
 | `domain/service` | 한 엔티티에 둘 수 없는 순수 업무 규칙·정책 |
 | `domain/exception` | 업무 규칙 위반. HTTP 상태·ProblemDetail·응답 메시지와 분리 |
-| `infrastructure/persistence` | JPA 어댑터 `JpaPaymentRepository`, Spring Data 인터페이스 `SpringDataPaymentRepository`, 기술용 Outbox·Inbox 저장 |
+| `infrastructure/persistence` | JPA 어댑터·Spring Data 인터페이스·기술용 Outbox/Inbox 저장 |
 | `infrastructure/messaging` | Kafka Producer·Listener, Outbox 발행기·재처리 스케줄러 |
-| `infrastructure/client` | HTTP PG 구현 `HttpPgClient`, 외부 전용 요청·응답 |
+| `infrastructure/client` | 외부 HTTP 구현·클라이언트 전용 요청/응답 |
 | `infrastructure/cache` | Redis 세션·인증 가드·캐시·잠금 어댑터 |
 | `infrastructure/config` | Spring 설정·클라이언트 구성·OpenAPI |
 | `infrastructure/observability` | 자기 저장소·Kafka의 읽기 전용 관측과 불변 메트릭 snapshot |
@@ -223,7 +212,7 @@ ArchUnit이 계층 경계와 다른 서비스 구현의 직접 import를 검사�
 
 트랜잭션 경계는 응용 서비스에서 시작합니다. 도메인에는 `@Service`·`@Transactional`·Spring Data·Kafka·Redis 호출을 넣지 않습니다. 순수 도메인 정책의 Bean 등록이 필요하면 인프라 설정에서 구성합니다. 포트의 입력·출력도 외부 클라이언트·JPA 구현 타입에 의존하지 않습니다.
 
-커머스 인증도 같은 경계를 따릅니다. 표현 계층은 로그인·복구 DTO와 오류 변환, 응용 계층은 자격 확인·세션 발급·폐기·재조정 흐름, 도메인은 계정 상태·인증 버전 전이를 맡습니다. Redis·비밀번호 해시·복구 토큰 전달은 응용 포트 뒤의 인프라 어댑터로 구현합니다. Gateway의 세션 필터는 WebFlux에 맞는 비동기 Redis 접근을 사용하며 JPA·비밀번호 검증을 직접 수행하지 않습니다.
+인증의 Redis·비밀번호 해시·복구 토큰 전달도 응용 포트 뒤의 인프라 어댑터로 둡니다. Gateway의 세션 필터는 WebFlux의 비동기 Redis 접근을 사용하며 JPA·비밀번호 검증을 수행하지 않습니다.
 
 Kafka Listener는 메시지 검증·응용 서비스 호출·처리 결과에 따른 ack를 맡습니다. 금액·상태 전이 규칙은 도메인, 흐름·원자 저장 경계는 응용 서비스가 맡습니다. Outbox·Inbox의 기술용 레코드는 업무 엔티티와 구분합니다. 생산자는 업무 상태와 Outbox, 소비자는 Inbox와 실행 작업을 각각 같은 DB 트랜잭션에 저장합니다.
 
@@ -233,22 +222,19 @@ Payment API·Worker는 패키지를 복제하지 않습니다. HTTP와 비동기
 
 ### 저장소 파일 위치
 
-| 위치 | 기준 |
-| --- | --- |
-| `gateway/`, `commerce/`, `payment/`, `settlement/`, `finance-mock/` | 독립 애플리케이션의 Gradle 모듈. 업무 모듈은 도메인 이름, 외부 대역은 대상·역할로 이름을 짓고 `-service`는 생략 |
-| `<모듈>/src/main/resources` | 앱 설정 |
-| `infra/postgres/schema` | 서비스 DB별 스키마 DDL. 생성·변경 절차는 [DB 정책](migrations.md)을 따름 |
-| `<모듈>/src/test/java`, `src/test/resources` | 단위·통합 테스트와 필요한 fixture. [테스트 규칙](../CONTRIBUTING.md#테스트-작성) 적용 |
-| `infra/` | PostgreSQL 컨테이너 초기화·Prometheus·Grafana 등 실행 환경 파일 |
-| `<모듈>/…/infrastructure/` | Java 어댑터 코드. 루트의 배포 설정 폴더와 역할이 다름 |
-| `config/` | Checkstyle 등 저장소 공통 개발 도구 설정 |
-| `scripts/` | 환경 초기화·기동 검증 같은 개발 보조 명령 |
-| `tests/load/` | k6 JavaScript 부하 시나리오. 서비스 업무 구현과 분리 |
-| `internal-auth/` | 실행하지 않는 공유 라이브러리 모듈. 추출 범위는 [공유 코드 경계](decisions/0009-api-contract-and-shared-code.md#추출-기록) |
-| `docs/` | 실행·설계·DB 정책. 기록 추가는 [작성 기준](../CONTRIBUTING.md#문서와-기록) 적용 |
-| `.agents/skills/` | 반복하는 에이전트 작업 절차. 공통 개발 규칙은 복제하지 않고 링크 |
+업무 모듈은 도메인 이름, 외부 대역은 대상·역할로 이름을 짓고 `-service`는 생략합니다.
 
-폴더 이름은 책임을 나타내며 DDD가 특정 이름·깊이를 강제하지는 않습니다. 새 역할이 기존 분류에 맞지 않으면 가장 가까운 책임과 변경 이유부터 검토합니다.
+애플리케이션 모듈은 위 [실행 단위](#실행-단위), 문서·테스트는 [문서 구조](../CONTRIBUTING.md#문서-구조와-기준-위치)와 [테스트 작성](../CONTRIBUTING.md#테스트-작성)을 따릅니다.
+
+| 위치 | 책임 |
+| --- | --- |
+| `<모듈>/src/main/resources` | 앱 설정 |
+| `infra/` | Compose가 사용하는 DB 초기화·관측 설정. 서비스 DDL은 `infra/postgres/schema` |
+| `<모듈>/…/infrastructure/` | Java 어댑터. 루트 실행 환경 설정과 구분 |
+| `config/`, `scripts/`, `tests/load/` | 개발 도구 설정, 보조 명령, k6 부하 시나리오 |
+| `internal-auth/` | 실행하지 않는 공유 라이브러리. [추출 범위](decisions/0009-api-contract-and-shared-code.md#추출-기록) |
+
+새 파일은 가장 가까운 기존 책임에 두고, 실제 역할이 늘 때 패키지를 추가합니다.
 
 ### 본인 카카오톡 시연 어댑터
 
@@ -260,19 +246,19 @@ Commerce의 `infrastructure/client/kakao`가 공식 self-send HTTP와 본인 토
 
 전달·용량 산정과 선택 이유는 [Kafka 이벤트 전달과 용량 산정](decisions/0005-kafka-event-delivery-and-capacity.md)을 따릅니다. 생산자별 토픽·책임별 Consumer 그룹, 업무 상태·Outbox의 원자 저장과 Inbox·처리 대기 작업의 커밋 후 offset 승인을 구현 기준으로 삼고 파티션·동시 실행·보존·접수 제한은 ADR의 초기값으로 시작하고 정상 부하와 장애 후 배출 시험으로 조정합니다. 이벤트 종류·key·그룹·payload는 [API 이벤트 계약](api.md#이벤트-연동)이 소유합니다. 토픽·서비스 사이의 전역 순서는 가정하지 않으며 금융 이벤트에 배송지·비밀번호·인증 토큰을 넣지 않습니다.
 
-현재 Commerce의 Outbox·Relay와 Payment의 Inbox 영속 인계·원문 격리·DLT 발행·운영 재처리를 구현했습니다. 해석 불가 원문과 발행 작업은 Payment DB에 함께 보존하고, Kafka 응답은 DB 트랜잭션 밖의 전용 실행기에서 기다립니다. 저장 구조와 논리 관계는 [메시지 데이터 모델](data-model.md#메시지멱등성감사)을 따릅니다. 발행·수신·원문 격리는 기본 비활성이며 다른 소비자의 DLT는 토픽만 준비한 상태입니다. 금융 업무 전체의 연결·정합성·처리량·장애 후 배출 목표는 검증 전입니다. 활성화 절차와 시험 범위는 [Kafka 전달 기반](development.md#kafka-전달-기반)을 따릅니다.
+Outbox·Inbox·원문 격리·DLT 작업의 저장 관계는 [메시지 데이터 모델](data-model.md#메시지멱등성감사), 활성화와 복구 절차는 [Kafka 전달 기반](development.md#kafka-전달-기반)을 따릅니다. Kafka 응답은 DB 트랜잭션 밖에서 기다립니다.
 
 ## 네트워크와 관측
 
 Gateway는 빌드에 포함한 [OpenAPI](openapi.json)의 `/api/` 작업을 HTTP 메서드·경로와 `x-owner-service`로 대조해 커머스·Payment API·Settlement로 전달합니다. 경로 접두사가 같은 판매자 API도 상품·계정은 커머스, 정산·지급 조회는 Settlement로 구분합니다. 명세에 없는 경로·메서드와 `/internal`·`/mock`·관리 경로는 전달하지 않습니다. API 명세는 `/v3/api-docs/commerce|payment|settlement`, Swagger UI는 `/swagger-ui.html`입니다.
 
-라우팅, Gateway의 세션 검증, 커머스 상품·재고 API와 판매자 가입·로그인 세션 발급·로그아웃·비밀번호 복구, Payment의 본인 결제·승인 시도·마일리지 조회와 Settlement용 정산 컨텍스트·대조 조회, 운영 결제 작업 조회·재처리, Settlement의 판매자 본인 정산 항목·배치·지급 조회와 운영자 지급 작업 재처리·정산 배치 생성은 구현했지만 나머지 업무 API는 구현 전입니다. 커머스·Payment·Settlement는 Gateway 자격, Finance Mock은 지급에 Settlement, PG 승인·조회·환불에 Payment 자격이 없는 직접 호출을 컨트롤러 전에 거절합니다. 판정은 공유 라이브러리 `internal-auth`가 맡고 서비스는 허용 발신자만 설정합니다. 서비스 자격은 Settlement→Finance Mock 지급 호출과 Payment Worker→Finance Mock 승인·환불·원거래 조회 HTTP 클라이언트에 연결했습니다. 다른 호출을 추가할 때는 [연결 방법](development.md#내부-호출-자격)을 따릅니다. 내부 HTTP는 평문이므로 로컬 개발 환경에서만 사용합니다. Gateway 자체 오류는 [공통 오류 계약](../CONTRIBUTING.md#오류)으로 응답하고 백엔드의 오류 응답은 보존합니다. 전송 계층의 자동 재시도를 끄며 응답 전 연결 단절도 업무 실패로 확정하지 않습니다. 구매자의 주문·결제 요청과 판매자의 상품·정산 요청에 서로 다른 권한을 적용하고, 각 서비스에서도 계정 종류·거래 소유권을 검증해야 합니다.
+백엔드는 컨트롤러 전에 대상별 호출 자격과 허용 발신자를 검사하고, 사용자 작업에는 계정 종류·거래 소유권도 대조합니다. MVC 앱의 자격 판정은 `internal-auth`를 사용하며 설정·교체는 [내부 호출 자격](development.md#내부-호출-자격)을 따릅니다. 내부 HTTP는 평문이므로 로컬 개발 환경에서만 사용합니다. Gateway 자체 오류는 [공통 오류 계약](../CONTRIBUTING.md#오류)으로 응답하고 백엔드 오류는 보존합니다. 전송 계층의 자동 재시도를 끄며 연결 단절을 금융 실패로 확정하지 않습니다.
 
 `v3`는 Springdoc의 OpenAPI 3 문서 경로이며 서비스 API의 세 번째 버전을 뜻하지 않습니다.
 
 서비스 관리 포트 9091은 컨테이너 내부 전용입니다. Gateway 업무 포트와 분리해 `/actuator/**`·`finance-mock`·내부 API를 외부 경로에 연결하지 않습니다. 기본 호스트 포트는 Gateway `127.0.0.1:8080`, Zipkin `127.0.0.1:9411`, Prometheus `127.0.0.1:9090`입니다. 선택 `observability` 프로필은 Alertmanager·Grafana·Kafka-UI 포트를 루프백에 추가합니다. 데이터 파일시스템 수집기는 호스트 포트를 게시하지 않습니다.
 
-Prometheus는 6개 실행의 JVM·프로세스·HTTP 메트릭, 활성화한 격리 DB 표본, 세 서비스 금융 Inbox·Outbox·Job과 금융 상태, 세 금융 그룹 Kafka lag와 실제 데이터 파일시스템을 수집합니다. Grafana는 기본 실행 지표와 격리·발행 적체·관측 신선도를 보여줍니다. 금융·격리 경보는 Alertmanager로 전달하며 기본은 화면 확인, Slack은 비밀 파일을 사용하는 별도 overlay로 연결합니다. 승인 완료 TPS와 정산 전체 지연 관측은 별도 구현 대상입니다. 금융 지표와 복구는 [금융 관측](development.md#금융-관측과-접수-복구), 격리 지표와 조치는 [DLT 관측](development.md#dlt-관측과-조치)을 따릅니다.
+수집 대상과 전달 경계는 위 [관측 구성](#관측-구성)을 따릅니다. 금융 지표·접수 복구는 [금융 관측](development.md#금융-관측과-접수-복구), 격리 지표·조치는 [DLT 관측](development.md#dlt-관측과-조치)에서 확인합니다. 승인 완료 TPS와 정산 전체 지연은 별도 업무 시나리오로 계측합니다.
 
 ### 로그 수집
 
