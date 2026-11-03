@@ -346,6 +346,8 @@ def cmd_ramp(args):
     import threading
 
     stages = parse_stages(args.stages)
+    if args.kill_after < 0 or args.kill_after >= sum(seconds for _, seconds in stages):
+        raise SystemExit("kill-after must be nonnegative and earlier than the end of injection")
     run = args.run or "ramp-" + datetime.now().strftime("%Y%m%d-%H%M%S")
     directory = WORK / run
     directory.mkdir(parents=True, exist_ok=True)
@@ -362,18 +364,23 @@ def cmd_ramp(args):
     samples = [{**snapshot(), "elapsed": 0.0}]
     origin = time.monotonic()
     fault = {}
+    fault_thread = None
     if args.kill_after:
         def kill_worker():
-            time.sleep(args.kill_after)
-            fault["killedAt"] = round(time.monotonic() - origin, 2)
-            compose("kill", "payment-worker")
-            env = compose_env()
-            env["LOAD_PAYMENT_LISTENER_ENABLED"] = "true"
-            if args.scenario:
-                env["LOAD_PG_SCENARIO"] = args.scenario
-            compose("up", "-d", "--wait", "--no-deps", "payment-worker", env=env)
-            fault["restartedAt"] = round(time.monotonic() - origin, 2)
-        threading.Thread(target=kill_worker, daemon=True).start()
+            try:
+                time.sleep(args.kill_after)
+                fault["killedAt"] = round(time.monotonic() - origin, 2)
+                compose("kill", "payment-worker")
+                env = compose_env()
+                env["LOAD_PAYMENT_LISTENER_ENABLED"] = "true"
+                if args.scenario:
+                    env["LOAD_PG_SCENARIO"] = args.scenario
+                compose("up", "-d", "--wait", "--no-deps", "payment-worker", env=env)
+                fault["restartedAt"] = round(time.monotonic() - origin, 2)
+            except BaseException as error:  # compose 실패(SystemExit)도 주 스레드에서 보고한다
+                failure.append(error)
+        fault_thread = threading.Thread(target=kill_worker, daemon=True)
+        fault_thread.start()
     thread.start()
     drain_started = None
     with open(directory / "samples.jsonl", "a", encoding="utf-8") as out:
@@ -397,17 +404,26 @@ def cmd_ramp(args):
                 "stage", "receivedPerSecond", "confirmedPerSecond", "unfinished", "waiting",
                 "kafkaLag", "outboxPending", "jobsReview")}), flush=True)
             if failure:
-                raise SystemExit(f"producer failed: {failure[0]}")
+                raise SystemExit(f"load worker failed: {failure[0]}")
             if thread.is_alive():
                 continue
             drain_started = drain_started or time.monotonic()
             idle = (sample["unfinished"] == 0 and sample["waiting"] == 0
                     and sample["kafkaLag"] == 0 and sample["outboxPending"] == 0)
-            if idle:
+            if idle and (fault_thread is None or not fault_thread.is_alive()):
                 break
             if time.monotonic() - drain_started > args.drain:
                 print("drain timeout; leaving remaining backlog for inspection")
                 break
+
+    if fault_thread is not None:
+        if fault_thread.is_alive():
+            raise SystemExit("worker restart did not complete before drain timeout")
+        fault_thread.join()
+        if failure:
+            raise SystemExit(f"load worker failed: {failure[0]}")
+        if "restartedAt" not in fault:
+            raise SystemExit("worker restart did not complete")
 
     summary = {"run": run, "mix": args.mix, "scenario": args.scenario, "fault": fault,
                "stages": []}
