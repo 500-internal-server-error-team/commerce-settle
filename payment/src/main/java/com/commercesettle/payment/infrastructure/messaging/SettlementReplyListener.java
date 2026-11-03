@@ -33,6 +33,9 @@ import org.springframework.kafka.support.Acknowledgment;
 public class SettlementReplyListener {
   static final String TOPIC = "commerce-settle.settlement.v1";
 
+  /** OpenAPI의 사유 코드 길이 상한. SAGA의 {@code last_error_code varchar(80)}와 같다. */
+  private static final int MAX_CODE_LENGTH = 80;
+
   private final ObjectMapper mapper;
   private final Map<String, Reply> replies;
   private final OrderPaymentRequestAcceptor acceptor;
@@ -53,19 +56,22 @@ public class SettlementReplyListener {
                     new TypeReference<EventEnvelope<RefundReservationResultPayload>>() {}),
                 List.of("refundId", "paymentId"),
                 List.of("reservationId"),
-                List.of()),
+                List.of(),
+                List.of("reasonCode")),
             "RefundLedgerReversed",
             new Reply(
                 mapper.readerFor(
                     new TypeReference<EventEnvelope<RefundLedgerReversedPayload>>() {}),
                 List.of("refundId", "paymentId", "reservationId"),
                 List.of(),
-                List.of("reversedAt")),
+                List.of("reversedAt"),
+                List.of()),
             "RefundReservationReleased",
             new Reply(
                 mapper.readerFor(
                     new TypeReference<EventEnvelope<RefundReservationReleasedPayload>>() {}),
                 List.of("refundId", "paymentId", "reservationId"),
+                List.of(),
                 List.of(),
                 List.of()));
     this.acceptor = acceptor;
@@ -130,6 +136,9 @@ public class SettlementReplyListener {
           requireUuid(payload.path(field));
         }
       }
+      for (String field : reply.nullableCodes()) {
+        requireNullableCode(payload.path(field));
+      }
       for (String field : reply.times()) {
         if (!payload.path(field).isTextual()) {
           throw new IllegalArgumentException();
@@ -151,6 +160,24 @@ public class SettlementReplyListener {
     }
   }
 
+  /**
+   * 사유 코드는 null 또는 1~80자다. 긴 값을 Inbox에 넘기면 SAGA 저장에서 롤백만 반복하다 확인 대상으로 남고 환불은 예약 대기에 머물므로, 인계 전에 거절해
+   * 격리한다.
+   */
+  private static void requireNullableCode(JsonNode node) {
+    if (node.isNull()) {
+      return;
+    }
+    if (!node.isTextual()) {
+      throw new IllegalArgumentException();
+    }
+    String value = node.textValue();
+    int length = value.codePointCount(0, value.length());
+    if (length < 1 || length > MAX_CODE_LENGTH) {
+      throw new IllegalArgumentException();
+    }
+  }
+
   private static UUID paymentId(Object payload) {
     return switch (payload) {
       case RefundReservationResultPayload reply -> reply.paymentId();
@@ -160,7 +187,11 @@ public class SettlementReplyListener {
     };
   }
 
-  /** 응답 종류별 해석기와 형식을 따로 검사할 UUID·nullable UUID·시각 필드. */
+  /** 응답 종류별 해석기와 형식을 따로 검사할 UUID·nullable UUID·시각·nullable 사유 코드 필드. */
   private record Reply(
-      ObjectReader reader, List<String> uuids, List<String> nullableUuids, List<String> times) {}
+      ObjectReader reader,
+      List<String> uuids,
+      List<String> nullableUuids,
+      List<String> times,
+      List<String> nullableCodes) {}
 }
