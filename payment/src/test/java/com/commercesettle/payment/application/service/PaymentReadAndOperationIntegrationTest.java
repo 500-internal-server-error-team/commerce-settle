@@ -15,6 +15,7 @@ import com.commercesettle.payment.application.dto.ReconciliationEventPageView;
 import com.commercesettle.payment.application.dto.SettlementContextView;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
+import com.commercesettle.payment.application.event.RefundFinancialCompletedPayload;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.PaymentGateway;
@@ -44,6 +45,7 @@ import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
@@ -56,6 +58,8 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
@@ -64,6 +68,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.TransientDataAccessResourceException;
 import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -251,6 +256,142 @@ class PaymentReadAndOperationIntegrationTest {
         .isInstanceOf(ReconciliationCutoffNotReadyException.class);
     assertThat(reconciliation.read(dbNow.minus(Duration.ofMinutes(11)), null, 10).items())
         .isEmpty();
+  }
+
+  @Test
+  @DisplayName("환불 완료도 발행 전후 모두 조회하며 최초 확정 Outbox의 원금액을 유지한다")
+  void includesRefundWithOriginalFinancialAmounts() throws Exception {
+    UUID payment = UUID.randomUUID();
+    UUID confirmed = originalEvent(payment);
+    UUID refund = UUID.randomUUID();
+    UUID eventId = refundEvent(payment, refund, 9_000, 1_000);
+
+    ReconciliationEventPageView first = reconciliation.read(CUTOFF, null, 1);
+
+    assertThat(first.totalElements()).isEqualTo(2);
+    ReconciliationEvent event = first.items().getFirst();
+    assertThat(event.eventId()).isEqualTo(eventId);
+    assertThat(event.eventType()).isEqualTo("RefundFinancialCompleted");
+    assertThat(event.paymentId()).isEqualTo(payment);
+    assertThat(event.refundId()).isEqualTo(refund);
+    assertThat(event.externalAmount()).isEqualTo(9_000);
+    assertThat(event.mileageAmount()).isEqualTo(1_000);
+    assertThat(event.platformCouponAmount()).isEqualTo(500);
+    assertThat(event.settlementBaseAmount()).isEqualTo(10_500);
+    assertThat(event.feeAmount()).isEqualTo(1_500);
+    assertThat(event.sellerNetAmount()).isEqualTo(9_000);
+    assertThat(event.published()).isFalse();
+    assertThat(event.partition()).isNull();
+    assertThat(event.offset()).isNull();
+    assertThat(event.publishedAt()).isNull();
+    assertThat(reconciliation.read(CUTOFF, first.nextCursor(), 1).items())
+        .extracting(ReconciliationEvent::eventId)
+        .containsExactly(confirmed);
+
+    jdbc()
+        .update(
+            "UPDATE payment.outbox SET status = 'PUBLISHED', published_partition = 2,"
+                + " published_offset = 42, published_at = clock_timestamp() WHERE id = ?",
+            eventId);
+    ReconciliationEvent published = reconciliation.read(CUTOFF, null, 1).items().getFirst();
+    assertThat(published.published()).isTrue();
+    assertThat(published.partition()).isEqualTo(2);
+    assertThat(published.offset()).isEqualTo(42L);
+    assertThat(published.publishedAt()).isNotNull();
+    assertThat(published.feeAmount()).isEqualTo(event.feeAmount());
+    assertThat(published.sellerNetAmount()).isEqualTo(event.sellerNetAmount());
+  }
+
+  @Test
+  @DisplayName("페이지 밖 환불이라도 최초 확정 원천이 없으면 빈 값 대신 대조 불가로 중단한다")
+  void rejectsRefundWithoutOriginalOutsidePage() throws Exception {
+    refundEvent(UUID.randomUUID(), UUID.randomUUID(), 9_000, 1_000);
+    confirmedEvent(CUTOFF);
+
+    assertThatThrownBy(() -> reconciliation.read(CUTOFF, null, 1))
+        .isInstanceOf(TransientDataAccessResourceException.class);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"9001,1000", "9000,1001"})
+  @DisplayName("환불의 외부·마일리지 금액이 최초 확정과 다르면 대조를 중단한다")
+  void rejectsRefundAmountMismatch(long external, long mileageAmount) throws Exception {
+    UUID payment = UUID.randomUUID();
+    originalEvent(payment);
+    refundEvent(payment, UUID.randomUUID(), external, mileageAmount);
+
+    assertThatThrownBy(() -> reconciliation.read(CUTOFF, null, 10))
+        .isInstanceOf(TransientDataAccessResourceException.class);
+  }
+
+  @Test
+  @DisplayName("같은 결제의 최초 확정 원천이 여러 개면 임의의 금액을 선택하지 않는다")
+  void rejectsAmbiguousOriginalForRefund() throws Exception {
+    UUID payment = UUID.randomUUID();
+    originalEvent(payment);
+    originalEvent(payment);
+    refundEvent(payment, UUID.randomUUID(), 9_000, 1_000);
+
+    assertThatThrownBy(() -> reconciliation.read(CUTOFF, null, 10))
+        .isInstanceOf(TransientDataAccessResourceException.class);
+  }
+
+  @Test
+  @DisplayName("cursor 기준선 뒤 저장된 확정 원천으로 과거 환불의 누락 금액을 채우지 않는다")
+  void rejectsOriginalCreatedAfterSnapshot() throws Exception {
+    Instant snapshot =
+        jdbc()
+            .queryForObject("SELECT clock_timestamp()", Timestamp.class)
+            .toInstant()
+            .minusSeconds(60);
+    UUID payment = UUID.randomUUID();
+    originalEvent(payment);
+    UUID refund = refundEvent(payment, UUID.randomUUID(), 9_000, 1_000);
+    jdbc()
+        .update(
+            "UPDATE payment.outbox SET created_at = ? WHERE id = ?",
+            Timestamp.from(snapshot.minusSeconds(1)),
+            refund);
+    String cursor =
+        new ReconciliationQueryService.Cursor(
+                snapshot, CUTOFF, 1, 1, new Position(snapshot, UUID.randomUUID()))
+            .encode();
+
+    assertThatThrownBy(() -> reconciliation.read(CUTOFF, cursor, 1))
+        .isInstanceOf(TransientDataAccessResourceException.class);
+  }
+
+  private UUID originalEvent(UUID payment) {
+    UUID event = UUID.randomUUID();
+    insertOutbox(
+        event,
+        "PaymentConfirmed",
+        CUTOFF.minusSeconds(1),
+        payment,
+        """
+        {"paymentId":"%s","externalAmount":9000,"mileageAmount":1000,"platformCouponAmount":500,
+         "settlementBaseAmount":10500,"feeAmount":1500,"sellerNetAmount":9000}
+        """
+            .formatted(payment));
+    return event;
+  }
+
+  private UUID refundEvent(UUID payment, UUID refund, long external, long mileageAmount)
+      throws Exception {
+    UUID event = UUID.randomUUID();
+    insertOutbox(
+        event,
+        "RefundFinancialCompleted",
+        CUTOFF,
+        payment,
+        mapper.writeValueAsString(
+            new RefundFinancialCompletedPayload(
+                refund,
+                payment,
+                external,
+                mileageAmount,
+                OffsetDateTime.ofInstant(CUTOFF, ZoneOffset.UTC))));
+    return event;
   }
 
   @Test
@@ -531,12 +672,17 @@ class PaymentReadAndOperationIntegrationTest {
   }
 
   private void insertOutbox(UUID eventId, String type, Instant occurredAt, String payload) {
+    insertOutbox(eventId, type, occurredAt, eventId, payload);
+  }
+
+  private void insertOutbox(
+      UUID eventId, String type, Instant occurredAt, UUID aggregateId, String payload) {
     String json =
         """
         {"eventId":"%s","eventType":"%s","eventVersion":1,"occurredAt":"%s",
          "aggregateId":"%s","aggregateVersion":0,"payload":%s}
         """
-            .formatted(eventId, type, occurredAt, eventId, payload.strip());
+            .formatted(eventId, type, occurredAt, aggregateId, payload.strip());
     jdbc()
         .update(
             "INSERT INTO payment.outbox (id, event_type, event_version, aggregate_id,"
@@ -544,9 +690,9 @@ class PaymentReadAndOperationIntegrationTest {
                 + " VALUES (?, ?, 1, ?, 0, 'commerce-settle.payment.v1', ?, ?, CAST(? AS jsonb), ?)",
             eventId,
             type,
-            eventId,
+            aggregateId,
             Timestamp.from(occurredAt),
-            eventId.toString(),
+            aggregateId.toString(),
             json,
             json.getBytes(StandardCharsets.UTF_8));
   }
