@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check the running local foundation, not payment business functionality."""
 
+import argparse
 import hashlib
 import json
 import os
@@ -381,9 +382,44 @@ def check_kafka_topics():
             assert configs.get("retention.bytes") == "-1", summary
 
 
-def main():
+def check_backend_ports(service, ports, demo_ui=False):
+    allowed = {"commerce": 18081, "payment-api": 18082, "settlement": 18083, "finance-mock": 18084}
+    if not demo_ui or service not in allowed:
+        assert not ports, service
+        return
+    assert ports and len(ports) == 1, service
+    port = ports[0]
+    assert (port.get("host_ip"), int(port["published"]), int(port["target"]), port.get("protocol", "tcp")) == (
+        "127.0.0.1", allowed[service], 8080, "tcp"), service
+
+
+def check_demo_ui_operator_bindings(config):
+    targets = [("commerce", "/internal/coupon-issue-runs", 200),
+               ("payment-api", "/internal/payment-jobs", 200),
+               ("settlement", "/internal/payout-jobs", 200),
+               ("finance-mock", "/mock/accounts/" + str(uuid.uuid4()), 404)]
+    credentials = []
+    for service, _, _ in targets:
+        settings = json.loads(config["services"][service]["environment"]["SPRING_APPLICATION_JSON"])
+        credentials.append(settings["app"]["internal-auth"]["senders"]["[operator:demo-ui]"]["current"])
+    assert len(set(credentials)) == 4 and all(len(value) >= 43 for value in credentials), "Use distinct demo operator credentials"
+    for index, (service, path, expected) in enumerate(targets):
+        port = config["services"][service]["ports"][0]["published"]
+        base = f"http://127.0.0.1:{port}"
+        assert gateway_json(base, "GET", path, token=credentials[index])[0] == expected, service
+        assert gateway_json(base, "GET", path)[0] == 401, service
+        assert gateway_json(base, "GET", path, token=credentials[(index + 1) % 4])[0] == 401, service
+    print("PASS demo UI: four operator bindings; anonymous and other-owner credentials rejected")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--demo-ui", action="store_true", help="Validate the opt-in loopback operator ports on a dedicated UI project")
+    args = parser.parse_args(argv)
     # Reading the resolved port supports overrides in .env and COMPOSE_FILE.
     config = json.loads(compose("config", "--format", "json").stdout)
+    if args.demo_ui:
+        assert re.fullmatch(r"commerce-settle-ui-[a-z0-9-]+", config["name"]), "Use a dedicated UI Compose project"
     port = config["services"]["gateway"]["ports"][0]["published"]
     base = f"http://127.0.0.1:{port}"
 
@@ -399,13 +435,15 @@ def main():
         ).stdout
         assert "jvm_memory_used_bytes" in metrics, service
         if service != "gateway":
-            assert not config["services"][service].get("ports"), service
+            check_backend_ports(service, config["services"][service].get("ports"), args.demo_ui)
         print(f"PASS {service}: readiness, metrics and port boundary")
 
         logs = compose("logs", "--no-color", "--no-log-prefix", "--tail=100", service).stdout
         timestamps = re.findall(r"(?m)^(\d{4}-\d{2}-\d{2}T\S+)\s", logs)
         assert timestamps and all(stamp.endswith("+09:00") for stamp in timestamps), service
     print("PASS app logs: explicit KST offset for all six processes")
+    if args.demo_ui:
+        check_demo_ui_operator_bindings(config)
 
     for service in ["commerce", "payment", "settlement"]:
         with urlopen(f"{base}/v3/api-docs/{service}", timeout=15) as response:

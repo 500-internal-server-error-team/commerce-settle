@@ -7,12 +7,36 @@ import re
 import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+import smoke
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class ComposeConfigurationTest(unittest.TestCase):
+    def test_demo_ui_smoke_rejects_existing_demo_before_running_checks(self):
+        with patch.object(smoke, "compose", return_value=SimpleNamespace(stdout='{"name":"commerce-settle-demo"}')) as cli, \
+                patch.object(smoke, "internal_json") as health, \
+                self.assertRaisesRegex(AssertionError, "dedicated UI Compose project"):
+            smoke.main(["--demo-ui"])
+        cli.assert_called_once_with("config", "--format", "json")
+        health.assert_not_called()
+
+    def test_demo_ui_ports_require_explicit_mode_and_loopback_binding(self):
+        ports = [{"host_ip": "127.0.0.1", "published": "18081", "target": 8080, "protocol": "tcp"}]
+        smoke.check_backend_ports("commerce", ports, True)
+        for service, candidate, opted_in in [
+            ("commerce", ports, False),
+            ("commerce", [{**ports[0], "host_ip": "0.0.0.0"}], True),
+            ("commerce", [{**ports[0], "published": "9091"}], True),
+            ("commerce", ports * 2, True),
+            ("payment-worker", ports, True),
+        ]:
+            with self.subTest(service=service, ports=candidate, opted_in=opted_in), self.assertRaises(AssertionError):
+                smoke.check_backend_ports(service, candidate, opted_in)
+
     def resolve(self, outbox_enabled, *overrides):
         source = ROOT / "compose.yml"
         variables = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", source.read_text()))
