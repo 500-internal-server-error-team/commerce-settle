@@ -5,7 +5,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * 대상 서비스별 Gateway 내부 호출 자격(ADR 0010). 사용자 세션 토큰과 별개이며 해당 대상에만 유효하다.
+ * 대상 서비스별 Gateway 내부 호출 자격. 사용자 세션 토큰과 별개이며 해당 대상에만 유효하다.
  *
  * <p>값이 없거나 256비트(URL-safe 43자) 미만이면 기동하지 않는다. 원문은 로그·응답에 넣지 않는다.
  */

@@ -22,9 +22,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
- * 강제 종료로 실행 중 상태에 남은 일배치 실행을 정리한다(ADR 0007 D7). 호출자가 그 batchDate의 실행자 잠금을 쥐고 있어야 한다. 잠금을 잡았다는 것으로
- * 실행자가 없음을, Job·Step의 마지막 갱신이 임계 시간보다 오래됐다는 것으로 연결만 끊긴 살아 있는 실행자가 아님을 확인한다. 재시작 위치는 업무 DB가 정하므로 정리
- * 뒤 같은 batchDate로 다시 실행하면 커밋하지 않은 판매자만 처리한다. 판정할 수 없으면 정리하지 않는다.
+ * 강제 종료로 실행 중 상태에 남은 일배치 실행을 정리한다. 호출자가 그 batchDate의 실행자 잠금을 쥐고 있어야 한다. 잠금을 잡았다는 것으로 실행자가 없음을,
+ * Job·Step의 마지막 갱신이 임계 시간보다 오래됐다는 것으로 연결만 끊긴 살아 있는 실행자가 아님을 확인한다. 재시작 위치는 업무 DB가 정하므로 정리 뒤 같은
+ * batchDate로 다시 실행하면 커밋하지 않은 판매자만 처리한다. 판정할 수 없으면 정리하지 않는다.
  */
 @Component
 class DailySettlementRecovery {

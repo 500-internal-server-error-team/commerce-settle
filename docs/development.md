@@ -184,7 +184,7 @@ Commerce의 `PaymentAccepted` Listener와 처리기는 기본 비활성입니다
 
 처리기는 1초마다 최대 100건을 한 건씩 별도 트랜잭션으로 처리합니다. 도래한 잠긴 Inbox는 건너뛰고, 주문의 회차·버전·기존 ID를 확인해 `paymentId`와 Inbox APPLIED를 함께 저장합니다. `PAYMENT_PENDING`·금액·주소 사본·재고 예약은 유지합니다. envelope의 Payment aggregateVersion을 주문 버전으로 비교하지 않습니다.
 
-선행 주문 미도착·일시 반영 실패는 1초부터 최대 60초 간격으로 지수 재시도하며 10회 소진 시 사유와 함께 REVIEW_REQUIRED로 남깁니다. 반영 트랜잭션이 롤백되면 별도 트랜잭션에서 재시도 기록을 남기며, 이미 다른 처리기가 완료한 행은 변경하지 않습니다. 이전 회차·버전·상태·다른 ID의 충돌은 즉시 확인 대상으로 보존합니다. 운영 HTTP 재처리 API는 후속 작업입니다. 확정·거절·취소와 환불 결과는 별도 주문 결과 처리기가 같은 Inbox에서 처리합니다.
+선행 주문 미도착·일시 반영 실패는 1초부터 최대 60초 간격으로 지수 재시도하며 10회 소진 시 사유와 함께 REVIEW_REQUIRED로 남깁니다. 반영 트랜잭션이 롤백되면 별도 트랜잭션에서 재시도 기록을 남기며, 이미 다른 처리기가 완료한 행은 변경하지 않습니다. 이전 회차·버전·상태·다른 ID의 충돌은 즉시 확인 대상으로 보존합니다. 이 Inbox 처리기의 운영 HTTP 재처리는 지원하지 않습니다. 확정·거절·취소와 환불 결과는 별도 주문 결과 처리기가 같은 Inbox에서 처리합니다.
 
 ## 주문 업무 흐름
 
@@ -214,7 +214,7 @@ SELLER: POST /api/sellers/me/refund-requests/{requestId}/receipt
 
 주문 스케줄러는 `APP_ORDER_WORKFLOW_ENABLED=true`, 결과 처리기는 `APP_ORDER_RESULT_PROCESSOR_ENABLED=true`로 시험 인스턴스에서 활성화합니다. 결과 수신은 기존 `APP_KAFKA_PAYMENT_ACCEPTED_ENABLED=true`를 공유하며, 접수 ID 처리기는 기존 플래그를 별도로 유지합니다. 기본값은 모두 false입니다. 이 설정은 인스턴스 환경에 전달해야 하며 `.env` 추가만으로 기존 Compose 컨테이너에 전달되지 않습니다. 빈 전용 DB에는 갱신한 초기 SQL을 적용하고 기존 볼륨을 초기화하지 않습니다.
 
-Payment 내부 조회와 운영 종결은 ADR 0010의 `service:payment`·`operator:<식별자>` 자격을 인스턴스의 `app.internal-auth.senders`에 설정해야 합니다. 사용자 토큰이나 Gateway 자격으로 호출할 수 없습니다. 운영 종결은 [소유 증빙과 구매자 확인](api.md#실패-환불의-운영-종결)을 모두 대조하는 `RefundClosureEvidence`를 사용합니다. 기본은 비활성(503)이며 금융 실패만으로 주문을 PAID로 되돌리거나 자동 구매확정을 진행하지 않습니다.
+Payment 내부 조회와 운영 종결은 `service:payment`·`operator:<식별자>` 자격을 인스턴스의 `app.internal-auth.senders`에 설정해야 합니다. 사용자 토큰이나 Gateway 자격으로 호출할 수 없습니다. 운영 종결은 [소유 증빙과 구매자 확인](api.md#실패-환불의-운영-종결)을 모두 대조하는 `RefundClosureEvidence`를 사용합니다. 기본은 비활성(503)이며 금융 실패만으로 주문을 PAID로 되돌리거나 자동 구매확정을 진행하지 않습니다.
 
 증빙 읽기를 켜기 전에 Payment의 `refunds`·불변 DECLINED·RESTORE 원장과 Settlement의 실제 원예약 해제 스키마/동작을 적용·검증합니다. Payment는 필요한 스키마가 없으면 503, Settlement는 원예약이 없으면 404입니다. 두 읽기 API는 Gateway에 공개하지 않고 `SERVICE:commerce`만 허용합니다.
 
@@ -395,7 +395,7 @@ Payment 승인 Worker는 `PAYMENT_ROLE=worker`에서 `app.payment-approval.enabl
 | `fixture-pg-refund-loss-v1` | 성공 | 성공 후 504 | 정상 |
 | `fixture-pg-lookup-fail-v1` | 성공 | 성공 | 503 |
 
-이 fixture의 지연은 모두 0ms이고 지정한 장애 확률은 100%, 나머지는 0%입니다. 설계 문서의 초기 분포 제안과 구분합니다. seed는 20261102, 입금 지연은 PG_A/EASY_PAY 5·PG_B 6·PG_C 7영업일입니다. 정상 조회 버전을 따로 선택해 원금융 버전을 유지하면서 조회 장애를 해소합니다.
+이 fixture의 지연은 모두 0ms이고 지정한 장애 확률은 100%, 나머지는 0%입니다. 설계 문서의 분포형 시험 입력과 구분합니다. seed는 20261102, 입금 지연은 PG_A/EASY_PAY 5·PG_B 6·PG_C 7영업일입니다. 정상 조회 버전을 따로 선택해 원금융 버전을 유지하면서 조회 장애를 해소합니다.
 
 PAYOUT 재원은 기존 `fixture-payout-funding`(기초잔액 1,000,000원), EASY_PAY 지갑은 `fixture-easy-wallet`(1,000,000원)을 사용합니다. 카드의 `accountRef`는 합성 참조를 사용하며 잔액을 차감하지 않습니다. 외부 수단은 CREDIT_CARD·DEBIT_CARD·EASY_PAY만 허용합니다. 승인·조회·환불은 `FINANCE_MOCK_PAYMENT_CREDENTIAL`로 검증한 `service:payment`만 허용하며 기존 지급은 `service:settlement`만 받습니다. `init_env.py`로 두 현재 자격을 준비하고 교체 중에만 각 `_PREVIOUS`를 설정합니다. 루프백·컨테이너 내부의 로컬 시험에 한정하며 Gateway에는 공개하지 않습니다.
 
@@ -450,7 +450,7 @@ curl http://localhost:18083/mock/accounts/ACCOUNT_ID \
 
 계정은 `201`의 `Location`으로 조회합니다. 같은 키·본문의 POST는 잔액 변경 뒤에도 원생성 응답이며 현재 잔액은 GET에서 확인합니다. 기존 계정 참조·시나리오 버전의 재등록은 409이므로 새 시험에는 새 참조·버전을 사용합니다. PAYOUT 시나리오는 입금 지연·환불 4필드를 명시적으로 null로 보냅니다. 시나리오의 `Location`은 식별 URI이며 GET은 제공하지 않습니다.
 
-`./gradlew :finance-mock:build`의 `MockPreparationIntegrationTest`는 실제 HTTP·전용 PostgreSQL에서 세 준비 API, 입력·권한·출처, 중복·경합, 잠금 상한, 저장 중단 롤백·재시도와 새 앱 인스턴스의 원결과 재사용을 검사합니다. 전체 운영자 ID 100/101자 경계에서 두 생성 API의 성공·재요청·본문 충돌·운영자별 키 격리와 저장 길이도 확인합니다. 기존 금융 거래 시험과 함께 실행하며 실제 금융기관·전체 서비스 왕복의 판정은 #120에서 수행합니다. 테이블·컬럼 추가 없이 기존 DDL을 재사용하므로 이 API 추가를 위해 공유 DB·볼륨을 초기화하지 않습니다.
+`./gradlew :finance-mock:build`는 준비 API의 실제 HTTP·PostgreSQL 계약, 운영자별 멱등·경합·중단 복구를 검사합니다. 전체 서비스 왕복의 검증을 대신하지 않습니다. 기존 DDL을 사용하므로 공유 DB·볼륨을 초기화하지 않습니다.
 
 ## 개발·검증
 
@@ -475,11 +475,30 @@ Payment API와 Worker는 같은 `payment` 모듈로 빌드합니다. Gradle 모�
 
 문서만 변경했으면 링크·앵커·예제·계약 보존과 `git diff --check`를 확인합니다. CI의 필수 검사는 [협업 규칙](../CONTRIBUTING.md#ci)을 따릅니다. 검증 결과는 해당 이슈·PR에 남기며, 대역·계약 fixture를 사용한 시험과 실제 서비스 간 왕복을 구분합니다.
 
+### 정산 일배치 실행과 복구
+
+`dailySettlementJob`은 `batchDate`가 식별자이며 매일 10:00 KST에 실행합니다. 기본 활성화이며 `SETTLEMENT_DAILY_BATCH_ENABLED=false`로 스케줄 실행을 끕니다. 같은 날짜의 COMPLETED는 다시 실행하지 않고 FAILED·STOPPED는 같은 식별자로 재개합니다. Job 실행 전에 날짜별 PostgreSQL 세션 advisory lock을 확보하며 다른 실행자가 있으면 중복 실행하지 않습니다.
+
+강제 종료로 STARTED가 남으면 실행자 잠금을 얻은 뒤 Job·Step의 마지막 갱신이 `settlement.daily-batch.stale-after`(기본 10분)보다 오래된 경우에만 FAILED로 정리하고 같은 날짜로 한 번 재시작합니다. 확인할 수 없으면 정리하지 않으며 일시적인 조회·잠금 오류는 재확인합니다. 다음 날짜를 임의로 성공 처리하거나 새 날짜로 실패 회차를 덮어쓰지 않습니다.
+
+판매자 한 명이 chunk 한 건이며 대상·합계·지급·작업을 판매자 단위 트랜잭션으로 커밋합니다. chunk는 DB 트랜잭션을 열지 않아 커머스 컨텍스트 HTTP 대기 중 연결을 점유하지 않습니다. 재시작은 Batch 실행 위치 대신 업무 DB의 미선점 PAYABLE 항목을 seller ID 순 keyset으로 다시 읽으므로 완료한 판매자를 중복 지급하지 않습니다. 판매자별 검증·잠금 경합은 그 판매자를 건너뛰고 DB 자원 오류·공통 컨텍스트 조회 장애는 Step을 실패시켜 복구 후 재개합니다.
+
 ### Kafka 전달 기반
+
+Listener·Outbox를 활성화했을 때의 기본 동시성·연결 풀은 다음과 같습니다. JDBC 값은 JVM별 상한이며, 인스턴스를 늘리면 합산해 DB·외부 대역 한도와 비교합니다.
+
+| 앱 | Listener 동시성 | Outbox 미완료 발행 상한 | JDBC 풀 |
+| --- | --- | --- | --- |
+| Commerce | 1 | 8 | 10 |
+| Payment | 3 | 32 | 20 |
+| Settlement | 1 | 8 | 10 |
+| Finance Mock | — | — | 5 |
+
+Payment의 결제 요청 처리기는 3슬롯·슬롯별 100건, 승인 Worker는 6슬롯·조회당 최대 20건입니다. Settlement 지급은 8슬롯 중 2개를 미확정 조회·중단 복구에 전용으로 남깁니다. 실제 값은 각 앱의 `application.yml`과 명시한 환경 변수로 정하며 변경한 값·시험 조건을 함께 기록합니다. 이 상한은 처리량 달성의 근거가 아닙니다.
 
 Commerce·Payment·Settlement는 자기 원본 토픽 `commerce-settle.<서비스>.v1`을 생성합니다. 소비자별 DLT는 `commerce-settle.<소비자>.v1.dlt`이며 소비자는 `commerce`, `commerce-notifications`, `payment`, `settlement`입니다. 모두 파티션 3개·복제 1개이고 원본은 24시간, DLT는 7일 보존합니다. Payment·Settlement의 명시적 원문 격리·DLT 발행 경로는 아래에 설명하며 다른 소비자는 토픽만 준비한 상태입니다. 기존 토픽 설정이 다르면 smoke가 실패하므로 실제 값을 대조해야 합니다.
 
-업무 상태와 Outbox는 같은 트랜잭션에 저장합니다. `OrderEventOutbox.appendPaymentRequested`는 호출자 트랜잭션에 참여하며 실제 전송은 `OutboxRelay`가 저장된 topic·key·원문 bytes로 수행합니다. Kafka ACK 뒤에만 발행 위치와 완료 상태를 저장합니다. 발행 경로·CDC 대안은 [Kafka 결정](decisions/0005-kafka-event-delivery-and-capacity.md#발행-경로-통일)을 따릅니다.
+업무 상태와 Outbox는 같은 트랜잭션에 저장합니다. `OrderEventOutbox.appendPaymentRequested`는 호출자 트랜잭션에 참여하며 실제 전송은 `OutboxRelay`가 저장된 topic·key·원문 bytes로 수행합니다. Kafka ACK 뒤에만 발행 위치와 완료 상태를 저장합니다. 발행·복구 경계는 [Kafka 전달 기준](architecture.md#kafka)을 따릅니다.
 
 Payment의 `AcceptOrderPaymentRequestService`는 Inbox의 `WAITING`·`next_run_at`에 원본과 메시지 처리 대기 작업을 저장·커밋한 뒤 반환합니다. 같은 ID·동일 bytes는 원래 상태를 유지하고 다른 bytes는 `inbox_conflicts`에 격리합니다. 별도 `inbox_jobs`나 가짜 paymentId의 금융 Job을 만들지 않습니다. 대기 행은 Worker의 `ApplyOrderPaymentRequestService`가 처리하며, 실패의 재시도·확인 대상 전환은 [데이터 모델](data-model.md#inbox)을 따릅니다. 수신 ACK는 이 대기 작업의 저장 완료만 뜻합니다. 처리기는 `PAYMENT_ROLE=worker`에서 `app.payment-request-processor.enabled=true`로 켭니다. 동시 실행은 `app.payment-request-processor.concurrency`(기본 3)이며 슬롯마다 한 행씩 선점하고, 배치 상한(기본 100건)에 닿으면 조회 간격을 기다리지 않고 이어서 처리합니다. 승인·Outbox와 함께 쓰는 DB 연결 풀을 고려해 슬롯 수를 정합니다. 설정 원문은 [Payment 구성](../payment/src/main/resources/application.yml)을 따릅니다.
 
@@ -558,7 +577,9 @@ Gateway 자체 오류는 `application/problem+json`과 실제 추적의 `traceId
 
 ### 내부 호출 자격
 
-[ADR 0010](decisions/0010-internal-service-credentials.md)의 판정은 `internal-auth` 라이브러리의 자동 구성이 서블릿 앱의 모든 요청에서 컨트롤러 전에 수행합니다. 각 앱은 `docs/openapi.json`을 `contracts/openapi.json` 리소스로 포함하고 `app.internal-auth`에 소유 서비스(`service`), 필수 발신자(`required-sender`, 기본 `gateway`), 발신자별 현재·이전 자격(`senders`)을 둡니다. 명세 문서(`GET /v3/api-docs/**`)와 관리 포트는 판정하지 않습니다. 명세의 작업·권한을 바꾸면 Gateway와 해당 백엔드를 함께 다시 빌드합니다.
+자격은 `[A-Za-z0-9_-]{43,}` 형식의 256비트 이상 값입니다. 발신자 ID는 `gateway`, `service:[a-z][a-z0-9-]*`, `operator:<영문·숫자·점·밑줄·하이픈 식별자>`이며 현재·이전 값 두 개까지 허용합니다. 자격 없음·불일치는 401, 미등록 메서드·경로는 404, 대상 서비스·역할·신원 헤더 권한 불일치는 403입니다. 사용자 세션 토큰을 내부 자격으로 재사용하지 않습니다.
+
+내부 호출 자격 판정은 `internal-auth` 라이브러리의 자동 구성이 서블릿 앱의 모든 요청에서 컨트롤러 전에 수행합니다. 각 앱은 `docs/openapi.json`을 `contracts/openapi.json` 리소스로 포함하고 `app.internal-auth`에 소유 서비스(`service`), 필수 발신자(`required-sender`, 기본 `gateway`), 발신자별 현재·이전 자격(`senders`)을 둡니다. 명세 문서(`GET /v3/api-docs/**`)와 관리 포트는 판정하지 않습니다. 명세의 작업·권한을 바꾸면 Gateway와 해당 백엔드를 함께 다시 빌드합니다.
 
 | 발신자 → 대상 | 받는 쪽 변수 | 보내는 쪽 |
 | --- | --- | --- |
@@ -600,9 +621,9 @@ docker compose exec -T payment-api curl --fail http://localhost:9091/actuator/he
 | `AUTH_RESET_DELIVERY_KEY` | 미전달 복구 토큰 복호화 불가 |
 | `AUTH_REDIS_RUN_ID` | Gateway·Commerce가 승인할 Redis 실행 식별자. 인증 세대와 함께 복구 |
 
-CI의 `smoke_redis_restart.py`는 Redis·Gateway·Commerce를 재기동하므로 공용 스택에서 실행하지 않습니다. 재시작·같은 run_id의 연결 단절·세대 교체 후 이전 세션 거절과 새 로그인을 확인하며, 미구현 인증 변경 재조정까지 검증한 것은 아닙니다.
+CI의 `smoke_redis_restart.py`는 Redis·Gateway·Commerce를 재기동하므로 공용 스택에서 실행하지 않습니다. 재시작·같은 run_id의 연결 단절·세대 교체 후 이전 세션 거절과 새 로그인을 확인하며, 인증 변경 재조정은 이 smoke의 검사 범위에 포함하지 않습니다.
 
-인증 게이트는 기동 직후 확인 전 상태로 사용자 인증을 503으로 거절하고, 연결한 Redis의 `INFO server` run_id가 `AUTH_REDIS_RUN_ID`와 같을 때만 엽니다. Redis가 앱보다 늦게 떠도 1초 간격으로 다시 확인합니다. 연 뒤 연결이 끊기거나 run_id가 다르면 닫고, 재연결이나 스크립트 재적재가 성공해도 재기동 전까지 다시 열지 않습니다. 첫 확인에서 run_id가 다르면 앱은 기동한 채 닫힌 상태로 둡니다. 닫히면 Gateway는 보호 작업을, 커머스는 세션 발급·로그아웃·비밀번호 복구 요청·재설정·인증 관련 계정 변경을 Redis를 쓰지 않고 503으로 거절합니다. 공개 작업, 서비스·운영자 자격과 Worker는 영향을 받지 않습니다. 닫은 사유(`RUN_ID_MISMATCH`·`DISCONNECTED`)와 시각은 `auth.redis-gate` ERROR 로그로 확인합니다. 짧은 단절에도 닫히는 것은 [ADR 0003](decisions/0003-redis-sessions.md)이 감수한 가용성 비용입니다.
+인증 게이트는 기동 직후 확인 전 상태로 사용자 인증을 503으로 거절하고, 연결한 Redis의 `INFO server` run_id가 `AUTH_REDIS_RUN_ID`와 같을 때만 엽니다. Redis가 앱보다 늦게 떠도 1초 간격으로 다시 확인합니다. 연 뒤 연결이 끊기거나 run_id가 다르면 닫고, 재연결이나 스크립트 재적재가 성공해도 재기동 전까지 다시 열지 않습니다. 첫 확인에서 run_id가 다르면 앱은 기동한 채 닫힌 상태로 둡니다. 닫히면 Gateway는 보호 작업을, 커머스는 세션 발급·로그아웃·비밀번호 복구 요청·재설정·인증 관련 계정 변경을 Redis를 쓰지 않고 503으로 거절합니다. 공개 작업, 서비스·운영자 자격과 Worker는 영향을 받지 않습니다. 닫은 사유(`RUN_ID_MISMATCH`·`DISCONNECTED`)와 시각은 `auth.redis-gate` ERROR 로그로 확인합니다. 짧은 단절에도 닫히는 것은 [인증 정책](policies.md#인증공통-api-기준)이 감수한 가용성 비용입니다.
 
 - 고정 30분 직전/정각/직후와 반복 조회를 시험해 expiresAt·TTL이 연장되지 않는지 확인합니다. Redis 쓰기 거절·시간 초과에는 토큰을 반환하지 않고 보호 요청은 503이어야 합니다.
 - 로그아웃·계정 정지·비밀번호 재설정과 동시 로그인을 경합시킵니다. Redis 가드 선차단 뒤 DB 롤백·커밋 결과 유실·Redis 후속 반영 실패를 주입하고, 차단 유지·이전 버전 거절·DB 확정 결과에 따른 재조정을 확인합니다.
@@ -646,7 +667,7 @@ Redis 비밀번호를 바꿀 때도 앱과 Redis를 함께 재생성해야 합�
 
 ## 본인 카카오톡 시연
 
-[ADR 0012](decisions/0012-kakao-self-message-demo.md)의 본인 수신 시연입니다. 기본 실행은 `MOCK_KAKAO`입니다. 기존 알림 저장·Worker에 self-send HTTP·토큰 어댑터를 연결했습니다. 지정한 구매자·판매자만 실제 채널을 선택하며 새 발송에 채널·앱/본인 계정의 SHA-256 참조를 고정합니다. 기존 대기 건은 설정 변경으로 다른 계정이나 모의 채널에 보내지 않습니다. 판매는 같은 물리 계정·판매자별 1분 집계를 유지합니다. 배송완료와 반품 입고도 실제 주문 전이와 같은 트랜잭션에 저장합니다. 한 번의 시간 진행으로 배송완료·구매확정이 함께 발생하면 각각 남깁니다.
+본인 카카오 계정의 수신 시연입니다. 기본 실행은 `MOCK_KAKAO`입니다. 기존 알림 저장·Worker에 self-send HTTP·토큰 어댑터를 연결했습니다. 지정한 구매자·판매자만 실제 채널을 선택하며 새 발송에 채널·앱/본인 계정의 SHA-256 참조를 고정합니다. 기존 대기 건은 설정 변경으로 다른 계정이나 모의 채널에 보내지 않습니다. 판매는 같은 물리 계정·판매자별 1분 집계를 유지합니다. 배송완료와 반품 입고도 실제 주문 전이와 같은 트랜잭션에 저장합니다. 한 번의 시간 진행으로 배송완료·구매확정이 함께 발생하면 각각 남깁니다.
 
 ### 앱 설정과 최초 동의
 

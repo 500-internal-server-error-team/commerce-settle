@@ -10,7 +10,7 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
- * 발신자별 내부 호출 자격(ADR 0010)을 확인한다. 발신자마다 현재·이전 두 값까지 허용한다.
+ * 발신자별 내부 호출 자격을 확인한다. 발신자마다 현재·이전 두 값까지 허용한다.
  *
  * <p>설정 원문 대신 SHA-256 결과만 보관하고 {@link MessageDigest#isEqual}로 비교한다. 자격이 256비트(URL-safe 43자) 미만이거나
  * 발신자 ID 형식이 다르면 기동하지 않는다.

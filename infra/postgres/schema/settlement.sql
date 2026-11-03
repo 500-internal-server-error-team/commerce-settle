@@ -336,7 +336,7 @@ CREATE TABLE settlement.inbox_quarantine_resumes (
     UNIQUE (delivery_id, expected_version)
 );
 
--- Settlement 발행 Outbox. Payment·Commerce outbox와 같은 구조다(ADR 0005).
+-- Settlement 발행 Outbox. Payment·Commerce outbox와 같은 구조다.
 CREATE TABLE settlement.outbox (
     id uuid PRIMARY KEY,
     sequence_no bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
@@ -427,7 +427,7 @@ CREATE INDEX ix_audit_logs_aggregate
 CREATE INDEX ix_audit_logs_actor ON settlement.audit_logs (actor_kind, actor_ref, occurred_at, id);
 CREATE INDEX ix_audit_logs_correlation ON settlement.audit_logs (correlation_id);
 
--- Spring Batch 5.2 메타데이터. 라이브러리의 schema-postgresql.sql에서 서비스 내부 FK만 뺐다(ADR 0006).
+-- Spring Batch 5.2 메타데이터. 라이브러리의 schema-postgresql.sql에서 서비스 내부 FK만 뺐다.
 -- Spring Batch가 시각을 LocalDateTime으로 쓰므로 원본의 timestamp를 유지한다.
 CREATE TABLE settlement.BATCH_JOB_INSTANCE (
     JOB_INSTANCE_ID BIGINT       NOT NULL PRIMARY KEY,

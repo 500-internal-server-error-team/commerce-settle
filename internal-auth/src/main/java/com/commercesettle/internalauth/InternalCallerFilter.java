@@ -22,7 +22,7 @@ import org.springframework.web.util.pattern.PathPattern;
 import org.springframework.web.util.pattern.PathPatternParser;
 
 /**
- * 컨트롤러 전에 내부 호출 자격(ADR 0010)으로 발신자를 확인한다.
+ * 컨트롤러 전에 내부 호출 자격으로 발신자를 확인한다.
  *
  * <p>판정 순서: 자격 없음·불일치 401 → 명세에 없는 메서드·경로 404 → 다른 서비스 소유 작업이나 발신자와 맞지 않는 {@code x-actor} 403 →
  * Gateway가 아닌 발신자의 신원 헤더 403. 통과한 요청의 {@code X-Authenticated-*}는 Gateway가 보낸 값이다. 계정 종류·ID·세션 해시의

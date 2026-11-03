@@ -27,9 +27,9 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.stereotype.Component;
 
 /**
- * 월간 회차별 실행자 잠금과 진행 중 실행의 정리(정산 일배치와 같은 방식, ADR 0007 D7·0008). 잠금은 PostgreSQL 세션 advisory lock을 전용
- * 연결에 잡고 Job이 끝날 때까지 쥔다. 실행 프로세스가 죽어 연결이 끊기면 DB가 잠금을 풀어 주므로, 잠금을 잡았다는 것은 그 회차의 실행자가 없다는 뜻이다. 잠금을
- * 잡았는데도 진행 중으로 남은 실행은 Job·Step의 마지막 갱신이 임계 시간보다 오래됐을 때만 FAILED로 정리해 같은 식별자로 재시작할 수 있게 한다.
+ * 월간 회차별 실행자 잠금과 진행 중 실행의 정리(정산 일배치와 같은 방식). 잠금은 PostgreSQL 세션 advisory lock을 전용 연결에 잡고 Job이 끝날 때까지
+ * 쥔다. 실행 프로세스가 죽어 연결이 끊기면 DB가 잠금을 풀어 주므로, 잠금을 잡았다는 것은 그 회차의 실행자가 없다는 뜻이다. 잠금을 잡았는데도 진행 중으로 남은 실행은
+ * Job·Step의 마지막 갱신이 임계 시간보다 오래됐을 때만 FAILED로 정리해 같은 식별자로 재시작할 수 있게 한다.
  */
 @Component
 public class GradeCouponExecutions implements CouponIssueRunExecutions {

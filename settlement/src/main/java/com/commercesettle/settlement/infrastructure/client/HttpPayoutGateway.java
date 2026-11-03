@@ -17,8 +17,8 @@ import org.springframework.web.client.RestClientException;
  * 대역이 MOCK_TRANSACTION_NOT_FOUND라고 답했을 때만 거래 부재로 본다. 응답의 업무 키·금액·작업·출금 계정·금융 시나리오 버전이 요청과 다르면 결과를
  * 믿지 않는다.
  *
- * <p>모든 요청에 Finance Mock용 {@code service:settlement} 내부 호출 자격(ADR 0010)을 붙인다. 자격 거절(401·403)은 대역이
- * 요청을 처리하지 않았다는 뜻이지 지급 결과가 아니므로 미확정으로 둔다.
+ * <p>모든 요청에 Finance Mock용 {@code service:settlement} 내부 호출 자격을 붙인다. 자격 거절(401·403)은 대역이 요청을 처리하지
+ * 않았다는 뜻이지 지급 결과가 아니므로 미확정으로 둔다.
  */
 public class HttpPayoutGateway implements PayoutGateway {
   private static final String NOT_FOUND_CODE = "MOCK_TRANSACTION_NOT_FOUND";

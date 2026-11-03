@@ -86,7 +86,7 @@ logging:
 app:
   internal-auth:
     service: payment
-    # Gateway의 내부 호출 자격(ADR 0010). 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
+    # Gateway의 내부 호출 자격. 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
     senders:
       gateway:
         current: ${PAYMENT_GATEWAY_CREDENTIAL}
@@ -127,7 +127,7 @@ app:
     # stub: 즉시 승인하는 개발용 대역, http: finance-mock PG 대역
     gateway: ${PAYMENT_APPROVAL_GATEWAY:stub}
     mock-base-url: ${FINANCE_MOCK_URL:http://finance-mock:8080}
-    # http일 때 finance-mock에 보내는 service:payment 자격(ADR 0010). Worker에만 주입한다.
+    # http일 때 finance-mock에 보내는 service:payment 자격. Worker에만 주입한다.
     mock-credential: ${FINANCE_MOCK_PAYMENT_CREDENTIAL:}
     poll-interval-ms: 1000
     # 동시에 실행하는 슬롯 수. 슬롯마다 한 폴링에 최대 max-jobs-per-poll건을 처리하고, 상한에 닿으면 기다리지 않고 다시 폴링한다.

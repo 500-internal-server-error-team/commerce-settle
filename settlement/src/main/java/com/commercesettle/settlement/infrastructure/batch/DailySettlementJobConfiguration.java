@@ -41,9 +41,9 @@ import org.springframework.dao.TransientDataAccessException;
 
 /**
  * 정산 일배치 Job. item은 판매자 한 명이고 chunk 크기는 1이며, 판매자 한 명의 대상·합계·지급·작업은 {@link SellerSettlementService}의
- * 판매자 단위 트랜잭션에 커밋된다(ADR 0007 D4 제안안). chunk는 DB 트랜잭션을 열지 않아 커머스 지급 컨텍스트를 기다리는 동안 DB 연결을 쥐지 않는다.
- * reader는 마감 전 지급 대상이 있는 판매자를 seller_id 순 keyset으로 읽는다. 커밋한 판매자의 항목은 선점돼 조회 조건에서 빠지므로, 재시작 위치는 실행
- * 문맥에 저장하지 않고 업무 DB를 다시 조회해 정한다.
+ * 판매자 단위 트랜잭션에 커밋된다. chunk는 DB 트랜잭션을 열지 않아 커머스 지급 컨텍스트를 기다리는 동안 DB 연결을 쥐지 않는다. reader는 마감 전 지급 대상이
+ * 있는 판매자를 seller_id 순 keyset으로 읽는다. 커밋한 판매자의 항목은 선점돼 조회 조건에서 빠지므로, 재시작 위치는 실행 문맥에 저장하지 않고 업무 DB를 다시
+ * 조회해 정한다.
  */
 @Configuration
 class DailySettlementJobConfiguration {

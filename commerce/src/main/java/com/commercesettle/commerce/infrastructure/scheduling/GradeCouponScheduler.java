@@ -15,8 +15,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 /**
  * 매월 1일 00:10 KST부터 그 달의 월간 우수고객 회차를 만들고 실행한다. 10분마다 다시 확인해 미생성·미완료 회차와 앱 중단으로 놓친 실행을 이어간다. 완료한 회차는
  * 실행하지 않으므로 반복 확인은 회차 조회만 한다. 이전 월에 끝나지 않은 회차도 먼저 실행해, 원래 기한이 지났으면 새 발급 없이 EXPIRED로 종결한다. 스케줄러 스레드를
- * 오래 잡지 않도록 실행은 전용 실행기에 넘기고(ADR 0008), 이 인스턴스의 앞 실행이 끝나지 않았으면 새 실행을 넘기지 않는다. 다른 인스턴스와의 중복 실행은 런처의
- * 회차 잠금이 막는다.
+ * 오래 잡지 않도록 실행은 전용 실행기에 넘기고, 이 인스턴스의 앞 실행이 끝나지 않았으면 새 실행을 넘기지 않는다. 다른 인스턴스와의 중복 실행은 런처의 회차 잠금이 막는다.
  */
 public class GradeCouponScheduler {
   private static final Logger LOG = LoggerFactory.getLogger(GradeCouponScheduler.class);

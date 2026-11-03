@@ -22,8 +22,8 @@ import org.springframework.core.io.Resource;
 import org.springframework.web.servlet.HandlerExceptionResolver;
 
 /**
- * 내부 호출 자격(ADR 0010) 판정을 서블릿 앱의 모든 요청에서 컨트롤러 앞에 둔다. 소유 서비스 이름이나 필수 발신자의 자격이 없으면 기동하지 않는다. 관리 포트는 별도
- * 웹 서버라 이 필터를 거치지 않는다.
+ * 내부 호출 자격 판정을 서블릿 앱의 모든 요청에서 컨트롤러 앞에 둔다. 소유 서비스 이름이나 필수 발신자의 자격이 없으면 기동하지 않는다. 관리 포트는 별도 웹 서버라 이
+ * 필터를 거치지 않는다.
  *
  * <p>명세는 앱 리소스의 {@code contracts/openapi.json}을 읽는다.
  */

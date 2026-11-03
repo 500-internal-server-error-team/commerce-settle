@@ -23,8 +23,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 결제확정·구매확정 이벤트를 Inbox 저장과 같은 트랜잭션에 반영한다(ADR 0007: 원장 반영은 소비자에서 즉시). 선행 결제가 없는 구매확정만 WAITING으로 남기고
- * 처리기가 다시 판정한다. 같은 결제의 다른 eventId는 기존 값과 같으면 기존 결과를 유지하고, 다르면 운영 확인으로 남긴다.
+ * 결제확정·구매확정 이벤트를 Inbox 저장과 같은 트랜잭션에 반영한다. 선행 결제가 없는 구매확정만 WAITING으로 남기고 처리기가 다시 판정한다. 같은 결제의 다른
+ * eventId는 기존 값과 같으면 기존 결과를 유지하고, 다르면 운영 확인으로 남긴다.
  */
 @Service
 public class SettlementEventService {
@@ -144,7 +144,7 @@ public class SettlementEventService {
     }
     Optional<SettlementItem> found = items.findByPaymentId(purchase.paymentId());
     if (found.isEmpty()) {
-      // 결제 원장이 아직 없다. 두 토픽 사이 순서는 보장되지 않는다(ADR 0005).
+      // 결제 원장이 아직 없다. 두 토픽 사이 순서는 보장되지 않는다.
       if (!inbox.markWaiting(inboxId, waitingRecheckDelay, MAX_WAITING_ATTEMPTS, now)) {
         logReview(event, "PAYMENT_NOT_ARRIVED");
       }

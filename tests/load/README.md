@@ -1,6 +1,6 @@
 # 결제 부하·장애·복구 시험
 
-[#133](https://github.com/500-internal-server-error-team/commerce-settle/issues/133)의 결제 처리량, PG 장애, Worker 재시작 뒤 정합성을 측정합니다. 지표 정의는 [ADR 0002](../../docs/decisions/0002-performance-and-integrity-metrics.md)를 따릅니다.
+[#133](https://github.com/500-internal-server-error-team/commerce-settle/issues/133)의 결제 처리량, PG 장애, Worker 재시작 뒤 정합성을 측정합니다. 지표 정의는 [검증 지표와 완료 기준](../../docs/design.md#검증-지표와-완료-기준)를 따릅니다.
 
 ## 측정 범위
 
@@ -60,4 +60,4 @@ python3 tests/load/payment_load.py reconcile          # 원장 ↔ Payment ↔ f
 
 ## 실측 기록
 
-2026-11-03의 [시험 환경·단계별 수치·병목 분석·장애 복구 관측 원문](https://github.com/500-internal-server-error-team/commerce-settle/blob/7a3affbd34cde810951d21e35aefcb4aa557dafc/tests/load/README.md#시험-환경)을 보존합니다. 당시 60초 단계 시험의 관측이며, ADR 0002의 15분 지속 가능 TPS 판정을 대신하지 않습니다.
+2026-11-03의 [시험 환경·단계별 수치·병목 분석·장애 복구 관측 원문](https://github.com/500-internal-server-error-team/commerce-settle/blob/7a3affbd34cde810951d21e35aefcb4aa557dafc/tests/load/README.md#시험-환경)을 보존합니다. 당시 60초 단계 시험의 관측이며, 15분 지속 가능 TPS 판정을 대신하지 않습니다.

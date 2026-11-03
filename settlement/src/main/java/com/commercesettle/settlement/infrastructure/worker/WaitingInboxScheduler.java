@@ -8,7 +8,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/** 선행 결제를 기다리는 구매확정을 짧은 주기로 다시 판정한다(ADR 0007). 한 건이 실패해도 다음 건으로 넘어간다. */
+/** 선행 결제를 기다리는 구매확정을 짧은 주기로 다시 판정한다. 한 건이 실패해도 다음 건으로 넘어간다. */
 @Component
 @ConditionalOnProperty(name = "settlement.inbox-processor.enabled", havingValue = "true")
 class WaitingInboxScheduler {

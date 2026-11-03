@@ -17,7 +17,7 @@ dependencies {
     testImplementation 'com.networknt:json-schema-validator:2.0.4'
 }
 
-// 내부 호출 자격 판정이 요청을 명세 작업과 대조한다(ADR 0010).
+// 내부 호출 자격 판정이 요청을 명세 작업과 대조한다.
 tasks.named('processResources') {
     from(rootProject.file('docs/openapi.json')) { into 'contracts' }
 }

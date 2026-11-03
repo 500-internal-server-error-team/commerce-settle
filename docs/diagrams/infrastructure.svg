@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1216" height="768" viewBox="0 0 1216 768" role="img" aria-labelledby="title desc" data-scope="compose-target" data-network="backend">
   <title id="title">통합 인프라 구조도</title>
-  <desc id="desc">Compose 개발·CI 목표 구성. 브라우저와 k6가 Gateway에 HTTP 요청을 보낸다. Spring Boot 앱은 Gateway, 커머스, 결제 API, 결제 Worker, 정산, 금융 모의 서버의 여섯 독립 컨테이너다. 공개 라우팅은 커머스·결제 API·정산에 한정한다. 카카오 모의 발송은 커머스 앱 내부 처리이며 실제 카카오 채널이나 외부 HTTP 연동이 아니다. PostgreSQL 한 컨테이너에서 네 업무 DB를 분리하고 결제 API와 Worker는 payment DB를 공유한다. 메트릭·추적 선은 데이터 흐름을, 관측 도구 안의 Kafka UI에서 바로 위 Kafka로 향하는 선은 관리·조회 요청을 나타낸다. Redis는 여섯 앱이 같은 호스트로 연결하는 공유 컨테이너 한 개다. 관측 도구와 Slack으로 이어지는 경보를 함께 표시한다. 상세 연결과 현재 구현 범위는 인프라 문서가 기준이다. 커머스의 월간 혜택 배치·주문·쿠폰 만료·보존·알림 처리는 commerce 앱 내부의 목표 실행이며 별도 컨테이너를 추가하지 않는다. Commerce와 Settlement는 각 앱 안에 Spring Batch를 포함한다.</desc>
+  <desc id="desc">Compose 개발·CI 구성. 브라우저와 k6가 Gateway에 HTTP 요청을 보낸다. Spring Boot 앱은 Gateway, 커머스, 결제 API, 결제 Worker, 정산, 금융 모의 서버의 여섯 독립 컨테이너다. 공개 라우팅은 커머스·결제 API·정산에 한정한다. 카카오 모의 발송은 커머스 앱 내부 처리이며 실제 카카오 채널이나 외부 HTTP 연동이 아니다. PostgreSQL 한 컨테이너에서 네 업무 DB를 분리하고 결제 API와 Worker는 payment DB를 공유한다. 메트릭·추적 선은 데이터 흐름을, 관측 도구 안의 Kafka UI에서 바로 위 Kafka로 향하는 선은 관리·조회 요청을 나타낸다. Redis는 여섯 앱이 같은 호스트로 연결하는 공유 컨테이너 한 개다. 관측 도구와 Slack으로 이어지는 경보를 함께 표시한다. 상세 연결과 현재 구현 범위는 인프라 문서가 기준이다. 커머스의 월간 혜택 배치·주문·쿠폰 만료·보존·알림 처리는 commerce 앱 내부의 목표 실행이며 별도 컨테이너를 추가하지 않는다. Commerce와 Settlement는 각 앱 안에 Spring Batch를 포함한다.</desc>
   <defs>
     <symbol id="logo-springbatch" viewBox="0 0 150.49 156.27">
       <path d="M0,101.29v11.57l75.24,43.41,75.25-43.41V101.29L75.24,144.7ZM0,78.14V89.71l75.24,43.41,75.25-43.41V78.14L75.24,121.55ZM75.24,0,0,43.41V66.56L75.24,110l75.25-43.41V43.41Z" fill="#6db33f" />
@@ -152,7 +152,7 @@
         <use href="#logo-springbatch" x="318" y="449" width="22" height="22" aria-hidden="true" />
         <text x="352.0" y="445.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" dominant-baseline="central">정산</text>
         <text x="352.0" y="461.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">원장·정산 대상·금액 확정</text>
-        <text x="352.0" y="477.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">지급 작업 처리·대조</text>
+        <text x="352.0" y="477.5" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" dominant-baseline="central">지급 작업 처리</text>
       </g>
       <g id="finance-mock" data-node="true" data-box="524,428,240,64" data-align-content="vertical-center" data-content-center-y="460" data-container="finance-mock" data-app="finance-mock">
         <rect x="524" y="428" width="240" height="64" rx="4" fill="#fff" stroke="#7b8ba2" stroke-width="1.2" />

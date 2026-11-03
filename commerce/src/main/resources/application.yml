@@ -27,7 +27,7 @@ spring:
       mode: never
   batch:
     job:
-      # 기동 시 자동 실행하지 않고 스케줄러가 targetMonth·runId로 실행한다(ADR 0008).
+      # 기동 시 자동 실행하지 않고 스케줄러가 targetMonth·runId로 실행한다.
       enabled: false
     jdbc:
       # 메타데이터 테이블은 commerce 초기 SQL이 만든다.
@@ -184,7 +184,7 @@ app:
     encryption-key: ${ADDRESS_ENCRYPTION_KEY}
   internal-auth:
     service: commerce
-    # 발신자별 내부 호출 자격(ADR 0010). gateway가 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
+    # 발신자별 내부 호출 자격. gateway가 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
     senders:
       gateway:
         current: ${COMMERCE_GATEWAY_CREDENTIAL}

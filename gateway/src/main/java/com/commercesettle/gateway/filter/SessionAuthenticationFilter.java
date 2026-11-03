@@ -24,7 +24,7 @@ import reactor.core.publisher.Mono;
  * 명세의 {@code x-actor}로 보호 작업을 가려 세션을 검증하고, 검증한 신원만 백엔드에 전달한다.
  *
  * <p>클라이언트가 보낸 {@code X-Authenticated-*}와 {@code Authorization}은 공개 작업을 포함한 모든 요청에서 제거하고, {@code
- * Authorization}은 대상 서비스 전용 Gateway 자격(ADR 0010)으로 교체한다.
+ * Authorization}은 대상 서비스 전용 Gateway 자격으로 교체한다.
  */
 @Component
 public class SessionAuthenticationFilter implements GlobalFilter, Ordered {
