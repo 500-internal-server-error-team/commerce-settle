@@ -60,9 +60,6 @@ class RefundClosureEvidenceIntegrationTest {
 
   @BeforeEach
   void prepare() {
-    // #131 미병합: 문서에 고정한 읽기 계약 fixture이며 금융 실행 왕복을 대신하지 않는다.
-    jdbc.execute(
-        "CREATE TABLE IF NOT EXISTS payment.refunds (id uuid PRIMARY KEY, payment_id uuid NOT NULL, order_refund_request_id uuid NOT NULL, status varchar(32) NOT NULL, external_status varchar(24) NOT NULL, mileage_restored_at timestamptz, version bigint NOT NULL, updated_at timestamptz NOT NULL)");
     jdbc.update(
         "INSERT INTO payment.payments (id, order_id, buyer_id, seller_id, order_version, product_id, current_cycle_id, gross_amount, coupon_amount, seller_coupon_amount, platform_coupon_amount, settlement_base_amount, total_amount, mileage_amount, external_amount, fee_amount, seller_net_amount, status, policy_version, created_at, updated_at, version) VALUES (?,?,?,gen_random_uuid(),0,gen_random_uuid(),gen_random_uuid(),10000,0,0,0,10000,10000,2000,8000,1500,8500,'CONFIRMED','test',?,?,0)",
         payment,
@@ -71,10 +68,11 @@ class RefundClosureEvidenceIntegrationTest {
         AT,
         AT);
     jdbc.update(
-        "INSERT INTO payment.refunds VALUES (?,?,?,'DECLINED','DECLINED',NULL,3,?)",
+        "INSERT INTO payment.refunds (id,payment_id,order_refund_request_id,external_amount,mileage_amount,status,business_key,external_status,mileage_restored_at,created_at,updated_at,version) VALUES (?,?,?,8000,2000,'DECLINED',gen_random_uuid(),'DECLINED',NULL,?,?,3)",
         refund,
         payment,
         request,
+        AT,
         AT);
   }
 
@@ -120,13 +118,19 @@ class RefundClosureEvidenceIntegrationTest {
   @Test
   @DisplayName("선행 금융 스키마가 없으면 503으로 닫는다")
   void rejectsMissingFinancialSchema() throws Exception {
-    jdbc.execute("DROP TABLE payment.refunds");
+    jdbc.execute("ALTER TABLE payment.refunds RENAME TO unavailable_refunds");
+    try {
+      mvc.perform(get(path()).header(HttpHeaders.AUTHORIZATION, "Bearer " + COMMERCE))
+          .andExpect(status().isServiceUnavailable());
+      assertThat(
+              jdbc.queryForObject(
+                  "select count(*) from payment.payments where id=?", Long.class, payment))
+          .isEqualTo(1);
+    } finally {
+      jdbc.execute("ALTER TABLE payment.unavailable_refunds RENAME TO refunds");
+    }
     mvc.perform(get(path()).header(HttpHeaders.AUTHORIZATION, "Bearer " + COMMERCE))
-        .andExpect(status().isServiceUnavailable());
-    assertThat(
-            jdbc.queryForObject(
-                "select count(*) from payment.payments where id=?", Long.class, payment))
-        .isEqualTo(1);
+        .andExpect(status().isOk());
   }
 
   private String path() {
