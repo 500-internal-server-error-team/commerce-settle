@@ -27,7 +27,7 @@ import org.springframework.stereotype.Component;
  * 실행하지 않는다. 외부 호출 동안 DB 연결을 쥐지 않아 슬롯 수만큼 PG 대역 호출이 겹친다. 어느 슬롯이든 상한까지 처리했으면 남은 작업이 있다고 보고 간격을 기다리지
  * 않고 다시 폴링한다.
  *
- * <p>한 작업의 예외는 기록하고 그 슬롯의 다음 작업으로 넘어간다. 그 작업은 임대 만료 뒤 다시 회수되고 시도 상한에서 운영 확인으로 넘어간다.
+ * <p>작업 오류가 나면 다른 슬롯의 진행 중 묶음이 끝난 뒤 이번 폴링을 끝내고 다음 예약 주기에 다시 시도한다. 이미 임대한 작업은 임대 만료 뒤 회수된다.
  */
 @Component
 @EnableScheduling
@@ -85,12 +85,12 @@ class ApprovalWorkerScheduler {
         Thread.currentThread().interrupt();
         return;
       } catch (ExecutionException e) {
-        // runSlot은 작업 예외를 삼키므로 여기 오는 것은 실행 슬롯 자체의 오류다. 다음 폴링에서 다시 시작한다.
+        // 다른 슬롯이 상한을 채웠어도 오류 뒤에는 다음 예약 주기까지 기다린다.
         LOG.atError()
             .setCause(e.getCause())
             .addKeyValue("event", "payment.approval")
             .addKeyValue("result", "ERROR")
-            .log("Approval slot failed");
+            .log("Approval polling stopped after a job error");
         return;
       }
     }
@@ -100,17 +100,8 @@ class ApprovalWorkerScheduler {
   private int runSlot() {
     int processed = 0;
     while (processed < maxJobsPerPoll && !stopping) {
-      try {
-        if (!worker.runOnce()) {
-          return processed;
-        }
-      } catch (RuntimeException e) {
-        LOG.atError()
-            .setCause(e)
-            .addKeyValue("event", "payment.approval")
-            .addKeyValue("result", "ERROR")
-            .addKeyValue("errorType", e.getClass().getName())
-            .log("Approval job failed; it will be retried after its lease expires");
+      if (!worker.runOnce()) {
+        return processed;
       }
       processed++;
     }

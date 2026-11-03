@@ -509,8 +509,7 @@ class ApplyOrderPaymentRequestServiceTest {
   @CsvSource({"1, 1", "2, 2", "3, 4", "6, 32", "7, 60", "9, 60"})
   @DisplayName("재시도 대기는 1초부터 두 배씩 늘고 60초를 넘지 않는다")
   void growsRetryDelayUpToSixtySeconds(int attempts, long seconds) {
-    assertThat(ApplyOrderPaymentRequestService.retryDelay(attempts))
-        .isEqualTo(Duration.ofSeconds(seconds));
+    assertThat(PaymentRetryPolicy.delayAfter(attempts)).isEqualTo(Duration.ofSeconds(seconds));
   }
 
   @Test

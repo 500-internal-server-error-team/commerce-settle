@@ -20,20 +20,13 @@ public class ApprovalWorkerConfiguration {
   ApprovalWorkerSettings approvalWorkerSettings(
       @Value("${app.payment-approval.lease-duration:30s}") Duration leaseDuration,
       @Value("${app.payment-approval.http-timeout:5s}") Duration httpTimeout,
-      @Value("${app.payment-approval.unconfirmed-retry-delay:5s}") Duration retryDelay,
       @Value("${app.payment-approval.max-attempts:10}") int maxAttempts,
       @Value("${app.payment-approval.card-provider:PG_A}") String cardProvider,
       @Value("${app.payment-approval.funding-account-ref:payout-funding-default}")
           String fundingAccountRef,
       @Value("${app.payment-approval.scenario-version:pg-normal-v1}") String scenarioVersion) {
     return new ApprovalWorkerSettings(
-        leaseDuration,
-        httpTimeout,
-        retryDelay,
-        maxAttempts,
-        cardProvider,
-        fundingAccountRef,
-        scenarioVersion);
+        leaseDuration, httpTimeout, maxAttempts, cardProvider, fundingAccountRef, scenarioVersion);
   }
 
   /**
