@@ -123,7 +123,8 @@ class SellerCouponIntegrationTest {
   }
 
   @Test
-  @DisplayName("발급은 판매자 부담 쿠폰 한 장을 만들고 같은 구매자 새 요청은 409, 같은 키 재요청은 기존 쿠폰, 없는 구매자는 404다")
+  @DisplayName(
+      "발급은 판매자 부담 쿠폰 한 장을 만들고 같은 구매자 새 요청은 COUPON_ALREADY_ISSUED, 같은 키 재요청은 기존 쿠폰, 없는 구매자는 404다")
   void issuesOneCouponPerBuyer() throws Exception {
     Shop shop = shop();
     UUID template = campaign(shop, 10, 30_000);
@@ -138,6 +139,7 @@ class SellerCouponIntegrationTest {
     assertThat(replay.path("id")).isEqualTo(coupon.path("id"));
     assertThat(coupon.path("funder").asText()).isEqualTo("SELLER");
     assertThat(coupon.path("sellerId").asText()).isEqualTo(shop.seller().toString());
+    assertThat(again.path("code").asText()).isEqualTo("COUPON_ALREADY_ISSUED");
     assertThat(again.path("detail").asText()).isEqualTo("이미 이 캠페인의 쿠폰을 받은 구매자입니다.");
     issue(shop, template, UUID.randomUUID(), 404, key());
     assertThat(totals(template))
@@ -186,19 +188,48 @@ class SellerCouponIntegrationTest {
   }
 
   @Test
-  @DisplayName("발급 종료는 새 발급만 막고, 버전이 다르면 409이며 이미 발급한 쿠폰은 그대로다")
+  @DisplayName(
+      "발급 종료는 새 발급만 막고(COUPON_CAMPAIGN_NOT_ISSUABLE), 버전이 다르면 버전 충돌이며 다시 종료해도 발급 불가로 거절하고 이미 발급한 쿠폰은 그대로다")
   void closesCampaignForNewIssues() {
     Shop shop = shop();
     UUID template = campaign(shop, 10, 30_000);
     JsonNode coupon = issue(shop, template, buyer().id(), 201, key());
 
-    seller(shop.seller(), path(template) + "/closure", version(1), 409, key());
+    JsonNode stale = seller(shop.seller(), path(template) + "/closure", version(1), 409, key());
     JsonNode closed = seller(shop.seller(), path(template) + "/closure", version(0), 200, key());
+    JsonNode closedAgain =
+        seller(shop.seller(), path(template) + "/closure", version(1), 409, key());
+    JsonNode rejected = issue(shop, template, buyer().id(), 409, key());
 
+    assertThat(stale.path("code").asText()).isEqualTo("COMMON_VERSION_CONFLICT");
     assertThat(closed.path("status").asText()).isEqualTo("CLOSED");
-    assertThat(issue(shop, template, buyer().id(), 409, key()).path("detail").asText())
-        .isEqualTo("신규 발급을 종료한 캠페인입니다.");
+    assertThat(closedAgain.path("code").asText()).isEqualTo("COUPON_CAMPAIGN_NOT_ISSUABLE");
+    assertThat(rejected.path("code").asText()).isEqualTo("COUPON_CAMPAIGN_NOT_ISSUABLE");
+    assertThat(rejected.path("detail").asText()).isEqualTo("신규 발급을 종료한 캠페인입니다.");
     assertThat(couponStatus(UUID.fromString(coupon.path("id").asText()))).isEqualTo("ISSUED");
+  }
+
+  @Test
+  @DisplayName("발급 기간 전 캠페인의 발급은 COUPON_CAMPAIGN_NOT_ISSUABLE과 사유로 거절하고 아무것도 발급하지 않는다")
+  void rejectsIssueBeforeCampaignStarts() {
+    Shop shop = shop();
+    Instant start = Instant.now().truncatedTo(ChronoUnit.SECONDS).plus(Duration.ofHours(1));
+    UUID template =
+        UUID.fromString(
+            seller(
+                    shop.seller(),
+                    "/api/sellers/me/coupon-templates",
+                    terms(shop, 10, 30_000).put("validFrom", start.toString()),
+                    201,
+                    key())
+                .path("id")
+                .asText());
+
+    JsonNode rejected = issue(shop, template, buyer().id(), 409, key());
+
+    assertThat(rejected.path("code").asText()).isEqualTo("COUPON_CAMPAIGN_NOT_ISSUABLE");
+    assertThat(rejected.path("detail").asText()).isEqualTo("아직 발급 기간이 아닌 캠페인입니다.");
+    assertThat(totals(template)).containsEntry("issued_count", 0);
   }
 
   @Test
