@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="396" viewBox="0 0 880 396" role="img" aria-labelledby="title desc">
   <title id="title">거래 알림</title>
-  <desc id="desc">목표 구조: commerce Spring Boot 앱 내부에서 알림 소비·발송·카카오 모의 수신을 처리한다. 새 앱/DB나 실제 카카오 연결은 없다.</desc>
+  <desc id="desc">기본 MOCK_KAKAO 경로: commerce 앱 내부에서 알림 소비·발송·모의 수신을 처리한다. 명시적 KAKAO_SELF 시연은 별도 어댑터를 사용하며 본문 정책을 따른다.</desc>
   <defs>
     <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
       <polygon points="0 0, 8 3, 0 6" fill="#607084" />

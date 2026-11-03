@@ -2,9 +2,7 @@
 
 서비스별 PostgreSQL과 [Redis 인증 데이터](#redis-인증-데이터)의 설계입니다. PostgreSQL의 물리 FK는 만들지 않고 아래 관계를 애플리케이션에서 검증합니다. 공통 시간 컬럼은 [시간 정보와 감사 기록](architecture.md#시간-정보와-감사-기록)에 따라 채웁니다. 생성/수정 시각과 행위 감사 로그는 별개입니다. 식별자는 서버 생성 UUID, 금액·누적 수량은 bigint, PostgreSQL 시각은 `timestamptz`이며 조회 시간대는 KST입니다. 내부 저장은 같은 절대시각을 유지합니다. `?`는 nullable, 나머지 컬럼은 NOT NULL입니다. 숫자 버전은 0부터 시작하고 조건부 갱신마다 증가합니다.
 
-이 문서는 테이블·컬럼·제약·인덱스의 목표 스키마를 정의합니다. 실제 DDL과 환경별 생성·변경 절차는 [DB 정책](migrations.md)을 따르며, 명세의 존재를 테이블 구현 완료로 간주하지 않습니다. 현재 커머스의 `products`·`product_inventory`·`inventory_movements`·`inventory_reservations`·`sale_events`·`event_participations`·`coupon_templates`·`buyer_coupons`·`coupon_history`·`coupon_issue_runs`·`coupon_issue_targets`·`idempotency_records`·`buyer_accounts`·`seller_accounts`·`password_reset_tokens`·`audit_logs`와 Spring Batch 메타데이터는 [commerce 초기 SQL](../infra/postgres/schema/commerce.sql)에, 정산의 `settlement_items`·`settlement_entries`·`settlement_batches`·`payouts`·`payout_jobs`·`settlement_reservations`·`inbox`·`inbox_conflicts`·`inbox_quarantines`·`inbox_quarantine_deliveries`·`payout_job_replays`·`idempotency_records`·`audit_logs`와 Spring Batch 메타데이터는 [settlement 초기 SQL](../infra/postgres/schema/settlement.sql)에, 금융 Mock의 `mock_accounts`·`mock_scenarios`·`mock_transactions`·`mock_funds_reservations`·`mock_cash_entries`·`idempotency_records`는 [finance_mock 초기 SQL](../infra/postgres/schema/finance_mock.sql)에 반영했습니다. 금융 Mock은 지급과 PG·간편결제 승인·전액 환불·입금 처리를 구현하며 해당 컬럼을 사용합니다.
-
-주문의 `orders`·`order_addresses`·`order_refund_requests`도 commerce 초기 SQL과 도메인·저장소에 반영했습니다. 주문·재고 예약·결제 결과·배송·취소/반품 상태와 Inbox/Outbox를 연결합니다. 쿠폰·이벤트 실저장과 금융/정산 실행은 소유 어댑터 및 해당 서비스의 책임입니다. 현재 연결·검증 범위는 [주문 업무 흐름](development.md#주문-업무-흐름)을 따릅니다.
+테이블·컬럼·제약·인덱스와 저장 상태를 정의합니다. 실제 DDL과 적용 방식은 [DB 정책](migrations.md), 실행·연결 조건은 [개발 환경](development.md)을 따릅니다. 설계의 존재만으로 구현 완료를 판단하지 않습니다.
 
 아래 컬럼·제약·인덱스가 기준이고 ERD는 주요 필드와 관계를 요약합니다. 각 뷰는 같은 DB 안의 관계를 보여주며 외부 서비스 ID는 값으로만 저장합니다. 주소·연락처는 별도 암호화 사본이고 금융 이벤트에 포함하지 않습니다.
 
@@ -394,7 +392,7 @@
 | `updated_at` | `timestamptz` | NOT NULL |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(order_id). 주문 생성 후 사본 불변, 정한 마스킹/보존 보류만 허용.
+**제약:** UNIQUE(order_id). 주소록 암호문을 복사하지 않고 새 주문 주소 ID·칸 이름에 묶은 AES-GCM 사본으로 다시 암호화한다. 주문 생성 후 사본은 불변이며 정한 마스킹/보존 보류만 허용한다.
 
 **인덱스:** UNIQUE(order_id).
 
@@ -512,13 +510,9 @@
 
 **제약:** target_month·cutoff_at·policy_version·status는 NOT NULL. CHECK(replaces_run_id <> id). UNIQUE(target_month) WHERE status <> 'CANCELLED'; UNIQUE(replaces_run_id) WHERE replaces_run_id IS NOT NULL. target_month는 월 첫날이고 target_count>=0, cutoff_spend>0이다. 세 취소 필드는 CANCELLED일 때 모두 필수이며 다른 상태에서는 모두 null이다. 대체 회차는 같은 월·마감·정책 버전의 CANCELLED 부모 한 개를 참조하며, 부모·자식 연결과 취소를 같은 트랜잭션에 저장한다. 참조·상태는 앱에서 확인하며 물리 FK는 두지 않는다. EXPIRED 또는 발급 이력이 있는 회차는 취소하지 않는다. 집계 오류의 발급0건 COMPLETED는 원래 기한 안에서만 같은 교정 조건을 적용한다.
 
-Scheduler는 매월 1일 00:10 KST부터 생성·실행하고 미생성·미완료 회차를 10분마다 확인한다. 첫 Step은 PREPARING에서 같은 마감 원자료의 집계·대상 저장을 재개하고, RANK 동점자 전원·등급·템플릿·할인 합계·중복을 검증한 뒤 대상 수·경계 금액과 ISSUING을 확정한다. 대상이 없으면 target_count=0/cutoff_spend=null로 완료한다. 확정 뒤에는 대상을 덮어쓰지 않는다. 업무 상태가 ISSUING으로 커밋됐지만 첫 Step 완료 이력이 남지 않았다면 저장한 확정 결과를 확인해 재사용하고 재집계하지 않는다. 발급 Step은 고정한 PENDING만 처리한다. 예정 할인 총액은 대상별 할인액의 합이며 사전 예산 승인과 비교하지 않는다.
+업무 상태가 ISSUING으로 커밋됐으면 Batch 첫 Step의 완료 이력이 없어도 확정 대상을 재사용합니다. 대상이 없으면 target_count=0/cutoff_spend=null로 완료합니다. 회차 잠금을 교정·실행 등록·대상 저장·발급이 공유하므로 취소와 첫 발급 중 하나만 커밋할 수 있습니다. 대상·원회차 이력은 보존합니다. [선정·교정 조건](policies.md#월간-회차-검증과-오류-교정)과 [Job 실행](architecture.md#월간-혜택-job)을 따릅니다.
 
-Job 식별자는 targetMonth+runId다. 정상 재시작은 같은 값을 사용하고 CANCELLED는 실행하지 않는다. 원자료나 저장한 정책 버전을 재구성할 수 없으면 현재 값으로 대체하지 않고 발급을 멈춘다. 원래 만료가 지나면 미발급 대상을 EXPIRED로 종결하며 새 회차로 연장하지 않는다.
-
-교정·Job 실행 등록·대상 저장·발급 chunk는 회차 행을 먼저 잠그고 상태를 다시 확인한다. 교정은 원회차 PREPARING/ISSUING/COMPLETED, 활성 실행 없음·실행자 부재 확인, 발급 0건, 원래 발급 기한 전이라는 조건을 모두 확인한다. ISSUED 또는 buyer_coupon_id가 있는 대상·해당 대상의 ISSUE 이력이 있으면 거절하고, 이력의 정합성을 확인할 수 없으면 판정을 미룬다. 취소·대체 회차·감사·멱등 결과는 원자 저장한다. 취소가 먼저 커밋되면 이전 실행의 지연 저장을 거절하고 첫 발급이 먼저 커밋되면 취소를 거절한다. 원회차 대상과 이력은 보존한다. 호출·오류는 [운영 계약](api.md#월간-혜택-운영-조회와-오류-교정)을 따른다.
-
-**인덱스:** (status,target_month,id); 조건부 월 유일성과 replaces_run_id 유일성은 위 제약으로 관리한다. Job 메타데이터와 업무 테이블의 스키마·제약은 첫 구현에서 함께 검증한다.
+**인덱스:** (status,target_month,id); 조건부 월 유일성과 replaces_run_id 유일성은 위 제약으로 관리한다.
 
 ### coupon_issue_targets
 
@@ -655,7 +649,7 @@ Job 식별자는 targetMonth+runId다. 정상 재시작은 같은 값을 사용�
 
 **제약:** UNIQUE(refund_id). 금융 성공/마일리지 복원/원장 상쇄/주문 복구를 별도 추적. 완료 ack 전 전체 완료 금지.
 
-현재 `step`은 RESERVATION_REQUESTED → EXTERNAL_REFUND_PENDING → MILEAGE_RESTORE_PENDING → LEDGER_REVERSAL_PENDING → ORDER_RESTORE_PENDING → COMPLETED이며, 외부 확정 거절은 RELEASE_PENDING → FAILED, 예약 거절은 RESERVATION_REQUESTED → FAILED입니다. 원장 상쇄 확인 때 `RefundCompleted`를 저장하고, `RefundOrderRestored`를 반영해야 환불이 COMPLETED가 됩니다. Settlement 응답(예약 결과·원장 상쇄·예약 해제)은 Settlement 토픽 수신기가 [inbox](#inbox)에 넘기고 결제 요청 처리기가 `RefundSettlementReplyService`로 반영합니다. 반영하지 않은 응답은 Inbox `REVIEW_REQUIRED`(`REFUND_SETTLEMENT_REPLY_REJECTED`)로 남깁니다.
+`step`은 RESERVATION_REQUESTED → EXTERNAL_REFUND_PENDING → MILEAGE_RESTORE_PENDING → LEDGER_REVERSAL_PENDING → ORDER_RESTORE_PENDING → COMPLETED이며, 외부 확정 거절은 RELEASE_PENDING → FAILED, 예약 거절은 RESERVATION_REQUESTED → FAILED입니다. 원장 상쇄 확인 때 `RefundCompleted`를 저장하고, `RefundOrderRestored`를 반영해야 환불이 COMPLETED가 됩니다. Settlement 응답(예약 결과·원장 상쇄·예약 해제)은 Settlement 토픽 수신기가 [inbox](#inbox)에 넘기고 결제 요청 처리기가 `RefundSettlementReplyService`로 반영합니다. 반영하지 않은 응답은 Inbox `REVIEW_REQUIRED`(`REFUND_SETTLEMENT_REPLY_REJECTED`)로 남깁니다.
 
 **인덱스:** (step,updated_at,id).
 
@@ -681,7 +675,7 @@ Job 식별자는 targetMonth+runId다. 정상 재시작은 같은 값을 사용�
 
 **제약:** UNIQUE(order_refund_request_id), UNIQUE(business_key). 부분 UNIQUE(payment_id) WHERE status IN (RESERVING,EXTERNAL_PENDING,RESTORING,INTERNAL_PENDING,COMPLETED,UNKNOWN,COMPENSATING). 원결제 E/M을 복사해 불변.
 
-현재 Payment가 환불 SAGA에 이 테이블을 사용합니다. `RefundApproved`를 받으면 확정 결제의 E/M을 복사해 RESERVING으로 접수하고 `RefundAccepted`·`RefundReservationRequested`(판매자 순액 N)를 같은 트랜잭션에 저장합니다. 같은 취소·반품 요청의 재전달은 기존 환불로 연결하고, 같은 원결제의 다른 요청은 Inbox의 `REVIEW_REQUIRED`로 남깁니다. 정산금 예약 뒤 환불 작업(`payment_jobs` REFUND, 업무 키는 `business_key`)이 원승인 시도의 provider·원외부 거래·시나리오 버전으로 E만 환불합니다. `external_status`는 NOT_REQUIRED(E=0, 호출 생략)/PENDING/REQUESTED(호출했을 수 있어 조회부터 재개)/SUCCEEDED/DECLINED/UNKNOWN입니다. 외부 성공 확인과 같은 트랜잭션에 M 복원·RESTORE 원장·INTERNAL_PENDING·`RefundFinancialCompleted`를 저장합니다. 확정 거절은 복원 없이 COMPENSATING과 `RefundReleaseRequested`, 미확정은 예약을 유지한 UNKNOWN으로 원거래를 다시 조회합니다. 외부 환불은 즉시 성공하는 개발용 stub(`app.refund.gateway=stub`)뿐이며 finance-mock 환불 연동은 아직 없습니다.
+`RefundApproved`를 받으면 확정 결제의 E/M을 복사해 RESERVING으로 접수하고 `RefundAccepted`·`RefundReservationRequested`(판매자 순액 N)를 같은 트랜잭션에 저장합니다. 같은 취소·반품 요청의 재전달은 기존 환불로 연결하고, 같은 원결제의 다른 요청은 Inbox의 `REVIEW_REQUIRED`로 남깁니다. 정산금 예약 뒤 환불 작업(`payment_jobs` REFUND, 업무 키는 `business_key`)이 원승인 시도의 provider·원외부 거래·시나리오 버전으로 E만 환불합니다. `external_status`는 NOT_REQUIRED(E=0, 호출 생략)/PENDING/REQUESTED(호출했을 수 있어 조회부터 재개)/SUCCEEDED/DECLINED/UNKNOWN입니다. 외부 성공 확인과 같은 트랜잭션에 M 복원·RESTORE 원장·INTERNAL_PENDING·`RefundFinancialCompleted`를 저장합니다. 확정 거절은 복원 없이 COMPENSATING과 `RefundReleaseRequested`, 미확정은 예약을 유지한 UNKNOWN으로 원거래를 다시 조회합니다. 외부 연결과 stub의 검증 범위는 [실행 안내](development.md#kafka-전달-기반)를 따릅니다.
 
 **인덱스:** (payment_id,created_at,id); (status,updated_at,id).
 
@@ -740,7 +734,7 @@ Job 식별자는 targetMonth+runId다. 정상 재시작은 같은 값을 사용�
 
 provider·method·account_ref·funding_account_ref·amount·scenario_version은 외부 호출 전 원본문의 사본으로 고정합니다. 호출 전 중단 뒤에도 이 값으로 승인 요청을 재구성하며 현재 서버 설정으로 재원·시나리오를 덮어쓰지 않습니다.
 
-현재 Payment Worker의 승인 처리기가 이 테이블을 사용합니다. 승인 작업을 임대한 뒤 PENDING 결제면 결제 요청 원문의 결제수단·계정과 서버 설정(카드 PG, 재원 계정, 시나리오 버전)으로 시도를 만들고 결제를 PROCESSING으로 바꿔 승인을 요청합니다. 결제 회차 ID를 대역 업무 키로 씁니다. 승인되면 마일리지 예약 차감·결제 확정·`PaymentConfirmed`, 확정 거절되면 예약 해제·`PaymentDeclined`를 작업 종료와 같은 트랜잭션에 저장합니다. 결과를 모르면 미확정으로 두고 다음 실행에서 원거래를 조회하며, 신뢰한 404만 같은 키·본문으로 재전송합니다. PG 호출은 `app.payment-approval.gateway`로 finance-mock 대역(`http`)과 즉시 승인하는 개발용 대역(`stub`, 기본값)을 고르며, 처리기는 기본 비활성입니다.
+승인 작업을 임대한 뒤 PENDING 결제면 결제 요청 원문의 결제수단·계정과 서버 설정(카드 PG, 재원 계정, 시나리오 버전)으로 시도를 만들고 결제를 PROCESSING으로 바꿔 승인을 요청합니다. 결제 회차 ID를 대역 업무 키로 씁니다. 승인되면 마일리지 예약 차감·결제 확정·`PaymentConfirmed`, 확정 거절되면 예약 해제·`PaymentDeclined`를 작업 종료와 같은 트랜잭션에 저장합니다. 결과를 모르면 미확정으로 두고 다음 실행에서 원거래를 조회하며, 신뢰한 404만 같은 키·본문으로 재전송합니다. PG 선택·활성화는 [승인 실행 안내](development.md#pg-승인조회전액-환불)를 따릅니다.
 
 **인덱스:** (status,updated_at,id); UNIQUE(payment_id) WHERE status IN (PENDING,PROCESSING,UNKNOWN,APPROVED).
 
@@ -1128,7 +1122,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 | `operator_ref` | `varchar(100)?` | REPLAY 실행 서비스 자격의 운영자 |
 | `reason` | `varchar(200)?` | REPLAY 사유 |
 
-**제약:** UNIQUE(delivery_id,attempt_no), attempt_no>=1. REPLAY는 operator_ref/reason 필수이며 원키·본문을 바꾸지 않고 retry_count만 0으로 재개한다. SEND/LOOKUP 시작과 delivery 임대·카운트 갱신을 원자 저장한다. 만료된 RUNNING은 UNKNOWN으로 남기고 LOOKUP부터 재개한다.
+**제약:** UNIQUE(delivery_id,attempt_no), attempt_no>=1. REPLAY는 operator_ref/reason 필수이며 원키·본문을 바꾸지 않고 retry_count만 0으로 재개한다. SEND/LOOKUP 시작과 delivery 임대·카운트 갱신을 원자 저장한다. 만료된 RUNNING의 시도는 UNKNOWN으로 남긴다. MOCK_KAKAO는 LOOKUP으로 확인하며 원수신 조회가 없는 KAKAO_SELF는 REVIEW_REQUIRED로 보낸다. [채널별 복구](policies.md#소유권과-복구)를 따른다.
 
 **인덱스:** (delivery_id,attempt_no); (status,started_at).
 
@@ -1237,17 +1231,19 @@ Commerce는 추가로 전체 행의 (aggregate_id,aggregate_version,sequence_no)
 
 **제약:** UNIQUE(consumer,event_id). status=RECEIVED/WAITING/APPLIED/REVIEW_REQUIRED. WAITING은 원 event_type/version/occurred_at/payload와 다음 재판정 시각을 보존해 Kafka ack·재시작 뒤에도 로컬에서 재개. payload에 금융 계약 외의 주소/인증 비밀값 금지.
 
-현재 Payment 수신은 원본과 `WAITING`·`next_run_at`을 한 행으로 저장해 메시지 처리 대기 작업을 영속화합니다. 별도 `inbox_jobs`는 만들지 않습니다. 조회용 `occurred_at`과 불변 bytes의 정밀도 구분은 Outbox와 같습니다. 같은 consumer·eventId의 동일 bytes 재전달은 원래 위치·상태·결과를 유지합니다. 다른 bytes는 아래 충돌 기록에 보존하고 그 격리 트랜잭션을 커밋한 뒤 ack합니다. 이는 금융 접수나 APPLIED를 뜻하지 않습니다. 후속 결제 유즈케이스가 대기 행을 읽고 결제·마일리지 예약·필요한 금융 `payment_jobs`와 Inbox 완료를 같은 트랜잭션에 저장해야 합니다. 결제 요청 처리기는 Worker에서 대기 행을 선점해 결제·마일리지 예약·승인 `payment_jobs`·Inbox 완료를 같은 트랜잭션에 저장하며, 외부 결제액이 0원이면 같은 트랜잭션에서 마일리지를 차감하고 결제를 확정합니다. 가용 마일리지가 부족하거나 지갑이 없으면 결제를 만들지 않고 `REVIEW_REQUIRED`로 남깁니다. 새 결제를 만든 같은 트랜잭션에서 `PaymentAccepted`를 Outbox에 저장하며, Relay는 Worker에서만 발행합니다. 처리기와 Relay는 기본 비활성이며 외부 금융 실행은 아직 연결하지 않습니다. 같은 토픽의 `PaymentCancellationRequested`도 같은 Inbox·처리기로 받습니다. 외부 승인 전(PENDING)이거나 확정 거절된 결제는 취소하고 마일리지 예약 해제·승인 작업 종료·`PaymentCancelled`를 같은 트랜잭션에 저장합니다. 승인 중·미확정·확정된 결제나 다른 결제 회차의 요청은 결제를 바꾸지 않고 `PaymentCancellationRejected`를 남깁니다. 결제 요청과 취소 요청은 처리 트랜잭션에서 Inbox 행보다 주문 단위 advisory lock을 먼저 잡아 서로의 커밋을 보고 처리합니다. 취소로 결제를 만들 때도 사용한 결제 요청 원문의 `result_ref`를 그 결제에 연결합니다. 원문이 WAITING이면 같은 트랜잭션에서 APPLIED로 완료하고, REVIEW_REQUIRED이면 기존 상태·사유를 보존합니다. 원문 조회는 이 연결을 기준으로 하며, 취소된 결제의 재요청도 주문·회차·당사자·금액·정책·결제수단을 같은 기준으로 비교합니다. 원문 연결 조회는 상태에 종속되지 않는 `(consumer,result_ref,created_at,id)` 부분 인덱스를, 취소·결제 요청의 주문·회차 조회는 `(consumer,aggregate_id,paymentCycleId,created_at,id)` 표현식 인덱스를 사용합니다. 결제가 없을 때 같은 주문·회차의 결제 요청 원문을 이미 받았다면(처리 대기든 확인 대상이든) 그 원문으로 승인 작업·마일리지 예약 없이 취소된 결제를 만들고 `PaymentCancelled`를 남깁니다. 원문이 아직 없으면 취소를 결과 참조 없이 APPLIED로 남기고, 늦게 온 결제 요청이 취소된 결제를 만든 뒤 두 수신 기록을 그 결제에 연결합니다. 원문 금액이 규칙에 맞지 않으면 취소도 `PAYMENT_CANCELLATION_REQUEST_INVALID`로 확인 대상이 됩니다.
+Inbox는 원문과 대기를 한 행에 보존하며 별도 `inbox_jobs`를 두지 않습니다. 조회용 `occurred_at`과 원문 bytes의 정밀도는 Outbox와 같습니다. 동일 consumer·eventId의 같은 bytes는 최초 출처·상태·결과를 유지하고 다른 bytes는 [충돌 기록](#inbox_conflicts)에 보존합니다. 수신 저장·ACK와 업무 반영 완료는 구분합니다.
 
-Payment Inbox는 처리 시도를 추적하는 `attempts`(`integer`, 0 이상, 기본 0)와 `last_error_code`(`varchar(80)?`)를 추가로 둡니다. 처리기는 별도 트랜잭션으로 선점을 커밋해 `attempts`를 늘리고 `next_run_at`을 임대 만료(기본 30초)로 미룹니다. 그래서 처리가 롤백된 뒤 실패를 기록하기 전에도 다른 처리기가 같은 행을 다시 선점하지 않고, 기록 전에 중단된 시도도 횟수에 남습니다. 처리는 선점한 버전 그대로인 행을 다시 잠근 뒤 실행하며, 임대가 끝나 다른 처리기가 선점한 행의 결과·실패는 반영하지 않습니다. 업무상 거절은 거절 사유와 함께 `REVIEW_REQUIRED`로 남깁니다. 그 밖의 처리 예외는 결제·마일리지·Outbox 변경을 롤백한 뒤 별도 트랜잭션에서 사유를 저장하고 `next_run_at`을 1초부터 두 배씩 최대 60초 뒤로 미룹니다. 10번째 시도의 실패는 `REVIEW_REQUIRED`로 남기고, 이미 10번 시도한 행이 다시 선점 대상이 되면 처리하지 않고 `PAYMENT_REQUEST_ATTEMPTS_EXHAUSTED`로 남깁니다. 원문을 읽을 수 없는 행은 재시도 없이 `PAYMENT_REQUEST_BODY_UNREADABLE`로 남깁니다. 선점은 한 번에 한 행만 다루며, 이 두 확인 대상 전환도 처리 1건으로 세어 처리기의 배치 크기에 포함합니다. 처리기는 여러 실행 슬롯(`app.payment-request-processor.concurrency`, 기본 3)이 각자 선점하며, 어느 슬롯이든 배치 크기만큼 처리했으면 간격을 기다리지 않고 이어서 처리합니다. 처리에 성공해도 마지막 사유는 지우지 않습니다. `REVIEW_REQUIRED`는 사유가 있어야 합니다.
+Payment·Commerce·Settlement는 `attempts integer NOT NULL DEFAULT 0 CHECK(attempts>=0)`와 `last_error_code varchar(80)?`를 추가로 둡니다. 재판정은 1~60초 지수 대기로 최대 10회이며 소진·업무 거절은 사유가 있는 REVIEW_REQUIRED로 보존합니다.
 
-**인덱스:** (status,created_at,id).
+Payment는 별도 선점 트랜잭션에서 attempts와 30초 임대를 저장하므로 처리 롤백·중단도 시도 횟수에 남습니다. 선점 버전이 바뀐 결과는 반영하지 않습니다. 10번째 처리 실패는 원사유와 REVIEW_REQUIRED로 남기며, 이미 10회 시도한 행의 재선점은 `PAYMENT_REQUEST_ATTEMPTS_EXHAUSTED`, 읽을 수 없는 원문은 재시도 없이 `PAYMENT_REQUEST_BODY_UNREADABLE`입니다. 선점은 한 행씩이며 확인 대상 전환도 배치 처리 건수에 포함합니다. 성공해도 마지막 사유는 보존합니다.
 
-Payment·Commerce는 추가로 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니다.
+Payment의 `result_ref`는 생성·취소된 결제 ID입니다. 결제·마일리지·금융 작업·Outbox·Inbox 완료는 같은 트랜잭션으로 저장합니다. 취소 요청과 결제 요청은 Inbox보다 주문 advisory lock을 먼저 잡습니다. 취소 때 참조한 결제 요청이 WAITING이면 APPLIED로 완료하고 REVIEW_REQUIRED이면 상태·사유를 보존하며 두 경우 모두 결제 참조를 연결합니다. 원요청의 주문·회차·당사자·금액·정책·수단은 재요청에서도 대조합니다. 원문 없이 먼저 온 취소의 결과 참조는 늦게 온 결제 요청을 처리할 때 연결합니다. 원문 금액 오류는 `PAYMENT_CANCELLATION_REQUEST_INVALID`로 남깁니다. 가용 마일리지 부족·지갑 부재는 결제를 만들지 않고 REVIEW_REQUIRED로 남깁니다. 실행·취소 조건은 [Payment 수신 실행](development.md#kafka-전달-기반)을 따릅니다.
 
-Settlement는 `PaymentConfirmed`·`PurchaseConfirmed`를 Listener 트랜잭션에서 `RECEIVED`로 저장하고 같은 트랜잭션에 반영해 `APPLIED`(`result_ref`=정산 항목 ID) 또는 `REVIEW_REQUIRED`로 남긴 뒤 ACK합니다. 선행 결제 항목이 없는 구매확정만 `WAITING`으로 두고 1초 주기 처리기가 다시 판정합니다. Commerce와 같은 `attempts`·`last_error_code`를 두어 1~60초 지수 대기로 최대 10회 판정하고, 소진하면 같은 UPDATE에서 `REVIEW_REQUIRED`·`PAYMENT_NOT_ARRIVED`로 남깁니다. 소진 뒤 결제확정이 와도 자동으로 다시 판정하지 않습니다. Listener와 처리기가 같은 항목을 동시에 바꿔 버전이 충돌하면 Listener가 새 트랜잭션으로 한 번 다시 판정합니다. Settlement도 WAITING 행의 (consumer,next_run_at,id)를 인덱싱합니다. 같은 환불의 원요청 조회를 위해 `RefundReservationRequested` 행의 (consumer,payload의 refundId uuid,created_at,id)도 부분 인덱싱합니다.
+Settlement의 `result_ref`는 정산 항목 ID입니다. 선행 결제가 없는 구매확정은 WAITING이며 소진하면 REVIEW_REQUIRED·`PAYMENT_NOT_ARRIVED`가 됩니다. 이후 PaymentConfirmed가 항목을 만들면 **그 사유의 구매확정만** 같은 트랜잭션에서 WAITING으로 되돌립니다. 다른 확인 대상은 자동 재개하지 않습니다. Listener 버전 충돌은 새 트랜잭션으로 한 번 재판정합니다. [이벤트 연동](api.md#이벤트-연동)을 따릅니다.
 
-Commerce의 `PaymentAccepted` 처리는 주문 ID 연결과 Inbox APPLIED를 원자 저장하고 `result_ref`에 주문 ID를 남깁니다. Commerce Inbox에는 `attempts integer NOT NULL DEFAULT 0 CHECK (attempts>=0)`와 `last_error_code varchar(80)?`를 추가해 선행 주문 미도착·반영 실패를 1~60초 지수 대기로 최대 10회 처리하고 소진 시 REVIEW_REQUIRED로 보존합니다. 이전 회차·버전·상태·다른 결제 ID는 즉시 확인 대상으로 남기며 주문을 덮어쓰지 않습니다. 원문·최초 출처·기존 처리 결과와 충돌 이력은 재시작·중복 인계에도 유지합니다. Payment의 재시도 컬럼·처리 변경은 별도 #76 범위입니다.
+Commerce의 `result_ref`는 주문 ID입니다. 주문 연결·결과 반영과 Inbox 완료를 원자 저장하고 충돌 원문·사유·최초 출처를 보존합니다. 회차·버전·결제 ID 검사는 [결제 접수 결과 수신](development.md#결제-접수-결과-수신)을 따릅니다.
+
+**인덱스:** 공통 (status,created_at,id), 세 서비스 WAITING의 (consumer,next_run_at,id). Payment는 결과 참조 조회의 `(consumer,result_ref,created_at,id)` 부분 인덱스와 주문·회차 조회의 `(consumer,aggregate_id,paymentCycleId,created_at,id)` 표현식 인덱스를 사용합니다. Settlement는 `RefundReservationRequested`의 `(consumer,payload의 refundId uuid,created_at,id)` 부분 인덱스를 추가합니다.
 
 ### inbox_conflicts
 
@@ -1389,13 +1385,13 @@ Finance Mock 준비 API의 운영자 범위는 [시험 데이터 준비 정책](
 | 외부 시도 | PENDING→PROCESSING→APPROVED/DECLINED/UNKNOWN. M 전액이면 attempt 없음. |
 | 금융 환불 | RESERVING→EXTERNAL_PENDING→RESTORING→INTERNAL_PENDING→COMPLETED. 원장 상쇄·커머스 복구 확인 대기는 INTERNAL_PENDING이며, RefundCompleted 발행만으로 완료하지 않는다. RefundOrderRestored를 수신·반영한 뒤 COMPLETED로 전이한다. 외부 거절은 COMPENSATING→DECLINED, 결과 불명은 UNKNOWN. |
 | 정산 항목 | WAITING_CONFIRMATION→PAYABLE은 구매확정과 선행 원장이 모두 준비된 ready_at 시점. WAITING_CONFIRMATION/PAYABLE→REFUND_RESERVED→REFUNDED. 지급은 PAYABLE→PAYOUT_RESERVED→PAID만 허용. 보상은 previous_item_status와 최신 구매확정/환불 정보를 대조해 조건부 복귀. |
-| 거래 알림 | 판매 COLLECTING→PENDING, 나머지 PENDING→SENDING→SENT/RETRY/UNKNOWN/REVIEW_REQUIRED. UNKNOWN은 원수신 조회부터 재개. SENT는 모의 수신 확인이며 금융 성공 상태를 바꾸지 않는다. |
+| 거래 알림 | 판매 COLLECTING→PENDING, 나머지 PENDING→SENDING→SENT/RETRY/UNKNOWN/REVIEW_REQUIRED. MOCK_KAKAO의 UNKNOWN은 원수신 조회부터 재개하고 KAKAO_SELF는 REVIEW_REQUIRED로 보낸다. SENT는 채널별 수신/API 성공 응답 확인이며 읽음이나 금융 성공을 뜻하지 않는다. |
 | 재고 예약 | RESERVED→CONSUMED→RESTORED, RESERVED→RELEASED→RESERVED(새 결제 회차). 회차가 일치하는 결과만 반영하며 세부 조건은 [inventory_reservations](#inventory_reservations). |
 | 쿠폰·이벤트·예약 | [정책](policies.md)의 상태와 시각 조건을 함께 적용한다. 상태를 덮어써 사용/복원 이력을 지우지 않는다. |
 
 ## 구현 시 검증
 
-테이블을 구현할 때 위 부분 유니크·체크·인덱스와 실제 enum을 DDL에 명시한다. 동시에 같은 쿠폰·마일리지·마지막 재고를 쓰는 경우와 환불/지급 예약 경합, 자동 구매확정/환불 마감 경합을 실제 DB로 검사한다. 상품 변경과 신규 일반 주문·이벤트 공개의 양쪽 잠금 순서, 이벤트 기간의 상품 변경 거절, 미결제 기한 취소와 결제 확정/재시도의 경합도 실제 DB에서 검사하고, Payment의 승인 차단 확정 전에는 예약이 유지되는지 확인한다. 현재 문서·그림의 구조 검사는 DB 동작 검증을 대신하지 않는다.
+DDL의 enum·부분 유니크·CHECK·인덱스를 실제 PostgreSQL에서 검증합니다. [동시성·실패 시나리오](design.md#9-실패공격범위-이탈에-대한-검증)와 위 트랜잭션의 잠금 순서·원자 저장을 함께 확인하며 문서·그림 구조 검사로 DB 검증을 대신하지 않습니다.
 
 ## 주문·알림 보존 작업
 

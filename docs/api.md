@@ -1,6 +1,6 @@
 # 기능 API
 
-기계 판독 기준은 [OpenAPI 3.1.1 명세](openapi.json)입니다. 요청/응답 필드·필수값·타입·오류·권한·멱등 헤더를 포함합니다. 이 문서는 기능 탐색과 서비스 연동의 기준이며 현재 업무 API가 구현됐다는 뜻은 아닙니다. [업무 정책](policies.md)과 [ERD](data-model.md)를 함께 적용합니다.
+기계 판독 기준은 [OpenAPI 3.1.1 명세](openapi.json)입니다. 요청/응답 필드·필수값·타입·오류·권한·멱등 헤더를 포함합니다. 이 문서는 API를 찾는 방법과 서비스 간 사용 순서를 설명합니다. 명세에는 구현 전 계약도 포함하므로 제공 여부는 소유 서비스의 Controller와 실행 설정을 확인합니다. [업무 정책](policies.md)과 [ERD](data-model.md)를 함께 적용합니다.
 
 API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CONTRIBUTING.md#api-경로와-명세)을 따릅니다.
 
@@ -8,16 +8,15 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 
 - 요청 형식·범위는 `@Valid`와 OpenAPI, 업무 불변식은 도메인, 최종 경합은 DB에서 검증합니다. [검증 경계](../CONTRIBUTING.md#검증-경계)를 따릅니다. 생성/수정 시각·행위 감사 필드는 서버가 기록하며 요청 DTO로 받지 않습니다.
 - 공개 `/api` 경로는 Gateway가 명세의 HTTP 메서드·경로·`x-owner-service`에 따라 소유 앱으로 전달합니다. `/internal`·`/mock`는 Gateway에 공개하지 않습니다. 상세 라우팅은 [네트워크와 관측](architecture.md#네트워크와-관측)을 따릅니다.
-- 현재 커머스의 일반 주문 생성·조회, 상품·재고 API, 선착순 이벤트의 판매자 등록·변경·공개·조기 종료와 공개 목록·조회·게이지와 주문 생성의 선착순 참여, 웰컴·판매자 쿠폰의 주문 사용과 본인 쿠폰 목록, 판매자 쿠폰 캠페인 등록·조회·발급 종료와 구매자 발급, 월간 혜택 회차의 운영 조회·교정, 웰컴 쿠폰을 함께 발급하는 구매자 가입과 판매자 가입, 구매자·판매자 로그인·로그아웃·본인 계정 조회·비밀번호 복구, 판매자 본인 정보 조회·변경, 구매자 주소록과 해당 MVC 오류 처리, 금융 Mock의 지급 실행·원지급 조회(`/mock/payouts`)와 PG 승인·원거래 조회·전액 환불(`/mock/providers/**`)을 제공합니다. 주문 견적·판매자 주문 조회·결제 재시도/취소·발송·취소/반품 API와 Payment 내부 주문 컨텍스트, Settlement 내부 상품 지급 컨텍스트도 제공합니다. 본인 거래 알림과 운영 발송/시도/모의 수신 조회·원키 재처리도 제공합니다. Payment는 본인 결제·승인 시도·마일리지 잔액/원장 조회, Settlement용 정산 컨텍스트·정산 대조 조회, 운영 결제 작업 조회·원키 재처리를 제공합니다. Settlement는 판매자 본인의 정산 항목·배치·지급 조회와 운영자 전용 지급 작업 조회·재처리, 정산 배치 생성·재개, 격리 원문 조회·원키 재처리·소진 발행 재개를 제공합니다. 기능별 제공 범위는 아래 각 절과 OpenAPI에서 확인합니다. 지급 대역은 `service:settlement`, PG 승인·조회·환불은 `service:payment` 자격만 받습니다. 세션 검증·신원 헤더·백엔드 호출 자격의 구현 범위는 [인증 경계](architecture.md#사용자-인증과-내부-신원-전달)에서 확인합니다. 커머스·Payment·Settlement·Finance Mock은 컨트롤러 전에 내부 호출 자격을 판정합니다. 내부 HTTP가 평문이므로 로컬 개발 환경에서만 사용합니다.
-- 주문은 실제 DB에 저장하며 결제 확정·거절·승인 차단 취소와 환불 결과를 영속 Inbox로 반영합니다. 재고·금액·배송지 사본과 Outbox는 같은 로컬 트랜잭션에 보존합니다. 선착순 이벤트와 쿠폰은 `OrderBenefits` 구현으로 연결했습니다. 쿠폰은 웰컴·판매자 쿠폰 발급, 월간 우수고객 자동 선정·발급과 운영 조회·교정, 기한 경과 만료를 구현했습니다. 실패 환불의 운영 종결은 소유 서비스의 인증된 읽기와 구매자 확인 기록을 대조하는 `RefundClosureEvidence`로 연결합니다. #131의 금융 환불 구현과 #154의 실제 예약 해제는 선행 의존이며 미설치·미연결 상태는 503으로 중단합니다. 기본 설정에서 미연결 의존 입력은 503으로 중단하며 금융 성공을 만들지 않습니다. [실행·검증 범위](development.md#주문-업무-흐름)를 따릅니다. 메모리 stub은 별도의 생성/조회 학습용입니다.
+
 - `x-actor`는 소비자 권한, `x-owner-service`는 처리 앱입니다. 자기 역할과 리소스 소유권을 함께 검사합니다. 구매자/판매자 토큰을 서비스 자격으로 쓸 수 없습니다.
-- 사용자 Bearer 토큰은 [Redis 세션 정책](policies.md#인증공통-api-기준)을 따릅니다. 커머스가 발급·폐기를 맡고 Gateway는 보호 요청마다 Redis 세션·계정 가드를 확인합니다. 외부 보안 스키마 accountSession과 백엔드의 Gateway 호출 자격은 [신원 전달 계약](architecture.md#사용자-인증과-내부-신원-전달)으로 구분합니다. 고정 30분이며 세션 없음·폐기/만료·버전 불일치·정지/삭제는 401, 변경 중 가드·가드 누락·Redis 검증 불가·복구 차단은 503입니다. PUBLIC은 메서드와 경로를 함께 대조합니다.
-- POST 주문은 주문 리소스 생성 `201`과 Location을 반환하며 결제는 비동기입니다. 비동기 재처리·대역 접수는 `202`+Location이고 승인/환불 완료를 뜻하지 않습니다. 상태 조회 응답으로 후속 완료를 확인합니다.
+- 사용자 Bearer 토큰은 [Redis 세션 정책](policies.md#인증공통-api-기준)을 따릅니다. 커머스가 발급·폐기를 맡고 Gateway는 보호 요청마다 Redis 세션·계정 가드를 확인합니다. 외부 보안 스키마 accountSession과 백엔드의 Gateway 호출 자격은 [신원 전달 계약](architecture.md#사용자-인증과-내부-신원-전달)으로 구분합니다. 만료·폐기·저장소 장애의 응답 조건은 세션 정책을 따르며 PUBLIC은 메서드·경로를 함께 대조합니다.
+- POST 주문은 주문 리소스 생성 `201`과 Location을 반환하며 결제는 비동기입니다. 비동기 재처리·대역 접수는 `202`이며 승인/환불 완료를 뜻하지 않습니다. 후속 조회 경로·필수 헤더는 작업별 OpenAPI 계약을 따릅니다. 상태 조회 응답으로 후속 완료를 확인합니다.
 - 쓰기 DTO는 additionalProperties=false입니다. 클라이언트 가격·buyerId·sellerId·providerId로 원금액/주체를 덮어쓰지 않습니다. 생성 시 서버 계산과 expectedProductVersion/expectedEventVersion/expectedTotalAmount를 비교해 달라졌으면 409입니다.
 - 금융 API의 순수 조회도 본인 소유를 검사합니다. 역할 오류403, 같은 역할의 타인 리소스404. `400/401/403/404/409/429/503`은 [RFC9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 application/problem+json이며 code/traceId를 포함합니다.
 - 목록은 고정 createdAt DESC,id DESC 정렬·page/size 범위를 사용합니다. 금액은 정수, ID는 문자열 UUID, 시각의 입력·출력은 [공통 시간 규약](../CONTRIBUTING.md#요청과-응답)을 따릅니다. 유효기간과 상태/버전 검사 기준은 policies.md가 소유합니다.
 - 버전이 있는 업무 리소스의 DELETE는 query의 expectedVersion, 다른 변경은 DTO의 expectedVersion을 검증합니다. 로그인·현재 세션 로그아웃·비밀번호 재설정에는 expectedVersion을 요구하지 않습니다.
-- `Idempotency-Key` 필수 여부는 아래 기능 목록과 OpenAPI를 따릅니다. 같은 키·본문의 재요청은 기존 결과로 연결하고 같은 키의 다른 본문은 `409`입니다. 리소스를 반환하는 재요청은 첫 응답의 사본 대신 현재 상태를 반환하며, 그 사이 삭제됐으면 `404`입니다. 시험 계정 준비 POST는 아래 준비 계약에 따라 원생성 결과를 반환합니다. 주소 삭제는 멱등 기록 보존 기간 안에 같은 키·요청으로 재요청하면 `204`를 반환하고, 새 키로 이미 삭제된 주소를 요청하면 `404`입니다. 사용자 API 키는 계정 종류·계정 ID·작업별로 구분하며, 내부 명령 키는 발신 서비스·업무 종류와 함께 식별합니다. 구매자 가입의 키 범위·재요청·충돌·보존 기한은 [구매자 가입 재시도](policies.md#구매자-가입-재시도)를 따릅니다.
+- `Idempotency-Key` 필수 여부는 OpenAPI를 따릅니다. 같은 키·본문의 재요청은 기존 결과로 연결하고 같은 키의 다른 본문은 `409`입니다. 리소스를 반환하는 재요청은 첫 응답의 사본 대신 현재 상태를 반환하며, 그 사이 삭제됐으면 `404`입니다. 시험 계정 준비 POST는 아래 준비 계약에 따라 원생성 결과를 반환합니다. 주소 삭제는 멱등 기록 보존 기간 안에 같은 키·요청으로 재요청하면 `204`를 반환하고, 새 키로 이미 삭제된 주소를 요청하면 `404`입니다. 사용자 API 키는 계정 종류·계정 ID·작업별로 구분하며, 내부 명령 키는 발신 서비스·업무 종류와 함께 식별합니다. 구매자 가입의 키 범위·재요청·충돌·보존 기한은 [구매자 가입 재시도](policies.md#구매자-가입-재시도)를 따릅니다.
 
 로그인·비밀번호 복구 요청의 계정 식별자별 제한은 [요청 제한 정책](policies.md#로그인복구-요청-제한)을 따릅니다. 제한 초과는 `429`와 `Retry-After`, 제한 저장소 확인 실패는 부작용 없이 `503`이며 계정 존재 여부를 응답으로 구분하지 않습니다.
 
@@ -29,109 +28,19 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 
 ## 기능 목록
 
-| 메서드 | 경로 | 기능 | 권한 | 요청 DTO | 응답 DTO | 필수 헤더 | 성공 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| POST | `/api/buyers` | 구매자 가입 | PUBLIC | `BuyerRegistration` | `Account` | `Idempotency-Key` | 201 |
-| POST | `/api/sellers` | 판매자 가입 | PUBLIC | `SellerRegistration` | `Account` | — | 201 |
-| POST | `/api/buyer-sessions` | buyer 로그인 | PUBLIC | `LoginRequest` | `Session` | — | 200 |
-| POST | `/api/seller-sessions` | seller 로그인 | PUBLIC | `LoginRequest` | `Session` | — | 200 |
-| DELETE | `/api/sessions/current` | 로그아웃 | BUYER / SELLER | `—` | `—` | — | 204 |
-| GET | `/api/accounts/me` | 본인 계정 | BUYER / SELLER | `—` | `Account` | — | 200 |
-| POST | `/api/password-reset-requests` | 재설정 요청 | PUBLIC | `PasswordResetRequest` | `AcceptedNotice` | — | 200 |
-| POST | `/api/password-resets` | 비밀번호 재설정 | PUBLIC | `PasswordReset` | `—` | — | 204 |
-| GET | `/api/sellers/me` | 본인 판매자 정보 | SELLER | `—` | `SellerProfile` | — | 200 |
-| PUT | `/api/sellers/me` | 판매자 정보 변경 | SELLER | `SellerProfileUpdate` | `SellerProfile` | `Idempotency-Key` | 200 |
-| POST | `/api/buyers/me/addresses` | 주소 등록 | BUYER | `AddressCreate` | `Address` | `Idempotency-Key` | 201 |
-| GET | `/api/buyers/me/addresses` | 주소 목록 | BUYER | `—` | `AddressPage` | — | 200 |
-| PUT | `/api/buyers/me/addresses/{addressId}` | 주소 변경 | BUYER | `AddressUpdate` | `Address` | `Idempotency-Key` | 200 |
-| DELETE | `/api/buyers/me/addresses/{addressId}` | 주소 삭제 | BUYER | query `expectedVersion` | `—` | `Idempotency-Key` | 204 |
-| GET | `/api/products` | 판매 상품 목록 | PUBLIC | `—` | `ProductPage` | — | 200 |
-| GET | `/api/products/{productId}` | 판매 상품 조회 | PUBLIC | `—` | `Product` | — | 200 |
-| POST | `/api/sellers/me/products` | 상품 등록 | SELLER | `ProductCreate` | `Product` | `Idempotency-Key` | 201 |
-| GET | `/api/sellers/me/products` | 본인 상품 목록 | SELLER | `—` | `ProductPage` | — | 200 |
-| PUT | `/api/sellers/me/products/{productId}` | 상품 변경 | SELLER | `ProductUpdate` | `Product` | `Idempotency-Key` | 200 |
-| DELETE | `/api/sellers/me/products/{productId}` | 상품 논리삭제 | SELLER | query `expectedVersion` | `—` | `Idempotency-Key` | 204 |
-| GET | `/api/sellers/me/products/{productId}/inventory` | 본인 상품 재고 | SELLER | `—` | `Inventory` | — | 200 |
-| POST | `/api/sellers/me/products/{productId}/inventory-adjustments` | 일반 가용 재고 조정 | SELLER | `InventoryAdjustment` | `Inventory` | `Idempotency-Key` | 200 |
-| POST | `/api/sellers/me/coupon-templates` | 쿠폰 템플릿 등록 | SELLER | `CouponTemplateCreate` | `CouponTemplate` | `Idempotency-Key` | 201 |
-| GET | `/api/sellers/me/coupon-templates` | 쿠폰 템플릿 목록 | SELLER | `—` | `CouponTemplatePage` | — | 200 |
-| POST | `/api/sellers/me/coupon-templates/{templateId}/closure` | 쿠폰 신규 발급 종료 | SELLER | `VersionRequest` | `CouponTemplate` | `Idempotency-Key` | 200 |
-| POST | `/api/sellers/me/coupon-templates/{templateId}/issues` | 구매자에게 판매자 쿠폰 발급 | SELLER | `CouponIssueRequest` | `BuyerCoupon` | `Idempotency-Key` | 201 |
-| GET | `/api/buyers/me/coupons` | 본인 쿠폰 목록 | BUYER | `—` | `BuyerCouponPage` | — | 200 |
-| POST | `/api/sellers/me/events` | 이름을 정해 이벤트 등록 | SELLER | `EventCreate` | `Event` | `Idempotency-Key` | 201 |
-| PUT | `/api/sellers/me/events/{eventId}` | 미공개 이벤트 변경 | SELLER | `EventUpdate` | `Event` | `Idempotency-Key` | 200 |
-| POST | `/api/sellers/me/events/{eventId}/publication` | 이벤트 공개·재고 배정 | SELLER | `VersionRequest` | `Event` | `Idempotency-Key` | 200 |
-| POST | `/api/sellers/me/events/{eventId}/closure` | 이벤트 조기 종료 | SELLER | `ReasonRequest` | `Event` | `Idempotency-Key` | 200 |
-| GET | `/api/events` | 공개 이벤트 목록 | PUBLIC | `—` | `EventPage` | — | 200 |
-| GET | `/api/events/{eventId}` | 공개 이벤트 조회 | PUBLIC | `—` | `Event` | — | 200 |
-| GET | `/api/events/{eventId}/gauge` | 판매 진행률·신청 상태 | PUBLIC | `—` | `EventGauge` | — | 200 |
-| POST | `/api/order-quotes` | 서버 주문 금액 미리보기 | BUYER | `OrderQuoteRequest` | `OrderQuote` | — | 200 |
-| POST | `/api/orders` | 일반/이벤트 주문과 결제 접수 | BUYER | `OrderCreate` | `Order` | `Idempotency-Key` | 201 |
-| GET | `/api/orders` | 본인 주문 목록 | BUYER | `—` | `OrderPage` | — | 200 |
-| GET | `/api/orders/{orderId}` | 본인 주문 조회 | BUYER | `—` | `Order` | — | 200 |
-| POST | `/api/orders/{orderId}/payment-retries` | 확정 거절 뒤 재예약·재시도 | BUYER | `VersionRequest` | `Order` | `Idempotency-Key` | 202 |
-| POST | `/api/orders/{orderId}/cancellation` | 미결제 주문 취소 접수 | BUYER | `ReasonRequest` | `Order` | `Idempotency-Key` | 202 |
-| POST | `/api/orders/{orderId}/refund-requests` | 기한 내 취소·반품 요청 | BUYER | `OrderRefundCreate` | `OrderRefundRequest` | `Idempotency-Key` | 201 |
-| GET | `/api/refund-requests/{requestId}` | 본인 취소·반품 진행 | BUYER | `—` | `OrderRefundRequest` | — | 200 |
-| POST | `/api/refund-requests/{requestId}/withdrawal` | 승인 전 반품 요청 철회 | BUYER | `VersionRequest` | `OrderRefundRequest` | `Idempotency-Key` | 200 |
-| GET | `/api/sellers/me/orders` | 본인 판매 주문 목록 | SELLER | `—` | `SellerOrderPage` | — | 200 |
-| GET | `/api/sellers/me/orders/{orderId}` | 이행 대상 판매 주문 조회 | SELLER | `—` | `SellerOrder` | — | 200 |
-| POST | `/api/sellers/me/orders/{orderId}/shipments` | 발송 처리 | SELLER | `ShipmentRequest` | `Order` | `Idempotency-Key` | 200 |
-| GET | `/api/sellers/me/refund-requests` | 본인 반품 요청 목록 | SELLER | `—` | `OrderRefundRequestPage` | — | 200 |
-| POST | `/api/sellers/me/refund-requests/{requestId}/decision` | 반품 승인·거절 | SELLER | `RefundDecision` | `OrderRefundRequest` | `Idempotency-Key` | 202 |
-| POST | `/api/sellers/me/refund-requests/{requestId}/receipt` | 반품 입고·재고 복구 | SELLER | `VersionRequest` | `OrderRefundRequest` | `Idempotency-Key` | 200 |
-| GET | `/api/payments` | 본인 결제 목록 | BUYER | `—` | `PaymentPage` | — | 200 |
-| GET | `/api/payments/{paymentId}` | 본인 결제 진행 | BUYER | `—` | `Payment` | — | 200 |
-| GET | `/api/payments/{paymentId}/attempts` | 본인 외부 승인 시도 | BUYER | `—` | `PaymentAttemptPage` | — | 200 |
-| GET | `/api/refunds/{refundId}` | 본인 금융 환불 진행 | BUYER | `—` | `FinancialRefund` | — | 200 |
-| GET | `/api/buyers/me/mileage` | 본인 마일리지 잔액 | BUYER | `—` | `MileageWallet` | — | 200 |
-| GET | `/api/buyers/me/mileage/entries` | 본인 마일리지 이력 | BUYER | `—` | `MileageEntryPage` | — | 200 |
-| GET | `/api/sellers/me/settlement-items` | 본인 정산 항목 | SELLER | `—` | `SettlementItemPage` | — | 200 |
-| GET | `/api/sellers/me/settlement-batches` | 본인 정산 배치 | SELLER | `—` | `SettlementBatchPage` | — | 200 |
-| GET | `/api/sellers/me/payouts` | 본인 지급 목록 | SELLER | `—` | `PayoutPage` | — | 200 |
-| GET | `/api/sellers/me/payouts/{payoutId}` | 본인 지급 조회 | SELLER | `—` | `Payout` | — | 200 |
-| GET | `/internal/orders/{orderId}/payment-context` | 불변 주문·금액 컨텍스트 | SERVICE:payment | `—` | `PaymentContext` | — | 200 |
-| GET | `/internal/products/{productId}/settlement-context` | 상품·판매자 지급 컨텍스트 | SERVICE:settlement | `—` | `ProductSettlementContext` | — | 200 |
-| GET | `/internal/payments/{paymentId}/settlement-context` | 확정 결제·원금액 컨텍스트 | SERVICE:settlement | `—` | `SettlementContext` | — | 200 |
-| GET | `/internal/payment-reconciliation-events` | 마감 시점의 불변 금융 이벤트·발행 위치 | SERVICE:settlement | `cutoffAt`, `cursor`, `size` | `PaymentReconciliationEventPage` | — | 200 |
-| POST | `/internal/refund-requests/{requestId}/closure` | 실패 환불의 안전한 운영 종결 | OPERATOR | `FailedRefundClosure` | `OrderRefundRequest` | `Idempotency-Key` | 200 |
-| POST | `/api/refund-requests/{requestId}/closure-confirmations` | 본인 실패 환불의 종결 의사 확인 | BUYER | `{expectedVersion}` | `RefundClosureConfirmation` | `Idempotency-Key` | 201 |
-| GET | `/internal/refunds/{refundId}/financial-closure-evidence` | Payment의 원환불·미복원 증빙 | SERVICE:commerce | — | `FinancialClosureEvidence` | — | 200 |
-| GET | `/internal/refunds/{refundId}/reservation-closure-evidence` | Settlement의 원예약 해제 증빙 | SERVICE:commerce | — | `ReservationClosureEvidence` | — | 200 |
-| GET | `/internal/coupon-issue-runs` | 월간 혜택 회차 목록 | OPERATOR | query `targetMonth/status/page/size` | `CouponIssueRunPage` | — | 200 |
-| GET | `/internal/coupon-issue-runs/{runId}` | 회차·취소·대체 결과 조회 | OPERATOR | `—` | `CouponIssueRun` | — | 200 |
-| POST | `/internal/coupon-issue-runs/{runId}/replacements` | 발급 전 오류 교정 | OPERATOR | `CouponIssueRunReplacementRequest` | `CouponIssueRun` | `Idempotency-Key` | 201 |
-| GET | `/internal/payment-jobs` | 운영 작업 목록 | OPERATOR | `—` | `JobPage` | — | 200 |
-| POST | `/internal/payment-jobs/{jobId}/replays` | 원업무 작업 재처리 | OPERATOR | `ReplayRequest` | `Job` | `Idempotency-Key` | 202 |
-| GET | `/internal/payout-jobs` | 운영 작업 목록 | OPERATOR | `—` | `JobPage` | — | 200 |
-| POST | `/internal/payout-jobs/{jobId}/replays` | 원업무 작업 재처리 | OPERATOR | `ReplayRequest` | `Job` | `Idempotency-Key` | 202 |
-| POST | `/internal/settlement-retention` | 알림 보존용 배치 종결 묶음 조회 | SERVICE:commerce | `SettlementRetentionLookup` | `SettlementBatchClosure[]` | — | 200 |
-| POST | `/internal/settlement-batches` | 정산 배치 생성·재개 | OPERATOR | `BatchCreate` | `SettlementBatch` | `Idempotency-Key` | 202 |
-| GET | `/internal/settlement-quarantines` | 격리 원문 목록 | OPERATOR | query `deliveryStatus/page/size` | `SettlementQuarantinePage` | — | 200 |
-| GET | `/internal/settlement-quarantines/{quarantineId}` | 격리 원문·발행 작업·재개 이력 | OPERATOR | `—` | `SettlementQuarantine` | — | 200 |
-| POST | `/internal/settlement-quarantines/{quarantineId}/replays` | 격리 원문 원키 재처리 | OPERATOR | `QuarantineReplayRequest` | `SettlementQuarantine` | `Idempotency-Key` | 202 |
-| POST | `/internal/settlement-quarantine-deliveries/{deliveryId}/resumes` | 소진 발행 작업 재개 | OPERATOR | `QuarantineReplayRequest` | `SettlementQuarantineDelivery` | `Idempotency-Key` | 202 |
-| POST | `/mock/providers/{providerId}/payments` | 모의 외부 승인 | SERVICE:payment | `MockApproval` | `MockTransaction` | `Idempotency-Key` | 202 |
-| GET | `/mock/providers/{providerId}/transactions/{businessKey}` | 원대역 거래 조회 | SERVICE:payment | `—` | `MockTransaction` | — | 200 |
-| POST | `/mock/providers/{providerId}/payments/{externalId}/refunds` | 원외부 결제 전액 환불 | SERVICE:payment | `MockRefund` | `MockTransaction` | `Idempotency-Key` | 202 |
-| POST | `/mock/payouts` | 모의 지급 실행 | SERVICE:settlement | `MockPayout` | `MockTransaction` | `Idempotency-Key` | 202 |
-| GET | `/mock/payouts/{businessKey}` | 원지급 조회 | SERVICE:settlement | `—` | `MockTransaction` | — | 200 |
-| POST | `/mock/accounts` | 격리 시험 계정 준비 | OPERATOR | `MockAccountCreate` | `MockAccount` | `Idempotency-Key` | 201 |
-| GET | `/mock/accounts/{accountId}` | 격리 시험 잔액 조회 | OPERATOR | `—` | `MockAccount` | — | 200 |
-| POST | `/mock/scenarios` | 새 버전 장애 설정 | OPERATOR | `MockScenarioCreate` | `MockScenario` | `Idempotency-Key` | 201 |
-| GET | `/api/sellers/me/products/{productId}` | 본인 미공개/판매 상품 조회 | SELLER | `—` | `Product` | — | 200 |
-| GET | `/api/sellers/me/coupon-templates/{templateId}` | 본인 쿠폰 템플릿 조회 | SELLER | `—` | `CouponTemplate` | — | 200 |
-| GET | `/api/sellers/me/events` | 본인 이벤트 목록 | SELLER | `—` | `EventPage` | — | 200 |
-| GET | `/api/sellers/me/events/{eventId}` | 본인 이벤트 조회 | SELLER | `—` | `Event` | — | 200 |
-| GET | `/api/notifications` | 본인 거래 알림 목록 | BUYER / SELLER | `—` | `NotificationPage` | — | 200 |
-| GET | `/api/notifications/{notificationId}` | 본인 거래 알림 조회 | BUYER / SELLER | `—` | `Notification` | — | 200 |
-| GET | `/internal/notification-deliveries` | 운영 발송 목록 | OPERATOR | `—` | `NotificationDeliveryPage` | — | 200 |
-| GET | `/internal/notification-deliveries/{deliveryId}` | 운영 발송 조회 | OPERATOR | `—` | `NotificationDelivery` | — | 200 |
-| GET | `/internal/notification-deliveries/{deliveryId}/attempts` | 발송·조회·재처리 이력 | OPERATOR | `—` | `NotificationAttemptPage` | — | 200 |
-| POST | `/internal/notification-deliveries/{deliveryId}/replays` | 원알림 재처리 | OPERATOR | `NotificationReplayRequest` | `NotificationDelivery` | `Idempotency-Key` | 202 |
-| GET | `/internal/notification-mock/receipts/{deliveryId}` | 모의 수신 원결과 조회 | OPERATOR | `—` | `MockNotificationReceipt` | — | 200 |
+메서드·경로·DTO·권한·필수 헤더·응답 코드는 [OpenAPI](openapi.json)의 `paths`를 기준으로 합니다. 실행 중인 API는 Gateway의 [Swagger UI](http://localhost:8080/swagger-ui.html)에서 서비스별로 탐색합니다. 내부·모의 API는 소유 앱의 `/v3/api-docs`에서 확인하며 Gateway를 거치지 않습니다.
 
-같은 `/api/buyers`·`/api/sellers` 접두사라도 기능 소유 앱이 다를 수 있습니다. Gateway는 `x-owner-service`의 개별 경로 패턴을 기준으로 라우팅합니다. 마일리지는 Payment, 판매자 정산/지급은 Settlement이며 일반 계정/상품/주문은 커머스입니다. 상품 생성은 재고 0인 inventory 행도 함께 만들고 재고 조정은 별도 명령으로 기록합니다.
+| 찾을 기능 | 소유 서비스 | 사용·연동 안내 |
+| --- | --- | --- |
+| 계정·세션·주소·상품·재고·이벤트 | Commerce | [인증·역할](architecture.md#사용자-인증과-내부-신원-전달), [일반 주문](development.md#일반-주문-api) |
+| 쿠폰 발급·조회·월간 혜택 | Commerce | [쿠폰 사용](#쿠폰-사용-순서), [월간 혜택 운영](#월간-혜택-운영-조회와-오류-교정) |
+| 주문·견적·발송·취소·반품 | Commerce | [주문·환불](#주문환불-사용-순서), [실패 환불 종결](#실패-환불의-운영-종결) |
+| 결제·마일리지·금융 환불 | Payment | [이벤트 연동](#이벤트-연동), [정산 대조](#정산-대조-조회) |
+| 정산·지급·배치·지급 작업·격리 운영 | Settlement | [환불 SAGA](#settlement-환불-saga), [정산 정책](policies.md#정산재처리), [격리 운영](#격리-원문-운영) |
+| 거래 알림·발송 이력·재처리 | Commerce | [거래 알림](#거래-알림-사용-순서) |
+| PG·간편결제·지급 대역·시험 계정·장애 설정 | Finance Mock | [금융 대역](#금융-대역-조회와-장애-설정) |
+
+같은 `/api/buyers`·`/api/sellers` 접두사라도 기능 소유 앱이 다릅니다. Gateway는 `x-owner-service`의 개별 메서드·경로로 라우팅하며, 마일리지는 Payment, 정산·지급은 Settlement가 소유합니다.
 
 ## 쿠폰 사용 순서
 
@@ -143,13 +52,11 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 
 ## 월간 혜택 운영 조회와 오류 교정
 
-위 세 경로는 Commerce가 소유하며 구현했습니다. 검증한 OPERATOR별 서비스 자격만 허용하고 Gateway에 공개하지 않습니다. 구매자·판매자 세션과 일반 서비스 자격으로 호출하지 않습니다. 목록은 생성 시각 DESC,id DESC, page 기본0·size 기본20/최대100이며 targetMonth 필터는 혜택 월 첫날입니다. 회차·발급 건수·이전/대체 연결은 같은 조회 스냅샷에서 반환합니다.
+`GET /internal/coupon-issue-runs`, `GET /internal/coupon-issue-runs/{runId}`, `POST /internal/coupon-issue-runs/{runId}/replacements`는 Commerce 소유 계약입니다. 검증한 OPERATOR별 서비스 자격만 허용하고 Gateway에 공개하지 않습니다. 구매자·판매자 세션과 일반 서비스 자격으로 호출하지 않습니다. 목록은 생성 시각 DESC,id DESC, page 기본0·size 기본20/최대100이며 targetMonth 필터는 혜택 월 첫날입니다. 회차·발급 건수·이전/대체 연결은 같은 조회 스냅샷에서 반환합니다.
 
-교정 POST는 필수 Idempotency-Key와 `{expectedVersion, reasonCode: "AGGREGATION_ERROR"}`를 받습니다. 처리자는 검증한 자격에서 기록하며 구매자·등급·금액·원자료 마감·기간을 받지 않습니다. 원회차 PREPARING/ISSUING/COMPLETED, 발급0건, 원래 발급 기한 전, 활성 실행 없음과 실행자 부재를 확인합니다. 진행 중 실행은 JobOperator의 정상 중단 절차와 진행 트랜잭션 종료를 먼저 확인하고, STARTED 잔류는 실행자·저장 진행 상태를 검증해 복구합니다. 실행 이력을 임의 수정하거나 새 파라미터로 우회하지 않습니다.
+교정 POST는 `Idempotency-Key`와 `{expectedVersion, reasonCode: "AGGREGATION_ERROR"}`를 받습니다. 구매자·등급·금액·마감·기간을 지정할 수 없습니다. [발급 0건·안전한 중단 등 교정 조건](policies.md#월간-회차-검증과-오류-교정)을 충족하면 취소·대체 회차·감사·멱등 결과를 원자 저장합니다.
 
-런처의 실행 등록·대상 저장·발급·교정은 같은 회차 행을 잠그고 상태를 다시 확인합니다. 취소가 먼저 커밋되면 이전 실행의 저장을 거절하고 첫 발급이 먼저 커밋되면 교정을 거절합니다. ISSUED 대상·연결 쿠폰·해당 대상의 ISSUE 이력이 있는 회차는 취소하지 않습니다. 교정은 원회차 CANCELLED 전이·같은 월/마감/정책/만료의 새 PREPARING 회차·감사·멱등 결과를 한 트랜잭션에 저장합니다. 대체 회차는 새 runId와 replacesRunId를 가지며, 새 쿠폰 발급은 이후 Scheduler가 자동으로 시작합니다. 정책과 상태·유일성은 [업무 정책](policies.md#월간-회차-검증과-오류-교정)·[데이터 모델](data-model.md#coupon_issue_runs)을 따릅니다.
-
-성공은 `201`과 새 회차의 Location이며 쿠폰 발급 완료가 아닙니다. 동일 키·본문의 재요청은 저장한 결과를 버전·현재 상태 검사보다 먼저 반환합니다. 같은 키의 다른 본문은409이며 새 회차를 다시 만들지 않습니다. 원회차 조회의 replacementRunId로도 교정 결과를 찾을 수 있습니다. 감사에는 COUPON_ISSUE_RUN_REPLACED/CREATED, AGGREGATION_ERROR, 검증한 OPERATOR와 원회차·대체 회차를 같은 트랜잭션에 남깁니다.
+성공은 `201`과 새 회차의 Location이며 발급 완료가 아닙니다. 동일 키·본문은 상태·버전 검사보다 먼저 기존 결과를 반환하고 다른 본문은 409입니다. 새 runId·replacesRunId와 원회차의 replacementRunId로 연결하며 Scheduler가 이후 발급을 시작합니다. 저장 제약은 [회차 모델](data-model.md#coupon_issue_runs)을 따릅니다.
 
 | 조건 | 응답 |
 | --- | --- |
@@ -206,7 +113,7 @@ Kafka key는 위 표를 따르며 envelope의 aggregateId와 같다는 뜻은 �
 
 Commerce는 `PaymentAccepted` v1을 수신해 본인 주문 조회의 `paymentId`를 연결합니다. 원문·출처와 Inbox 대기를 커밋한 뒤 ACK하고, 주문 연결·Inbox 완료를 같은 트랜잭션에 저장합니다. 동일 연결은 주문 버전 증가 뒤에도 무변경으로 처리하며, 이전 회차·버전·다른 ID의 충돌은 사유와 함께 보존합니다. 이 접수 통지로 주문 상태·금액·재고 예약은 바꾸지 않습니다. 소비·처리기는 기본 비활성이고 [활성화와 복구](development.md#결제-접수-결과-수신)를 따릅니다. 같은 소비 경계가 PaymentConfirmed·PaymentDeclined·PaymentCancelled·PaymentCancellationRejected·RefundAccepted·RefundCompleted·RefundFailed도 인계합니다. 선행 주문·환불 접수가 없으면 기다리고, 이전 회차는 무변경 처리하며 모순 결과는 검토 대상으로 남깁니다. 결제·환불 반영과 해당 재고/혜택·감사·Outbox는 원자 저장합니다.
 
-Settlement는 `PaymentConfirmed`·`PurchaseConfirmed`와 환불 SAGA 요청 `RefundReservationRequested`·`RefundFinancialCompleted`·`RefundReleaseRequested` v1을 수신합니다. 두 토픽의 다른 eventType은 저장 없이 ACK하고, 대상 이벤트는 종류·버전·생산자 토픽·key(`paymentId`)·필드 타입을 엄격하게 검사합니다. 해석할 수 없는 입력은 원문 격리(`app.kafka.quarantine.enabled`, 기본 `false`)가 켜져 있으면 원문과 DLT 발행 작업을 저장한 뒤 ACK하고, 꺼져 있으면 ACK하지 않고 수신 컨테이너를 멈춥니다. `PaymentConfirmed`는 금액 계약을 검사해 정산 항목과 최초 원장 5 leg를, `PurchaseConfirmed`는 시각 계약과 주문 일치를 검사해 항목을 `PAYABLE`로 바꾸며 Inbox와 같은 트랜잭션에 커밋한 뒤 ACK합니다. 금액·시각 계약 위반과 같은 결제의 다른 값은 `REVIEW_REQUIRED`로 남기고 다음 메시지를 처리합니다. 결제 항목이 아직 없는 구매확정은 1초부터 최대 60초 간격으로 10회까지 다시 판정하고, 소진하면 `REVIEW_REQUIRED`(`PAYMENT_NOT_ARRIVED`)로 남깁니다. 그 뒤 같은 결제의 `PaymentConfirmed`가 새 항목을 만들면 같은 트랜잭션에서 그 구매확정만 다시 대기시키고 처리기가 같은 검사로 반영합니다. 다른 사유의 `REVIEW_REQUIRED`는 되돌리지 않습니다. 수신은 `app.kafka.settlement-events.enabled`(기본 `false`)로 켜며 신규 그룹 `settlement.v1`의 offset 초기화는 [Kafka 전달 기반](development.md#kafka-전달-기반)과 같습니다. 환불 SAGA 요청은 [Settlement 환불 SAGA](#settlement-환불-saga)를 따릅니다. Payment의 `PaymentConfirmed`·환불 요청과 Commerce의 `PurchaseConfirmed` 발행은 구현했으며, Settlement 쪽은 계약대로 만든 메시지로 검증했습니다. Payment·Commerce와 Settlement의 실제 서비스 연동은 [주문·결제·정산·환불 왕복](development.md#주문결제정산환불-왕복) smoke로 확인합니다(지급 단계 제외).
+Settlement는 `PaymentConfirmed`·`PurchaseConfirmed`와 환불 SAGA 요청 `RefundReservationRequested`·`RefundFinancialCompleted`·`RefundReleaseRequested` v1을 수신합니다. 두 토픽의 다른 eventType은 저장 없이 ACK하고, 대상 이벤트는 종류·버전·생산자 토픽·key(`paymentId`)·필드 타입을 엄격하게 검사합니다. 해석할 수 없는 입력은 원문 격리(`app.kafka.quarantine.enabled`, 기본 `false`)가 켜져 있으면 원문과 DLT 발행 작업을 저장한 뒤 ACK하고, 꺼져 있으면 ACK하지 않고 수신 컨테이너를 멈춥니다. `PaymentConfirmed`는 금액 계약을 검사해 정산 항목과 최초 원장 5 leg를, `PurchaseConfirmed`는 시각 계약과 주문 일치를 검사해 항목을 `PAYABLE`로 바꾸며 Inbox와 같은 트랜잭션에 커밋한 뒤 ACK합니다. 금액·시각 계약 위반과 같은 결제의 다른 값은 `REVIEW_REQUIRED`로 남기고 다음 메시지를 처리합니다. 결제 항목이 아직 없는 구매확정은 1초부터 최대 60초 간격으로 10회까지 다시 판정하고, 소진하면 `REVIEW_REQUIRED`(`PAYMENT_NOT_ARRIVED`)로 남깁니다. 그 뒤 같은 결제의 `PaymentConfirmed`가 새 항목을 만들면 같은 트랜잭션에서 그 구매확정만 다시 대기시키고 처리기가 같은 검사로 반영합니다. 다른 사유의 `REVIEW_REQUIRED`는 되돌리지 않습니다. 수신은 `app.kafka.settlement-events.enabled`(기본 `false`)로 켜며 신규 그룹 `settlement.v1`의 offset 초기화는 [Kafka 전달 기반](development.md#kafka-전달-기반)과 같습니다. 환불 SAGA 요청은 [Settlement 환불 SAGA](#settlement-환불-saga)를 따릅니다. 서비스 간 실제 왕복은 계약 메시지만 주입한 시험과 구분해 검증합니다.
 
 ### Settlement 환불 SAGA
 
@@ -259,7 +166,7 @@ PG A/B/C의 카드와 EASY_PAY의 시험 지갑에 승인·전액 환불을 제�
 
 ## 거래 알림 사용 순서
 
-Commerce의 기본 MOCK_KAKAO 저장·조회·발송·복구와 명시적 [본인 카카오 시연](development.md#본인-카카오톡-시연)을 구현했습니다. Payment는 결제 확정·마일리지 복원 트랜잭션에서 `PaymentNoticeRequested`를 생산합니다. 확정 환불 실패 안내는 기존 `RefundFailed` 주문 반영을 사용하며 UNKNOWN은 실패 알림으로 보내지 않습니다. Settlement의 notice 생산부 연결과 전체 금융 왕복은 [#120](https://github.com/500-internal-server-error-team/commerce-settle/issues/120)에서 추적합니다. 소비·발송 활성화와 격리 복구는 [실행 안내](development.md#모의-거래-알림)를 따릅니다.
+거래 알림은 기본 MOCK_KAKAO와 명시적 [본인 카카오 시연](development.md#본인-카카오톡-시연)을 구분합니다. 소비·발송 활성화와 격리 복구는 [실행 안내](development.md#모의-거래-알림)를 따릅니다.
 
 1. 결제·환불은 Payment의 `PaymentNoticeRequested`, 정산·지급은 Settlement의 `SettlementNoticeRequested`를 기존 생산자 토픽에서 받습니다. 알림 소비 그룹은 `commerce-notifications.v1`이며 기존 금융 소비 그룹과 offset을 공유하지 않습니다. 알림 실패가 금융 이벤트 소비를 막지 않습니다.
 2. 커머스의 발송·배송완료·자동 구매확정·취소·반품 접수/결정/입고 전이는 같은 DB 트랜잭션에 알림 항목을 만듭니다. 외부 요청 이벤트는 Inbox에 저장하고 주문/원환불의 선행 반영이 없으면 영속 대기합니다. 새 알림 요청은 기존 금융 v1 이벤트의 payload를 바꾸지 않습니다.
@@ -268,8 +175,6 @@ Commerce의 기본 MOCK_KAKAO 저장·조회·발송·복구와 명시적 [본�
 5. 모의 수신 조회는 기록 없음 또는 실제 채널 발송이면 404, 모의 원결과 존재 시 200입니다. 확정 거절도 원결과로 보존하며 재요청으로 성공을 만들지 않습니다. 알림 발송은 인프로세스 어댑터이며 별도 공개 Mock HTTP 서버를 만들지 않습니다. [알림 정책](policies.md#거래-알림)과 [저장 구조](data-model.md#거래-알림)가 복구·중복·묶음 기준입니다.
 
 ## 오류와 완료 기준
-
-정산 대조 조회가 미래 마감이나 안전 여유 이전 기준선을 받으면 `409 RECONCILIATION_CUTOFF_NOT_READY`를 반환합니다. 원천 이력·조회 경계 보장 불가는 503이며 대조 판정을 미룹니다.
 
 | code 예 | 상태 | 조건 |
 | --- | --- | --- |
@@ -307,6 +212,6 @@ Commerce의 기본 MOCK_KAKAO 저장·조회·발송·복구와 명시적 [본�
 
 Commerce는 DB 트랜잭션 밖에서 Payment의 원환불과 `RESTORE` 원장, Settlement의 원예약·현재 항목을 읽습니다. 각 소유 서비스는 자기 DB의 한 SQL 스냅샷만 반환합니다. 타 서비스 DB를 직접 읽거나 호출자가 보낸 성공 플래그를 사용하지 않습니다. `DECLINED` 원외부 환불·마일리지 미복원, `RELEASED` 원예약·활성 예약 없음·지급 미배정과 구매자 확인을 모두 요구하며, 각 증빙을 한 번 더 읽어 확인 중 버전/내용 변경도 거절합니다(최대 네 번의 GET, 자동 재시도 없음).
 
-이 읽기 계약은 #131의 `DECLINED` 금융 환불과 #154의 `RELEASED` 원예약을 **같은 원환불로 재실행·재활성화하지 않는 불변 종결 사실**로 정의합니다. 재실행 가능한 중간 상태나 UNKNOWN은 종결 증빙이 될 수 없습니다. 선행 구현의 종결 불변식과 스키마를 확인하기 전에는 어댑터를 활성화하지 않습니다. 반복 조회는 분산 트랜잭션이나 변경 가능한 상태의 장기 잠금을 대신하지 않습니다.
+이 읽기 계약은 `DECLINED` 금융 환불과 `RELEASED` 원예약을 **같은 원환불로 재실행·재활성화하지 않는 불변 종결 사실**로 정의합니다. 재실행 가능한 중간 상태나 UNKNOWN은 종결 증빙이 될 수 없습니다. 선행 구현의 종결 불변식과 스키마를 확인하기 전에는 어댑터를 활성화하지 않습니다. 반복 조회는 분산 트랜잭션이나 변경 가능한 상태의 장기 잠금을 대신하지 않습니다.
 
 최종 저장은 같은 주문 버전을 잠금 아래 재검사하고, 운영자 신원·구매자 확인·소유 서비스 응답 사본·조회 시각을 `refund_closure_evidence`에 보존하는 로컬 트랜잭션입니다. 종결 상태·증빙 reference·감사도 함께 커밋하거나 롤백합니다. 같은 종결 키는 외부 재조회 없이 기존 결과로 연결합니다. 누락·다른 환불·고객/버전/시점 불일치·미확정·해제 전 상태는 409, 인증 설정·통신·선행 스키마 장애는 503이며 주문은 `REFUND_PENDING`을 유지합니다. 검증된 운영 종결만 기존 주문 재개 정책을 적용하며 금융 실패 자체로 PAID·자동 구매확정을 만들지 않습니다.

@@ -2,8 +2,7 @@
  #!/usr/bin/env python3
 """결제 부하·복구 시험(#133) 도구. 표준 라이브러리만 쓰고 Kafka·DB는 Compose 컨테이너 안의 CLI로 다룬다.
 
-Commerce의 신규 주문 접수 gate가 관측 연결(#166) 전에는 닫혀 있어, 주문 API 대신 Commerce가 발행하는 것과 같은
-`OrderPaymentRequested` v1을 `commerce-settle.commerce.v1`에 직접 넣는다. 측정 구간은 Payment 수신부터
+Commerce가 발행하는 것과 같은 `OrderPaymentRequested` v1을 `commerce-settle.commerce.v1`에 직접 넣는다. 측정 구간은 Payment 수신부터
 finance-mock 승인과 결과 Outbox 발행까지다. 순서와 해석은 tests/load/README.md를 따른다.
 
     python tests/load/payment_load.py up         # 별도 프로젝트로 전체 스택 기동(수신 Listener는 꺼 둠)
