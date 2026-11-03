@@ -19,6 +19,14 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 @Transactional(propagation = Propagation.MANDATORY)
 public class JdbcQuarantineStore implements QuarantineStore {
+  /** deliveryStatus가 있으면 그 상태의 DLT/REPLAY 작업을 가진 원문만 고른다. */
+  private static final String STATUS_FILTER =
+      """
+       WHERE CAST(:status AS varchar) IS NULL OR EXISTS (
+        SELECT 1 FROM payment.inbox_quarantine_deliveries d
+        WHERE d.quarantine_id=q.id AND d.status=CAST(:status AS varchar))
+      """;
+
   private final NamedParameterJdbcTemplate jdbc;
 
   public JdbcQuarantineStore(NamedParameterJdbcTemplate jdbc) {
@@ -240,6 +248,112 @@ public class JdbcQuarantineStore implements QuarantineStore {
 
   private static String keyString(byte[] key) {
     return key == null ? null : new String(key, StandardCharsets.UTF_8);
+  }
+
+  @Override
+  public List<QuarantineView> findPage(String deliveryStatus, int page, int size) {
+    var ids =
+        jdbc.query(
+            "SELECT q.id FROM payment.inbox_quarantines q"
+                + STATUS_FILTER
+                + " ORDER BY q.created_at DESC, q.id DESC LIMIT :size OFFSET :offset",
+            new MapSqlParameterSource()
+                .addValue("status", deliveryStatus, Types.VARCHAR)
+                .addValue("size", size)
+                .addValue("offset", (long) page * size),
+            (rs, row) -> rs.getObject(1, UUID.class));
+    return ids.stream().map(id -> find(id).orElseThrow()).toList();
+  }
+
+  @Override
+  public long count(String deliveryStatus) {
+    Long count =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM payment.inbox_quarantines q" + STATUS_FILTER,
+            new MapSqlParameterSource().addValue("status", deliveryStatus, Types.VARCHAR),
+            Long.class);
+    return count == null ? 0 : count;
+  }
+
+  @Override
+  public Optional<QuarantineView> find(UUID quarantineId) {
+    var rows =
+        jdbc.query(
+            """
+            SELECT id,consumer,source_topic,source_partition,source_offset,error_code,
+              octet_length(raw_body) AS body_size,encode(sha256(raw_body),'hex') AS body_sha256,
+              version,created_at
+            FROM payment.inbox_quarantines WHERE id=:id
+            """,
+            new MapSqlParameterSource("id", quarantineId),
+            (rs, row) ->
+                new QuarantineView(
+                    rs.getObject("id", UUID.class),
+                    rs.getString("consumer"),
+                    rs.getString("source_topic"),
+                    rs.getInt("source_partition"),
+                    rs.getLong("source_offset"),
+                    rs.getString("error_code"),
+                    (Integer) rs.getObject("body_size"),
+                    rs.getString("body_sha256"),
+                    rs.getLong("version"),
+                    rs.getTimestamp("created_at").toInstant(),
+                    deliveries("d.quarantine_id=:id", quarantineId)));
+    return rows.stream().findFirst();
+  }
+
+  @Override
+  public Optional<DeliveryView> findDelivery(UUID deliveryId) {
+    return deliveries("d.id=:id", deliveryId).stream().findFirst();
+  }
+
+  /** 원문·키 bytes는 읽지 않는다. 재개 이력은 작업마다 createdAt, id 순서로 붙인다. */
+  private List<DeliveryView> deliveries(String where, UUID id) {
+    return jdbc.query(
+        """
+        SELECT d.id,d.quarantine_id,d.kind,d.topic,d.status,d.attempts,d.next_run_at,d.lease_until,
+          d.operator_id,d.reason_code,d.version,d.created_at,d.updated_at
+        FROM payment.inbox_quarantine_deliveries d WHERE
+        """
+            + where
+            + " ORDER BY d.created_at, d.id",
+        new MapSqlParameterSource("id", id),
+        (rs, row) -> {
+          UUID delivery = rs.getObject("id", UUID.class);
+          var leaseUntil = rs.getTimestamp("lease_until");
+          return new DeliveryView(
+              delivery,
+              rs.getObject("quarantine_id", UUID.class),
+              rs.getString("kind"),
+              rs.getString("topic"),
+              rs.getString("status"),
+              rs.getInt("attempts"),
+              rs.getTimestamp("next_run_at").toInstant(),
+              leaseUntil == null ? null : leaseUntil.toInstant(),
+              rs.getString("operator_id"),
+              rs.getString("reason_code"),
+              rs.getLong("version"),
+              rs.getTimestamp("created_at").toInstant(),
+              rs.getTimestamp("updated_at").toInstant(),
+              resumes(delivery));
+        });
+  }
+
+  private List<ResumeView> resumes(UUID delivery) {
+    return jdbc.query(
+        """
+        SELECT id,expected_version,previous_attempts,operator_id,reason_code,created_at
+        FROM payment.inbox_quarantine_resumes WHERE delivery_id=:id ORDER BY created_at, id
+        """,
+        new MapSqlParameterSource("id", delivery),
+        (rs, row) ->
+            new ResumeView(
+                rs.getObject("id", UUID.class),
+                rs.getLong("expected_version"),
+                rs.getInt("previous_attempts"),
+                rs.getString("operator_id"),
+                rs.getString("reason_code"),
+                rs.getTimestamp("created_at").toInstant()));
   }
 
   private static MapSqlParameterSource params(Instant now) {

@@ -12,10 +12,10 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Repository
-class JdbcOperatorRequestStore implements OperatorRequestStore {
+public class JdbcOperatorRequestStore implements OperatorRequestStore {
   private final NamedParameterJdbcTemplate jdbc;
 
-  JdbcOperatorRequestStore(NamedParameterJdbcTemplate jdbc) {
+  public JdbcOperatorRequestStore(NamedParameterJdbcTemplate jdbc) {
     this.jdbc = jdbc;
   }
 

@@ -3,6 +3,9 @@ package com.commercesettle.payment.application.service;
 import com.commercesettle.payment.application.port.QuarantineStore;
 import com.commercesettle.payment.application.port.QuarantineStore.Delivery;
 import com.commercesettle.payment.application.port.QuarantineStore.Source;
+import com.commercesettle.payment.domain.exception.QuarantineNotFoundException;
+import com.commercesettle.payment.domain.exception.QuarantineOperationRejectedException;
+import com.commercesettle.payment.domain.exception.QuarantineOperationRejectedException.Reason;
 import java.time.Clock;
 import java.util.List;
 import java.util.UUID;
@@ -10,7 +13,10 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 원문 격리와 발행 작업만 원자 저장한다. Kafka 응답은 트랜잭션 밖에서 기다린다. */
+/**
+ * 원문 격리와 발행 작업만 원자 저장하고, 운영 재처리(REPLAY)와 소진 발행 재개를 요청자·사유와 함께 기록한다. Kafka 응답은 트랜잭션 밖에서 기다린다. 운영 호출은
+ * {@link QuarantineOperationService}를 거친다.
+ */
 @Service
 public class QuarantineService {
   private final QuarantineStore store;
@@ -31,13 +37,24 @@ public class QuarantineService {
     }
   }
 
-  /** 인증된 운영 호출자가 원인 수정 뒤 요청한다. 발행 완료는 업무 적용 성공과 다르다. */
+  /**
+   * 인증된 운영 호출자가 원인 수정 뒤 요청한다. 발행 완료는 업무 적용 성공과 다르다. 거절하면 없는 원문은 {@link
+   * QuarantineNotFoundException}, 버전 불일치·진행 중 재처리는 {@link QuarantineOperationRejectedException}이다.
+   */
   @Transactional
   public UUID requestReplay(UUID id, long expectedVersion, String operator, String reasonCode) {
     validateOperatorRequest(id, expectedVersion, operator, reasonCode);
     return store
         .requestReplay(id, expectedVersion, operator, reasonCode, clock.instant())
-        .orElseThrow(() -> new IllegalStateException("Quarantine version or replay state changed"));
+        .orElseThrow(
+            () -> {
+              QuarantineStore.QuarantineView current =
+                  store.find(id).orElseThrow(QuarantineNotFoundException::new);
+              return new QuarantineOperationRejectedException(
+                  current.version() != expectedVersion
+                      ? Reason.VERSION_CONFLICT
+                      : Reason.REPLAY_ACTIVE);
+            });
   }
 
   /** 소진된 동일 발행 작업을 재개하며 이전 시도 수와 요청자·사유를 별도 이력에 보존한다. */
@@ -47,7 +64,14 @@ public class QuarantineService {
     return store
         .resumeDelivery(id, expectedVersion, operator, reasonCode, clock.instant())
         .orElseThrow(
-            () -> new IllegalStateException("Quarantine delivery version or state changed"));
+            () -> {
+              QuarantineStore.DeliveryView current =
+                  store.findDelivery(id).orElseThrow(QuarantineNotFoundException::new);
+              return new QuarantineOperationRejectedException(
+                  current.version() != expectedVersion
+                      ? Reason.VERSION_CONFLICT
+                      : Reason.DELIVERY_NOT_RESUMABLE);
+            });
   }
 
   private static void validateOperatorRequest(
@@ -55,7 +79,7 @@ public class QuarantineService {
     if (id == null
         || expectedVersion < 0
         || operator == null
-        || !operator.matches("[A-Za-z0-9._@-]{1,100}")
+        || !operator.matches("[A-Za-z0-9._@:-]{1,100}")
         || reasonCode == null
         || !reasonCode.matches("[A-Z][A-Z0-9_]{0,79}")) {
       throw new IllegalArgumentException("Invalid replay request");
