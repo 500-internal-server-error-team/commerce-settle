@@ -79,7 +79,7 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 | POST | `/api/sellers/me/orders/{orderId}/shipments` | 발송 처리 | SELLER | `ShipmentRequest` | `Order` | `Idempotency-Key` | 200 |
 | GET | `/api/sellers/me/refund-requests` | 본인 반품 요청 목록 | SELLER | `—` | `OrderRefundRequestPage` | — | 200 |
 | POST | `/api/sellers/me/refund-requests/{requestId}/decision` | 반품 승인·거절 | SELLER | `RefundDecision` | `OrderRefundRequest` | `Idempotency-Key` | 202 |
-| POST | `/api/sellers/me/refund-requests/{requestId}/receipt` | 반품 입고·재고 복구 | SELLER | `VersionRequest` | `OrderRefundRequest` | `Idempotency-Key` | 200 |
+| POST | `/api/sellers/me/refund-requests/{requestId}/receipt` | 반품 입고·검수 결과 확정(재판매 가능이면 재고 복원) | SELLER | `ReturnReceiptRequest` | `OrderRefundRequest` | `Idempotency-Key` | 200 |
 | GET | `/api/payments` | 본인 결제 목록 | BUYER | `—` | `PaymentPage` | — | 200 |
 | GET | `/api/payments/{paymentId}` | 본인 결제 진행 | BUYER | `—` | `Payment` | — | 200 |
 | GET | `/api/payments/{paymentId}/attempts` | 본인 외부 승인 시도 | BUYER | `—` | `PaymentAttemptPage` | — | 200 |

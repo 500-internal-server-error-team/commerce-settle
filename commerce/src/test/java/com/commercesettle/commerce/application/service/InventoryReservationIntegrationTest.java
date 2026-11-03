@@ -169,6 +169,31 @@ class InventoryReservationIntegrationTest {
   }
 
   @Test
+  @DisplayName("재판매 불가 반품 입고는 판매만 줄이는 이력을 남기고 이후 복원 요청은 수량을 바꾸지 않는다")
+  void disposesUnsellableReturnOnce() {
+    UUID productId = stockedProduct(10);
+    UUID orderId = UUID.randomUUID();
+    UUID cycle = UUID.randomUUID();
+    UUID request = UUID.randomUUID();
+    inOrder(() -> reservations.reserve(orderId, productId, 3, cycle, EXPIRES));
+    inOrder(() -> reservations.consume(orderId, cycle));
+
+    Outcome disposed = inOrder(() -> reservations.disposeForReturn(orderId, request));
+    Outcome restored = inOrder(() -> reservations.restoreForReturn(orderId, UUID.randomUUID()));
+
+    assertThat(List.of(disposed, restored))
+        .containsExactly(Outcome.APPLIED, Outcome.ALREADY_APPLIED);
+    assertQuantities(productId, 7, 0, 0);
+    assertThat(reservationStatus(orderId)).isEqualTo("DISPOSED");
+    assertThat(
+            count(
+                "inventory_movements where operation = 'RETURN_DISPOSE' and business_ref = ?"
+                    + " and available_delta = 0 and sold_delta = -3",
+                request))
+        .isEqualTo(1);
+  }
+
+  @Test
   @DisplayName("금지된 전이는 거절하고 예약 상태·수량·이력을 바꾸지 않는다")
   void rejectsForbiddenTransitionWithoutSideEffects() {
     UUID productId = stockedProduct(10);

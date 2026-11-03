@@ -256,12 +256,40 @@ class EventOrderIntegrationTest {
     seller(
         sale,
         "/api/sellers/me/refund-requests/" + requestId + "/receipt",
-        version(exchange(buyer.id(), "/api/refund-requests/" + requestId, null, 200)),
+        version(exchange(buyer.id(), "/api/refund-requests/" + requestId, null, 200))
+            .put("resalable", true),
         200);
 
     assertStock(sale, 6, 4, 0);
     assertSlots(sale, 1, 0);
     assertThat(participation(id)).isEqualTo("REFUNDED");
+  }
+
+  @Test
+  @DisplayName("발송한 선착순 주문의 재판매 불가 반품은 판매만 줄이고 가용 재고는 그대로 두며 검수 결과를 바꾸는 재입고는 거절한다")
+  void disposesUnsellableEventReturn() throws Exception {
+    Sale sale = openSale(5);
+    Buyer buyer = buyer();
+    JsonNode order = order(sale, buyer, 201);
+    UUID id = uuid(order, "id");
+    UUID requestId = approvedReturn(sale, buyer, order);
+    String path = "/api/sellers/me/refund-requests/" + requestId + "/receipt";
+    JsonNode before = exchange(buyer.id(), "/api/refund-requests/" + requestId, null, 200);
+
+    seller(sale, path, version(before), 400);
+    JsonNode received = seller(sale, path, version(before).put("resalable", false), 200);
+    seller(sale, path, version(received).put("resalable", true), 409);
+
+    assertThat(received.path("receiptResalable").asBoolean(true)).isFalse();
+    assertStock(sale, 5, 4, 0);
+    assertSlots(sale, 1, 0);
+    assertThat(participation(id)).isEqualTo("REFUNDED");
+    assertThat(
+            jdbc.queryForObject(
+                "select status from commerce.inventory_reservations where order_id = ?",
+                String.class,
+                id))
+        .isEqualTo("DISPOSED");
   }
 
   @Test
@@ -283,6 +311,38 @@ class EventOrderIntegrationTest {
     assertThat(mismatched.path("code").asText()).isEqualTo("COMMON_RESOURCE_NOT_FOUND");
     assertSlots(scheduled, 0, 0);
     assertSlots(other, 0, 0);
+  }
+
+  /** 결제 확정·발송한 주문의 반품을 승인하고 원환불을 연결한 요청 ID를 돌려준다. */
+  private UUID approvedReturn(Sale sale, Buyer buyer, JsonNode order) throws Exception {
+    UUID id = uuid(order, "id");
+    UUID payment = confirm(order);
+    seller(
+        sale,
+        "/api/sellers/me/orders/" + id + "/shipments",
+        version(read(buyer, id)).put("shipmentReference", "test-parcel"),
+        200);
+    JsonNode request =
+        exchange(
+            buyer.id(),
+            "/api/orders/" + id + "/refund-requests",
+            version(read(buyer, id)).put("kind", "RETURN").put("reason", "시험 반품"),
+            201);
+    UUID requestId = uuid(request, "id");
+    seller(
+        sale,
+        "/api/sellers/me/refund-requests/" + requestId + "/decision",
+        version(request).put("decision", "APPROVE").put("reason", "확인"),
+        202);
+    receive(
+        "RefundAccepted",
+        mapper
+            .createObjectNode()
+            .put("orderId", id.toString())
+            .put("paymentId", payment.toString())
+            .put("refundId", UUID.randomUUID().toString())
+            .put("requestId", requestId.toString()));
+    return requestId;
   }
 
   private JsonNode order(Sale sale, Buyer buyer, int expected) {

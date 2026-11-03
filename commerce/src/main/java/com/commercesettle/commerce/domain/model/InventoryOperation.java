@@ -8,6 +8,7 @@ public enum InventoryOperation {
   ORDER_RELEASE,
   REFUND_RESTORE,
   RETURN_RESTORE,
+  RETURN_DISPOSE,
   EVENT_ALLOCATE,
   EVENT_RETURN
 }

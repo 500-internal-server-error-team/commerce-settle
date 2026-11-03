@@ -13,6 +13,7 @@ public record OrderRefundView(
     UUID refundId,
     Instant decisionAt,
     Instant receivedAt,
+    Boolean receiptResalable,
     long version) {
   public static OrderRefundView from(OrderRefundRequest r) {
     return new OrderRefundView(
@@ -24,6 +25,7 @@ public record OrderRefundView(
         r.getRefundId(),
         r.getDecisionAt(),
         r.getReceivedAt(),
+        r.getReceiptResalable(),
         r.getVersion());
   }
 }

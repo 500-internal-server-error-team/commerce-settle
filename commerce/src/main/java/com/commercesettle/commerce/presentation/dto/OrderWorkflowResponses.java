@@ -180,6 +180,9 @@ public final class OrderWorkflowResponses {
       @Schema(nullable = true) @JsonProperty(required = true) UUID refundId,
       @Schema(nullable = true) @JsonProperty(required = true) OffsetDateTime decisionAt,
       @Schema(nullable = true) @JsonProperty(required = true) OffsetDateTime receivedAt,
+      @Schema(nullable = true, description = "반품 입고 검수 결과. 입고 전에는 null")
+          @JsonProperty(required = true)
+          Boolean receiptResalable,
       @Schema(minimum = "0") @JsonProperty(required = true) long version) {
     public static Refund from(OrderRefundView v) {
       return new Refund(
@@ -191,6 +194,7 @@ public final class OrderWorkflowResponses {
           v.refundId(),
           time(v.decisionAt()),
           time(v.receivedAt()),
+          v.receiptResalable(),
           v.version());
     }
   }

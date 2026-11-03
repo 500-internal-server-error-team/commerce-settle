@@ -175,7 +175,11 @@ public class OrderRefundService {
   }
 
   @Transactional
-  public OrderRefundView receive(UUID seller, UUID id, String key, long expected) {
+  /**
+   * 반품 입고와 검수 결과를 확정한다. 재판매 가능이면 판매 수량을 가용 재고로 복원하고, 불가면 판매 수량만 줄인다. 금융 환불의 진행·결과와 관계없이 한 번 반영한다.
+   */
+  public OrderRefundView receive(
+      UUID seller, UUID id, String key, long expected, boolean resalable) {
     return change(
         ActorKind.SELLER,
         seller,
@@ -183,13 +187,15 @@ public class OrderRefundService {
         key,
         expected,
         "RECEIVE_RETURN",
-        List.of(),
+        List.of(resalable),
         (order, r) -> {
-          boolean received = r.receive(clock.instant());
+          boolean received = r.receive(resalable, clock.instant());
           if (received) {
             order.receiveReturn(clock.instant());
-            if (order.getEventId() == null) inventory.restoreForReturn(order.getId(), r.getId());
-            else benefits.receiveReturn(order, r.getId(), clock.instant());
+            if (order.getEventId() != null)
+              benefits.receiveReturn(order, r.getId(), resalable, clock.instant());
+            else if (resalable) inventory.restoreForReturn(order.getId(), r.getId());
+            else inventory.disposeForReturn(order.getId(), r.getId());
             notifications.refund(
                 order,
                 r,

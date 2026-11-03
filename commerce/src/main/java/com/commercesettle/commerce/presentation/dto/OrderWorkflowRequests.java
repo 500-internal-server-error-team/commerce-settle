@@ -18,6 +18,16 @@ public final class OrderWorkflowRequests {
   @Schema(name = "VersionRequest", additionalProperties = Schema.AdditionalPropertiesValue.FALSE)
   public record Version(@JsonProperty(required = true) @NotNull @Min(0) Long expectedVersion) {}
 
+  @Schema(
+      name = "ReturnReceiptRequest",
+      additionalProperties = Schema.AdditionalPropertiesValue.FALSE)
+  public record ReturnReceipt(
+      @JsonProperty(required = true) @NotNull @Min(0) Long expectedVersion,
+      @Schema(description = "재판매 가능 검수 결과. false면 가용 재고에 더하지 않는다.")
+          @JsonProperty(required = true)
+          @NotNull
+          Boolean resalable) {}
+
   @Schema(name = "ReasonRequest", additionalProperties = Schema.AdditionalPropertiesValue.FALSE)
   public record Reason(
       @JsonProperty(required = true) @NotNull @Min(0) Long expectedVersion,
