@@ -136,9 +136,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [smoke, redis, retention, admission, financial-flow, reconciliation]
+        scenario: [smoke, redis, retention, admission, financial-flow, reconciliation, demo-ui]
     env:
-      COMPOSE_PROJECT_NAME: commerce-settle-ci
+      COMPOSE_PROJECT_NAME: ${{ matrix.scenario == 'demo-ui' && 'commerce-settle-ui-ci' || 'commerce-settle-ci' }}
+      COMPOSE_FILE: ${{ matrix.scenario == 'demo-ui' && 'compose.yml:compose.demo-ui.yml' || 'compose.yml' }}
       PYTHONUNBUFFERED: '1'
     steps:
       - *checkout
@@ -148,6 +149,18 @@ jobs:
           name: application-jars
       - name: Initialize local settings
         run: python3 scripts/init_env.py
+      - name: Configure isolated demo UI operator credentials
+        if: matrix.scenario == 'demo-ui'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import secrets
+          with Path('.env').open('a') as settings:
+              for service in ['COMMERCE', 'PAYMENT', 'SETTLEMENT', 'FINANCE_MOCK']:
+                  credential = secrets.token_urlsafe(32)
+                  print('::add-mask::' + credential)
+                  settings.write(f'DEMO_{service}_OPERATOR_CREDENTIAL={credential}\n')
+          PY
       - name: Verify actual financial observations and order admission recovery
         if: matrix.scenario == 'admission'
         run: python3 scripts/test_admission.py
@@ -158,10 +171,19 @@ jobs:
         if: matrix.scenario == 'reconciliation'
         run: python3 -B scripts/test_reconciliation.py
       - name: Start the stack from empty volumes
-        if: matrix.scenario != 'admission' && matrix.scenario != 'financial-flow' && matrix.scenario != 'reconciliation'
+        if: matrix.scenario != 'admission' && matrix.scenario != 'financial-flow' && matrix.scenario != 'reconciliation' && matrix.scenario != 'demo-ui'
         run: |
           python3 scripts/sync_redis_run_id.py
           docker compose up -d --build --wait --wait-timeout 300
+      - name: Verify demo UI operator ports on startup and restart
+        if: matrix.scenario == 'demo-ui'
+        run: |
+          python3 scripts/sync_redis_run_id.py
+          docker compose up -d --build --wait --wait-timeout 300
+          python3 -B scripts/smoke.py --demo-ui
+          docker compose restart commerce payment-api settlement finance-mock
+          docker compose up -d --wait --wait-timeout 300 --no-recreate
+          python3 -B scripts/smoke.py --demo-ui
       - name: Verify service, database and messaging boundaries
         if: matrix.scenario == 'smoke'
         run: python3 scripts/smoke.py

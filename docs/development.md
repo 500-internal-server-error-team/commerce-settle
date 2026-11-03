@@ -684,6 +684,14 @@ java -jar demo-control/build/libs/app.jar
 
 새 전용 스택에는 `compose.demo-ui.yml`을 적용할 수 있습니다. 서비스별로 다른 43자 이상 운영 자격을 비공개 환경에서 공급합니다. overlay는 해당 자격의 `operator:demo-ui`와 인증된 내부 HTTP용 루프백 포트만 추가합니다. 기존 사용자 확인용 `commerce-settle-demo`에는 적용하지 않습니다. 동시에 실행할 스택은 Gateway·Zipkin·Prometheus·관측 도구의 호스트 포트도 기존 환경과 겹치지 않게 선택하고 위 제어 서버 목적지와 함께 맞춥니다. 이 overlay가 금융 Worker·이벤트 연결을 켜거나 fixture를 적재하지는 않습니다. 기존 기능별 활성화 절차를 따릅니다.
 
+이 overlay의 기동·재기동 검증은 동일한 전용 프로젝트와 Compose 파일을 유지해 실행합니다.
+
+```bash
+COMPOSE_PROJECT_NAME=commerce-settle-ui-demo COMPOSE_FILE=compose.yml:compose.demo-ui.yml python3 scripts/smoke.py --demo-ui
+```
+
+`--demo-ui`는 `commerce-settle-ui-`로 시작하는 별도 프로젝트에서만 네 서비스의 지정된 loopback HTTP 포트를 허용합니다. 각 소유자의 운영 자격으로 조회하고 비인증·다른 소유자 자격의 401을 확인합니다. Worker·DB·Redis는 계속 내부 전용입니다. 옵션 없는 기본 smoke의 내부 포트 제한은 그대로 유지합니다. CI의 `demo-ui` 통합 시나리오는 빈 볼륨 기동과 네 서비스 재기동 뒤 이 smoke를 각각 실행합니다.
+
 모니터링 주소는 `DEMO_PROMETHEUS_URL`, `DEMO_ZIPKIN_URL`, `DEMO_GRAFANA_URL`, `DEMO_KAFKA_UI_URL`, `DEMO_ALERTMANAGER_URL`로 설정합니다. 기본값은 위 접속 표와 같고, 링크가 있다는 것이 도구의 기동을 뜻하지 않습니다. 모니터링의 수집·조회 시각은 실제 시간입니다.
 
 월간 화면은 회차 집계와 `/internal/coupon-issue-runs/{runId}/targets`의 저장된 선정 순위·구매액·혜택·발급 결과를 조회합니다. 웰컴·월간 혜택에 임의 수동 발급 버튼을 추가하지 않습니다. **런타임 업무 시간 이동과 월간 배치 수동 실행은 제공하지 않습니다.** 배송·반품·정산·월간 발급은 실제 기한과 기존 처리기의 준비가 필요합니다. 금융 환불의 stub 사용·지급 단계 제외 등은 [왕복 검증 범위](#주문결제정산환불-왕복)를 그대로 적용합니다.
