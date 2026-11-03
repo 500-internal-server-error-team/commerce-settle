@@ -13,6 +13,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  demo-ui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: demo-ui
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: demo-ui/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - run: npm run build
+
   checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -57,6 +74,12 @@ jobs:
       - *checkout
       - *java
       - *gradle
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Build local demo UI for the control jar
+        working-directory: demo-ui
+        run: npm ci --no-audit --no-fund && npm run build
       - name: Package applications
         run: ./gradlew --no-daemon --parallel bootJar
       - name: Share application jars
@@ -80,7 +103,7 @@ jobs:
           - group: settlement
             tasks: ':settlement:test'
           - group: other-services
-            tasks: ':payment:test :finance-mock:test :gateway:test :internal-auth:test'
+            tasks: ':payment:test :finance-mock:test :gateway:test :internal-auth:test :demo-control:test'
     steps:
       - *checkout
       - *java
@@ -165,7 +188,7 @@ jobs:
 
   build-and-smoke:
     if: always()
-    needs: [checks, package, tests, observability, integration]
+    needs: [checks, package, tests, observability, integration, demo-ui]
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:

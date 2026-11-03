@@ -84,6 +84,7 @@ Java 21 · Spring Boot · Spring Cloud Gateway · PostgreSQL · Kafka · Redis �
 - [문서 구조·기준 위치·추가 방법](CONTRIBUTING.md#문서와-기록)
 - [업무 흐름·범위·가정·검증 조건](docs/design.md)
 - [구매자·판매자 와이어프레임](docs/wireframes.html)
+- [데모·실험 UI 실행](docs/development.md#데모실험-ui)
 
 ## 참고
 

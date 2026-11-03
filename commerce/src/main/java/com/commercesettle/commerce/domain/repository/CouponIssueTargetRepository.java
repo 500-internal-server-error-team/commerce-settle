@@ -36,6 +36,19 @@ public interface CouponIssueTargetRepository {
 
   CouponIssueTarget save(CouponIssueTarget target);
 
+  /** 회차에 고정한 대상만 순위·구매자 순서로 조회한다. 현재 주문으로 순위를 다시 계산하지 않는다. */
+  PageResult<TargetView> findByRun(UUID runId, int page, int size);
+
+  record TargetView(
+      UUID id,
+      UUID buyerId,
+      long externalSpend,
+      int rankNo,
+      String grade,
+      long discountAmount,
+      UUID buyerCouponId,
+      String status) {}
+
   record RankedBuyer(UUID buyerId, long externalSpend, int rankNo) {}
 
   record Summary(long count, long discountTotal) {}

@@ -83,6 +83,16 @@ public class CouponIssueRunAdminService {
     return view(runs.findById(runId).orElseThrow(() -> new CouponIssueRunNotFoundException(runId)));
   }
 
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+  public PageResult<CouponIssueTargetRepository.TargetView> targets(
+      UUID runId, int page, int size) {
+    if (page < 0 || size < 1 || size > 100) {
+      throw new IllegalArgumentException("invalid page or size");
+    }
+    runs.findById(runId).orElseThrow(() -> new CouponIssueRunNotFoundException(runId));
+    return targets.findByRun(runId, page, size);
+  }
+
   /**
    * 발급 전 집계 오류 회차를 취소하고 대체 회차를 만든다. 같은 키·본문의 재요청은 저장한 결과를 버전·현재 상태 검사보다 먼저 돌려준다. 새 쿠폰 발급은 이후 스케줄러가
    * 대체 회차로 시작한다.

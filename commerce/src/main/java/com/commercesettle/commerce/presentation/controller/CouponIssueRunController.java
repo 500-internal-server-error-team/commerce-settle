@@ -5,6 +5,7 @@ import com.commercesettle.commerce.domain.model.CouponIssueRunStatus;
 import com.commercesettle.commerce.presentation.dto.CouponIssueRunPageResponse;
 import com.commercesettle.commerce.presentation.dto.CouponIssueRunReplacementRequest;
 import com.commercesettle.commerce.presentation.dto.CouponIssueRunResponse;
+import com.commercesettle.commerce.presentation.dto.CouponIssueTargetResponse;
 import com.commercesettle.internalauth.InternalCallerFilter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -58,6 +59,15 @@ public class CouponIssueRunController {
   @GetMapping("/{runId}")
   public CouponIssueRunResponse run(@PathVariable UUID runId) {
     return CouponIssueRunResponse.from(runs.run(runId));
+  }
+
+  @Operation(operationId = "get_internal_coupon_issue_run_targets", summary = "월간 회차의 고정 순위·발급 결과")
+  @GetMapping("/{runId}/targets")
+  public CouponIssueTargetResponse.Page targets(
+      @PathVariable UUID runId,
+      @RequestParam(defaultValue = "0") @Min(0) int page,
+      @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    return CouponIssueTargetResponse.Page.from(runs.targets(runId, page, size));
   }
 
   @Operation(

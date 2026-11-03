@@ -3,6 +3,7 @@ package com.commercesettle.commerce.infrastructure.persistence;
 import com.commercesettle.commerce.domain.model.CouponGrade;
 import com.commercesettle.commerce.domain.model.CouponIssueTarget;
 import com.commercesettle.commerce.domain.repository.CouponIssueTargetRepository;
+import com.commercesettle.commerce.domain.repository.PageResult;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
@@ -145,5 +146,37 @@ class JpaCouponIssueTargetRepository implements CouponIssueTargetRepository {
   @Override
   public CouponIssueTarget save(CouponIssueTarget target) {
     return targets.saveAndFlush(target);
+  }
+
+  @Override
+  public PageResult<TargetView> findByRun(UUID runId, int page, int size) {
+    long count =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM commerce.coupon_issue_targets WHERE run_id = ?",
+            Long.class,
+            runId);
+    List<TargetView> rows =
+        jdbc.query(
+            """
+        SELECT t.id, t.buyer_id, t.external_spend, t.rank_no, c.grade,
+               c.discount_amount, t.buyer_coupon_id, t.status
+        FROM commerce.coupon_issue_targets t
+        JOIN commerce.coupon_templates c ON c.id = t.template_id
+        WHERE t.run_id = ? ORDER BY t.rank_no, t.buyer_id LIMIT ? OFFSET ?
+        """,
+            (rs, row) ->
+                new TargetView(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("buyer_id", UUID.class),
+                    rs.getLong("external_spend"),
+                    rs.getInt("rank_no"),
+                    rs.getString("grade"),
+                    rs.getLong("discount_amount"),
+                    rs.getObject("buyer_coupon_id", UUID.class),
+                    rs.getString("status")),
+            runId,
+            size,
+            (long) page * size);
+    return new PageResult<>(rows, page, size, count);
   }
 }

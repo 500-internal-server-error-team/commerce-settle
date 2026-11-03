@@ -42,6 +42,8 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 
 Commerce의 `/internal/coupon-issue-runs`에서 월간 회차 목록·단건을 조회하고 `/{runId}/replacements`로 교정합니다. 검증한 운영자만 호출하며 Gateway에 공개하지 않습니다. 필드·필터·정렬·페이지는 [OpenAPI](openapi.json)를 따릅니다.
 
+`/{runId}/targets`는 회차에 고정한 `rankNo ASC,buyerId ASC` 순서로 선정 순위·구매액·등급·발급 쿠폰 ID·상태를 조회합니다. 현재 주문으로 다시 집계하지 않습니다. 없는 회차는 404이며 대상 확정 전에는 빈 목록입니다. 페이지 조건은 OpenAPI를 따릅니다.
+
 교정 POST는 `Idempotency-Key`와 `{expectedVersion, reasonCode: "AGGREGATION_ERROR"}`를 받습니다. 구매자·등급·금액·마감·기간을 지정할 수 없습니다. [발급 0건·안전한 중단 등 교정 조건](policies.md#월간-회차-검증과-오류-교정)을 충족하면 취소·대체 회차·감사·멱등 결과를 원자 저장합니다.
 
 성공은 `201`과 새 회차의 Location이며 발급 완료가 아닙니다. 동일 키·본문은 상태·버전 검사보다 먼저 기존 결과를 반환하고 다른 본문은 409입니다. 새 runId·replacesRunId와 원회차의 replacementRunId로 연결하며 Scheduler가 이후 발급을 시작합니다. 저장 제약은 [회차 모델](data-model.md#coupon_issue_runs)을 따릅니다.

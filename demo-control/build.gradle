@@ -1,0 +1,13 @@
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+}
+
+tasks.named('processResources') {
+    from(rootProject.file('docs/openapi.json')) { into 'contract' }
+    if (rootProject.file('demo-ui/dist').exists()) {
+        from(rootProject.file('demo-ui/dist')) { into 'static' }
+    }
+}
+
+tasks.named('bootRun') { workingDir rootProject.projectDir }

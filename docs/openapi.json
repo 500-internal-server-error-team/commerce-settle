@@ -12,6 +12,136 @@
     }
   ],
   "paths": {
+    "/internal/coupon-issue-runs/{runId}/targets": {
+      "get": {
+        "tags": [
+          "commerce"
+        ],
+        "x-owner-service": "commerce",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "operationId": "get_internal_coupon_issue_run_targets",
+        "summary": "월간 회차의 고정 순위·발급 결과",
+        "description": "회차에 저장한 선정 대상만 rankNo ASC,buyerId ASC로 페이지 조회한다. 현재 주문으로 재집계하지 않으며 구매자 이메일·주소를 반환하지 않는다. 없는 회차는404, 발급 전 미선정 회차는 빈 목록이다.",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "회차 상태",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CouponIssueTargetPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/settlement-inbox-summary": {
         "get": {
             "operationId": "get_internal_settlement_inbox_summary",
@@ -9689,6 +9819,109 @@
       }
     },
     "schemas": {
+      "CouponIssueTarget": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "buyerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "externalSpend": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "rankNo": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "grade": {
+            "type": "string",
+            "enum": [
+              "BRONZE",
+              "SILVER",
+              "GOLD"
+            ]
+          },
+          "discountAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "buyerCouponId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "ISSUED",
+              "EXPIRED"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "buyerId",
+          "externalSpend",
+          "rankNo",
+          "grade",
+          "discountAmount",
+          "buyerCouponId",
+          "status"
+        ]
+      },
+      "CouponIssueTargetPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CouponIssueTarget"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "totalElements": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "totalPages": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "size",
+          "totalElements",
+          "totalPages"
+        ]
+      },
       "InboxRejudgementFilter": {
           "type": "object",
           "additionalProperties": false,
