@@ -3,10 +3,14 @@ package com.commercesettle.payment.application.service;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.RefundAcceptedPayload;
 import com.commercesettle.payment.application.event.RefundApprovedPayload;
+import com.commercesettle.payment.application.event.RefundLedgerReversedPayload;
 import com.commercesettle.payment.application.event.RefundOrderRestoredPayload;
+import com.commercesettle.payment.application.event.RefundReservationReleasedPayload;
 import com.commercesettle.payment.application.event.RefundReservationRequestedPayload;
+import com.commercesettle.payment.application.event.RefundReservationResultPayload;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
+import com.commercesettle.payment.application.service.RefundSettlementReplyService.Outcome;
 import com.commercesettle.payment.domain.model.Payment;
 import com.commercesettle.payment.domain.model.PaymentStatus;
 import com.commercesettle.payment.domain.model.Refund;
@@ -18,13 +22,16 @@ import com.commercesettle.payment.domain.repository.RefundRepository;
 import com.commercesettle.payment.domain.repository.RefundSagaRepository;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * 선점한 Commerce 환불 이벤트를 결제 요청 처리기와 같은 트랜잭션에서 반영한다. RefundApproved는 원결제 전액 환불과 SAGA를 접수하고
- * RefundAccepted·RefundReservationRequested를 함께 저장한다. RefundOrderRestored는 주문 복구 확인을 반영해 환불을 끝낸다.
+ * 선점한 Commerce 환불 이벤트와 Settlement 환불 응답을 결제 요청 처리기와 같은 트랜잭션에서 반영한다. RefundApproved는 원결제 전액 환불과
+ * SAGA를 접수하고 RefundAccepted·RefundReservationRequested를 함께 저장한다. RefundOrderRestored는 주문 복구 확인을 반영해
+ * 환불을 끝낸다. Settlement 응답은 {@link RefundSettlementReplyService}가 반영하고, 기다리지 않는 단계·다른 원결제·다른 예약의 응답은
+ * 확인 대상으로 남긴다.
  *
  * <p>같은 취소·반품 요청의 재전달은 기존 환불로 연결하고, 같은 원결제의 다른 요청은 중복 환불이므로 확인 대상으로 남긴다. 아직 확정되지 않은 원결제는 결과가 날 때까지
  * 다시 처리한다.
@@ -40,6 +47,7 @@ public class RefundEventHandler {
   static final String ALREADY_COMPLETED = "REFUND_ALREADY_COMPLETED";
   static final String REFUND_NOT_FOUND = "REFUND_NOT_FOUND";
   static final String ORDER_RESTORED_UNEXPECTED = "REFUND_ORDER_RESTORED_UNEXPECTED";
+  static final String SETTLEMENT_REPLY_REJECTED = "REFUND_SETTLEMENT_REPLY_REJECTED";
 
   private static final Logger LOG = LoggerFactory.getLogger(RefundEventHandler.class);
 
@@ -48,24 +56,30 @@ public class RefundEventHandler {
   private final RefundRepository refunds;
   private final RefundSagaRepository sagas;
   private final RefundEvents events;
+  private final RefundSettlementReplyService replies;
 
   RefundEventHandler(
       InboxStore inbox,
       PaymentRepository payments,
       RefundRepository refunds,
       RefundSagaRepository sagas,
-      RefundEvents events) {
+      RefundEvents events,
+      RefundSettlementReplyService replies) {
     this.inbox = inbox;
     this.payments = payments;
     this.refunds = refunds;
     this.sagas = sagas;
     this.events = events;
+    this.replies = replies;
   }
 
   /** 이 처리기가 반영하는 이벤트인지 확인한다. */
   public boolean handles(EventEnvelope<?> event) {
     return event.payload() instanceof RefundApprovedPayload
-        || event.payload() instanceof RefundOrderRestoredPayload;
+        || event.payload() instanceof RefundOrderRestoredPayload
+        || event.payload() instanceof RefundReservationResultPayload
+        || event.payload() instanceof RefundLedgerReversedPayload
+        || event.payload() instanceof RefundReservationReleasedPayload;
   }
 
   /** 선점한 Inbox 행이 잠긴 트랜잭션에서 호출한다. */
@@ -73,6 +87,13 @@ public class RefundEventHandler {
     switch (claimed.event().payload()) {
       case RefundApprovedPayload approved -> accept(claimed, approved, now);
       case RefundOrderRestoredPayload restored -> orderRestored(claimed, restored, now);
+      case RefundReservationResultPayload reply ->
+          settlementReplied(claimed, reply.refundId(), replies.applyReservationResult(reply), now);
+      case RefundLedgerReversedPayload reply ->
+          settlementReplied(claimed, reply.refundId(), replies.applyLedgerReversed(reply), now);
+      case RefundReservationReleasedPayload reply ->
+          settlementReplied(
+              claimed, reply.refundId(), replies.applyReservationReleased(reply), now);
       default -> throw new IllegalArgumentException("Not a refund event");
     }
   }
@@ -178,6 +199,16 @@ public class RefundEventHandler {
         .addKeyValue("paymentId", refund.getPaymentId())
         .addKeyValue("result", RefundStatus.COMPLETED.name())
         .log("Refund completed after order restoration");
+  }
+
+  /** 반영했거나 이미 반영한 응답, 계속 기다리라는 예약 결과는 APPLIED로 끝낸다. 반영하지 않은 응답은 확인 대상으로 남긴다. */
+  private void settlementReplied(
+      WaitingInboxEvent claimed, UUID refundId, Outcome outcome, Instant now) {
+    if (outcome == Outcome.REJECTED) {
+      review(claimed, SETTLEMENT_REPLY_REJECTED, now);
+      return;
+    }
+    inbox.markApplied(claimed.inboxId(), refundId, now);
   }
 
   private static boolean isUnsettled(PaymentStatus status) {

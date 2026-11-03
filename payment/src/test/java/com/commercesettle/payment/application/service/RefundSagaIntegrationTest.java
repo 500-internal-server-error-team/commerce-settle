@@ -6,7 +6,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.commercesettle.payment.application.dto.RefundWorkerSettings;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.RefundApprovedPayload;
+import com.commercesettle.payment.application.event.RefundLedgerReversedPayload;
 import com.commercesettle.payment.application.event.RefundOrderRestoredPayload;
+import com.commercesettle.payment.application.event.RefundReservationReleasedPayload;
 import com.commercesettle.payment.application.event.RefundReservationResultPayload;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
@@ -19,11 +21,11 @@ import com.commercesettle.payment.domain.model.PaymentAttempt;
 import com.commercesettle.payment.domain.repository.MileageWalletRepository;
 import com.commercesettle.payment.domain.repository.PaymentAttemptRepository;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
-import com.commercesettle.payment.infrastructure.messaging.StubSettlementRefundResponder;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -65,8 +67,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
- * 환불 승인 수신부터 정산 예약(stub)·외부 환불·마일리지 복원·원장 상쇄(stub)·주문 복구 확인까지 실제 PostgreSQL에서 이어 실행한다. 외부 환불 대역은
- * 결과를 고를 수 있는 시험용 대역이다.
+ * 환불 승인 수신부터 정산 예약·외부 환불·마일리지 복원·원장 상쇄·주문 복구 확인까지 실제 PostgreSQL에서 이어 실행한다. Settlement 응답은
+ * Settlement 토픽 원문으로 Inbox에 넣어 수신기 뒤의 처리 경로로 반영한다. 외부 환불 대역은 결과를 고를 수 있는 시험용 대역이다.
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -74,6 +76,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class RefundSagaIntegrationTest {
+  private static final String SETTLEMENT_TOPIC = "commerce-settle.settlement.v1";
 
   @Container @ServiceConnection
   static final PostgreSQLContainer<?> POSTGRES =
@@ -202,11 +205,11 @@ class RefundSagaIntegrationTest {
     gateway.nextRefund(new Result.Declined(UUID.randomUUID()));
     approve(payment, UUID.randomUUID());
     inboxProcessor.processNext();
-    stub().run();
+    settle();
 
     assertThat(worker.runOnce()).isTrue();
     assertThat(refundStatus()).isEqualTo("COMPENSATING");
-    stub().run();
+    settle();
 
     assertThat(refundStatus()).isEqualTo("DECLINED");
     assertThat(walletBalance(payment)).isEqualTo(500);
@@ -228,7 +231,7 @@ class RefundSagaIntegrationTest {
     gateway.nextRefund(new Result.Unconfirmed("timeout"));
     approve(payment, UUID.randomUUID());
     inboxProcessor.processNext();
-    stub().run();
+    settle();
 
     worker.runOnce();
 
@@ -258,7 +261,7 @@ class RefundSagaIntegrationTest {
     Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 2_000), 500);
     approve(payment, UUID.randomUUID());
     inboxProcessor.processNext();
-    stub().run();
+    settle();
     UUID businessKey =
         jdbc().queryForObject("SELECT business_key FROM payment.payment_jobs", UUID.class);
     jdbc().update("UPDATE payment.payment_jobs SET attempts = ?", attempt - 1);
@@ -293,7 +296,7 @@ class RefundSagaIntegrationTest {
     Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 2_000), 500);
     approve(payment, UUID.randomUUID());
     inboxProcessor.processNext();
-    stub().run();
+    settle();
     jdbc().update("UPDATE payment.payment_jobs SET attempts = 9");
     gateway.nextRefund(new Result.Unconfirmed("provider unavailable"));
 
@@ -319,7 +322,7 @@ class RefundSagaIntegrationTest {
     gateway.nextRefund(new Result.Unconfirmed("connection reset"));
     approve(payment, UUID.randomUUID());
     inboxProcessor.processNext();
-    stub().run();
+    settle();
     worker.runOnce();
 
     gateway.nextLookup(new Result.NotFound());
@@ -339,15 +342,15 @@ class RefundSagaIntegrationTest {
     UUID requestId = UUID.randomUUID();
     approve(payment, requestId);
     inboxProcessor.processNext();
-    stub().run();
+    settle();
     worker.runOnce();
-    stub().run();
+    settle();
 
     approve(payment, requestId);
     approve(payment, UUID.randomUUID());
     inboxProcessor.processNext();
     inboxProcessor.processNext();
-    stub().run();
+    settle();
     while (worker.runOnce()) {
       // 남은 작업이 있으면 모두 실행한다.
     }
@@ -366,12 +369,93 @@ class RefundSagaIntegrationTest {
   }
 
   @Test
+  @DisplayName("Settlement 응답의 같은 eventId 재전달과 같은 결과의 새 응답은 환불 작업을 한 번만 만든다")
+  void appliesRedeliveredSettlementReplyOnce() throws Exception {
+    Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 0), 0);
+    approve(payment, UUID.randomUUID());
+    inboxProcessor.processNext();
+    var reserved =
+        new RefundReservationResultPayload(
+            refundId(),
+            payment.getId(),
+            RefundReservationResultPayload.Result.RESERVED,
+            UUID.randomUUID(),
+            null);
+    UUID eventId = UUID.randomUUID();
+
+    reply(eventId, "RefundReservationResult", reserved);
+    reply(eventId, "RefundReservationResult", reserved);
+    reply("RefundReservationResult", reserved);
+
+    assertThat(jdbc().queryForObject("SELECT count(*) FROM payment.payment_jobs", Long.class))
+        .isEqualTo(1);
+    assertThat(jdbc().queryForObject("SELECT step FROM payment.refund_sagas", String.class))
+        .isEqualTo("EXTERNAL_REFUND_PENDING");
+    assertThat(settlementInbox()).containsExactly("APPLIED", "APPLIED");
+  }
+
+  @Test
+  @DisplayName("기다리지 않는 단계의 Settlement 응답은 반영하지 않고 확인 대상으로 남긴다")
+  void keepsOutOfOrderSettlementReplyForReview() throws Exception {
+    Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 0), 0);
+    approve(payment, UUID.randomUUID());
+    inboxProcessor.processNext();
+
+    reply(
+        "RefundLedgerReversed",
+        new RefundLedgerReversedPayload(
+            refundId(),
+            payment.getId(),
+            UUID.randomUUID(),
+            clock.instant().atOffset(ZoneOffset.UTC)));
+
+    assertThat(jdbc().queryForObject("SELECT step FROM payment.refund_sagas", String.class))
+        .isEqualTo("RESERVATION_REQUESTED");
+    assertThat(
+            jdbc()
+                .queryForObject(
+                    "SELECT last_error_code FROM payment.inbox WHERE source_topic = ?",
+                    String.class,
+                    SETTLEMENT_TOPIC))
+        .isEqualTo(RefundEventHandler.SETTLEMENT_REPLY_REJECTED);
+    assertThat(settlementInbox()).containsExactly("REVIEW_REQUIRED");
+    assertThat(eventTypes(payment)).containsExactly("RefundAccepted", "RefundReservationRequested");
+  }
+
+  @Test
+  @DisplayName("Settlement가 정산금 예약을 거절하면 외부 환불 없이 사유와 함께 실패로 끝난다")
+  void failsWithoutExternalRefundWhenSettlementRejects() throws Exception {
+    Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 2_000), 0);
+    approve(payment, UUID.randomUUID());
+    inboxProcessor.processNext();
+
+    reply(
+        "RefundReservationResult",
+        new RefundReservationResultPayload(
+            refundId(),
+            payment.getId(),
+            RefundReservationResultPayload.Result.REJECTED,
+            null,
+            "PAYOUT_RESERVED"));
+
+    assertThat(worker.runOnce()).isFalse();
+    assertThat(gateway.refunds).isEmpty();
+    assertThat(restoreEntries()).isZero();
+    assertThat(refundStatus()).isEqualTo("DECLINED");
+    assertThat(eventTypes(payment))
+        .containsExactly("RefundAccepted", "RefundReservationRequested", "RefundFailed");
+    assertThat(payload(payment, "RefundFailed").path("reasonCode").asText())
+        .isEqualTo("PAYOUT_RESERVED");
+    assertThat(settlementInbox()).containsExactly("APPLIED");
+  }
+
+  @Test
   @DisplayName("환불 행 잠금 경합이 길면 준비 단계는 대기 상한 안에 롤백하고 외부 환불을 호출하지 않는다")
   void rollsBackPrepareWhenRefundRowLockIsContended() throws Exception {
     Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 0), 0);
     approve(payment, UUID.randomUUID());
     inboxProcessor.processNext();
-    stub().run();
+    settle();
     lockRefundRow();
 
     long started = System.nanoTime();
@@ -390,7 +474,7 @@ class RefundSagaIntegrationTest {
     Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 2_000), 0);
     approve(payment, UUID.randomUUID());
     inboxProcessor.processNext();
-    stub().run();
+    settle();
     gateway.beforeRefund = this::lockRefundRow;
 
     long started = System.nanoTime();
@@ -441,7 +525,7 @@ class RefundSagaIntegrationTest {
     Payment payment = confirmed(new PaymentAmounts(10000, 0, 0, 2000), 500);
     approve(payment, UUID.randomUUID());
     inboxProcessor.processNext();
-    stub().run();
+    settle();
     jdbc()
         .execute(
             "ALTER TABLE payment.outbox ADD CONSTRAINT reject_notice CHECK (event_type <> 'PaymentNoticeRequested')");
@@ -483,9 +567,9 @@ class RefundSagaIntegrationTest {
   private UUID runSagaToOrderRestore(Payment payment) throws Exception {
     approve(payment, UUID.randomUUID());
     assertThat(inboxProcessor.processNext()).isTrue();
-    stub().run();
+    settle();
     assertThat(worker.runOnce()).isTrue();
-    stub().run();
+    settle();
     assertThat(worker.runOnce()).isFalse();
     return jdbc().queryForObject("SELECT id FROM payment.refunds", UUID.class);
   }
@@ -518,11 +602,13 @@ class RefundSagaIntegrationTest {
   }
 
   private void saveWaiting(EventEnvelope<?> event) throws Exception {
+    saveWaiting(event, "commerce-settle.commerce.v1");
+  }
+
+  private void saveWaiting(EventEnvelope<?> event, String topic) throws Exception {
     byte[] body = mapper.writeValueAsBytes(event);
     new TransactionTemplate(manager)
-        .executeWithoutResult(
-            status ->
-                inbox.saveWaiting(event, new Source("commerce-settle.commerce.v1", 0, 0L, body)));
+        .executeWithoutResult(status -> inbox.saveWaiting(event, new Source(topic, 0, 0L, body)));
   }
 
   /** 승인(카드는 승인 시도까지)과 마일리지 차감이 끝난 결제. 지갑에는 차감 뒤 잔액을 둔다. */
@@ -557,8 +643,65 @@ class RefundSagaIntegrationTest {
     return payment;
   }
 
-  private StubSettlementRefundResponder stub() {
-    return new StubSettlementRefundResponder(replies, clock, 20);
+  /**
+   * Settlement가 정산 응답을 기다리는 SAGA마다 보낼 응답을 Settlement 토픽 원문으로 Inbox에 넣고 처리한다. 예약은 성공하고 예약 ID는 환불
+   * ID에서 고정한다.
+   */
+  private void settle() throws Exception {
+    for (var saga :
+        jdbc()
+            .queryForList(
+                """
+                SELECT s.refund_id, r.payment_id, s.step, s.reservation_ref
+                FROM payment.refund_sagas s JOIN payment.refunds r ON r.id = s.refund_id
+                WHERE s.step IN ('RESERVATION_REQUESTED', 'LEDGER_REVERSAL_PENDING', 'RELEASE_PENDING')
+                """)) {
+      UUID refundId = (UUID) saga.get("refund_id");
+      UUID paymentId = (UUID) saga.get("payment_id");
+      UUID reservationId = (UUID) saga.get("reservation_ref");
+      switch ((String) saga.get("step")) {
+        case "RESERVATION_REQUESTED" ->
+            reply(
+                "RefundReservationResult",
+                new RefundReservationResultPayload(
+                    refundId,
+                    paymentId,
+                    RefundReservationResultPayload.Result.RESERVED,
+                    UUID.nameUUIDFromBytes(refundId.toString().getBytes(StandardCharsets.UTF_8)),
+                    null));
+        case "LEDGER_REVERSAL_PENDING" ->
+            reply(
+                "RefundLedgerReversed",
+                new RefundLedgerReversedPayload(
+                    refundId, paymentId, reservationId, clock.instant().atOffset(ZoneOffset.UTC)));
+        default ->
+            reply(
+                "RefundReservationReleased",
+                new RefundReservationReleasedPayload(refundId, paymentId, reservationId));
+      }
+    }
+  }
+
+  /** Settlement 응답 한 건을 Settlement와 같은 봉투(원결제 ID 집계)로 Inbox에 넣고 그 건만 처리한 뒤 eventId를 돌려준다. */
+  private UUID reply(String eventType, Object payload) throws Exception {
+    UUID eventId = UUID.randomUUID();
+    reply(eventId, eventType, payload);
+    return eventId;
+  }
+
+  private void reply(UUID eventId, String eventType, Object payload) throws Exception {
+    UUID paymentId =
+        switch (payload) {
+          case RefundReservationResultPayload p -> p.paymentId();
+          case RefundLedgerReversedPayload p -> p.paymentId();
+          case RefundReservationReleasedPayload p -> p.paymentId();
+          default -> throw new IllegalArgumentException();
+        };
+    saveWaiting(
+        new EventEnvelope<>(
+            eventId, eventType, 1, clock.instant().atOffset(ZoneOffset.UTC), paymentId, 1, payload),
+        SETTLEMENT_TOPIC);
+    inboxProcessor.processEvent(eventId);
   }
 
   private List<String> eventTypes(Payment payment) {
@@ -578,6 +721,18 @@ class RefundSagaIntegrationTest {
                 payment.getId(),
                 eventType);
     return mapper.readTree(json).path("payload");
+  }
+
+  private UUID refundId() {
+    return jdbc().queryForObject("SELECT id FROM payment.refunds", UUID.class);
+  }
+
+  private List<String> settlementInbox() {
+    return jdbc()
+        .queryForList(
+            "SELECT status FROM payment.inbox WHERE source_topic = ? ORDER BY created_at, id",
+            String.class,
+            SETTLEMENT_TOPIC);
   }
 
   private String refundStatus() {

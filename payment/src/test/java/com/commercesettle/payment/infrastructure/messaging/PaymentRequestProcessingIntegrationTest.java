@@ -13,6 +13,7 @@ import com.commercesettle.payment.application.service.ApplyOrderPaymentRequestSe
 import com.commercesettle.payment.application.service.PaymentNotices;
 import com.commercesettle.payment.application.service.RefundEventHandler;
 import com.commercesettle.payment.application.service.RefundEvents;
+import com.commercesettle.payment.application.service.RefundSettlementReplyService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -950,7 +951,8 @@ class PaymentRequestProcessingIntegrationTest {
     ApplyOrderPaymentRequestService.class,
     PaymentNotices.class,
     RefundEventHandler.class,
-    RefundEvents.class
+    RefundEvents.class,
+    RefundSettlementReplyService.class
   })
   static class Config {
     @Bean

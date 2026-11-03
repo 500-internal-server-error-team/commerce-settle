@@ -16,7 +16,6 @@ import com.commercesettle.payment.domain.repository.RefundRepository;
 import com.commercesettle.payment.domain.repository.RefundSagaRepository;
 import java.time.Clock;
 import java.time.Instant;
-import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -29,9 +28,9 @@ import org.springframework.transaction.annotation.Transactional;
  * Settlement의 환불 응답(정산금 예약 결과·원장 상쇄·예약 해제)을 환불 SAGA에 반영한다. 응답 한 건을 한 트랜잭션에서 환불 행을 잠그고 반영하며, 다음 단계에
  * 필요한 작업이나 결과 이벤트를 같은 트랜잭션에 저장한다.
  *
- * <p>응답은 지금 개발용 stub 응답기가 보낸다. Settlement 연동 뒤에는 Settlement 토픽의 수신기가 같은 메서드를 호출하고 stub을 끈다. 같은 응답의
- * 재전달은 {@link Outcome#ALREADY_APPLIED}로 무변경 처리하고, 기다리지 않는 단계·다른 원결제·다른 예약의 응답은 {@link
- * Outcome#REJECTED}로 반영하지 않는다.
+ * <p>Settlement 토픽의 응답은 Inbox를 거쳐 {@link RefundEventHandler}가 이 메서드들을 호출한다. 같은 결과의 재전달은 {@link
+ * Outcome#ALREADY_APPLIED}로 무변경 처리하고, 기다리지 않는 단계·다른 원결제·다른 예약의 응답은 {@link Outcome#REJECTED}로 반영하지
+ * 않는다.
  */
 @Service
 public class RefundSettlementReplyService {
@@ -67,23 +66,6 @@ public class RefundSettlementReplyService {
     /** 예약 결과가 WAITING이라 계속 기다린다. */
     WAITING,
     REJECTED
-  }
-
-  /** 정산 응답을 기다리는 SAGA. stub 응답기와 운영 확인에 쓴다. */
-  public record AwaitingSettlement(
-      UUID refundId, UUID paymentId, RefundSagaStep step, UUID reservationId) {}
-
-  @Transactional(readOnly = true)
-  public List<AwaitingSettlement> awaitingSettlement(int limit) {
-    return sagas.findAwaitingSettlement(limit).stream()
-        .map(
-            saga ->
-                new AwaitingSettlement(
-                    saga.getRefundId(),
-                    refunds.findById(saga.getRefundId()).orElseThrow().getPaymentId(),
-                    saga.getStep(),
-                    saga.getReservationRef()))
-        .toList();
   }
 
   /** 정산금 예약 결과. RESERVED면 외부 환불·마일리지 복원 작업을 만들고, REJECTED면 외부 환불 없이 실패로 끝내 RefundFailed를 저장한다. */

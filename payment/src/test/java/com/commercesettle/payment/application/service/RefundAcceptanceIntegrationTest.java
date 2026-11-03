@@ -322,7 +322,8 @@ class RefundAcceptanceIntegrationTest {
     ApplyOrderPaymentRequestService.class,
     PaymentNotices.class,
     RefundEventHandler.class,
-    RefundEvents.class
+    RefundEvents.class,
+    RefundSettlementReplyService.class
   })
   static class Config {
     @Bean
