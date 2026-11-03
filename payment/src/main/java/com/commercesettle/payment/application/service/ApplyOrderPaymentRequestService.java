@@ -72,6 +72,7 @@ public class ApplyOrderPaymentRequestService {
   private final MileageEntryRepository entries;
   private final PaymentEventOutbox outbox;
   private final RefundEventHandler refundEvents;
+  private final PaymentNotices notices;
   private final TransactionOperations transactions;
   private final Clock clock;
   private final Duration lease;
@@ -85,6 +86,7 @@ public class ApplyOrderPaymentRequestService {
       MileageEntryRepository entries,
       PaymentEventOutbox outbox,
       RefundEventHandler refundEvents,
+      PaymentNotices notices,
       TransactionOperations transactions,
       Clock clock,
       @Value("${app.payment-request-processor.lease-ms:30000}") long leaseMs) {
@@ -99,6 +101,7 @@ public class ApplyOrderPaymentRequestService {
     this.entries = entries;
     this.outbox = outbox;
     this.refundEvents = refundEvents;
+    this.notices = notices;
     this.transactions = transactions;
     this.clock = clock;
     this.lease = Duration.ofMillis(leaseMs);
@@ -259,6 +262,7 @@ public class ApplyOrderPaymentRequestService {
               payment.getId(),
               0,
               PaymentConfirmedPayload.of(payment)));
+      notices.completed(payment, null, wallet.orElseThrow(), now, 0);
     }
     inbox.markApplied(inboxId, payment.getId(), now);
     return true;

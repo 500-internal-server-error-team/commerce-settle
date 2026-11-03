@@ -28,4 +28,9 @@ class JpaMileageWalletRepository implements MileageWalletRepository {
   public MileageWallet save(MileageWallet wallet) {
     return repository.save(wallet);
   }
+
+  @Override
+  public MileageWallet saveAndFlush(MileageWallet wallet) {
+    return repository.saveAndFlush(wallet);
+  }
 }

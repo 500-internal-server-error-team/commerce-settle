@@ -12,4 +12,7 @@ public interface MileageWalletRepository {
   Optional<MileageWallet> findByBuyerId(UUID buyerId);
 
   MileageWallet save(MileageWallet wallet);
+
+  /** 같은 트랜잭션의 알림에 DB 갱신 뒤 버전을 저장하기 위해 flush한다. */
+  MileageWallet saveAndFlush(MileageWallet wallet);
 }

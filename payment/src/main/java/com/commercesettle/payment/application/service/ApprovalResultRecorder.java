@@ -55,6 +55,7 @@ class ApprovalResultRecorder {
   private final MileageReservationRepository reservations;
   private final MileageEntryRepository entries;
   private final PaymentEventOutbox outbox;
+  private final PaymentNotices notices;
   private final ApprovalWorkerSettings settings;
   private final Clock clock;
 
@@ -67,6 +68,7 @@ class ApprovalResultRecorder {
       MileageReservationRepository reservations,
       MileageEntryRepository entries,
       PaymentEventOutbox outbox,
+      PaymentNotices notices,
       ApprovalWorkerSettings settings,
       Clock clock) {
     this.jobs = jobs;
@@ -77,6 +79,7 @@ class ApprovalResultRecorder {
     this.reservations = reservations;
     this.entries = entries;
     this.outbox = outbox;
+    this.notices = notices;
     this.settings = settings;
     this.clock = clock;
   }
@@ -150,7 +153,7 @@ class ApprovalResultRecorder {
       case Result.Succeeded succeeded -> {
         release(job, PaymentJobStatus.DONE, null);
         attempt.approve(succeeded.externalRef(), now);
-        consumeMileage(payment, now);
+        MileageWallet wallet = consumeMileage(payment, now);
         payment.confirm(now);
         payments.save(payment);
         outbox.appendPaymentConfirmed(
@@ -162,6 +165,7 @@ class ApprovalResultRecorder {
                 payment.getId(),
                 version + 1,
                 PaymentConfirmedPayload.of(payment)));
+        notices.completed(payment, null, wallet, now, version + 1);
       }
       case Result.Declined declined -> {
         release(job, PaymentJobStatus.DONE, null);
@@ -234,10 +238,10 @@ class ApprovalResultRecorder {
   }
 
   /** 승인으로 확정되면 예약해 둔 마일리지를 실제로 차감한다. */
-  private void consumeMileage(Payment payment, Instant now) {
+  private MileageWallet consumeMileage(Payment payment, Instant now) {
     Optional<MileageReservation> reservation = reserved(payment);
     if (reservation.isEmpty()) {
-      return;
+      return null;
     }
     MileageWallet wallet = wallet(payment);
     wallet.consumeReserved(reservation.get().getAmount(), now);
@@ -245,6 +249,7 @@ class ApprovalResultRecorder {
     reservations.save(reservation.get());
     entries.save(MileageEntry.debit(wallet, reservation.get(), now));
     wallets.save(wallet);
+    return wallet;
   }
 
   /** 확정 거절되면 마일리지 예약을 풀어 준다. */

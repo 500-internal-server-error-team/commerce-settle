@@ -250,6 +250,8 @@ Commerce가 주문 전이와 같은 트랜잭션으로 알림 항목을 저장�
 
 `.env`의 `APP_NOTIFICATIONS_WORKER_ENABLED=true`로 설정해 Commerce를 재기동하면 1초 주기로 선행 반영 대기와 발송을 처리합니다. 스케줄 작업은 별도 풀에서 실행하고 발송 작업·외부 호출은 각각 최대 2개입니다. 외부 호출 대기열은 8개, 호출 상한 5초·임대 30초이며 응답 유실/임대 만료는 같은 deliveryId 조회부터 재개합니다. 기본값 false에서는 기록·조회 API만 제공하고 자동 발송하지 않습니다.
 
+Payment의 결제 확정(외부 승인·마일리지 전액)과 환불 마일리지 복원은 같은 트랜잭션에 `PaymentNoticeRequested`를 저장합니다. 기존 Payment Outbox Relay(`APP_OUTBOX_ENABLED=true`)를 사용하며 별도 발행기나 금융 상태를 바꾸는 발송 콜백은 없습니다. 마일리지 사용/복원 시 지갑을 flush한 뒤 실제 잔액·버전을 사본에 저장하고, 미사용이면 두 필드를 함께 null로 둡니다. 확정 환불 실패는 예약 거절/해제 뒤 `RefundFailed`를 받은 Commerce가 기존 조치 안내를 만들며 UNKNOWN은 성공·확정 실패 알림을 만들지 않습니다.
+
 Payment·Settlement notice를 받으려면 `APP_NOTIFICATIONS_CONSUMER_ENABLED=true`도 설정합니다. 그룹은 `commerce-notifications.v1`, 구독은 `commerce-settle.payment.v1`·`commerce-settle.settlement.v1`입니다. 기존 금융 그룹 offset과 분리하며 [초기 offset 준비](#kafka-전달-기반)는 두 구독 토픽 각각에 적용합니다. `auto.offset.reset=none`을 유지하고 이미 데이터나 offset이 있는 토픽을 임의 초기화하지 않습니다. 같은 토픽의 다른 금융 이벤트는 알림 그룹에서만 건너뜁니다. 정상 notice는 Inbox·알림 항목을 함께 저장하며 주문/원환불 복구가 앞서지 않았으면 원문을 영속 대기시킨 뒤 ACK합니다. 일반 선행 대기는 실패 횟수를 소진하지 않습니다.
 
 `GET /api/notifications`와 단건 조회는 본인 기록만 반환합니다. 내부 운영자는 `/internal/notification-deliveries`의 목록·단건·`attempts`, `/internal/notification-mock/receipts/{deliveryId}`를 조회합니다. 재처리는 `POST /internal/notification-deliveries/{deliveryId}/replays`에 최신 expectedVersion·reason과 Idempotency-Key를 보내며 같은 키/본문은 같은 발송으로 연결합니다. 원키·수신자·본문은 변경하지 않고 retryCount만 0으로 다시 엽니다. SENT·COLLECTING·PENDING·임대 중 발송은 409이고 모의 수신 기록 없음은 404입니다. 모의 확정 거절은 설정 변경이나 재처리로 성공으로 바꾸지 않습니다.

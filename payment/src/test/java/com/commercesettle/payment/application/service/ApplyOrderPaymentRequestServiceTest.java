@@ -80,6 +80,7 @@ class ApplyOrderPaymentRequestServiceTest {
           entries,
           outbox,
           mock(RefundEventHandler.class),
+          mock(PaymentNotices.class),
           TransactionOperations.withoutTransaction(),
           Clock.fixed(NOW, ZoneOffset.UTC),
           30_000);
@@ -1226,6 +1227,11 @@ class ApplyOrderPaymentRequestServiceTest {
     private final Map<UUID, MileageWallet> byBuyer = new HashMap<>();
     private int lookups;
 
+    @Override
+    public MileageWallet saveAndFlush(MileageWallet wallet) {
+      return save(wallet);
+    }
+
     MileageWallet fund(UUID buyerId, long balance) {
       MileageWallet wallet = MileageWallet.open(buyerId, balance, NOW);
       byBuyer.put(buyerId, wallet);
@@ -1288,6 +1294,13 @@ class ApplyOrderPaymentRequestServiceTest {
   }
 
   private static final class FakeOutbox implements PaymentEventOutbox {
+    @Override
+    public UUID appendNoticeRequested(
+        EventEnvelope<com.commercesettle.payment.application.event.PaymentNoticeRequestedPayload>
+            event) {
+      return event.eventId();
+    }
+
     private final List<EventEnvelope<PaymentAcceptedPayload>> accepted = new ArrayList<>();
     private final List<EventEnvelope<PaymentCancellationResultPayload>> cancellations =
         new ArrayList<>();
