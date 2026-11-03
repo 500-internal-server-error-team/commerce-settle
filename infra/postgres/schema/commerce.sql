@@ -440,6 +440,9 @@ CREATE UNIQUE INDEX uq_buyer_coupons_used_order
     ON commerce.buyer_coupons (used_order_id) WHERE used_order_id IS NOT NULL;
 CREATE INDEX ix_buyer_coupons_buyer_status_expires
     ON commerce.buyer_coupons (buyer_id, status, expires_at, id);
+-- 만료 스케줄러는 매분 상태·기한으로 대상을 찾는다. 상태를 바인딩 값으로 받으므로 부분 인덱스 대신 상태를 첫 열로 둔다.
+CREATE INDEX ix_buyer_coupons_status_expires
+    ON commerce.buyer_coupons (status, expires_at, id);
 
 CREATE TABLE commerce.coupon_history (
     id uuid PRIMARY KEY,
