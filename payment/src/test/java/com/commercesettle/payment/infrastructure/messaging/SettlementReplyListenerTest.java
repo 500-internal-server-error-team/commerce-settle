@@ -27,6 +27,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
@@ -133,6 +134,31 @@ class SettlementReplyListenerTest {
                 UUID.fromString(REFUND_ID),
                 UUID.fromString(PAYMENT_ID),
                 UUID.fromString(RESERVATION_ID)));
+  }
+
+  @ParameterizedTest(name = "reasonCode 길이 {0} → 인계 {1}")
+  @CsvSource({"-1, true", "0, false", "1, true", "80, true", "81, false"})
+  @DisplayName("사유 코드는 null 또는 1~80자만 인계하고 나머지는 격리한 뒤 offset을 승인한다")
+  void limitsReasonCodeLength(int length, boolean accepted) throws Exception {
+    ObjectNode json = (ObjectNode) mapper.readTree(RESERVED_JSON);
+    ObjectNode payload = (ObjectNode) json.get("payload");
+    payload.put("result", "REJECTED").putNull("reservationId");
+    if (length < 0) {
+      payload.putNull("reasonCode");
+    } else {
+      payload.put("reasonCode", "A".repeat(length));
+    }
+
+    listener(quarantine).receive(record(json, PAYMENT_ID), acknowledgment);
+
+    verify(acknowledgment).acknowledge();
+    if (accepted) {
+      verify(acceptor).acceptRefundEvent(any(), any());
+      verifyNoInteractions(quarantine);
+    } else {
+      verify(quarantine).capture(any());
+      verifyNoInteractions(acceptor);
+    }
   }
 
   @Test
