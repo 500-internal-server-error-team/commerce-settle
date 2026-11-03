@@ -54,6 +54,12 @@ public class GradeCouponService {
     this.clock = clock;
   }
 
+  /** 혜택 월보다 이전인데 끝나지 않은 회차의 혜택 월. 스케줄러가 기한 경과 종결까지 이어서 실행한다. */
+  @Transactional(readOnly = true)
+  public List<LocalDate> unfinishedMonthsBefore(LocalDate targetMonth) {
+    return runs.findUnfinishedMonthsBefore(CouponIssueRun.firstDay(targetMonth));
+  }
+
   /** 혜택 월의 취소되지 않은 회차. 월이 마감됐는데 없으면 최초 회차를 만든다. 마감 전이면 비어 있다. */
   @Transactional
   public Optional<CouponIssueRun> currentRun(LocalDate targetMonth) {

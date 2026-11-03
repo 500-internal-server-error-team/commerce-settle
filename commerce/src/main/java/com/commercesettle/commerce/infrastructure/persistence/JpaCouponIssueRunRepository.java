@@ -6,6 +6,7 @@ import com.commercesettle.commerce.domain.repository.CouponIssueRunRepository;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcOperations;
@@ -49,6 +50,12 @@ class JpaCouponIssueRunRepository implements CouponIssueRunRepository {
   @Override
   public Optional<CouponIssueRun> findCurrent(LocalDate targetMonth) {
     return runs.findByTargetMonthAndStatusNot(targetMonth, CouponIssueRunStatus.CANCELLED);
+  }
+
+  @Override
+  public List<LocalDate> findUnfinishedMonthsBefore(LocalDate targetMonth) {
+    return runs.findMonthsBefore(
+        targetMonth, List.of(CouponIssueRunStatus.PREPARING, CouponIssueRunStatus.ISSUING));
   }
 
   @Override

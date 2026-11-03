@@ -7,6 +7,7 @@ import com.commercesettle.commerce.domain.model.CouponIssueRun;
 import com.commercesettle.commerce.domain.model.CouponIssueRunStatus;
 import com.commercesettle.commerce.domain.model.Order;
 import com.commercesettle.commerce.infrastructure.batch.GradeCouponLauncher;
+import com.commercesettle.commerce.infrastructure.scheduling.GradeCouponScheduler;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
@@ -241,6 +242,34 @@ class GradeCouponIntegrationTest {
         .isEqualTo(2);
     assertThat(count("buyer_coupons where kind = 'GRADE' and target_month = ?", month))
         .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("스케줄러는 지난달에 끝나지 않은 회차도 실행해, 원래 기한이 지났으면 새 발급 없이 남은 대상과 회차를 EXPIRED로 종결한다")
+  void schedulerExpiresUnfinishedPreviousMonth() {
+    LocalDate november = LocalDate.of(2034, 11, 1);
+    for (int i = 0; i < 2; i++) {
+      confirmed(UUID.randomUUID(), 100_000 + i, november.minusMonths(1));
+    }
+    clock.at(november, 0, 20);
+    UUID run = grades.currentRun(november).orElseThrow().getId();
+    grades.prepare(run);
+    grades.issue(run, grades.pendingTargetIds(run, 1).get(0));
+
+    clock.at(november.plusMonths(1), 0, 20);
+    new GradeCouponScheduler(launcher, clock).run();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select status from commerce.coupon_issue_runs where id = ?", String.class, run))
+        .isEqualTo("EXPIRED");
+    assertThat(count("coupon_issue_targets where run_id = ? and status = 'ISSUED'", run))
+        .isEqualTo(1);
+    assertThat(count("coupon_issue_targets where run_id = ? and status = 'EXPIRED'", run))
+        .isEqualTo(1);
+    assertThat(count("buyer_coupons where target_month = ?", java.sql.Date.valueOf(november)))
+        .isEqualTo(1);
+    assertThat(grades.currentRun(november.plusMonths(1))).isPresent();
   }
 
   @Test

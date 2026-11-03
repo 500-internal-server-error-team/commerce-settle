@@ -4,6 +4,7 @@ import com.commercesettle.commerce.application.service.GradeCouponService;
 import com.commercesettle.commerce.domain.model.CouponIssueRun;
 import com.commercesettle.commerce.domain.model.CouponIssueRunStatus;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,6 +34,11 @@ public class GradeCouponLauncher {
     this.jobLauncher = jobLauncher;
     this.gradeCouponJob = gradeCouponJob;
     this.grades = grades;
+  }
+
+  /** 혜택 월보다 이전인데 끝나지 않은 회차의 혜택 월. */
+  public List<LocalDate> unfinishedMonthsBefore(LocalDate targetMonth) {
+    return grades.unfinishedMonthsBefore(targetMonth);
   }
 
   /** 회차 상태를 돌려준다. 혜택 월이 아직 마감되지 않았으면 비어 있다. */
