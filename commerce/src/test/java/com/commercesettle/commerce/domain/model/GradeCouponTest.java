@@ -3,6 +3,8 @@ package com.commercesettle.commerce.domain.model;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.commercesettle.commerce.domain.exception.CouponRejectedException;
+import com.commercesettle.commerce.domain.exception.CouponRejectedException.Reason;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -11,7 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
-/** 월간 우수고객의 등급 경계, 회차의 마감·기한과 상태 전이, GRADE 캠페인·쿠폰 기한을 확인한다. */
+/** 월간 우수고객의 등급 경계, 회차의 마감·기한과 상태 전이, GRADE 캠페인·쿠폰 기한과 사용 조건을 확인한다. */
 class GradeCouponTest {
   private static final LocalDate MONTH = LocalDate.of(2026, 11, 1);
   private static final Instant CUTOFF = Instant.parse("2026-10-31T15:00:00Z");
@@ -78,5 +80,35 @@ class GradeCouponTest {
                 BuyerCoupon.issueGrade(
                     UUID.randomUUID(), template, UUID.randomUUID(), target, EXPIRES))
         .hasMessageContaining("EXPIRED");
+  }
+
+  @ParameterizedTest
+  @CsvSource({"BRONZE, 50000", "SILVER, 70000", "GOLD, 90000"})
+  @DisplayName("등급 쿠폰은 최소 주문금액 직전은 거절하고 정각부터 할인하며, 혜택 월 시작 전과 기한 정각에는 쓸 수 없다")
+  void appliesGradeMinimumAndMonthBoundaries(CouponGrade grade, long minimum) {
+    CouponTemplate template = CouponTemplate.grade(UUID.randomUUID(), grade, MONTH, CUTOFF);
+    BuyerCoupon coupon =
+        BuyerCoupon.issueGrade(
+                UUID.randomUUID(), template, UUID.randomUUID(), UUID.randomUUID(), CUTOFF)
+            .coupon();
+
+    assertThat(discount(coupon, minimum, CUTOFF)).isEqualTo(grade.discountAmount());
+    assertThat(discount(coupon, minimum, EXPIRES.minusSeconds(1)))
+        .isEqualTo(grade.discountAmount());
+    assertRejected(() -> discount(coupon, minimum - 1, CUTOFF), Reason.BELOW_MIN_ORDER);
+    assertRejected(() -> discount(coupon, minimum, CUTOFF.minusSeconds(1)), Reason.NOT_STARTED);
+    assertRejected(() -> discount(coupon, minimum, EXPIRES), Reason.EXPIRED);
+  }
+
+  private static long discount(BuyerCoupon coupon, long gross, Instant at) {
+    return coupon.discountFor(null, null, gross, Order.ExternalMethod.CREDIT_CARD, at);
+  }
+
+  private static void assertRejected(
+      org.assertj.core.api.ThrowableAssert.ThrowingCallable call, Reason reason) {
+    assertThatThrownBy(call)
+        .isInstanceOf(CouponRejectedException.class)
+        .extracting(e -> ((CouponRejectedException) e).reason())
+        .isEqualTo(reason);
   }
 }
