@@ -10951,7 +10951,7 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
+        "x-implemented": true,
         "security": [
           {
             "serviceCredential": []
@@ -11095,7 +11095,7 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
+        "x-implemented": true,
         "security": [
           {
             "serviceCredential": []
@@ -11206,7 +11206,7 @@
         ],
         "x-owner-service": "commerce",
         "x-actor": "OPERATOR",
-        "x-implemented": false,
+        "x-implemented": true,
         "security": [
           {
             "serviceCredential": []
@@ -11214,7 +11214,7 @@
         ],
         "operationId": "post_internal_coupon_issue_run_replacement",
         "summary": "발급 전 오류 회차 취소와 대체 회차 생성",
-        "description": "Commerce 운영자별 서비스 자격의 구현 예정 집계 오류 교정. 정상 발급 승인·수신자/할인액 지정 API가 아니다. 원회차 PREPARING/ISSUING/COMPLETED, 발급0건, 원래 만료 전, 활성 JobExecution 없음과 실제 실행자 부재를 확인해야 한다. STARTING/STARTED/STOPPING 잔류는 정상 중단·복구 후에만 교정한다. 런처의 실행 등록·대상 저장·발급과 같은 회차 행 잠금을 사용하고 상태를 재검사한다. ISSUED 대상/연결 쿠폰/해당 대상 ISSUE 이력이 있으면409 COUPON_RUN_NOT_REPLACEABLE, 실행 중이면409 COUPON_RUN_EXECUTION_ACTIVE, 버전 불일치는409 COUPON_RUN_VERSION_CONFLICT, 기한 경과는409 COUPON_RUN_EXPIRED다. 실행자 부재·마감 자료·저장 정책·발급 이력의 정합성을 확인할 수 없으면503 COUPON_RUN_STATE_UNVERIFIED이며 현재 값으로 대체하지 않는다. 한 트랜잭션에서 원회차 CANCELLED, 같은 월·마감·정책 버전·만료의 새 PREPARING 회차, OPERATOR 감사와 멱등 결과를 저장한다. 새 회차는 replacesRunId로 이전 회차를 참조하고 취소되지 않은 회차의 월 유일성과 기존 쿠폰 월 중복 방지를 유지한다. 취소된 Job은 재시작하지 않는다. 새 쿠폰 발급은 이후 Scheduler/Job이 자동 실행하며201은 교정 리소스 생성 완료만 뜻한다. 집계 오류로 대상0명을 확정한 빈 COMPLETED 회차도 원래 발급 기한 안에서 같은 교정 조건을 적용한다.",
+        "description": "Commerce 운영자별 서비스 자격의 집계 오류 교정. 정상 발급 승인·수신자/할인액 지정 API가 아니다. 원회차 PREPARING/ISSUING/COMPLETED, 발급0건, 원래 만료 전, 활성 JobExecution 없음과 실제 실행자 부재를 확인해야 한다. STARTING/STARTED/STOPPING 잔류는 정상 중단·복구 후에만 교정하며, 런처가 업무가 끝난 회차를 포함해 정체된 잔류 실행을 FAILED로 정리한다. 런처의 실행 등록·대상 저장·발급과 같은 회차 행 잠금을 사용하고 상태를 재검사한다. ISSUED 대상/연결 쿠폰/해당 대상 ISSUE 이력이 있으면409 COUPON_RUN_NOT_REPLACEABLE, 실행 중이면409 COUPON_RUN_EXECUTION_ACTIVE, 버전 불일치는409 COUPON_RUN_VERSION_CONFLICT, 기한 경과는409 COUPON_RUN_EXPIRED다. 실행자 부재·마감 자료·저장 정책·발급 이력의 정합성을 확인할 수 없으면503 COUPON_RUN_STATE_UNVERIFIED이며 현재 값으로 대체하지 않는다. 한 트랜잭션에서 원회차 CANCELLED, 같은 월·마감·정책 버전·만료의 새 PREPARING 회차, OPERATOR 감사와 멱등 결과를 저장한다. 새 회차는 replacesRunId로 이전 회차를 참조하고 취소되지 않은 회차의 월 유일성과 기존 쿠폰 월 중복 방지를 유지한다. 취소된 Job은 재시작하지 않는다. 새 쿠폰 발급은 이후 Scheduler/Job이 자동 실행하며201은 교정 리소스 생성 완료만 뜻한다. 같은 키·본문 재요청은 저장한 대체 회차를 조회 API와 같은 한 스냅샷(회차·발급 건수·대체 연결)으로 반환한다. 집계 오류로 대상0명을 확정한 빈 COMPLETED 회차도 원래 발급 기한 안에서 같은 교정 조건을 적용한다.",
         "parameters": [
           {
             "name": "runId",
