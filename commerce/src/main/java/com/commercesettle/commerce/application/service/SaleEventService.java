@@ -4,6 +4,7 @@ import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.exception.SaleEventConflictException;
 import com.commercesettle.commerce.domain.exception.SaleEventConflictException.Reason;
 import com.commercesettle.commerce.domain.exception.SaleEventNotFoundException;
+import com.commercesettle.commerce.domain.exception.VersionConflictException;
 import com.commercesettle.commerce.domain.model.InventoryMovement;
 import com.commercesettle.commerce.domain.model.Product;
 import com.commercesettle.commerce.domain.model.ProductInventory;
@@ -171,7 +172,7 @@ public class SaleEventService {
         eventId,
         200,
         recordId -> {
-          Locked locked = lock(sellerId, eventId);
+          Locked locked = lock(sellerId, eventId, expectedVersion);
           SaleEvent event = locked.event();
           Product product = ownedProduct(sellerId, event.getProductId());
           if (product.getStatus() != ProductStatus.ON_SALE) {
@@ -199,7 +200,7 @@ public class SaleEventService {
         eventId,
         200,
         recordId -> {
-          Locked locked = lock(sellerId, eventId);
+          Locked locked = lock(sellerId, eventId, expectedVersion);
           InventoryMovement movement =
               locked
                   .event()
@@ -214,7 +215,10 @@ public class SaleEventService {
         existingId -> ownedEvent(sellerId, existingId));
   }
 
-  /** 시작 시각이 된 예정 이벤트를 연다. 재고는 바꾸지 않으므로 이벤트 행만 잠근다. */
+  /**
+   * 시작 시각이 된 예정 이벤트를 연다. 재고는 바꾸지 않으므로 이벤트 행만 잠그며, 참여·종료가 잡고 있는 행은 기다리지 않고 다음 실행으로 미룬다. 신청은 서버 시각으로
+   * 판단하므로 열기가 늦어도 참여를 막지 않는다.
+   */
   @Transactional
   public int openStarted(Instant now, int limit) {
     int opened = 0;
@@ -255,8 +259,11 @@ public class SaleEventService {
     return events.save(locked.event());
   }
 
-  /** 이벤트의 상품은 공개 후 바뀌지 않으므로 잠금 전에 상품 ID만 읽어 잠글 재고 행을 찾는다. */
-  private Locked lock(UUID sellerId, UUID eventId) {
+  /**
+   * 잠금 전에 상품 ID만 읽어 잠글 재고 행을 찾는다. 미공개 이벤트는 그 사이 변경으로 상품이 바뀔 수 있으므로, 잠근 이벤트의 상품이 잠근 재고 행과 다르면 버전 충돌로
+   * 거절해 최신 이벤트로 다시 요청하게 한다.
+   */
+  private Locked lock(UUID sellerId, UUID eventId, long expectedVersion) {
     UUID productId =
         events
             .findProductIdById(eventId)
@@ -267,6 +274,9 @@ public class SaleEventService {
             .findByIdForUpdate(eventId)
             .filter(value -> value.isOwnedBy(sellerId))
             .orElseThrow(() -> new SaleEventNotFoundException(eventId));
+    if (!event.getProductId().equals(productId)) {
+      throw new VersionConflictException("sale event", expectedVersion, event.getVersion());
+    }
     return new Locked(inventory, event);
   }
 

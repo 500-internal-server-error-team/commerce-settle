@@ -227,8 +227,10 @@ public class InventoryReservationService {
                 () -> new IllegalStateException("participation is missing for order " + orderId));
     Result result = forEvent.apply(reservation, inventory, event, participation);
     if (result.outcome() == Outcome.APPLIED) {
-      events.save(event);
+      // 재시도의 참여 재예약은 같은 구매자의 다른 진행 중 참여와 유일 인덱스로 충돌할 수 있다.
+      // 다른 저장의 flush가 이 위반을 먼저 드러내지 않도록 참여부터 저장해 참여 한도 거절로 알린다.
       saveParticipation(participation);
+      events.save(event);
       save(result, inventory, reservation);
     }
     return result.outcome();
@@ -251,14 +253,15 @@ public class InventoryReservationService {
     }
   }
 
-  /** 조건부 갱신이 실패한 이유를 현재 이벤트 상태로 구분한다. 미공개 이벤트는 구매자에게 없는 이벤트다. */
+  /**
+   * 조건부 갱신이 실패한 이유를 DB의 현재 이벤트 행으로 구분한다. 견적이 같은 트랜잭션에 올려 둔 이벤트 사본은 그 뒤의 종료·매진을 반영하지 않으므로 쓰지 않는다.
+   * 미공개 이벤트는 구매자에게 없는 이벤트다.
+   */
   private RuntimeException admissionRejected(UUID eventId, Instant now) {
-    SaleEvent event =
+    EventAdmission admission =
         events
-            .findById(eventId)
-            .filter(SaleEvent::isPublished)
+            .findAdmission(eventId, now)
             .orElseThrow(() -> new SaleEventNotFoundException(eventId));
-    EventAdmission admission = event.gauge(now).admission();
     boolean notOpen = admission == EventAdmission.NOT_STARTED || admission == EventAdmission.CLOSED;
     return new EventAdmissionClosedException(notOpen ? Reason.NOT_OPEN : Reason.NO_REMAINING);
   }
