@@ -946,6 +946,75 @@ class RetentionIntegrationTest {
     verify(settlement, times(3)).lookup(anySet());
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"MISSING", "OTHER_SELLER", "FUTURE", "DUPLICATE"})
+  @DisplayName("확인 불가한 원천 항목만 보존하고 정상 정산 알림은 정리하며 재처리 검증은 유지한다")
+  void isolatesUnverifiedSettlementFromVerifiedSources(String result) {
+    var bad = settlementNotice(Notification.Kind.PAYOUT_ACTION_REQUIRED, "REVIEW_REQUIRED");
+    var good = settlementNotice(Notification.Kind.SETTLEMENT_READY, "SENT");
+    when(settlement.lookup(anySet()))
+        .thenAnswer(
+            call -> {
+              Set<UUID> requested = call.getArgument(0);
+              var closures = new ArrayList<SettlementRetentionGateway.Closure>();
+              if (requested.contains(good.batch()))
+                closures.add(
+                    new SettlementRetentionGateway.Closure(
+                        good.batch(), good.seller(), NOW.minus(Duration.ofDays(91))));
+              if (requested.contains(bad.batch()) && !result.equals("MISSING")) {
+                closures.add(
+                    new SettlementRetentionGateway.Closure(
+                        bad.batch(),
+                        result.equals("OTHER_SELLER") ? UUID.randomUUID() : bad.seller(),
+                        result.equals("FUTURE")
+                            ? NOW.plusSeconds(1)
+                            : NOW.minus(Duration.ofDays(91))));
+                if (result.equals("DUPLICATE"))
+                  closures.add(
+                      new SettlementRetentionGateway.Closure(
+                          bad.batch(), bad.seller(), NOW.minus(Duration.ofDays(90))));
+              }
+              return closures;
+            });
+
+    new RetentionService(store, Clock.fixed(NOW, ZoneOffset.UTC), manager, settlement).run(2, 1);
+
+    var observed =
+        Map.of(
+            "unverifiedRetained", notifications.find(bad.delivery()).isPresent(),
+            "verifiedPurged", notifications.find(good.delivery()).isEmpty(),
+            "unverifiedUncached",
+                jdbc.queryForObject(
+                        "SELECT closed_at FROM commerce.notification_retention_batches WHERE batch_id=?",
+                        OffsetDateTime.class,
+                        bad.batch())
+                    == null);
+    assertThat(observed)
+        .containsAllEntriesOf(
+            Map.of(
+                "unverifiedRetained", true,
+                "verifiedPurged", true,
+                "unverifiedUncached", true));
+    assertThatThrownBy(
+            () ->
+                notificationService.replay(
+                    "test", bad.delivery(), "unverified-source-replay", 0, "test"))
+        .isInstanceOf(SettlementRetentionGateway.UnavailableException.class);
+    assertThat(notifications.find(bad.delivery()).orElseThrow().version()).isZero();
+    when(settlement.lookup(anySet()))
+        .thenReturn(
+            List.of(
+                new SettlementRetentionGateway.Closure(
+                    bad.batch(), bad.seller(), NOW.minus(Duration.ofDays(91)))));
+
+    new RetentionService(
+            store, Clock.fixed(NOW.plus(Duration.ofDays(1)), ZoneOffset.UTC), manager, settlement)
+        .run(2, 1);
+
+    assertThat(count("notification_deliveries")).isZero();
+    assertThat(count("notification_retired_keys")).isEqualTo(2);
+  }
+
   @Test
   @DisplayName("연결된 배치 여럿의 종결 조회를 한 번의 원천 호출로 묶는다")
   void batchesSettlementClosureLookups() {
@@ -1017,9 +1086,11 @@ class RetentionIntegrationTest {
                         new SettlementRetentionGateway.Closure(
                             notice.batch(), notice.seller(), NOW.minus(Duration.ofDays(91)))),
                     NOW));
-    var lease =
-        new TransactionTemplate(manager)
-            .execute(tx -> notifications.claim(NOW.plus(Duration.ofDays(1))));
+    jdbc.update(
+        "UPDATE commerce.notification_deliveries SET next_run_at=? WHERE id=?",
+        time(NOW),
+        notice.delivery());
+    var lease = new TransactionTemplate(manager).execute(tx -> notifications.claim(NOW));
 
     assertThat(lease.lease()).isNotNull();
     assertThat(process(Target.DELIVERY, notice.delivery(), NOW)).isEqualTo("HELD");
