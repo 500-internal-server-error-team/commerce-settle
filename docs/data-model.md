@@ -655,7 +655,7 @@ Job 식별자는 targetMonth+runId다. 정상 재시작은 같은 값을 사용�
 
 **제약:** UNIQUE(refund_id). 금융 성공/마일리지 복원/원장 상쇄/주문 복구를 별도 추적. 완료 ack 전 전체 완료 금지.
 
-현재 `step`은 RESERVATION_REQUESTED → EXTERNAL_REFUND_PENDING → MILEAGE_RESTORE_PENDING → LEDGER_REVERSAL_PENDING → ORDER_RESTORE_PENDING → COMPLETED이며, 외부 확정 거절은 RELEASE_PENDING → FAILED, 예약 거절은 RESERVATION_REQUESTED → FAILED입니다. 원장 상쇄 확인 때 `RefundCompleted`를 저장하고, `RefundOrderRestored`를 반영해야 환불이 COMPLETED가 됩니다. Settlement 응답(예약 결과·원장 상쇄·예약 해제)은 `RefundSettlementReplyService`가 반영하며, Settlement 연동 전에는 개발용 stub(`app.refund.settlement-stub.enabled`, 기본 `true`)이 즉시 성공 응답을 넣습니다. 연동하면 Settlement 토픽 수신기가 같은 서비스를 호출하게 하고 stub을 끕니다.
+현재 `step`은 RESERVATION_REQUESTED → EXTERNAL_REFUND_PENDING → MILEAGE_RESTORE_PENDING → LEDGER_REVERSAL_PENDING → ORDER_RESTORE_PENDING → COMPLETED이며, 외부 확정 거절은 RELEASE_PENDING → FAILED, 예약 거절은 RESERVATION_REQUESTED → FAILED입니다. 원장 상쇄 확인 때 `RefundCompleted`를 저장하고, `RefundOrderRestored`를 반영해야 환불이 COMPLETED가 됩니다. Settlement 응답(예약 결과·원장 상쇄·예약 해제)은 Settlement 토픽 수신기가 [inbox](#inbox)에 넘기고 결제 요청 처리기가 `RefundSettlementReplyService`로 반영합니다. 반영하지 않은 응답은 Inbox `REVIEW_REQUIRED`(`REFUND_SETTLEMENT_REPLY_REJECTED`)로 남깁니다.
 
 **인덱스:** (step,updated_at,id).
 
