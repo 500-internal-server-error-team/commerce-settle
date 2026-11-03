@@ -453,6 +453,17 @@ class OrderStubHttpIntegrationTest {
     assertOperation(path, method, generatedApi.path("paths").path(path).path(method));
   }
 
+  private JsonNode resolveResponse(JsonNode api, JsonNode response) {
+    if (!response.has("$ref")) {
+      return response;
+    }
+    String ref = response.path("$ref").asText();
+    assertThat(ref).startsWith("#/components/responses/");
+    JsonNode resolved = api.at(ref.substring(1));
+    assertThat(resolved.isMissingNode()).as(ref).isFalse();
+    return resolved;
+  }
+
   private void assertOperation(String path, String method, JsonNode actual) {
     JsonNode expected = canonicalApi.path("paths").path(path).path(method);
     assertThat(actual.path("operationId")).isEqualTo(expected.path("operationId"));
@@ -463,8 +474,10 @@ class OrderStubHttpIntegrationTest {
     assertThat(actual.path("responses").properties().stream().map(Map.Entry::getKey).toList())
         .containsExactlyInAnyOrderElementsOf(codes);
     for (String code : codes) {
-      JsonNode response = actual.path("responses").path(code);
-      JsonNode contract = expected.path("responses").path(code.equals("default") ? "400" : code);
+      JsonNode response = resolveResponse(generatedApi, actual.path("responses").path(code));
+      JsonNode contract =
+          resolveResponse(
+              canonicalApi, expected.path("responses").path(code.equals("default") ? "400" : code));
       assertThat(response.path("content").properties().stream().map(Map.Entry::getKey).toList())
           .as(method + " " + path + " " + code)
           .containsExactlyInAnyOrderElementsOf(
@@ -646,6 +659,7 @@ class OrderStubHttpIntegrationTest {
                     .path("default");
       }
       assertThat(declared.isMissingNode()).as(method + " " + path + " " + code).isFalse();
+      declared = resolveResponse(api, declared);
       assertThat(declared.path("content").has(media)).as(media).isTrue();
       String ref = declared.path("content").path(media).path("schema").path("$ref").asText();
       assertThat(ref).startsWith("#/components/schemas/");
