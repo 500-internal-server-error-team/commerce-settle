@@ -42,6 +42,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.batch.core.JobExecution;
 import org.springframework.batch.core.JobParametersBuilder;
 import org.springframework.batch.core.repository.JobRepository;
@@ -105,7 +107,7 @@ class GradeCouponIntegrationTest {
   @Autowired GradeCouponExecutions executions;
   @Autowired JobRepository jobs;
   @Autowired TransactionTemplate tx;
-  // 재요청 조회 도중 다른 교정이 커밋되는 시점을 만들려고 대체 회차 조회 앞에 한 번 끼어든다.
+  // 재요청의 첫 조회·잠금 획득·대체 회차 조회 사이에 다른 요청의 커밋을 배치한다.
   @MockitoSpyBean CouponIssueRunRepository runRepository;
 
   @Test
@@ -590,27 +592,58 @@ class GradeCouponIntegrationTest {
     replace(run, version, 201, key());
   }
 
-  @Test
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
   @Timeout(60)
   @DisplayName("교정 재요청의 응답은 조회 도중 다음 교정이 커밋돼도 회차 상태와 대체 회차 연결을 같은 시점 값으로 돌려준다")
-  void replaysReplacementFromOneSnapshot() throws Exception {
-    LocalDate month = LocalDate.of(2034, 5, 1);
+  void replaysReplacementFromOneSnapshot(boolean completesAfterInitialRead) throws Exception {
+    LocalDate month = LocalDate.of(2034, completesAfterInitialRead ? 6 : 5, 1);
     clock.at(month, 0, 20);
     CouponIssueRun original = grades.currentRun(month).orElseThrow();
     String key = key();
-    JsonNode created = replace(original.getId(), original.getVersion(), 201, key);
-    UUID second = UUID.fromString(created.path("id").asText());
-    long secondVersion = created.path("version").asLong();
+    AtomicReference<JsonNode> created = new AtomicReference<>();
+    if (completesAfterInitialRead) {
+      AtomicReference<Boolean> completeOnce = new AtomicReference<>(true);
+      doAnswer(
+              invocation -> {
+                if (completeOnce.getAndSet(false)) {
+                  ExecutorService other = Executors.newSingleThreadExecutor();
+                  try {
+                    created.set(
+                        other
+                            .submit(
+                                () -> replace(original.getId(), original.getVersion(), 201, key))
+                            .get(30, TimeUnit.SECONDS));
+                  } finally {
+                    other.shutdownNow();
+                  }
+                }
+                return invocation.callRealMethod();
+              })
+          .when(runRepository)
+          .findById(original.getId());
+    } else {
+      created.set(replace(original.getId(), original.getVersion(), 201, key));
+    }
     AtomicReference<UUID> third = new AtomicReference<>();
     AtomicReference<Boolean> armed = new AtomicReference<>(true);
     doAnswer(
             invocation -> {
-              if (second.equals(invocation.getArgument(0)) && armed.getAndSet(false)) {
+              JsonNode second = created.get();
+              if (second != null
+                  && UUID.fromString(second.path("id").asText()).equals(invocation.getArgument(0))
+                  && armed.getAndSet(false)) {
                 ExecutorService other = Executors.newSingleThreadExecutor();
                 try {
                   JsonNode next =
                       other
-                          .submit(() -> replace(second, secondVersion, 201, key()))
+                          .submit(
+                              () ->
+                                  replace(
+                                      UUID.fromString(second.path("id").asText()),
+                                      second.path("version").asLong(),
+                                      201,
+                                      key()))
                           .get(30, TimeUnit.SECONDS);
                   third.set(UUID.fromString(next.path("id").asText()));
                 } finally {
@@ -624,6 +657,7 @@ class GradeCouponIntegrationTest {
 
     JsonNode replay = replace(original.getId(), original.getVersion(), 201, key);
 
+    UUID second = UUID.fromString(created.get().path("id").asText());
     assertThat(third.get()).as("재조회 도중 다음 교정이 커밋됐다").isNotNull();
     assertThat(replay.path("id").asText()).isEqualTo(second.toString());
     assertThat(replay.path("status").asText()).isEqualTo("PREPARING");

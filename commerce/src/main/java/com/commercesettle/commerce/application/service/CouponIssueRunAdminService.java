@@ -109,6 +109,12 @@ public class CouponIssueRunAdminService {
       throw new CouponRunConflictException(Reason.EXECUTION_ACTIVE);
     }
     try (CouponIssueRunExecutions.Held ignored = held.get()) {
+      // 최초 조회 뒤 같은 키 요청이 완료됐을 수 있다. 원회차 잠금 안에서 다시 확인하고,
+      // 기존 결과는 쓰기 트랜잭션에 들어가기 전에 한 스냅샷으로 읽는다.
+      prior = snapshotReads.execute(status -> idempotency.replayPermanent(request, this::viewOf));
+      if (prior != null && prior.isPresent()) {
+        return prior.get();
+      }
       boolean active;
       try {
         active = executions.hasActiveExecution(runId);
