@@ -654,6 +654,8 @@ class PaymentReadAndOperationIntegrationTest {
       includeFilters = @ComponentScan.Filter(Repository.class))
   @Import({
     ApplyOrderPaymentRequestService.class,
+    RefundEventHandler.class,
+    RefundEvents.class,
     ApprovalWorker.class,
     ApprovalResultRecorder.class,
     MileageQueryService.class,
