@@ -544,6 +544,53 @@ class GradeCouponIntegrationTest {
     }
   }
 
+  @Test
+  @Timeout(60)
+  @DisplayName("대상 0명으로 완료한 회차에 강제 종료로 남은 실행은 정체되면 업무를 다시 실행하지 않고 FAILED로 정리해 기한 안의 교정을 다시 허용한다")
+  void recoversLeftoverExecutionOfEmptyCompletedRun() throws Exception {
+    LocalDate month = LocalDate.of(2034, 3, 1);
+    clock.at(month, 0, 20);
+    UUID run = grades.currentRun(month).orElseThrow().getId();
+    assertThat(grades.prepare(run)).isEqualTo(CouponIssueRunStatus.COMPLETED);
+    JobExecution left =
+        jobs.createJobExecution(
+            "gradeCouponJob",
+            new JobParametersBuilder()
+                .addLocalDate("targetMonth", month)
+                .addString("runId", run.toString())
+                .toJobParameters());
+    long version = grades.currentRun(month).orElseThrow().getVersion();
+
+    assertThat(code(replace(run, version, 409, key()))).isEqualTo("COUPON_RUN_EXECUTION_ACTIVE");
+    assertThat(launcher.run(month)).contains(CouponIssueRunStatus.COMPLETED);
+    assertThat(executionStatus(left)).isNotEqualTo("FAILED");
+
+    jdbc.update(
+        "update commerce.batch_job_execution set create_time = now() - interval '1 hour',"
+            + " last_updated = now() - interval '1 hour' where job_execution_id = ?",
+        left.getId());
+
+    assertThat(launcher.run(month)).contains(CouponIssueRunStatus.COMPLETED);
+    assertThat(executionStatus(left)).isEqualTo("FAILED");
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from commerce.batch_job_execution e"
+                    + " join commerce.batch_job_execution_params p"
+                    + " on p.job_execution_id = e.job_execution_id"
+                    + " where p.parameter_name = 'runId' and p.parameter_value = ?",
+                Long.class,
+                run.toString()))
+        .isEqualTo(1);
+    replace(run, version, 201, key());
+  }
+
+  private String executionStatus(JobExecution execution) {
+    return jdbc.queryForObject(
+        "select status from commerce.batch_job_execution where job_execution_id = ?",
+        String.class,
+        execution.getId());
+  }
+
   private JsonNode replace(UUID runId, long expectedVersion, int expected, String key) {
     ObjectNode body =
         mapper
