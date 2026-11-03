@@ -183,6 +183,8 @@ jobs:
           python3 -B scripts/smoke.py --demo-ui
           docker compose restart commerce payment-api settlement finance-mock
           docker compose up -d --wait --wait-timeout 300 --no-recreate
+          docker compose restart gateway payment-worker
+          docker compose up -d --wait --wait-timeout 300 --no-recreate
           python3 -B scripts/smoke.py --demo-ui
       - name: Verify service, database and messaging boundaries
         if: matrix.scenario == 'smoke'

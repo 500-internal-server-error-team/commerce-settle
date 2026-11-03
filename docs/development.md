@@ -690,7 +690,7 @@ java -jar demo-control/build/libs/app.jar
 COMPOSE_PROJECT_NAME=commerce-settle-ui-demo COMPOSE_FILE=compose.yml:compose.demo-ui.yml python3 scripts/smoke.py --demo-ui
 ```
 
-`--demo-ui`는 `commerce-settle-ui-`로 시작하는 별도 프로젝트에서만 네 서비스의 지정된 loopback HTTP 포트를 허용합니다. 각 소유자의 운영 자격으로 조회하고 비인증·다른 소유자 자격의 401을 확인합니다. Worker·DB·Redis는 계속 내부 전용입니다. 옵션 없는 기본 smoke의 내부 포트 제한은 그대로 유지합니다. CI의 `demo-ui` 통합 시나리오는 빈 볼륨 기동과 네 서비스 재기동 뒤 이 smoke를 각각 실행합니다.
+`--demo-ui`는 `commerce-settle-ui-`로 시작하는 별도 프로젝트에서만 네 서비스의 지정된 loopback HTTP 포트를 허용합니다. 각 소유자의 운영 자격으로 조회하고 비인증·다른 소유자 자격의 401을 확인합니다. Worker·DB·Redis는 계속 내부 전용입니다. 옵션 없는 기본 smoke의 내부 포트 제한은 그대로 유지합니다. CI의 `demo-ui` 통합 시나리오는 빈 볼륨 기동 뒤와 앱 재기동 뒤 이 smoke를 각각 실행합니다. 재기동은 소유 서비스 네 개가 준비된 뒤 호출자인 Gateway·Payment Worker도 다시 시작하는 순서이며 Redis·DB는 유지합니다. 백엔드만 교체하며 기존 호출자 연결을 유지하는 복구 시험은 이 시나리오 범위가 아닙니다.
 
 모니터링 주소는 `DEMO_PROMETHEUS_URL`, `DEMO_ZIPKIN_URL`, `DEMO_GRAFANA_URL`, `DEMO_KAFKA_UI_URL`, `DEMO_ALERTMANAGER_URL`로 설정합니다. 기본값은 위 접속 표와 같고, 링크가 있다는 것이 도구의 기동을 뜻하지 않습니다. 모니터링의 수집·조회 시각은 실제 시간입니다.
 
