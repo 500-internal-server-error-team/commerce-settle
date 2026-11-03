@@ -233,6 +233,23 @@ class SellerCouponIntegrationTest {
   }
 
   @Test
+  @DisplayName("발급 기간이 끝난 캠페인의 발급은 COUPON_CAMPAIGN_NOT_ISSUABLE과 사유로 거절하고 아무것도 발급하지 않는다")
+  void rejectsIssueAfterCampaignEnds() {
+    Shop shop = shop();
+    UUID template = campaign(shop, 10, 30_000);
+    jdbc.update(
+        "update commerce.coupon_templates set valid_from = now() - interval '2 hours',"
+            + " valid_until = now() - interval '1 second' where id = ?",
+        template);
+
+    JsonNode rejected = issue(shop, template, buyer().id(), 409, key());
+
+    assertThat(rejected.path("code").asText()).isEqualTo("COUPON_CAMPAIGN_NOT_ISSUABLE");
+    assertThat(rejected.path("detail").asText()).isEqualTo("발급 기간이 끝난 캠페인입니다.");
+    assertThat(totals(template)).containsEntry("issued_count", 0);
+  }
+
+  @Test
   @DisplayName("판매자 쿠폰 주문은 판매자 부담 할인으로 정산 기준액을 줄이고, 다른 상품에는 쓸 수 없으며 결제 확정이 캠페인 약속액을 사용액으로 옮긴다")
   void ordersWithSellerCoupon() throws Exception {
     Shop shop = shop();
