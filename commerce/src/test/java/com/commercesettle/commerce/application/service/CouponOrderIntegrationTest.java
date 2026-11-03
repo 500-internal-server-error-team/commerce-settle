@@ -157,35 +157,57 @@ class CouponOrderIntegrationTest {
 
     assertThat(couponStatus(coupon)).isEqualTo("ISSUED");
     assertTotalsChanged(issued, 0, 0);
-    assertThat(
-            jdbc.queryForList(
-                "select operation from commerce.coupon_history where buyer_coupon_id = ?"
-                    + " order by created_at, id",
-                String.class,
-                coupon))
-        .containsExactly("ISSUE", "RESERVE", "USE", "RESTORE");
+    assertThat(history(coupon)).containsExactly("ISSUE", "RESERVE", "USE", "RESTORE");
   }
 
   @Test
-  @DisplayName("결제 거절은 예약을 풀고 재시도에서 다시 잡으며, 예약 중 기한이 지나면 해제 때 EXPIRED로 두고 약속액을 상쇄한다")
-  void releasesOnDeclineAndExpiresAfterDeadline() throws Exception {
+  @DisplayName("결제 거절은 쿠폰 예약을 유지해, 그사이 기한이 지나도 재시도가 원래 할인으로 결제 확정까지 이어진다")
+  void keepsReservationAcrossDeclineAndRetryAfterDeadline() throws Exception {
     Buyer buyer = buyer();
     UUID product = product();
     UUID coupon = coupons.issueWelcome(buyer.id(), Instant.now()).getId();
     Map<String, Object> issued = welcomeTotals();
     UUID id = uuid(order(buyer, product, coupon, 201), "id");
-
     UUID payment = UUID.randomUUID();
+
     receive("PaymentDeclined", result(id, payment, cycle(id)));
-    assertThat(couponStatus(coupon)).isEqualTo("ISSUED");
-    send(buyer.id(), "/api/orders/" + id + "/payment-retries", version(read(buyer, id)), 202);
     assertThat(couponStatus(coupon)).isEqualTo("RESERVED");
 
     expire(coupon);
+    JsonNode retried =
+        send(buyer.id(), "/api/orders/" + id + "/payment-retries", version(read(buyer, id)), 202);
+    assertThat(retried.path("platformCouponAmount").asLong()).isEqualTo(DISCOUNT);
+    assertThat(couponStatus(coupon)).isEqualTo("RESERVED");
+
+    confirm(read(buyer, id), payment);
+    assertThat(couponStatus(coupon)).isEqualTo("USED");
+    assertTotalsChanged(issued, -DISCOUNT, DISCOUNT);
+    assertThat(history(coupon)).containsExactly("ISSUE", "RESERVE", "USE");
+  }
+
+  @Test
+  @DisplayName("거절 뒤 승인 차단 취소가 확정되면 그때 예약을 풀고, 기한이 지났으면 EXPIRED로 두며 약속액을 상쇄한다")
+  void releasesOnCancellationAfterDecline() throws Exception {
+    Buyer buyer = buyer();
+    UUID product = product();
+    UUID coupon = coupons.issueWelcome(buyer.id(), Instant.now()).getId();
+    Map<String, Object> issued = welcomeTotals();
+    UUID id = uuid(order(buyer, product, coupon, 201), "id");
+    UUID payment = UUID.randomUUID();
+
     receive("PaymentDeclined", result(id, payment, cycle(id)));
+    expire(coupon);
+    send(
+        buyer.id(),
+        "/api/orders/" + id + "/cancellation",
+        version(read(buyer, id)).put("reason", "시험 취소"),
+        202);
+    assertThat(couponStatus(coupon)).isEqualTo("RESERVED");
+    receive("PaymentCancelled", result(id, payment, cycle(id)));
 
     assertThat(couponStatus(coupon)).isEqualTo("EXPIRED");
     assertTotalsChanged(issued, -DISCOUNT, 0);
+    assertThat(history(coupon)).containsExactly("ISSUE", "RESERVE", "RELEASE");
   }
 
   @Test
@@ -289,9 +311,13 @@ class CouponOrderIntegrationTest {
 
   /** 결제 확정 결과를 반영하고 결제 ID를 돌려준다. */
   private UUID confirm(JsonNode order) throws Exception {
+    return confirm(order, UUID.randomUUID());
+  }
+
+  /** 재시도는 같은 결제의 새 회차이므로 거절된 결제 ID로 확정한다. */
+  private UUID confirm(JsonNode order, UUID payment) throws Exception {
     UUID id = uuid(order, "id");
     JsonNode context = internal("/internal/orders/" + id + "/payment-context");
-    UUID payment = UUID.randomUUID();
     ObjectNode p = mapper.createObjectNode();
     for (String k :
         List.of(
@@ -470,6 +496,14 @@ class CouponOrderIntegrationTest {
         .isEqualTo(committed);
     assertThat((Long) now.get("consumed_budget") - (Long) before.get("consumed_budget"))
         .isEqualTo(consumed);
+  }
+
+  private List<String> history(UUID coupon) {
+    return jdbc.queryForList(
+        "select operation from commerce.coupon_history where buyer_coupon_id = ?"
+            + " order by created_at, id",
+        String.class,
+        coupon);
   }
 
   private String couponStatus(UUID coupon) {

@@ -85,6 +85,7 @@ public class OrderBenefitsService implements OrderBenefits {
     }
   }
 
+  /** 확정 거절 뒤에도 쿠폰 예약은 이 주문에 남아 있으므로 다시 반영하지 않는다. 이벤트 재고만 새 회차로 다시 잡는다. */
   @Override
   public void retry(Order order, Instant now) {
     if (order.getBuyerCouponId() != null) {
@@ -105,9 +106,13 @@ public class OrderBenefitsService implements OrderBenefits {
     }
   }
 
+  /**
+   * 확정 거절은 재시도 기한까지 쿠폰 예약을 유지해 만료 전에 예약한 조건을 보존한다. 쿠폰은 승인 차단 취소가 확정될 때만 해제하고, 이벤트 재고는 거절 때 해제한 뒤
+   * 재시도에서 다시 잡는다.
+   */
   @Override
   public void release(Order order, Instant now) {
-    if (order.getBuyerCouponId() != null) {
+    if (order.getBuyerCouponId() != null && order.getStatus() != Order.Status.DECLINED) {
       coupons.release(order, now);
     }
     if (order.getEventId() != null) {
