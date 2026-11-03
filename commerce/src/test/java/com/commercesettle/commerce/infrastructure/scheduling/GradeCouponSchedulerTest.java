@@ -2,10 +2,12 @@ package com.commercesettle.commerce.infrastructure.scheduling;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.commercesettle.commerce.domain.model.CouponIssueRun;
 import com.commercesettle.commerce.infrastructure.batch.GradeCouponLauncher;
@@ -93,6 +95,24 @@ class GradeCouponSchedulerTest {
     scheduler.run();
 
     assertThat(accepted).hasSize(1);
+  }
+
+  @Test
+  @DisplayName("이전 월에 끝나지 않은 회차를 현재 월보다 먼저 실행하고, 이전 월이 실패해도 현재 월은 실행한다")
+  void launchesUnfinishedEarlierMonthsFirst() {
+    LocalDate october = MONTH.minusMonths(3);
+    LocalDate november = MONTH.minusMonths(2);
+    when(launcher.unfinishedMonthsBefore(MONTH)).thenReturn(List.of(october, november));
+    doThrow(new IllegalStateException("db down")).when(launcher).run(october);
+    GradeCouponScheduler scheduler = scheduler(GradeCouponScheduler.START_DELAY);
+
+    scheduler.run();
+    submitted.get(0).run();
+
+    var order = inOrder(launcher);
+    order.verify(launcher).run(october);
+    order.verify(launcher).run(november);
+    order.verify(launcher).run(MONTH);
   }
 
   @Test
