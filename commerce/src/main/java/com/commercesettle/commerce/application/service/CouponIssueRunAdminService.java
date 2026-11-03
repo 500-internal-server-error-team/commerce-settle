@@ -20,6 +20,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,6 +41,7 @@ public class CouponIssueRunAdminService {
   private final IdempotentRequests idempotency;
   private final AuditLog audit;
   private final TransactionTemplate transactions;
+  private final TransactionTemplate snapshotReads;
   private final Clock clock;
 
   public CouponIssueRunAdminService(
@@ -56,6 +58,9 @@ public class CouponIssueRunAdminService {
     this.idempotency = idempotency;
     this.audit = audit;
     this.transactions = transactions;
+    this.snapshotReads = new TransactionTemplate(transactions.getTransactionManager());
+    this.snapshotReads.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+    this.snapshotReads.setReadOnly(true);
     this.clock = clock;
   }
 
@@ -92,8 +97,9 @@ public class CouponIssueRunAdminService {
             "COUPON_ISSUE_RUN_REPLACE",
             idempotencyKey,
             List.of(runId, expectedVersion, reasonCode));
+    // 재요청 응답도 조회 API처럼 회차·발급 건수·대체 연결을 한 스냅샷에서 읽어, 그사이 커밋된 다음 교정과 섞이지 않게 한다.
     Optional<RunView> prior =
-        transactions.execute(status -> idempotency.replayPermanent(request, this::viewOf));
+        snapshotReads.execute(status -> idempotency.replayPermanent(request, this::viewOf));
     if (prior != null && prior.isPresent()) {
       return prior.get();
     }
