@@ -453,7 +453,7 @@ Payment 원문 격리는 새 빈 DB의 초기 SQL을 검증한 뒤 `app.kafka.qu
 
 Payment 격리 발행은 한 번에 하나만 임대하며 Kafka 응답 대기 중 공통 예약 스레드와 DB 트랜잭션을 점유하지 않습니다. 기본 주기는 1초, 주기당 최대 32개, 임대 240초, 결과 대기 125초입니다. `max.block.ms`와 결과 대기의 합은 임대보다 짧아야 합니다. 발행 실패는 1초부터 최대 60초 간격으로 10회까지 재시도하고, 소진하면 원문과 작업을 REVIEW_REQUIRED로 보존합니다.
 
-원인 수정 뒤 인증된 운영 호출자는 내부 재처리 호출로 원래 토픽·키·본문을 재발행합니다. 예상 버전과 활성 재처리 부재를 검사하고 요청자·사유를 기록합니다. REVIEW_REQUIRED 작업은 내부 재개 호출로 상태·버전을 확인하고 이전 시도 수와 재개 이력을 보존하며 재개합니다. DLT 가용성과 독립적으로 요청할 수 있고, 발행 완료가 업무 성공을 뜻하지는 않습니다. 공개 관리 UI·HTTP API는 제공하지 않습니다.
+원인 수정 뒤 인증된 운영 호출자는 내부 재처리 호출로 원래 토픽·키·본문을 재발행합니다. 예상 버전과 활성 재처리 부재를 검사하고 요청자·사유를 기록합니다. REVIEW_REQUIRED 작업은 내부 재개 호출로 상태·버전을 확인하고 이전 시도 수와 재개 이력을 보존하며 재개합니다. DLT 가용성과 독립적으로 요청할 수 있고, 발행 완료가 업무 성공을 뜻하지는 않습니다. 운영 HTTP는 [Payment 격리 원문 운영 API](api.md#payment-격리-원문-운영)이며 `operator:<식별자>` 자격만 받습니다. 재처리·재개는 `Idempotency-Key`(8~128자)가 필요하고, 멱등 기록은 `payment.idempotency_records`, 감사는 `payment.audit_logs`에 남습니다. 격리 운영 조회 인덱스는 Payment 초기 SQL에만 있어 기존 볼륨에는 생기지 않으므로 새 빈 개발 DB에서 사용합니다. 재처리는 원문의 원래 수신 토픽에 재발행하며 그 토픽은 다른 소비 그룹도 읽으므로, 다른 그룹이 같은 원문을 이미 처리했는지 확인한 뒤 요청합니다. 같은 eventId·bytes 재전달은 각 Inbox가 중복으로 끝냅니다. 공개 관리 UI는 제공하지 않습니다.
 
 Settlement 원문 격리도 같은 테이블 구조와 `app.kafka.quarantine.enabled`(기본 false)를 사용합니다. `PaymentConfirmed`·`PurchaseConfirmed`의 해석 실패만 격리하고, 반영 중 DB 오류와 격리 저장 실패는 ACK 없이 Listener를 중단합니다. Settlement 격리 발행은 공통 예약 스레드(4개)에서 Kafka 응답을 기다리며 주기·묶음·임대·결과 대기·재시도 규칙은 Payment와 같습니다. 대상 토픽은 `commerce-settle.settlement.v1.dlt`입니다. 운영 재처리·재개도 Payment와 같은 검사·기록으로 원래 수신 토픽(`commerce-settle.payment.v1`·`commerce-settle.commerce.v1`)에 재발행합니다. 이 토픽은 Commerce·Payment·알림 소비 그룹도 읽으므로, 다른 그룹이 같은 원문을 이미 처리했는지 확인한 뒤 요청합니다. 같은 eventId·bytes 재전달은 각 Inbox가 중복으로 끝냅니다.
 
@@ -469,7 +469,7 @@ Prometheus는 신규 격리·재시도 소진을 CRITICAL, 도래 후 5분/15분
 
 1. 신규 격리는 원본 위치·오류 코드를 확인하고 생산자/스키마 원인을 조사합니다. 원문을 Slack·일반 로그에 붙이지 않습니다.
 2. 발행 지연·REVIEW_REQUIRED는 Kafka 가용성, 발행 작업 상태·시도 수·임대를 확인합니다. DLT가 비어 있어도 DB 발행 대기를 확인합니다.
-3. 원인 수정 뒤 위의 `requestReplay` 또는 `resumeDelivery`로 재처리하며 발행 완료와 실제 Inbox·업무 결과를 따로 대조합니다. Settlement는 [격리 원문 운영 API](api.md#격리-원문-운영)로 호출합니다. Payment의 운영 HTTP와 Inbox 업무 실패의 수동 재개는 별도 구현 대상입니다.
+3. 원인 수정 뒤 위의 `requestReplay` 또는 `resumeDelivery`로 재처리하며 발행 완료와 실제 Inbox·업무 결과를 따로 대조합니다. Payment는 [Payment 격리 원문 운영 API](api.md#payment-격리-원문-운영), Settlement는 [격리 원문 운영 API](api.md#격리-원문-운영)로 호출합니다. Inbox 업무 실패의 수동 재개는 별도 구현 대상입니다.
 
 기본 수신처는 Alertmanager 화면입니다. 팀 Incoming Webhook을 연결할 때만 비밀 URL을 저장소 밖 파일에 두고 다음 overlay를 사용합니다. 해당 Webhook의 채널이 수신처이며 실제 채널로 시험 메시지를 자동 발송하지 않습니다.
 
