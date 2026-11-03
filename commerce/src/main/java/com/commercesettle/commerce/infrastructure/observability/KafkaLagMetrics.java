@@ -12,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.OffsetSpec;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.TopicPartition;
 
@@ -61,10 +62,9 @@ public final class KafkaLagMetrics implements AutoCloseable {
                       }));
       if (descriptions.size() != topics.size() || ends.isEmpty())
         throw new IllegalStateException("Missing topics");
-      var endOffsets = await(admin.listOffsets(ends).all(), deadline);
       var startOffsets = await(admin.listOffsets(starts).all(), deadline);
       var groups = admin.describeConsumerGroups(SUBSCRIPTIONS.keySet());
-      Map<String, Lag> current = new HashMap<>();
+      Map<String, Map<TopicPartition, OffsetAndMetadata>> committedByGroup = new HashMap<>();
       for (var subscription : SUBSCRIPTIONS.entrySet()) {
         String group = subscription.getKey();
         try {
@@ -74,13 +74,26 @@ public final class KafkaLagMetrics implements AutoCloseable {
               if (!subscription.getValue().contains(partition.topic()))
                 throw new IllegalStateException("Unexpected subscription");
             }
-          var committed =
+          committedByGroup.put(
+              group,
               await(
-                  admin.listConsumerGroupOffsets(group).partitionsToOffsetAndMetadata(), deadline);
+                  admin.listConsumerGroupOffsets(group).partitionsToOffsetAndMetadata(), deadline));
+        } catch (Exception exception) {
+          if (exception instanceof InterruptedException) Thread.currentThread().interrupt();
+          // 다른 그룹의 성공은 유지하고 실패한 그룹의 원본 시각은 내보내지 않는다.
+        }
+      }
+      // commit 이후 끝 offset을 읽어 정상적인 소비 진행을 범위 오류로 오인하지 않는다.
+      var endOffsets = await(admin.listOffsets(ends).all(), deadline);
+      Map<String, Lag> current = new HashMap<>();
+      for (var groupOffsets : committedByGroup.entrySet()) {
+        String group = groupOffsets.getKey();
+        try {
+          var committed = groupOffsets.getValue();
           long lag = 0;
           int partitions = 0;
           for (var partition : ends.keySet()) {
-            if (!subscription.getValue().contains(partition.topic())) continue;
+            if (!SUBSCRIPTIONS.get(group).contains(partition.topic())) continue;
             var offset = committed.get(partition);
             var end = endOffsets.get(partition);
             var start = startOffsets.get(partition);
