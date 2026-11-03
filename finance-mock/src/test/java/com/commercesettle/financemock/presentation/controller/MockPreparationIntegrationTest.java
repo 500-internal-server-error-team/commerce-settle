@@ -40,6 +40,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
@@ -64,6 +65,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "app.internal-auth.senders[gateway].current=" + MockPreparationIntegrationTest.GATEWAY
     })
 @Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 @Timeout(45)
 class MockPreparationIntegrationTest {
   static final String OPERATOR = "test-operator-credential-0123456789abcdef012345";
