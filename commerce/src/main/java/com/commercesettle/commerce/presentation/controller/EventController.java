@@ -1,5 +1,6 @@
 package com.commercesettle.commerce.presentation.controller;
 
+import com.commercesettle.commerce.application.service.EventGaugeCache;
 import com.commercesettle.commerce.application.service.SaleEventService;
 import com.commercesettle.commerce.presentation.dto.EventGaugeResponse;
 import com.commercesettle.commerce.presentation.dto.EventPageResponse;
@@ -20,9 +21,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/events")
 public class EventController {
   private final SaleEventService events;
+  private final EventGaugeCache gauges;
 
-  public EventController(SaleEventService events) {
+  public EventController(SaleEventService events, EventGaugeCache gauges) {
     this.events = events;
+    this.gauges = gauges;
   }
 
   @Operation(operationId = "get_api_events", summary = "공개 이벤트 목록", description = "미공개 이벤트를 제외한다.")
@@ -45,9 +48,10 @@ public class EventController {
   @Operation(
       operationId = "get_api_events_eventId_gauge",
       summary = "판매 진행률·신청 상태",
-      description = "DB의 현재 판매·예약 수량과 서버 시각으로 계산하며 asOf는 계산 시각이다.")
+      description =
+          "DB의 판매·예약 수량과 서버 시각으로 계산한 값을 인스턴스에서 1초 캐시하며 asOf는 계산 시각이다. 구매 허용은 이 값이 아니라 주문 때 DB로 판단한다.")
   @GetMapping("/{eventId}/gauge")
   public EventGaugeResponse gauge(@PathVariable UUID eventId) {
-    return EventGaugeResponse.from(events.gauge(eventId));
+    return EventGaugeResponse.from(gauges.gauge(eventId));
   }
 }
