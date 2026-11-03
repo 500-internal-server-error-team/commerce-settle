@@ -1,5 +1,6 @@
 package com.commercesettle.commerce.application.service;
 
+import static com.commercesettle.commerce.support.ConcurrentTransactions.holdTransaction;
 import static com.commercesettle.commerce.support.ConcurrentTransactions.runConcurrently;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -8,6 +9,7 @@ import com.commercesettle.commerce.domain.model.BuyerCoupon;
 import com.commercesettle.commerce.domain.model.ProductStatus;
 import com.commercesettle.commerce.domain.model.ShippingAddress;
 import com.commercesettle.commerce.infrastructure.messaging.PaymentAcceptedListener;
+import com.commercesettle.commerce.support.ConcurrentTransactions.HeldTransaction;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -35,6 +37,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -73,6 +76,7 @@ class CouponOrderIntegrationTest {
   @Autowired CouponService coupons;
   @Autowired OrderResultService results;
   @Autowired PaymentAcceptedService accepted;
+  @Autowired TransactionTemplate tx;
 
   // 금융 관측 기반 접수 제한은 이 시험의 대상이 아니므로 항상 접수한다.
   @MockitoBean OrderAdmissionService admission;
@@ -272,6 +276,39 @@ class CouponOrderIntegrationTest {
           .isEqualTo("쿠폰과 마일리지는 함께 사용할 수 없습니다.");
     }
     assertThat(couponStatus(coupon)).isEqualTo("ISSUED");
+  }
+
+  @Test
+  @DisplayName("쿠폰 예약·재시도·해제는 금액 집계가 바뀌지 않으므로 하나뿐인 웰컴 캠페인 행을 잠그지 않아, 그 행이 잠겨 있어도 주문이 진행된다")
+  void reservesWithoutLockingWelcomeCampaign() throws Exception {
+    Buyer buyer = buyer();
+    UUID product = product();
+    UUID coupon = coupons.issueWelcome(buyer.id(), Instant.now()).getId();
+    Map<String, Object> issued = welcomeTotals();
+    UUID id;
+    UUID payment = UUID.randomUUID();
+
+    try (HeldTransaction held =
+        holdTransaction(
+            tx,
+            () ->
+                jdbc.queryForList(
+                    "select id from commerce.coupon_templates"
+                        + " where kind = 'WELCOME' and status = 'ACTIVE' for update"))) {
+      id = uuid(order(buyer, product, coupon, 201), "id");
+      receive("PaymentDeclined", result(id, payment, cycle(id)));
+      send(buyer.id(), "/api/orders/" + id + "/payment-retries", version(read(buyer, id)), 202);
+      send(
+          buyer.id(),
+          "/api/orders/" + id + "/cancellation",
+          version(read(buyer, id)).put("reason", "시험 취소"),
+          202);
+      receive("PaymentCancelled", result(id, payment, cycle(id)));
+    }
+
+    assertThat(couponStatus(coupon)).isEqualTo("ISSUED");
+    assertTotalsChanged(issued, 0, 0);
+    assertThat(history(coupon)).containsExactly("ISSUE", "RESERVE", "RELEASE");
   }
 
   @Test

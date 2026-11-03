@@ -176,8 +176,15 @@ public class CouponService {
     }
   }
 
+  /**
+   * 이력을 남기고 캠페인 집계를 바꾼다. 예약·재시도와 기한 안의 해제처럼 금액이 바뀌지 않는 전이는 캠페인 행을 갱신하지 않는다. 웰컴 캠페인은 전체에 한 행뿐이라,
+   * 갱신하면 동시에 들어오는 쿠폰 주문이 모두 그 행 잠금을 주문 트랜잭션 끝까지 기다리게 된다.
+   */
   private void record(UUID templateId, CouponHistory history, int issuedDelta) {
     histories.save(history);
+    if (issuedDelta == 0 && history.getCommittedDelta() == 0 && history.getConsumedDelta() == 0) {
+      return;
+    }
     templates.addTotals(
         templateId, issuedDelta, history.getCommittedDelta(), history.getConsumedDelta());
   }
