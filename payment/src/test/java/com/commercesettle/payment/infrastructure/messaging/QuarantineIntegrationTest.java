@@ -10,12 +10,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.commercesettle.payment.application.port.QuarantineStore.Source;
+import com.commercesettle.payment.application.service.QuarantineOperationService;
 import com.commercesettle.payment.application.service.QuarantineService;
+import com.commercesettle.payment.domain.exception.QuarantineOperationRejectedException;
+import com.commercesettle.payment.domain.exception.QuarantineOperationRejectedException.Reason;
 import com.commercesettle.payment.infrastructure.observability.QuarantineMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +33,7 @@ import javax.sql.DataSource;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.OffsetSpec;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -109,6 +114,7 @@ class QuarantineIntegrationTest {
 
   @Autowired private JdbcTemplate jdbc;
   @Autowired private QuarantineService quarantine;
+  @Autowired private QuarantineOperationService operations;
   @Autowired private QuarantineRelay relay;
   @Autowired private KafkaTemplate<String, byte[]> kafka;
   @Autowired private KafkaListenerEndpointRegistry listeners;
@@ -309,7 +315,9 @@ class QuarantineIntegrationTest {
     }
     quarantine.requestReplay(id, 0, "test-operator", "PARSER_REVIEWED");
     assertThatThrownBy(() -> quarantine.requestReplay(id, 0, "test-operator", "PARSER_REVIEWED"))
-        .isInstanceOf(IllegalStateException.class);
+        .isInstanceOfSatisfying(
+            QuarantineOperationRejectedException.class,
+            e -> assertThat(e.reason()).isEqualTo(Reason.VERSION_CONFLICT));
     relay.run();
     await()
         .atMost(Duration.ofSeconds(15))
@@ -387,7 +395,49 @@ class QuarantineIntegrationTest {
         .isTrue();
     assertThat(quarantine.requestReplay(id, 0, "test-operator", "REVIEWED")).isNotNull();
     assertThatThrownBy(() -> quarantine.requestReplay(id, 0, "test-operator", "REVIEWED"))
-        .isInstanceOf(IllegalStateException.class);
+        .isInstanceOfSatisfying(
+            QuarantineOperationRejectedException.class,
+            e -> assertThat(e.reason()).isEqualTo(Reason.VERSION_CONFLICT));
+  }
+
+  @Test
+  @DisplayName("운영 API 재처리는 원래 topic에 같은 key·bytes로 다시 발행하고, 응답 유실 뒤 같은 키 재요청은 새 발행을 만들지 않는다")
+  void operatorReplayRepublishesOriginalRecordOnce() throws Exception {
+    byte[] body = "{\"operator-replay\":".getBytes(StandardCharsets.UTF_8);
+    String key = "operator-replay-key";
+    UUID id = quarantine.capture(new Source(GROUP, TOPIC, 0, 970, key, body));
+    relay.run();
+
+    var replayed = operations.replay("operator:ops-1", id, "replay-key-0970", 0, "SCHEMA_FIXED");
+    assertThat(replayed.version()).isEqualTo(1);
+    relay.run();
+    // 202 응답을 잃은 운영자가 같은 키·본문으로 다시 보낸다.
+    var retried = operations.replay("operator:ops-1", id, "replay-key-0970", 0, "SCHEMA_FIXED");
+
+    assertThat(retried.deliveries())
+        .filteredOn(d -> d.kind().equals("REPLAY"))
+        .singleElement()
+        .satisfies(d -> assertThat(d.status()).isEqualTo("PUBLISHED"));
+    var config = new HashMap<String, Object>();
+    config.put("bootstrap.servers", KAFKA.getBootstrapServers());
+    config.put("group.id", "inspect-operator-replay-" + UUID.randomUUID());
+    config.put("enable.auto.commit", false);
+    config.put("auto.offset.reset", "earliest");
+    try (var consumer =
+        new KafkaConsumer<>(config, new StringDeserializer(), new ByteArrayDeserializer())) {
+      consumer.subscribe(List.of(TOPIC));
+      var seen = new ArrayList<ConsumerRecord<String, byte[]>>();
+      await()
+          .atMost(Duration.ofSeconds(15))
+          .untilAsserted(
+              () -> {
+                consumer.poll(Duration.ofMillis(250)).records(TOPIC).forEach(seen::add);
+                assertThat(seen)
+                    .filteredOn(record -> key.equals(record.key()))
+                    .singleElement()
+                    .satisfies(record -> assertThat(record.value()).containsExactly(body));
+              });
+    }
   }
 
   @Test
@@ -407,7 +457,9 @@ class QuarantineIntegrationTest {
     UUID audit = quarantine.resumeDelivery(id, version, "test-operator", "BROKER_RECOVERED");
     assertThatThrownBy(
             () -> quarantine.resumeDelivery(id, version, "test-operator", "BROKER_RECOVERED"))
-        .isInstanceOf(IllegalStateException.class);
+        .isInstanceOfSatisfying(
+            QuarantineOperationRejectedException.class,
+            e -> assertThat(e.reason()).isEqualTo(Reason.VERSION_CONFLICT));
     assertThat(
             jdbc.queryForMap(
                 "SELECT previous_attempts,operator_id FROM payment.inbox_quarantine_resumes WHERE id=?",

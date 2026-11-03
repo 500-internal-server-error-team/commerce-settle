@@ -384,6 +384,9 @@ CREATE UNIQUE INDEX uk_quarantine_dlt ON payment.inbox_quarantine_deliveries (qu
 CREATE UNIQUE INDEX uk_quarantine_replay_active ON payment.inbox_quarantine_deliveries (quarantine_id)
     WHERE kind = 'REPLAY' AND status IN ('PENDING', 'RUNNING', 'RETRY');
 CREATE INDEX ix_quarantine_delivery_due ON payment.inbox_quarantine_deliveries (status, next_run_at, lease_until, id);
+-- 운영 조회: 원문 목록 정렬과 원문별 작업 조회.
+CREATE INDEX ix_quarantine_created ON payment.inbox_quarantines (created_at, id);
+CREATE INDEX ix_quarantine_delivery_quarantine ON payment.inbox_quarantine_deliveries (quarantine_id, created_at, id);
 
 CREATE TABLE payment.inbox_quarantine_resumes (
     id uuid PRIMARY KEY,
