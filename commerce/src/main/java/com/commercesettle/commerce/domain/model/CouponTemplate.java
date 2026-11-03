@@ -182,6 +182,28 @@ public class CouponTemplate extends AuditableEntity {
     return template;
   }
 
+  /** 혜택 월·등급마다 하나인 월간 우수고객 캠페인. 발급 기간은 혜택 월이며 플랫폼이 할인을 부담한다. */
+  public static CouponTemplate grade(
+      UUID id, CouponGrade grade, LocalDate targetMonth, Instant now) {
+    CouponTemplate template = new CouponTemplate(now);
+    template.id = Objects.requireNonNull(id, "id");
+    template.kind = CouponKind.GRADE;
+    template.funder = CouponFunder.PLATFORM;
+    template.grade = grade.name();
+    template.targetMonth = CouponIssueRun.firstDay(targetMonth);
+    template.name = "월간 우수고객 " + grade.name();
+    template.discountAmount = grade.discountAmount();
+    template.minOrderAmount = grade.minOrderAmount();
+    template.allowedMethods =
+        Arrays.stream(Order.ExternalMethod.values()).map(Enum::name).toArray(String[]::new);
+    template.pgCostCeilingBps = PG_COST_CEILING_BPS;
+    template.otherCostAllowance = OTHER_COST_ALLOWANCE;
+    template.validFrom = CouponIssueRun.monthStart(targetMonth);
+    template.validUntil = CouponIssueRun.monthStart(targetMonth.plusMonths(1));
+    template.status = CouponTemplateStatus.ACTIVE;
+    return template;
+  }
+
   /** 신규 발급만 막는다. 이미 발급한 쿠폰의 조건·기한은 그대로다. */
   public void close(long expectedVersion, Instant now) {
     if (status != CouponTemplateStatus.ACTIVE) {
@@ -233,6 +255,10 @@ public class CouponTemplate extends AuditableEntity {
 
   public UUID getProductId() {
     return productId;
+  }
+
+  public String getGrade() {
+    return grade;
   }
 
   public LocalDate getTargetMonth() {
