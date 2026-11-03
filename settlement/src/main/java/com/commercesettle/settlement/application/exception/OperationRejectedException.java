@@ -25,6 +25,10 @@ public class OperationRejectedException extends RuntimeException {
     /** 지원하지 않는 정산 정책 버전이다. */
     POLICY_UNSUPPORTED,
     /** 기존 배치도 없고 마감 전 지급 대상도 없다. */
-    NO_ELIGIBLE_ITEMS
+    NO_ELIGIBLE_ITEMS,
+    /** 같은 격리 원문의 재처리가 아직 발행 중이다. */
+    QUARANTINE_REPLAY_ACTIVE,
+    /** 발행 작업이 시도를 다 쓴 운영 확인(REVIEW_REQUIRED) 상태가 아니다. */
+    QUARANTINE_DELIVERY_NOT_RESUMABLE
   }
 }

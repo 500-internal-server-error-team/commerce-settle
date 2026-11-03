@@ -20,6 +20,8 @@ enum ErrorCode {
   SETTLEMENT_BATCH_NOT_DUE(HttpStatus.CONFLICT, "배치 마감이 아직 지나지 않았습니다."),
   SETTLEMENT_POLICY_UNSUPPORTED(HttpStatus.CONFLICT, "지원하지 않는 정산 정책 버전입니다."),
   SETTLEMENT_NO_ELIGIBLE_ITEMS(HttpStatus.CONFLICT, "마감 전 지급 대상 항목이 없습니다."),
+  QUARANTINE_REPLAY_ACTIVE(HttpStatus.CONFLICT, "같은 격리 원문의 재처리가 아직 발행 중입니다. 발행이 끝난 뒤 다시 요청해 주세요."),
+  QUARANTINE_DELIVERY_NOT_RESUMABLE(HttpStatus.CONFLICT, "시도를 다 쓴 발행 작업만 재개할 수 있습니다."),
   SETTLEMENT_PAYOUT_NOT_ALLOWED(HttpStatus.CONFLICT, "지급 전 검증을 통과하지 못했습니다."),
   COMMON_TEMPORARILY_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "요청을 처리할 수 없습니다."),
   COMMON_INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "요청을 처리할 수 없습니다.");

@@ -3,6 +3,9 @@ package com.commercesettle.settlement.application.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.commercesettle.settlement.application.exception.OperationRejectedException;
+import com.commercesettle.settlement.application.exception.OperationRejectedException.Reason;
+import com.commercesettle.settlement.application.exception.QuarantineNotFoundException;
 import com.commercesettle.settlement.application.port.QuarantineStore.Delivery;
 import com.commercesettle.settlement.application.port.QuarantineStore.Source;
 import java.nio.charset.StandardCharsets;
@@ -100,13 +103,18 @@ class QuarantineServiceIntegrationTest {
     UUID quarantineId = service.capture(source(3, "key", "body"));
 
     assertThatThrownBy(() -> service.requestReplay(quarantineId, 1, "ops@team", "FIXED"))
-        .isInstanceOf(IllegalStateException.class);
+        .isInstanceOfSatisfying(
+            OperationRejectedException.class,
+            e -> assertThat(e.reason()).isEqualTo(Reason.VERSION_CONFLICT));
+    assertThatThrownBy(() -> service.requestReplay(UUID.randomUUID(), 0, "ops@team", "FIXED"))
+        .isInstanceOf(QuarantineNotFoundException.class);
     assertThatThrownBy(() -> service.requestReplay(quarantineId, 0, "ops team", "FIXED"))
         .isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(() -> service.requestReplay(quarantineId, 0, "ops@team", "fixed"))
         .isInstanceOf(IllegalArgumentException.class);
 
-    UUID replay = service.requestReplay(quarantineId, 0, "ops@team", "PARSER_FIXED");
+    // 검증된 운영 호출자 값(operator:<식별자>)을 그대로 저장한다.
+    UUID replay = service.requestReplay(quarantineId, 0, "operator:ops", "PARSER_FIXED");
 
     assertThat(
             jdbc.queryForMap(
@@ -116,7 +124,7 @@ class QuarantineServiceIntegrationTest {
         .containsEntry("kind", "REPLAY")
         .containsEntry("topic", "commerce-settle.payment.v1")
         .containsEntry("status", "PENDING")
-        .containsEntry("operator_id", "ops@team")
+        .containsEntry("operator_id", "operator:ops")
         .containsEntry("reason_code", "PARSER_FIXED");
     assertThat(
             jdbc.queryForObject(
@@ -125,7 +133,9 @@ class QuarantineServiceIntegrationTest {
                 quarantineId))
         .isEqualTo(1);
     assertThatThrownBy(() -> service.requestReplay(quarantineId, 1, "ops@team", "AGAIN"))
-        .isInstanceOf(IllegalStateException.class);
+        .isInstanceOfSatisfying(
+            OperationRejectedException.class,
+            e -> assertThat(e.reason()).isEqualTo(Reason.QUARANTINE_REPLAY_ACTIVE));
     assertThat(
             service.claim(10, LEASE_MS, 10).stream()
                 .filter(delivery -> delivery.id().equals(replay))
@@ -146,13 +156,20 @@ class QuarantineServiceIntegrationTest {
     UUID delivery =
         jdbc.queryForObject("SELECT id FROM settlement.inbox_quarantine_deliveries", UUID.class);
     assertThatThrownBy(() -> service.resumeDelivery(delivery, 0, "ops@team", "DLT_RECOVERED"))
-        .isInstanceOf(IllegalStateException.class);
+        .isInstanceOfSatisfying(
+            OperationRejectedException.class,
+            e -> assertThat(e.reason()).isEqualTo(Reason.QUARANTINE_DELIVERY_NOT_RESUMABLE));
+    assertThatThrownBy(
+            () -> service.resumeDelivery(UUID.randomUUID(), 0, "ops@team", "DLT_RECOVERED"))
+        .isInstanceOf(QuarantineNotFoundException.class);
     jdbc.update(
         "UPDATE settlement.inbox_quarantine_deliveries"
             + " SET status = 'REVIEW_REQUIRED', attempts = 10, version = 7");
 
     assertThatThrownBy(() -> service.resumeDelivery(delivery, 6, "ops@team", "DLT_RECOVERED"))
-        .isInstanceOf(IllegalStateException.class);
+        .isInstanceOfSatisfying(
+            OperationRejectedException.class,
+            e -> assertThat(e.reason()).isEqualTo(Reason.VERSION_CONFLICT));
     service.resumeDelivery(delivery, 7, "ops@team", "DLT_RECOVERED");
 
     assertThat(
@@ -171,7 +188,9 @@ class QuarantineServiceIntegrationTest {
         .containsEntry("operator_id", "ops@team")
         .containsEntry("reason_code", "DLT_RECOVERED");
     assertThatThrownBy(() -> service.resumeDelivery(delivery, 7, "ops@team", "DLT_RECOVERED"))
-        .isInstanceOf(IllegalStateException.class);
+        .isInstanceOfSatisfying(
+            OperationRejectedException.class,
+            e -> assertThat(e.reason()).isEqualTo(Reason.VERSION_CONFLICT));
     assertThat(count("inbox_quarantine_resumes")).isEqualTo(1);
   }
 
