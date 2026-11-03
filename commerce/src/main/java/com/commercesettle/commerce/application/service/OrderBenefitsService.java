@@ -73,7 +73,7 @@ public class OrderBenefitsService implements OrderBenefits {
   @Override
   public void reserve(Order order, Long expectedEventVersion, Instant now) {
     if (order.getBuyerCouponId() != null) {
-      coupons.reserve(order);
+      coupons.reserve(order, now);
     }
     if (order.getEventId() != null) {
       inventory.reserveForEvent(
@@ -88,7 +88,7 @@ public class OrderBenefitsService implements OrderBenefits {
   @Override
   public void retry(Order order, Instant now) {
     if (order.getBuyerCouponId() != null) {
-      coupons.reserve(order);
+      coupons.reserve(order, now);
     }
     if (order.getEventId() != null) {
       inventory.reserveAgain(order.getId(), order.getPaymentCycleId(), order.getPaymentWaitUntil());
@@ -98,7 +98,7 @@ public class OrderBenefitsService implements OrderBenefits {
   @Override
   public void consume(Order order, Instant now) {
     if (order.getBuyerCouponId() != null) {
-      coupons.use(order);
+      coupons.use(order, now);
     }
     if (order.getEventId() != null) {
       inventory.consume(order.getId(), order.getPaymentCycleId());
@@ -108,7 +108,7 @@ public class OrderBenefitsService implements OrderBenefits {
   @Override
   public void release(Order order, Instant now) {
     if (order.getBuyerCouponId() != null) {
-      coupons.release(order);
+      coupons.release(order, now);
     }
     if (order.getEventId() != null) {
       inventory.release(order.getId(), order.getPaymentCycleId());
@@ -119,7 +119,7 @@ public class OrderBenefitsService implements OrderBenefits {
   @Override
   public void restore(Order order, UUID refundId, Instant now) {
     if (order.getBuyerCouponId() != null) {
-      coupons.restore(order);
+      coupons.restore(order, now);
     }
     if (order.getEventId() != null
         && order.getFulfillmentStatus() == Order.FulfillmentStatus.UNSHIPPED) {

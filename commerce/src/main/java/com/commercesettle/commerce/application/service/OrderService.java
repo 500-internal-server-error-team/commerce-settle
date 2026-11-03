@@ -129,6 +129,8 @@ public class OrderService {
       throw new VersionConflictException(
           "product", command.expectedProductVersion(), product.getVersion());
     }
+    // 쿠폰 기한·이벤트 기간은 주문 생성 시각 하나로 판단해 견적과 예약이 서로 다른 시각으로 갈리지 않게 한다.
+    var now = clock.instant();
     var offer =
         benefits.quote(
             buyerId,
@@ -141,7 +143,7 @@ public class OrderService {
             command.externalMethod() == null
                 ? null
                 : Order.ExternalMethod.valueOf(command.externalMethod().name()),
-            clock.instant());
+            now);
     if (!java.util.Objects.equals(command.expectedEventVersion(), offer.eventVersion())) {
       throw new VersionConflictException(
           "event",
@@ -179,7 +181,6 @@ public class OrderService {
         || !external && account != null) {
       throw invalid("methodAccountRef");
     }
-    var now = clock.instant();
     Order order =
         Order.pendingOffer(
             orderId,
