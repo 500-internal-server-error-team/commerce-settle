@@ -26,6 +26,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -73,7 +74,7 @@ public class PaymentExceptionHandler extends ResponseEntityExceptionHandler {
     return respond(ErrorCode.COMMON_VERSION_CONFLICT, request);
   }
 
-  /** 같은 키의 동시 요청은 먼저 커밋한 요청만 멱등 기록을 남기고 나머지는 충돌로 끝난다. */
+  /** 같은 키를 다른 본문에 재사용하거나 유일성 제약이 충돌하면 멱등 충돌로 응답한다. */
   @ExceptionHandler({IdempotencyConflictException.class, DuplicateKeyException.class})
   ResponseEntity<Object> idempotencyConflict(RuntimeException e, WebRequest request) {
     return respond(ErrorCode.COMMON_IDEMPOTENCY_CONFLICT, request);
@@ -100,6 +101,16 @@ public class PaymentExceptionHandler extends ResponseEntityExceptionHandler {
         .addKeyValue("traceId", traceId())
         .log("Storage is temporarily unavailable");
     return respond(ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE, "일시적으로 처리할 수 없습니다.", null, request);
+  }
+
+  /** JDBC 기본 변환기가 분류하지 않는 PostgreSQL 잠금·SQL 실행 시간 초과도 재시도 가능한 저장소 장애다. */
+  @ExceptionHandler(UncategorizedSQLException.class)
+  ResponseEntity<Object> sqlFailure(UncategorizedSQLException e, WebRequest request) {
+    String state = e.getSQLException().getSQLState();
+    if ("55P03".equals(state) || "57014".equals(state)) {
+      return temporarilyUnavailable(e, request);
+    }
+    return unexpected(e, request);
   }
 
   @ExceptionHandler(Exception.class)

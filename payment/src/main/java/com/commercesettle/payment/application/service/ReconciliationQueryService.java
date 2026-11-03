@@ -50,17 +50,18 @@ public class ReconciliationQueryService {
       throw new IllegalArgumentException("Invalid reconciliation page size");
     }
     Instant cutoff = cutoffAt.truncatedTo(ChronoUnit.MICROS);
+    Instant now = reader.now().truncatedTo(ChronoUnit.MICROS);
+    if (cutoff.plus(safetyMargin).isAfter(now)) {
+      throw new ReconciliationCutoffNotReadyException();
+    }
     Cursor at;
     if (cursor == null) {
-      Instant now = reader.now();
-      if (cutoff.plus(safetyMargin).isAfter(now)) {
-        throw new ReconciliationCutoffNotReadyException();
-      }
-      at = new Cursor(now.truncatedTo(ChronoUnit.MICROS), cutoff, size, 0, null);
+      at = new Cursor(now, cutoff, size, 0, null);
     } else {
       at = Cursor.decode(cursor);
       if (!at.cutoffAt().equals(cutoff)
           || at.size() != size
+          || at.snapshotAt().isAfter(now)
           || at.snapshotAt().isBefore(cutoff.plus(safetyMargin))) {
         throw new InvalidReconciliationCursorException();
       }

@@ -3,6 +3,7 @@ package com.commercesettle.payment.application.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.awaitility.Awaitility.await;
 
 import com.commercesettle.payment.application.dto.ApprovalWorkerSettings;
 import com.commercesettle.payment.application.dto.MileageEntryView;
@@ -19,6 +20,7 @@ import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.S
 import com.commercesettle.payment.application.port.PaymentGateway;
 import com.commercesettle.payment.application.port.PaymentGateway.ApprovalRequest;
 import com.commercesettle.payment.application.port.PaymentGateway.Result;
+import com.commercesettle.payment.application.port.ReconciliationEventReader.Position;
 import com.commercesettle.payment.application.port.ReconciliationEventReader.ReconciliationEvent;
 import com.commercesettle.payment.domain.exception.IdempotencyConflictException;
 import com.commercesettle.payment.domain.exception.InvalidReconciliationCursorException;
@@ -36,6 +38,8 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
@@ -44,6 +48,9 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
@@ -57,6 +64,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -335,6 +343,153 @@ class PaymentReadAndOperationIntegrationTest {
     assertThat(
             jdbc().queryForObject("SELECT count(*) FROM payment.idempotency_records", Long.class))
         .isZero();
+  }
+
+  @Test
+  @DisplayName("같은 키·본문의 동시 재처리는 작업을 한 번만 바꾸고 같은 결과를 반환한다")
+  void serializesConcurrentReplayWithSameBody() throws Exception {
+    request(10_000, 0, "CREDIT_CARD");
+    PaymentJobView job = jobs.list(0, 20).items().getFirst();
+
+    List<Object> results = concurrentReplays(job, job, "PG_RECOVERED", "PG_RECOVERED");
+
+    assertThat(results).allSatisfy(result -> assertThat(result).isInstanceOf(PaymentJobView.class));
+    assertThat(results.get(0)).isEqualTo(results.get(1));
+    assertThat(jobs.list(0, 20).items().getFirst().version()).isEqualTo(job.version() + 1);
+    assertThat(jdbc().queryForObject("SELECT count(*) FROM payment.audit_logs", Long.class))
+        .isEqualTo(1);
+    assertThat(
+            jdbc().queryForObject("SELECT count(*) FROM payment.idempotency_records", Long.class))
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("다른 작업에 같은 키를 동시에 쓰면 한 작업만 재처리하고 나머지는 본문 충돌로 거절한다")
+  void rejectsConcurrentReplayKeyReuseForDifferentJobs() throws Exception {
+    request(10_000, 0, "CREDIT_CARD");
+    request(20_000, 0, "CREDIT_CARD");
+    List<PaymentJobView> original = jobs.list(0, 20).items();
+
+    List<Object> results = concurrentReplays(original.get(0), original.get(1), "RETRY", "RETRY");
+
+    assertThat(results.stream().filter(PaymentJobView.class::isInstance)).hasSize(1);
+    assertThat(results.stream().filter(IdempotencyConflictException.class::isInstance)).hasSize(1);
+    assertThat(jdbc().queryForObject("SELECT sum(version) FROM payment.payment_jobs", Long.class))
+        .isEqualTo(original.stream().mapToLong(PaymentJobView::version).sum() + 1);
+    assertThat(jdbc().queryForObject("SELECT count(*) FROM payment.audit_logs", Long.class))
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("미래 마감은 유효 형식의 cursor가 있어도 안전 여유 검사에서 거절한다")
+  void rejectsFutureCutoffWithCursor() {
+    Instant dbNow = jdbc().queryForObject("SELECT clock_timestamp()", Timestamp.class).toInstant();
+    Instant cutoff = dbNow.plusSeconds(60);
+    Instant snapshot = cutoff.plus(Duration.ofMinutes(10));
+    String cursor =
+        new ReconciliationQueryService.Cursor(
+                snapshot, cutoff, 2, 1, new Position(snapshot, UUID.randomUUID()))
+            .encode();
+
+    assertThatThrownBy(() -> reconciliation.read(cutoff, cursor, 2))
+        .isInstanceOf(ReconciliationCutoffNotReadyException.class);
+  }
+
+  @Test
+  @DisplayName("준비된 마감도 미래 snapshotAt을 담은 cursor는 거절한다")
+  void rejectsFutureSnapshotForReadyCutoff() {
+    Instant dbNow = jdbc().queryForObject("SELECT clock_timestamp()", Timestamp.class).toInstant();
+    Instant cutoff = dbNow.minus(Duration.ofMinutes(11));
+    Instant snapshot = dbNow.plusSeconds(60);
+    String cursor =
+        new ReconciliationQueryService.Cursor(
+                snapshot, cutoff, 2, 1, new Position(snapshot, UUID.randomUUID()))
+            .encode();
+
+    assertThatThrownBy(() -> reconciliation.read(cutoff, cursor, 2))
+        .isInstanceOf(InvalidReconciliationCursorException.class);
+  }
+
+  /** 작업 행을 잠근 동안 두 요청을 시작해, 원래 구현에서 두 멱등 조회가 모두 끝난 경합을 재현한다. */
+  private List<Object> concurrentReplays(
+      PaymentJobView first, PaymentJobView second, String firstReason, String secondReason)
+      throws Exception {
+    CountDownLatch ready = new CountDownLatch(2);
+    CountDownLatch start = new CountDownLatch(1);
+    try (Connection lock = dataSource.getConnection();
+        var executor = Executors.newFixedThreadPool(2)) {
+      lock.setAutoCommit(false);
+      try (var statement =
+          lock.prepareStatement("SELECT id FROM payment.payment_jobs FOR UPDATE")) {
+        statement.executeQuery().close();
+      }
+      var one = executor.submit(() -> replayAfterStart(first, firstReason, ready, start));
+      var two = executor.submit(() -> replayAfterStart(second, secondReason, ready, start));
+      try {
+        assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+        start.countDown();
+        await()
+            .pollInterval(Duration.ofMillis(10))
+            .atMost(Duration.ofMillis(900))
+            .untilAsserted(
+                () ->
+                    assertThat(
+                            jdbc()
+                                .queryForObject(
+                                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()"
+                                        + " AND wait_event_type = 'Lock'",
+                                    Long.class))
+                        .isEqualTo(2));
+      } finally {
+        start.countDown();
+        lock.rollback();
+      }
+      return List.of(one.get(5, TimeUnit.SECONDS), two.get(5, TimeUnit.SECONDS));
+    }
+  }
+
+  private Object replayAfterStart(
+      PaymentJobView job, String reason, CountDownLatch ready, CountDownLatch start)
+      throws InterruptedException {
+    ready.countDown();
+    start.await();
+    try {
+      return jobs.replay(OPERATOR, job.id(), "concurrent-replay-key", job.version(), reason);
+    } catch (RuntimeException failure) {
+      return failure;
+    }
+  }
+
+  @Test
+  @DisplayName("작업 잠금 대기 상한을 넘으면 멱등·감사 기록을 롤백하고 같은 키로 다시 재처리할 수 있다")
+  void rollsBackReplayAfterJobLockTimeout() throws Exception {
+    request(10_000, 0, "CREDIT_CARD");
+    PaymentJobView job = jobs.list(0, 20).items().getFirst();
+    try (Connection lock = dataSource.getConnection()) {
+      lock.setAutoCommit(false);
+      try (var statement =
+          lock.prepareStatement("SELECT id FROM payment.payment_jobs FOR UPDATE")) {
+        statement.executeQuery().close();
+      }
+
+      assertThatThrownBy(
+              () -> jobs.replay(OPERATOR, job.id(), "timeout-replay-key", job.version(), "RETRY"))
+          .isInstanceOf(UncategorizedSQLException.class)
+          .rootCause()
+          .extracting(failure -> ((SQLException) failure).getSQLState())
+          .isEqualTo("55P03");
+      assertThat(
+              jdbc().queryForObject("SELECT count(*) FROM payment.idempotency_records", Long.class))
+          .isZero();
+      assertThat(jdbc().queryForObject("SELECT count(*) FROM payment.audit_logs", Long.class))
+          .isZero();
+      assertThat(jobs.list(0, 20).items().getFirst()).isEqualTo(job);
+      lock.rollback();
+    }
+
+    assertThat(
+            jobs.replay(OPERATOR, job.id(), "timeout-replay-key", job.version(), "RETRY").version())
+        .isEqualTo(job.version() + 1);
   }
 
   private UUID paymentId() {

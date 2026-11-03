@@ -63,7 +63,7 @@ public class PaymentJobOperationService {
       String operator, UUID jobId, String key, long expectedVersion, String reasonCode) {
     Scope scope = new Scope(ACTOR_KIND, operator, OPERATION, sha256(key));
     String requestHash = sha256(fingerprint(List.of(jobId, expectedVersion, reasonCode)));
-    Optional<OperatorRequestStore.Completed> existing = requests.find(scope);
+    Optional<OperatorRequestStore.Completed> existing = requests.findForUpdate(scope);
     if (existing.isPresent()) {
       if (!existing.get().requestHash().equals(requestHash)) {
         throw new IdempotencyConflictException();
