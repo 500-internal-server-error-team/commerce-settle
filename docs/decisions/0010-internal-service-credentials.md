@@ -6,6 +6,16 @@
 
 Gateway·서비스·운영자가 백엔드를 호출할 때 **발신자·대상 서비스 쌍마다 발급한 256비트 이상 임의값을 `Authorization: Bearer`로 보냅니다.** 백엔드는 이 자격으로 발신자를 확정하고, 빌드에 포함한 OpenAPI의 `x-actor`·`x-owner-service`로 호출할 수 있는 작업인지 판정한 뒤에만 사용자 신원 헤더를 읽습니다. 형식은 [OpenAPI](../openapi.json)의 `serviceCredential` 스킴과 같고 Gateway 자격도 이 형식을 따릅니다. 판정은 `internal-auth` 라이브러리가 맡으며 연결한 쌍과 남은 쌍의 연결 방법은 [개발 환경](../development.md#내부-호출-자격)에 둡니다.
 
+## 문제: Gateway가 인증했는데 백엔드가 왜 자격을 받는가
+
+Gateway는 사용자 세션을 검증한 결과를 **`X-Authenticated-Actor-Kind`·`X-Authenticated-Actor-Id` 평문 헤더로만 백엔드에 전달**합니다. 세션 토큰은 Gateway에서 제거되고 Payment·Settlement에는 인증 키 접근 권한도 없어, 백엔드는 세션을 다시 검증할 수 없습니다([신원 전달 계약](../architecture.md#사용자-인증과-내부-신원-전달)). 모든 컨테이너가 같은 `backend` 네트워크에 있어 Gateway를 거치지 않고 백엔드 포트에 도달할 수 있으므로([네트워크 전제](../architecture.md#애플리케이션과-인프라)), Gateway가 `/internal`·`/mock`을 전달하지 않는 것은 외부 입구만 막습니다. 자격이 없으면 다음을 막지 못합니다.
+
+- Gateway가 아닌 컨테이너가 `BUYER`·임의 계정 ID를 넣어 다른 구매자의 주문·결제를 조회·변경
+- 같은 앱이 받는 `/api/`·`/internal`·운영 작업을 경로만 골라 호출
+- 요청 본문·헤더의 자기 주장을 감사 [`actor_ref`](../data-model.md#audit_logs)·처리자로 기록
+
+Gateway 인증은 **사용자가 누구인가**를, 내부 자격은 **그 사실을 전한 호출자가 누구인가**를 확인합니다. 백엔드의 역할·소유권 검사는 두 확인을 통과한 신원 위에서만 의미가 있습니다.
+
 ## 결정
 
 ### 자격과 발급 단위
@@ -21,6 +31,7 @@ Gateway·서비스·운영자가 백엔드를 호출할 때 **발신자·대상 
 | `operator:<운영자 식별자>` | 커머스, Payment, Settlement, Finance Mock | `OPERATOR` |
 
 - Payment API·Worker는 같은 `service:payment` 자격을 씁니다. 운영자 식별자는 감사의 [`actor_ref`](../data-model.md#audit_logs)에 남는 값이며 이메일을 쓰지 않습니다.
+- 서명·토큰 발급 없이 **미리 나눈 값의 일치**만 봅니다. 대상은 받은 값과 일치하는 설정 항목의 발신자 ID(예: `gateway`)를 발신자로 확정합니다.
 - 대상 서비스는 허용할 발신자별 자격을 설정으로 받습니다. 교체 중에는 발신자당 현재·이전 두 값까지 허용합니다. 필수 자격 설정이 없거나 256비트 미만이면 앱을 기동하지 않습니다.
 - 대상 서비스는 자격 원문을 설정으로 받고 별도의 해시 설정을 두지 않습니다. 자격이 그 대상에만 유효하므로 대상의 설정이 노출돼도 다른 서비스에 쓸 수 없고, 해시 설정을 따로 생성·배포하는 비용이 더 큽니다. 비교는 양쪽 SHA-256 결과를 `MessageDigest.isEqual`로 상수 시간 비교합니다.
 

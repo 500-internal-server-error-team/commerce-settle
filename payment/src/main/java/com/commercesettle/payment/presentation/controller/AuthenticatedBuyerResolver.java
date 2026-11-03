@@ -15,7 +15,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 /**
  * Gateway의 신원 헤더에서 구매자를 읽는다. 헤더가 없거나 형식이 틀리면 401, 구매자가 아니면 403이다.
  *
- * <p>Payment는 아직 Gateway 내부 호출 자격을 판정하지 않으므로, 신원 헤더를 위조한 직접 호출은 막지 못한다(로컬 개발 전용).
+ * <p>내부 호출 자격 판정(ADR 0010)이 컨트롤러 전에 Gateway가 아닌 발신자의 신원 헤더를 거절하므로, 여기 도달한 헤더는 Gateway가 검증해 보낸 값이다.
  */
 @Component
 class AuthenticatedBuyerResolver implements HandlerMethodArgumentResolver, WebMvcConfigurer {
