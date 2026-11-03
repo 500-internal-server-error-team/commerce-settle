@@ -37,9 +37,26 @@ def until(action, description, seconds=180):
     raise AssertionError(description)
 
 
+SUBSCRIPTIONS = {
+    "commerce.v1": ["payment"], "payment.v1": ["commerce", "settlement"],
+    "settlement.v1": ["payment", "commerce"],
+}
+
+
+def prepare_offsets(compose):
+    """Start every financial group at the beginning of its contract topics in a new project."""
+    # The project is new and all consumers are disabled. Never reset a shared group's offsets.
+    for group, topics in SUBSCRIPTIONS.items():
+        arguments = ["exec", "-T", "kafka", "/opt/kafka/bin/kafka-consumer-groups.sh", "--bootstrap-server", "kafka:9092",
+                     "--group", group, "--reset-offsets", "--to-earliest", "--execute"]
+        for topic in topics:
+            arguments += ["--topic", "commerce-settle." + topic + ".v1"]
+        compose(*arguments)
+
+
 @contextmanager
-def stack():
-    project = "cs-admission-" + secrets.token_hex(5)
+def stack(prefix="cs-admission-"):
+    project = prefix + secrets.token_hex(5)
     directory = Path(tempfile.mkdtemp(prefix=project + "-"))
     settings = directory / "override.json"
     environment = {key: value for key, value in os.environ.items() if not key.startswith("COMPOSE_")}
@@ -125,17 +142,7 @@ def verify():
 
         until(lambda: gate(0), "gate did not start closed")
         started = time.monotonic()
-        subscriptions = {
-            "commerce.v1": ["payment"], "payment.v1": ["commerce", "settlement"],
-            "settlement.v1": ["payment", "commerce"],
-        }
-        # The project is new and all consumers are disabled. Never reset a shared group's offsets.
-        for group, topics in subscriptions.items():
-            arguments = ["exec", "-T", "kafka", "/opt/kafka/bin/kafka-consumer-groups.sh", "--bootstrap-server", "kafka:9092",
-                         "--group", group, "--reset-offsets", "--to-earliest", "--execute"]
-            for topic in topics:
-                arguments += ["--topic", "commerce-settle." + topic + ".v1"]
-            compose(*arguments)
+        prepare_offsets(compose)
         until(lambda: gate(1), "real observations did not open admission after recovery")
         first_recovery = time.monotonic() - started
         assert first_recovery >= 60, first_recovery

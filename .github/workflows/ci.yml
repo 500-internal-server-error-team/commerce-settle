@@ -113,7 +113,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [smoke, redis, retention, admission]
+        scenario: [smoke, redis, retention, admission, financial-flow]
     env:
       COMPOSE_PROJECT_NAME: commerce-settle-ci
       PYTHONUNBUFFERED: '1'
@@ -128,8 +128,11 @@ jobs:
       - name: Verify actual financial observations and order admission recovery
         if: matrix.scenario == 'admission'
         run: python3 scripts/test_admission.py
+      - name: Verify the order, payment, settlement and refund round trip
+        if: matrix.scenario == 'financial-flow'
+        run: python3 -B scripts/smoke_financial_flow.py
       - name: Start the stack from empty volumes
-        if: matrix.scenario != 'admission'
+        if: matrix.scenario != 'admission' && matrix.scenario != 'financial-flow'
         run: |
           python3 scripts/sync_redis_run_id.py
           docker compose up -d --build --wait --wait-timeout 300
