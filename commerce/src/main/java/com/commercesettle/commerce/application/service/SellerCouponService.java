@@ -29,7 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 판매자 쿠폰 캠페인의 등록·조회·발급 종료와 구매자 발급. 판매자 작업은 캠페인·상품 소유자를 대조하며 타인 캠페인은 없는 캠페인과 같게 취급한다. 쓰기는 멱등 기록과 업무
- * 변경을 한 트랜잭션에 저장한다. 발급은 캠페인 행의 조건부 증감 한 번으로 발급 수·예산을 확보하고 같은 트랜잭션에서 쿠폰과 이력을 저장한다.
+ * 변경을 한 트랜잭션에 저장한다. 발급은 캠페인 행 잠금으로 종료와 직렬화하고 조건부 증감 한 번으로 발급 수·예산을 확보하며, 같은 트랜잭션에서 쿠폰과 이력을 저장한다.
  */
 @Service
 public class SellerCouponService {
@@ -140,11 +140,7 @@ public class SellerCouponService {
         templateId,
         200,
         recordId -> {
-          CouponTemplate template =
-              templates
-                  .findByIdForUpdate(templateId)
-                  .filter(value -> value.isSellerCampaignOf(sellerId))
-                  .orElseThrow(() -> new CouponTemplateNotFoundException(templateId));
+          CouponTemplate template = ownedForUpdate(sellerId, templateId);
           template.close(expectedVersion, clock.instant());
           return templates.save(template);
         },
@@ -163,8 +159,8 @@ public class SellerCouponService {
         couponId,
         201,
         recordId -> {
+          CouponTemplate template = ownedForUpdate(sellerId, templateId);
           Instant now = clock.instant();
-          CouponTemplate template = owned(sellerId, templateId);
           template.requireIssuableAt(now);
           accounts
               .findById(ActorKind.BUYER, buyerId)
@@ -197,6 +193,14 @@ public class SellerCouponService {
 
   private static CouponView view(BuyerCoupon coupon, CouponTemplate template, Instant now) {
     return new CouponView(coupon, template.getName(), coupon.statusAt(now));
+  }
+
+  /** 발급과 종료가 같은 행 잠금 안에서 최신 상태를 판정한다. */
+  private CouponTemplate ownedForUpdate(UUID sellerId, UUID templateId) {
+    return templates
+        .findByIdForUpdate(templateId)
+        .filter(template -> template.isSellerCampaignOf(sellerId))
+        .orElseThrow(() -> new CouponTemplateNotFoundException(templateId));
   }
 
   private CouponTemplate owned(UUID sellerId, UUID templateId) {
