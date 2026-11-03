@@ -8,6 +8,7 @@ import com.commercesettle.settlement.domain.exception.PayoutNotFoundException;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
 import java.net.URI;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -18,6 +19,7 @@ import org.springframework.beans.TypeMismatchException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.core.MethodParameter;
+import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -44,6 +46,7 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
   private static final Logger LOGGER = LoggerFactory.getLogger(SettlementExceptionHandler.class);
   private static final String CODE = "code";
   private static final String INVALID_FORMAT = "형식이 올바르지 않습니다.";
+  private static final String UNIQUE_VIOLATION = "23505";
 
   private final ObjectProvider<Tracer> tracer;
 
@@ -85,13 +88,23 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
     return respond(ErrorCode.SETTLEMENT_PAYOUT_NOT_ALLOWED, request);
   }
 
-  /** 같은 행을 다른 트랜잭션이 먼저 바꿨다(낙관적 잠금·유일 제약). 같은 키로 다시 요청하면 최신 상태로 판정한다. */
-  @ExceptionHandler({
-    OptimisticLockingFailureException.class,
-    DataIntegrityViolationException.class
-  })
+  /** 같은 행을 다른 트랜잭션이 먼저 바꿨다. 같은 키로 다시 요청하면 최신 상태로 판정한다. */
+  @ExceptionHandler(OptimisticLockingFailureException.class)
   ResponseEntity<Object> versionConflict(RuntimeException e, WebRequest request) {
     return respond(ErrorCode.COMMON_VERSION_CONFLICT, request);
+  }
+
+  /**
+   * 유일 제약 경합(SQLState 23505)만 버전 충돌이다. JPA 저장의 위반은 {@code DuplicateKeyException}이 아니라 이 예외로 오므로 원인의
+   * SQLState로 가린다. NOT NULL·CHECK·길이 초과 같은 그 밖의 위반은 결함이므로 숨기지 않는다.
+   */
+  @ExceptionHandler(DataIntegrityViolationException.class)
+  ResponseEntity<Object> integrityViolation(DataIntegrityViolationException e, WebRequest request) {
+    if (NestedExceptionUtils.getMostSpecificCause(e) instanceof SQLException sql
+        && UNIQUE_VIOLATION.equals(sql.getSQLState())) {
+      return respond(ErrorCode.COMMON_VERSION_CONFLICT, request);
+    }
+    return unexpected(e, request);
   }
 
   @ExceptionHandler(IdempotencyConflictException.class)

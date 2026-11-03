@@ -161,6 +161,8 @@ class SettlementOperationControllerIntegrationTest {
         .andExpect(jsonPath("$.version").value(version + 1));
     assertThat(count("payout_job_replays")).isEqualTo(1);
     assertThat(count("audit_logs")).isEqualTo(1);
+    // 같은 배치의 생성·재처리 감사를 묶어 볼 수 있게 정산 배치 ID로 추적한다.
+    assertThat(auditCorrelation()).isEqualTo(payout.getBatchId().toString());
     replay(payout, "replay-key-0001", replay(version, "다른 사유"))
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.code").value("COMMON_IDEMPOTENCY_CONFLICT"));
@@ -251,6 +253,7 @@ class SettlementOperationControllerIntegrationTest {
     assertThat(count("settlement_batches")).isEqualTo(1);
     assertThat(count("payouts")).isEqualTo(1);
     assertThat(count("audit_logs")).isEqualTo(1);
+    assertThat(auditCorrelation()).isEqualTo(id);
     createBatch("batch-key-0001", batch(seller, DUE_DATE.minusDays(1), "delivery-daily-v1"))
         .andExpect(status().isConflict())
         .andExpect(jsonPath("$.code").value("COMMON_IDEMPOTENCY_CONFLICT"));
@@ -419,6 +422,10 @@ class SettlementOperationControllerIntegrationTest {
 
   private long count(String table) {
     return jdbc.queryForObject("SELECT count(*) FROM settlement." + table, Long.class);
+  }
+
+  private String auditCorrelation() {
+    return jdbc.queryForObject("SELECT correlation_id FROM settlement.audit_logs", String.class);
   }
 
   private static void await(CountDownLatch latch) {

@@ -65,6 +65,12 @@ public class SellerSettlementService {
    */
   @Transactional
   public Optional<SettlementBatch> settle(UUID sellerId, LocalDate batchDate) {
+    return settleSelected(sellerId, batchDate, null).map(Settled::batch);
+  }
+
+  /** {@link #settle}과 같고, 돌려준 배치를 이번 호출이 만들었는지도 알려 준다. 기존 배치를 받은 호출은 생성 감사를 남기지 않는다. */
+  @Transactional
+  public Optional<Settled> settleReportingCreation(UUID sellerId, LocalDate batchDate) {
     return settleSelected(sellerId, batchDate, null);
   }
 
@@ -72,11 +78,16 @@ public class SellerSettlementService {
   @Transactional
   public Optional<SettlementBatch> settleFixture(
       UUID sellerId, LocalDate batchDate, Set<UUID> itemIds) {
-    return settleSelected(sellerId, batchDate, java.util.Objects.requireNonNull(itemIds));
+    return settleSelected(sellerId, batchDate, java.util.Objects.requireNonNull(itemIds))
+        .map(Settled::batch);
   }
 
-  private Optional<SettlementBatch> settleSelected(
-      UUID sellerId, LocalDate batchDate, Set<UUID> itemIds) {
+  /**
+   * @param created 이번 호출이 배치를 만들었으면 true, 같은 판매자·날짜·정책의 기존 배치면 false
+   */
+  public record Settled(SettlementBatch batch, boolean created) {}
+
+  private Optional<Settled> settleSelected(UUID sellerId, LocalDate batchDate, Set<UUID> itemIds) {
     Optional<SettlementBatch> existing =
         batches.find(sellerId, batchDate, settings.policyVersion());
     if (existing.isPresent()) {
@@ -93,7 +104,7 @@ public class SellerSettlementService {
         throw new FixtureBatchConflictException(
             "Existing settlement batch conflicts with unprocessed fixture items");
       }
-      return existing;
+      return Optional.of(new Settled(existing.get(), false));
     }
     Instant now = clock.instant();
     Instant cutoffAt = SettlementBatch.cutoffOf(batchDate);
@@ -134,6 +145,6 @@ public class SellerSettlementService {
                 now));
     payoutJobs.save(PayoutJob.schedule(payout, now));
     notices.ready(batch, payout, now);
-    return Optional.of(batch);
+    return Optional.of(new Settled(batch, true));
   }
 }
