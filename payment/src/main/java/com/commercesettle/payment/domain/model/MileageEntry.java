@@ -11,7 +11,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * 마일리지 원장. 지갑에 일어난 일을 추가만 하고 수정하지 않는다. 같은 지갑·종류·업무 키는 한 번만 기록된다. 예약은 결제 회차 ID, 차감은 결제 ID를 업무 키로 쓴다.
+ * 마일리지 원장. 지갑에 일어난 일을 추가만 하고 수정하지 않는다. 같은 지갑·종류·업무 키는 한 번만 기록된다. 예약은 결제 회차 ID, 차감·복원은 결제 ID를 업무 키로
+ * 써서 원결제별로 한 번만 남긴다.
  */
 @Entity
 @Table(name = "mileage_entries")
@@ -85,6 +86,27 @@ public class MileageEntry {
       MileageWallet wallet, MileageReservation reservation, Instant now) {
     return new MileageEntry(
         wallet, reservation, MileageEntryKind.RELEASE, reservation.getCycleId(), now);
+  }
+
+  /**
+   * 환불의 마일리지 복원을 기록한다. 지갑에 복원한 뒤 불러 복원 후 잔액을 남긴다. 업무 키는 원결제 ID라서 새 환불 키나 이벤트 재전달로도 두 번 기록되지 않는다.
+   */
+  public static MileageEntry restore(MileageWallet wallet, Refund refund, Instant now) {
+    Objects.requireNonNull(wallet, "wallet");
+    if (refund.getMileageAmount() <= 0) {
+      throw new IllegalArgumentException("사용 마일리지가 없는 환불은 복원 원장을 만들지 않습니다.");
+    }
+    MileageEntry entry = new MileageEntry();
+    entry.id = UUID.randomUUID();
+    entry.walletId = wallet.getId();
+    entry.paymentId = refund.getPaymentId();
+    entry.refundId = refund.getId();
+    entry.kind = MileageEntryKind.RESTORE;
+    entry.businessRef = refund.getPaymentId();
+    entry.amount = refund.getMileageAmount();
+    entry.balanceAfter = wallet.getBalance();
+    entry.createdAt = Objects.requireNonNull(now, "now").truncatedTo(ChronoUnit.MICROS);
+    return entry;
   }
 
   public UUID getId() {

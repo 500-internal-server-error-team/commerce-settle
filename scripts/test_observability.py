@@ -100,6 +100,8 @@ def verify():
                         mount(directory / "prometheus.yml", "/etc/prometheus/prometheus.yml"),
                         mount(ROOT / "infra/prometheus/prometheus.yml", "/etc/prometheus/production.yml"),
                         mount(ROOT / "infra/prometheus/quarantine.rules.yml", "/etc/prometheus/quarantine.rules.yml"),
+                        mount(ROOT / "infra/prometheus/financial.rules.yml", "/etc/prometheus/financial.rules.yml"),
+                        mount(ROOT / "infra/prometheus/financial.rules.test.yml", "/etc/prometheus/financial.rules.test.yml"),
                         mount(directory / "integration.rules.yml", "/etc/prometheus/integration.rules.yml"),
                         mount(directory / "notification.integration.rules.yml", "/etc/prometheus/notification.integration.rules.yml"),
                         mount(ROOT / "infra/prometheus/quarantine.rules.test.yml", "/etc/prometheus/quarantine.rules.test.yml"),
@@ -150,6 +152,7 @@ def verify():
             cli("run", "--rm", "--no-deps", "--workdir", "/etc/prometheus", "--entrypoint", "/bin/promtool", "prometheus", "check", "config", "/etc/prometheus/production.yml")
             cli("run", "--rm", "--no-deps", "--workdir", "/etc/prometheus", "--entrypoint", "/bin/promtool", "prometheus", "test", "rules", "/etc/prometheus/quarantine.rules.test.yml")
             cli("run", "--rm", "--no-deps", "--workdir", "/etc/prometheus", "--entrypoint", "/bin/promtool", "prometheus", "test", "rules", "/etc/prometheus/notification.rules.test.yml")
+            cli("run", "--rm", "--no-deps", "--workdir", "/etc/prometheus", "--entrypoint", "/bin/promtool", "prometheus", "test", "rules", "/etc/prometheus/financial.rules.test.yml")
             cli("run", "--rm", "--no-deps", "--entrypoint", "/bin/amtool", "alertmanager", "check-config", "/etc/alertmanager/base.yml", "/etc/alertmanager/slack.yml")
             cli("up", "-d", "--wait", "--wait-timeout", "120")
             fixture = endpoint("fixture", 8000)

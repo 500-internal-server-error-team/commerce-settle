@@ -1,0 +1,135 @@
+groups:
+  - name: financial-admission
+    interval: 15s
+    rules:
+      - record: financial:queue_observed
+        expr: label_replace(commerce_settle_admission_observed_timestamp_seconds{signal="QUEUE_SIZE"}, "queue", "$1", "resource", "(.*)")
+      - record: financial:queue_current
+        expr: (financial:queue_observed == on (queue) group_left max by (queue) (financial:queue_observed)) and (financial:queue_observed > 0) and (time() - financial:queue_observed <= 45) and (financial:queue_observed <= time())
+      - record: financial:queue_value
+        expr: max by (queue) (commerce_settle_financial_queue_records and on (job, instance, queue) financial:queue_current)
+      - record: financial:due_queue_observed
+        expr: label_replace(commerce_settle_admission_observed_timestamp_seconds{signal="DUE_AGE"}, "queue", "$1", "resource", "(.*)")
+      - record: financial:due_queue_current
+        expr: (financial:due_queue_observed == on (queue) group_left max by (queue) (financial:due_queue_observed)) and (financial:due_queue_observed > 0) and (time() - financial:due_queue_observed <= 45) and (financial:due_queue_observed <= time())
+      - record: financial:due_queue_value
+        expr: max by (queue) (commerce_settle_financial_queue_due_delay_seconds and on (job, instance, queue) financial:due_queue_current)
+      - record: financial:group_observed
+        expr: label_replace(commerce_settle_admission_observed_timestamp_seconds{signal="LAG"}, "group", "$1", "resource", "(.*)")
+      - record: financial:group_current
+        expr: (financial:group_observed == on (group) group_left max by (group) (financial:group_observed)) and (financial:group_observed > 0) and (time() - financial:group_observed <= 45) and (financial:group_observed <= time())
+      - record: financial:group_value
+        expr: max by (group) (commerce_settle_kafka_group_lag_records and on (job, instance, group) financial:group_current)
+      - record: financial:store_observed
+        expr: label_replace(commerce_settle_admission_observed_timestamp_seconds{signal="STORAGE"}, "store", "$1", "resource", "(.*)")
+      - record: financial:store_current
+        expr: (financial:store_observed == on (store) group_left max by (store) (financial:store_observed)) and (financial:store_observed > 0) and (time() - financial:store_observed <= 45) and (financial:store_observed <= time())
+      - record: financial:store_value
+        expr: max by (store) (commerce_settle_data_filesystem_usage_ratio and on (job, instance, store) financial:store_current)
+      - record: financial:queue_review
+        expr: max by (queue) (commerce_settle_financial_queue_review_required_records and on (job, instance, queue) financial:queue_current)
+      - record: financial:operation_current
+        expr: (commerce_settle_financial_operation_observed_timestamp_seconds == on (operation) group_left max by (operation) (commerce_settle_financial_operation_observed_timestamp_seconds)) and (commerce_settle_financial_operation_observed_timestamp_seconds > 0) and (time() - commerce_settle_financial_operation_observed_timestamp_seconds <= 45) and (commerce_settle_financial_operation_observed_timestamp_seconds <= time())
+      - record: financial:operation_age
+        expr: max by (operation) (commerce_settle_financial_operation_age_seconds and on (job, instance, operation) financial:operation_current)
+      - alert: FinancialQueueOverdue
+        expr: financial:due_queue_value > 300
+        labels:
+          severity: warning
+        annotations:
+          summary: 금융 대기열의 자동 처리 도래 지연을 확인하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+      - alert: FinancialUnknown
+        expr: financial:operation_age{operation=~"payment.unknown|settlement.unknown"} > 300
+        labels:
+          severity: warning
+        annotations:
+          summary: 금융 미확정 원거래를 조회하고 대조하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+      - alert: FinancialQueueOverdue
+        expr: financial:due_queue_value > 900
+        labels:
+          severity: critical
+        annotations:
+          summary: 금융 대기열의 자동 처리 도래 지연을 확인하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+      - alert: FinancialUnknown
+        expr: financial:operation_age{operation=~"payment.unknown|settlement.unknown"} > 900
+        labels:
+          severity: critical
+        annotations:
+          summary: 금융 미확정 원거래를 조회하고 대조하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+      - alert: FinancialRefundDelayed
+        expr: financial:operation_age{operation="commerce.refund"} > 600
+        labels:
+          severity: warning
+        annotations:
+          summary: 환불의 외부 결과·원장·주문 복구 단계를 확인하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+      - alert: FinancialPayoutDelayed
+        expr: financial:operation_age{operation="settlement.payout"} > 1800
+        labels:
+          severity: warning
+        annotations:
+          summary: 확정 정산 배치의 미지급 상태를 확인하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+      - alert: FinancialRefundDelayed
+        expr: financial:operation_age{operation="commerce.refund"} > 1800
+        labels:
+          severity: critical
+        annotations:
+          summary: 환불의 외부 결과·원장·주문 복구 단계를 확인하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+      - alert: FinancialPayoutDelayed
+        expr: financial:operation_age{operation="settlement.payout"} > 3600
+        labels:
+          severity: critical
+        annotations:
+          summary: 확정 정산 배치의 미지급 상태를 확인하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+      - alert: FinancialManualReview
+        expr: financial:queue_review > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: 금융 작업의 수동 확인 사유와 원업무를 확인하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+      - alert: FinancialKafkaLag
+        expr: financial:group_value >= 50000
+        labels:
+          severity: warning
+        annotations:
+          summary: 금융 소비 그룹의 모든 구독 파티션과 처리율을 확인하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+      - alert: DataStoragePressure
+        expr: financial:store_value >= 0.7
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 실제 데이터 파일시스템의 여유 공간을 확보하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+      - alert: DataStoragePressure
+        expr: financial:store_value >= 0.8
+        labels:
+          severity: critical
+        annotations:
+          summary: 데이터 저장소 압박으로 신규 주문 접수를 중단합니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+      - alert: FinancialObservationUnavailable
+        expr: (count(financial:queue_value) != 8) or absent(financial:queue_value) or (count(financial:due_queue_value) != 8) or absent(financial:due_queue_value) or (count(financial:group_value) != 3) or absent(financial:group_value) or (count(financial:store_value) != 2) or absent(financial:store_value) or (count(financial:operation_age) != 4) or absent(financial:operation_age)
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 필수 금융 관측이 누락·실패했거나 45초보다 오래됐습니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+      - alert: NewOrderAdmissionClosed
+        expr: (max(commerce_order_admission_open) == 0) or absent(commerce_order_admission_open)
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: 신규 주문 접수가 닫혔습니다. 관측과 60초 회복 조건을 확인하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구

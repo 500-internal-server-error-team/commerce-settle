@@ -23,6 +23,7 @@ public class Payout extends AuditableEntity {
   private String fundingAccountRef;
   private String scenarioVersion;
   private Instant succeededAt;
+  private Instant unknownSince;
   private long amount;
   private UUID businessKey;
   private UUID externalRef;
@@ -92,6 +93,7 @@ public class Payout extends AuditableEntity {
   /** 결과를 확인하지 못했다. 예약과 업무 키를 유지하고 같은 원거래를 다시 조회한다. */
   public void markUnknown(Instant now) {
     require(inFlight(), PayoutStatus.UNKNOWN);
+    if (unknownSince == null) unknownSince = truncate(now);
     this.status = PayoutStatus.UNKNOWN;
     this.holdReason = PayoutHoldReason.UNKNOWN;
     touch(now);
@@ -128,6 +130,10 @@ public class Payout extends AuditableEntity {
 
   public UUID getId() {
     return id;
+  }
+
+  public Instant getUnknownSince() {
+    return unknownSince;
   }
 
   public UUID getBatchId() {

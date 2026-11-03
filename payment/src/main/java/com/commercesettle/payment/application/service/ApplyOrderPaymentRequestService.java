@@ -5,6 +5,7 @@ import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationResultPayload;
+import com.commercesettle.payment.application.event.PaymentConfirmedPayload;
 import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
@@ -18,6 +19,7 @@ import com.commercesettle.payment.domain.model.Payment;
 import com.commercesettle.payment.domain.model.PaymentAmounts;
 import com.commercesettle.payment.domain.model.PaymentJob;
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
+import com.commercesettle.payment.domain.model.PaymentStatus;
 import com.commercesettle.payment.domain.repository.MileageEntryRepository;
 import com.commercesettle.payment.domain.repository.MileageReservationRepository;
 import com.commercesettle.payment.domain.repository.MileageWalletRepository;
@@ -39,7 +41,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionOperations;
 
 /**
- * WAITING Inbox의 결제 요청을 검사해 결제·마일리지 예약·승인 작업을 만들고 처리 결과를 기록한다. 마일리지 전액 결제는 같은 트랜잭션에서 차감·확정한다.
+ * WAITING Inbox의 결제 요청을 검사해 결제·마일리지 예약·승인 작업을 만들고 처리 결과를 기록한다. 마일리지 전액 결제는 같은 트랜잭션에서 차감·확정한다. 환불
+ * 승인·주문 복구 확인은 같은 선점·실패 기록 규칙 아래 {@link RefundEventHandler}가 반영한다.
  *
  * <p>선점은 별도 트랜잭션으로 커밋해 시도 횟수를 늘리고 다음 처리 시각을 임대 만료로 미룬다. 그래서 처리가 롤백된 뒤 실패를 기록하기 전에도 다른 처리기가 같은 행을 다시
  * 잡지 않으며, 기록 전에 중단돼도 그 시도는 횟수에 남는다. 재시도해도 결과가 같은 업무상 거절은 예외 없이 사유와 함께 REVIEW_REQUIRED로 남긴다. 그 밖의
@@ -68,6 +71,7 @@ public class ApplyOrderPaymentRequestService {
   private final MileageReservationRepository reservations;
   private final MileageEntryRepository entries;
   private final PaymentEventOutbox outbox;
+  private final RefundEventHandler refundEvents;
   private final TransactionOperations transactions;
   private final Clock clock;
   private final Duration lease;
@@ -80,6 +84,7 @@ public class ApplyOrderPaymentRequestService {
       MileageReservationRepository reservations,
       MileageEntryRepository entries,
       PaymentEventOutbox outbox,
+      RefundEventHandler refundEvents,
       TransactionOperations transactions,
       Clock clock,
       @Value("${app.payment-request-processor.lease-ms:30000}") long leaseMs) {
@@ -93,6 +98,7 @@ public class ApplyOrderPaymentRequestService {
     this.reservations = reservations;
     this.entries = entries;
     this.outbox = outbox;
+    this.refundEvents = refundEvents;
     this.transactions = transactions;
     this.clock = clock;
     this.lease = Duration.ofMillis(leaseMs);
@@ -149,7 +155,8 @@ public class ApplyOrderPaymentRequestService {
   private void recordFailure(WaitingInboxEvent claimed, RuntimeException cause) {
     int attempts = claimed.attempts();
     Instant now = clock.instant();
-    Instant retry = attempts < MAX_ATTEMPTS ? now.plus(retryDelay(attempts)) : null;
+    Instant retry =
+        attempts < MAX_ATTEMPTS ? now.plus(PaymentRetryPolicy.delayAfter(attempts)) : null;
     Boolean recorded;
     try {
       recorded =
@@ -175,16 +182,15 @@ public class ApplyOrderPaymentRequestService {
         .log("Payment request processing failed");
   }
 
-  /** n번째 실패 뒤 대기 시간. 1초부터 두 배씩 늘리고 60초를 넘지 않는다. */
-  static Duration retryDelay(int attempts) {
-    return Duration.ofSeconds(Math.min(60, 1L << Math.min(attempts - 1, 6)));
-  }
-
   private boolean process(Optional<WaitingInboxEvent> claimed, Instant now) {
     if (claimed.isEmpty()) {
       return false;
     }
     UUID inboxId = claimed.get().inboxId();
+    if (refundEvents.handles(claimed.get().event())) {
+      refundEvents.handle(claimed.get(), now);
+      return true;
+    }
     if (claimed.get().event().payload()
         instanceof PaymentCancellationRequestedPayload cancellation) {
       return cancel(claimed.get(), cancellation, now);
@@ -241,6 +247,19 @@ public class ApplyOrderPaymentRequestService {
       reserveMileage(wallet.get(), payment, now);
     }
     appendAccepted(payment, payload, now);
+    if (payment.getStatus() == PaymentStatus.CONFIRMED) {
+      // 마일리지 전액 결제는 외부 승인 없이 같은 트랜잭션에서 확정했다. 새 결제라 버전은 0이고 PaymentAccepted 뒤에 발행된다.
+      outbox.appendPaymentConfirmed(
+          new EventEnvelope<>(
+              UUID.nameUUIDFromBytes(
+                  ("PaymentConfirmed:" + payment.getId()).getBytes(StandardCharsets.UTF_8)),
+              "PaymentConfirmed",
+              1,
+              now.atOffset(ZoneOffset.UTC),
+              payment.getId(),
+              0,
+              PaymentConfirmedPayload.of(payment)));
+    }
     inbox.markApplied(inboxId, payment.getId(), now);
     return true;
   }

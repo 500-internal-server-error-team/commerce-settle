@@ -25,6 +25,14 @@ spring:
   sql:
     init:
       mode: never
+  batch:
+    job:
+      # 기동 시 자동 실행하지 않고 스케줄러가 targetMonth·runId로 실행한다(ADR 0008).
+      enabled: false
+    jdbc:
+      # 메타데이터 테이블은 commerce 초기 SQL이 만든다.
+      initialize-schema: never
+      table-prefix: commerce.BATCH_
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
     template:
@@ -103,6 +111,19 @@ app:
       temporary-failure-permille: ${APP_NOTIFICATIONS_MOCK_TEMPORARY_FAILURE_PERMILLE:0}
       permanent-failure-permille: ${APP_NOTIFICATIONS_MOCK_PERMANENT_FAILURE_PERMILLE:0}
       response-loss-permille: ${APP_NOTIFICATIONS_MOCK_RESPONSE_LOSS_PERMILLE:0}
+  refund-closure:
+    enabled: ${APP_REFUND_CLOSURE_ENABLED:false}
+    payment-url: ${PAYMENT_URL:http://payment-api:8080}
+    settlement-url: ${SETTLEMENT_URL:http://settlement:8080}
+    payment-credential: ${PAYMENT_COMMERCE_CREDENTIAL:}
+    settlement-credential: ${SETTLEMENT_COMMERCE_CREDENTIAL:}
+  retention:
+    settlement-url: ${SETTLEMENT_URL:http://settlement:8080}
+    settlement-credential: ${SETTLEMENT_COMMERCE_CREDENTIAL:}
+    enabled: ${COMMERCE_RETENTION_ENABLED:false}
+    batch-size: ${COMMERCE_RETENTION_BATCH_SIZE:100}
+    max-batches: ${COMMERCE_RETENTION_MAX_BATCHES:10}
+    cron: ${COMMERCE_RETENTION_CRON:0 0 3 * * *}
   kafka:
     payment-accepted:
       enabled: ${APP_KAFKA_PAYMENT_ACCEPTED_ENABLED:false}
@@ -122,6 +143,13 @@ app:
   order-stub:
     enabled: ${APP_ORDER_STUB_ENABLED:false}
     seed: ${APP_ORDER_STUB_SEED:67}
+  coupons:
+    # 기한이 지난 미사용 쿠폰 만료. docs/architecture.md#정기-작업과-비동기-실행
+    expiry-scheduler-enabled: true
+    expiry-interval-ms: 60000
+    expiry-batch-size: 100
+    # 매월 1일 00:10 KST부터 월간 우수고객 회차 실행, 10분마다 미완료 회차 재확인
+    grade-scheduler-enabled: true
   sale-events:
     # 이벤트 시작·종료 처리. docs/architecture.md#정기-작업과-비동기-실행
     scheduler-enabled: true

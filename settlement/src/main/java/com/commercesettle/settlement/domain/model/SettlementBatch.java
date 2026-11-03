@@ -34,6 +34,7 @@ public class SettlementBatch extends AuditableEntity {
   private SettlementBatchStatus status;
 
   private long netAmount;
+  private Instant closedAt;
   @Version private Long version;
 
   protected SettlementBatch() {}
@@ -81,6 +82,7 @@ public class SettlementBatch extends AuditableEntity {
   /** 지급 성공이 확인되면 완료한다. */
   public void complete(Instant now) {
     transition(status == SettlementBatchStatus.PROCESSING, SettlementBatchStatus.COMPLETED, now);
+    closedAt = truncate(now);
   }
 
   /** 지급 확정 거절이나 재시도 소진은 운영 확인으로 넘긴다. 항목·예약은 그대로 둔다. */
@@ -88,6 +90,14 @@ public class SettlementBatch extends AuditableEntity {
     transition(
         status == SettlementBatchStatus.RESERVED || status == SettlementBatchStatus.PROCESSING,
         SettlementBatchStatus.REVIEW_REQUIRED,
+        now);
+  }
+
+  /** 운영 재처리로 지급 작업을 다시 열 때 되돌린다. 아직 호출하지 않은 지급이면 예약, 호출한 적이 있으면 처리 중이다. */
+  public void resumeAfterReview(boolean payoutStarted, Instant now) {
+    transition(
+        status == SettlementBatchStatus.REVIEW_REQUIRED,
+        payoutStarted ? SettlementBatchStatus.PROCESSING : SettlementBatchStatus.RESERVED,
         now);
   }
 
@@ -125,6 +135,10 @@ public class SettlementBatch extends AuditableEntity {
 
   public long getNetAmount() {
     return netAmount;
+  }
+
+  public Instant getClosedAt() {
+    return closedAt;
   }
 
   public Long getVersion() {

@@ -40,6 +40,7 @@ CREATE TABLE commerce.orders (
     payment_confirmed_at timestamptz,
     refund_deadline_at timestamptz,
     purchase_confirmed_at timestamptz,
+    closed_at timestamptz,
     payment_wait_until timestamptz NOT NULL,
     policy_version varchar(32) NOT NULL,
     created_at timestamptz NOT NULL,
@@ -67,14 +68,42 @@ CREATE TABLE commerce.orders (
     CHECK ((delivered_at IS NULL AND refund_deadline_at IS NULL)
         OR (delivered_at IS NOT NULL AND refund_deadline_at IS NOT NULL
             AND refund_deadline_at = delivered_at + interval '168 hours')),
+    CHECK ((closed_at IS NOT NULL) = (status IN ('CANCELLED','REFUNDED','PURCHASE_CONFIRMED'))),
     CHECK (payment_wait_until > created_at)
 );
+CREATE INDEX ix_orders_retention ON commerce.orders(closed_at,id) WHERE closed_at IS NOT NULL;
 CREATE INDEX ix_orders_buyer_created ON commerce.orders (buyer_id, created_at, id);
 CREATE INDEX ix_orders_seller_created ON commerce.orders (seller_id, created_at, id);
 CREATE INDEX ix_orders_delivery_due ON commerce.orders (fulfillment_status, delivery_due_at, id);
 CREATE INDEX ix_orders_refund_deadline ON commerce.orders (status, refund_deadline_at, id);
 CREATE INDEX ix_orders_payment_wait ON commerce.orders (status, payment_wait_until, id);
 CREATE UNIQUE INDEX uq_orders_payment ON commerce.orders (payment_id) WHERE payment_id IS NOT NULL;
+-- 월간 우수고객 선정은 전월 구매확정 주문의 구매자별 외부 결제액 합계를 기간으로 읽는다.
+-- 구매확정은 종결 상태라 부분 인덱스 행이 바뀌지 않고, 합계에 쓰는 값을 포함해 테이블을 읽지 않는다.
+CREATE INDEX ix_orders_purchase_confirmed ON commerce.orders (purchase_confirmed_at)
+    INCLUDE (buyer_id, external_amount) WHERE status = 'PURCHASE_CONFIRMED';
+
+-- 구매자 의사와 종결에 사용한 소유 서비스 증빙은 추가 전용으로 보존한다.
+CREATE TABLE commerce.refund_closure_confirmations (
+    id uuid PRIMARY KEY,
+    request_id uuid NOT NULL,
+    refund_id uuid NOT NULL,
+    payment_id uuid NOT NULL,
+    order_id uuid NOT NULL,
+    buyer_id uuid NOT NULL,
+    request_version bigint NOT NULL CHECK (request_version >= 0),
+    order_version bigint NOT NULL CHECK (order_version >= 0),
+    confirmed_at timestamptz NOT NULL
+);
+CREATE INDEX ix_refund_closure_confirmations_request ON commerce.refund_closure_confirmations (request_id, confirmed_at);
+
+CREATE TABLE commerce.refund_closure_evidence (
+    id uuid PRIMARY KEY,
+    request_id uuid NOT NULL UNIQUE,
+    operator_ref varchar(100) NOT NULL,
+    snapshot jsonb NOT NULL CHECK (jsonb_typeof(snapshot) = 'object'),
+    closed_at timestamptz NOT NULL
+);
 
 CREATE TABLE commerce.order_refund_requests (
     id uuid PRIMARY KEY,
@@ -112,7 +141,9 @@ CREATE TABLE commerce.order_addresses (
     hold_reason varchar(200),
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
-    version bigint NOT NULL DEFAULT 0 CHECK (version >= 0)
+    version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
+    CHECK (masked_at IS NULL OR (recipient_ciphertext=decode('00','hex')
+        AND phone_ciphertext=decode('00','hex') AND address_ciphertext=decode('00','hex')))
 );
 
 CREATE TABLE commerce.outbox (
@@ -285,6 +316,221 @@ CREATE INDEX ix_event_participations_event_status
     ON commerce.event_participations (event_id, status);
 CREATE INDEX ix_event_participations_buyer_created
     ON commerce.event_participations (buyer_id, created_at, id);
+
+CREATE TABLE commerce.coupon_templates (
+    id uuid PRIMARY KEY,
+    kind varchar(16) NOT NULL,
+    funder varchar(16) NOT NULL,
+    seller_id uuid,
+    product_id uuid,
+    grade varchar(16),
+    target_month date,
+    name varchar(80) NOT NULL,
+    discount_amount bigint NOT NULL,
+    min_order_amount bigint NOT NULL,
+    min_seller_net_amount bigint NOT NULL,
+    allowed_methods varchar(24)[] NOT NULL,
+    pg_cost_ceiling_bps integer NOT NULL,
+    other_cost_allowance bigint NOT NULL,
+    issuance_limit integer,
+    issued_count integer NOT NULL,
+    total_budget bigint,
+    committed_budget bigint NOT NULL,
+    consumed_budget bigint NOT NULL,
+    valid_from timestamptz NOT NULL,
+    valid_until timestamptz,
+    status varchar(16) NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0,
+    CONSTRAINT ck_coupon_templates_kind CHECK (kind IN ('WELCOME', 'GRADE', 'SELLER')),
+    CONSTRAINT ck_coupon_templates_status CHECK (status IN ('ACTIVE', 'CLOSED')),
+    CONSTRAINT ck_coupon_templates_name CHECK (char_length(name) BETWEEN 1 AND 80),
+    CONSTRAINT ck_coupon_templates_amounts CHECK (
+        discount_amount > 0 AND discount_amount < min_order_amount
+        AND min_order_amount <= 10000000 AND min_seller_net_amount >= 0
+    ),
+    CONSTRAINT ck_coupon_templates_methods CHECK (
+        cardinality(allowed_methods) BETWEEN 1 AND 3
+        AND allowed_methods <@ ARRAY['CREDIT_CARD', 'DEBIT_CARD', 'EASY_PAY']::varchar(24)[]
+    ),
+    CONSTRAINT ck_coupon_templates_costs CHECK (
+        pg_cost_ceiling_bps >= 0 AND other_cost_allowance >= 0
+    ),
+    CONSTRAINT ck_coupon_templates_totals CHECK (
+        issued_count >= 0 AND committed_budget >= 0 AND consumed_budget >= 0
+    ),
+    CONSTRAINT ck_coupon_templates_funder CHECK (
+        (kind = 'SELLER' AND funder = 'SELLER' AND seller_id IS NOT NULL)
+        OR (kind <> 'SELLER' AND funder = 'PLATFORM' AND seller_id IS NULL AND product_id IS NULL)
+    ),
+    CONSTRAINT ck_coupon_templates_grade CHECK (
+        (kind = 'GRADE') = (grade IS NOT NULL)
+        AND (kind = 'GRADE') = (target_month IS NOT NULL)
+        AND (grade IS NULL OR grade IN ('BRONZE', 'SILVER', 'GOLD'))
+        AND (target_month IS NULL OR target_month = date_trunc('month', target_month)::date)
+    ),
+    CONSTRAINT ck_coupon_templates_seller_limits CHECK (
+        CASE WHEN kind = 'SELLER' THEN
+            issuance_limit IS NOT NULL AND total_budget IS NOT NULL AND valid_until IS NOT NULL
+            AND issuance_limit > 0 AND total_budget > 0
+            AND issued_count <= issuance_limit
+            AND committed_budget + consumed_budget <= total_budget
+        ELSE issuance_limit IS NULL AND total_budget IS NULL END
+    ),
+    CONSTRAINT ck_coupon_templates_period CHECK (valid_until IS NULL OR valid_from < valid_until),
+    CONSTRAINT ck_coupon_templates_welcome_period CHECK (kind <> 'WELCOME' OR valid_until IS NULL)
+);
+CREATE INDEX ix_coupon_templates_seller_status_created
+    ON commerce.coupon_templates (seller_id, status, created_at, id);
+CREATE INDEX ix_coupon_templates_kind_month_status
+    ON commerce.coupon_templates (kind, target_month, status);
+-- 활성 WELCOME 캠페인은 전체 하나, GRADE는 등급·혜택 월마다 하나다.
+CREATE UNIQUE INDEX uq_coupon_templates_active_welcome
+    ON commerce.coupon_templates (kind) WHERE kind = 'WELCOME' AND status = 'ACTIVE';
+CREATE UNIQUE INDEX uq_coupon_templates_grade_month
+    ON commerce.coupon_templates (grade, target_month) WHERE kind = 'GRADE';
+
+CREATE TABLE commerce.buyer_coupons (
+    id uuid PRIMARY KEY,
+    template_id uuid NOT NULL,
+    buyer_id uuid NOT NULL,
+    kind varchar(16) NOT NULL,
+    funder varchar(16) NOT NULL,
+    seller_id uuid,
+    product_id uuid,
+    target_month date,
+    discount_amount bigint NOT NULL,
+    min_order_amount bigint NOT NULL,
+    allowed_methods varchar(24)[] NOT NULL,
+    valid_from timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    status varchar(16) NOT NULL,
+    reserved_order_id uuid,
+    used_order_id uuid,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0,
+    CONSTRAINT uq_buyer_coupons_template_buyer UNIQUE (template_id, buyer_id),
+    CONSTRAINT ck_buyer_coupons_kind CHECK (kind IN ('WELCOME', 'GRADE', 'SELLER')),
+    CONSTRAINT ck_buyer_coupons_status CHECK (status IN ('ISSUED', 'RESERVED', 'USED', 'EXPIRED')),
+    CONSTRAINT ck_buyer_coupons_amounts CHECK (
+        discount_amount > 0 AND discount_amount < min_order_amount
+        AND min_order_amount <= 10000000
+    ),
+    CONSTRAINT ck_buyer_coupons_methods CHECK (
+        cardinality(allowed_methods) BETWEEN 1 AND 3
+        AND allowed_methods <@ ARRAY['CREDIT_CARD', 'DEBIT_CARD', 'EASY_PAY']::varchar(24)[]
+    ),
+    CONSTRAINT ck_buyer_coupons_funder CHECK (
+        (kind = 'SELLER' AND funder = 'SELLER' AND seller_id IS NOT NULL)
+        OR (kind <> 'SELLER' AND funder = 'PLATFORM' AND seller_id IS NULL AND product_id IS NULL)
+    ),
+    CONSTRAINT ck_buyer_coupons_month CHECK ((kind = 'GRADE') = (target_month IS NOT NULL)),
+    CONSTRAINT ck_buyer_coupons_period CHECK (valid_from < expires_at),
+    CONSTRAINT ck_buyer_coupons_orders CHECK (
+        (status = 'RESERVED') = (reserved_order_id IS NOT NULL)
+        AND (status = 'USED') = (used_order_id IS NOT NULL)
+    )
+);
+-- WELCOME는 계정당 한 번, GRADE는 혜택 월마다 한 장이다. SELLER는 캠페인별 유일성만 둔다.
+CREATE UNIQUE INDEX uq_buyer_coupons_welcome
+    ON commerce.buyer_coupons (buyer_id) WHERE kind = 'WELCOME';
+CREATE UNIQUE INDEX uq_buyer_coupons_grade_month
+    ON commerce.buyer_coupons (buyer_id, target_month) WHERE kind = 'GRADE';
+CREATE UNIQUE INDEX uq_buyer_coupons_reserved_order
+    ON commerce.buyer_coupons (reserved_order_id) WHERE reserved_order_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_buyer_coupons_used_order
+    ON commerce.buyer_coupons (used_order_id) WHERE used_order_id IS NOT NULL;
+CREATE INDEX ix_buyer_coupons_buyer_status_expires
+    ON commerce.buyer_coupons (buyer_id, status, expires_at, id);
+-- 만료 스케줄러는 매분 상태·기한으로 대상을 찾는다. 상태를 바인딩 값으로 받으므로 부분 인덱스 대신 상태를 첫 열로 둔다.
+CREATE INDEX ix_buyer_coupons_status_expires
+    ON commerce.buyer_coupons (status, expires_at, id);
+
+CREATE TABLE commerce.coupon_history (
+    id uuid PRIMARY KEY,
+    buyer_coupon_id uuid NOT NULL,
+    order_id uuid,
+    operation varchar(16) NOT NULL,
+    business_ref uuid NOT NULL,
+    from_status varchar(16),
+    to_status varchar(16) NOT NULL,
+    committed_delta bigint NOT NULL,
+    consumed_delta bigint NOT NULL,
+    created_at timestamptz NOT NULL,
+    CONSTRAINT uq_coupon_history_operation UNIQUE (buyer_coupon_id, operation, business_ref),
+    CONSTRAINT ck_coupon_history_operation
+        CHECK (operation IN ('ISSUE', 'RESERVE', 'USE', 'RELEASE', 'RESTORE', 'EXPIRE')),
+    CONSTRAINT ck_coupon_history_status CHECK (
+        to_status IN ('ISSUED', 'RESERVED', 'USED', 'EXPIRED')
+        AND (from_status IS NULL OR from_status IN ('ISSUED', 'RESERVED', 'USED', 'EXPIRED'))
+        AND (operation = 'ISSUE') = (from_status IS NULL)
+    ),
+    CONSTRAINT ck_coupon_history_order CHECK (
+        (operation IN ('RESERVE', 'USE', 'RELEASE', 'RESTORE')) = (order_id IS NOT NULL)
+    )
+);
+CREATE INDEX ix_coupon_history_coupon_created
+    ON commerce.coupon_history (buyer_coupon_id, created_at, id);
+
+CREATE TABLE commerce.coupon_issue_runs (
+    id uuid PRIMARY KEY,
+    target_month date NOT NULL,
+    cutoff_at timestamptz NOT NULL,
+    policy_version varchar(32) NOT NULL,
+    replaces_run_id uuid,
+    target_count integer,
+    cutoff_spend bigint,
+    status varchar(24) NOT NULL,
+    cancelled_at timestamptz,
+    cancelled_by varchar(100),
+    cancellation_reason_code varchar(80),
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0,
+    CONSTRAINT ck_coupon_issue_runs_status
+        CHECK (status IN ('PREPARING', 'ISSUING', 'COMPLETED', 'EXPIRED', 'CANCELLED')),
+    CONSTRAINT ck_coupon_issue_runs_month
+        CHECK (target_month = date_trunc('month', target_month)::date),
+    CONSTRAINT ck_coupon_issue_runs_replaces CHECK (replaces_run_id IS NULL OR replaces_run_id <> id),
+    CONSTRAINT ck_coupon_issue_runs_counts CHECK (
+        (target_count IS NULL OR target_count >= 0) AND (cutoff_spend IS NULL OR cutoff_spend > 0)
+    ),
+    CONSTRAINT ck_coupon_issue_runs_cancellation CHECK (
+        (status = 'CANCELLED') = (cancelled_at IS NOT NULL)
+        AND (status = 'CANCELLED') = (cancelled_by IS NOT NULL)
+        AND (status = 'CANCELLED') = (cancellation_reason_code IS NOT NULL)
+    )
+);
+-- 취소되지 않은 회차는 혜택 월마다 하나이고, 대체 회차는 취소된 부모 하나만 잇는다.
+CREATE UNIQUE INDEX uq_coupon_issue_runs_active_month
+    ON commerce.coupon_issue_runs (target_month) WHERE status <> 'CANCELLED';
+CREATE UNIQUE INDEX uq_coupon_issue_runs_replaces
+    ON commerce.coupon_issue_runs (replaces_run_id) WHERE replaces_run_id IS NOT NULL;
+CREATE INDEX ix_coupon_issue_runs_status_month
+    ON commerce.coupon_issue_runs (status, target_month, id);
+
+CREATE TABLE commerce.coupon_issue_targets (
+    id uuid PRIMARY KEY,
+    run_id uuid NOT NULL,
+    template_id uuid NOT NULL,
+    buyer_id uuid NOT NULL,
+    external_spend bigint NOT NULL,
+    rank_no integer NOT NULL,
+    buyer_coupon_id uuid,
+    status varchar(24) NOT NULL,
+    created_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+    version bigint NOT NULL DEFAULT 0,
+    CONSTRAINT uq_coupon_issue_targets_run_buyer UNIQUE (run_id, buyer_id),
+    CONSTRAINT ck_coupon_issue_targets_status CHECK (status IN ('PENDING', 'ISSUED', 'EXPIRED')),
+    CONSTRAINT ck_coupon_issue_targets_spend CHECK (external_spend > 0),
+    CONSTRAINT ck_coupon_issue_targets_rank CHECK (rank_no BETWEEN 1 AND 100),
+    CONSTRAINT ck_coupon_issue_targets_coupon CHECK ((status = 'ISSUED') = (buyer_coupon_id IS NOT NULL))
+);
+CREATE UNIQUE INDEX uq_coupon_issue_targets_coupon
+    ON commerce.coupon_issue_targets (buyer_coupon_id) WHERE buyer_coupon_id IS NOT NULL;
 
 CREATE TABLE commerce.idempotency_records (
     id uuid PRIMARY KEY,
@@ -570,3 +816,112 @@ CREATE TABLE commerce.notification_inbox_quarantines (
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     UNIQUE(consumer,source_topic,source_partition,source_offset)
 );
+
+-- 보존 작업의 재조회 지점과 처리 이력. 개인정보·알림 본문은 기록하지 않습니다.
+CREATE TABLE commerce.notification_retention_batches (
+    batch_id uuid PRIMARY KEY,
+    seller_id uuid NOT NULL,
+    closed_at timestamptz,
+    hold_reason varchar(200)
+);
+
+CREATE INDEX ix_notification_items_retention_batch ON commerce.notification_items((CAST(payload->>'batchId' AS uuid)),delivery_id) WHERE source_service='settlement';
+
+CREATE TABLE commerce.retention_checks (
+    target_kind varchar(16) NOT NULL CHECK (target_kind IN ('ORDER','DELIVERY','SETTLEMENT')),
+    target_id uuid NOT NULL,
+    result varchar(32) NOT NULL,
+    checked_at timestamptz NOT NULL,
+    next_run_at timestamptz NOT NULL,
+    PRIMARY KEY(target_kind,target_id)
+);
+CREATE TABLE commerce.retention_history (
+    id uuid PRIMARY KEY,
+    target_kind varchar(16) NOT NULL CHECK (target_kind IN ('ORDER','DELIVERY','SETTLEMENT')),
+    target_id uuid NOT NULL,
+    result varchar(32) NOT NULL,
+    checked_at timestamptz NOT NULL
+);
+CREATE INDEX ix_retention_history_target ON commerce.retention_history(target_kind,target_id,checked_at,id);
+
+-- 삭제된 본문을 다시 만들지 않기 위한 최소 업무 멱등 기록.
+CREATE TABLE commerce.notification_retired_keys (
+    source_service varchar(16) NOT NULL,
+    kind varchar(40) NOT NULL,
+    business_ref uuid NOT NULL,
+    recipient_kind varchar(16) NOT NULL,
+    recipient_id uuid NOT NULL,
+    payload_hash bytea NOT NULL CHECK (octet_length(payload_hash)=32),
+    retired_at timestamptz NOT NULL,
+    PRIMARY KEY(source_service,kind,business_ref,recipient_kind,recipient_id)
+);
+
+CREATE INDEX ix_notification_items_retention_order ON commerce.notification_items((CAST(payload->>'orderId' AS uuid)),delivery_id);
+
+-- Spring Batch 메타데이터(월간 우수고객 Job). 앱 기동 때 만들지 않고 이 초기 SQL로 관리한다.
+CREATE TABLE commerce.BATCH_JOB_INSTANCE (
+    JOB_INSTANCE_ID BIGINT       NOT NULL PRIMARY KEY,
+    VERSION         BIGINT,
+    JOB_NAME        VARCHAR(100) NOT NULL,
+    JOB_KEY         VARCHAR(32)  NOT NULL,
+    CONSTRAINT JOB_INST_UN UNIQUE (JOB_NAME, JOB_KEY)
+);
+
+CREATE TABLE commerce.BATCH_JOB_EXECUTION (
+    JOB_EXECUTION_ID BIGINT        NOT NULL PRIMARY KEY,
+    VERSION          BIGINT,
+    JOB_INSTANCE_ID  BIGINT        NOT NULL,
+    CREATE_TIME      TIMESTAMP     NOT NULL,
+    START_TIME       TIMESTAMP DEFAULT NULL,
+    END_TIME         TIMESTAMP DEFAULT NULL,
+    STATUS           VARCHAR(10),
+    EXIT_CODE        VARCHAR(2500),
+    EXIT_MESSAGE     VARCHAR(2500),
+    LAST_UPDATED     TIMESTAMP
+);
+
+CREATE TABLE commerce.BATCH_JOB_EXECUTION_PARAMS (
+    JOB_EXECUTION_ID BIGINT        NOT NULL,
+    PARAMETER_NAME   VARCHAR(100)  NOT NULL,
+    PARAMETER_TYPE   VARCHAR(100)  NOT NULL,
+    PARAMETER_VALUE  VARCHAR(2500),
+    IDENTIFYING      CHAR(1)       NOT NULL
+);
+
+CREATE TABLE commerce.BATCH_STEP_EXECUTION (
+    STEP_EXECUTION_ID  BIGINT        NOT NULL PRIMARY KEY,
+    VERSION            BIGINT        NOT NULL,
+    STEP_NAME          VARCHAR(100)  NOT NULL,
+    JOB_EXECUTION_ID   BIGINT        NOT NULL,
+    CREATE_TIME        TIMESTAMP     NOT NULL,
+    START_TIME         TIMESTAMP DEFAULT NULL,
+    END_TIME           TIMESTAMP DEFAULT NULL,
+    STATUS             VARCHAR(10),
+    COMMIT_COUNT       BIGINT,
+    READ_COUNT         BIGINT,
+    FILTER_COUNT       BIGINT,
+    WRITE_COUNT        BIGINT,
+    READ_SKIP_COUNT    BIGINT,
+    WRITE_SKIP_COUNT   BIGINT,
+    PROCESS_SKIP_COUNT BIGINT,
+    ROLLBACK_COUNT     BIGINT,
+    EXIT_CODE          VARCHAR(2500),
+    EXIT_MESSAGE       VARCHAR(2500),
+    LAST_UPDATED       TIMESTAMP
+);
+
+CREATE TABLE commerce.BATCH_STEP_EXECUTION_CONTEXT (
+    STEP_EXECUTION_ID  BIGINT        NOT NULL PRIMARY KEY,
+    SHORT_CONTEXT      VARCHAR(2500) NOT NULL,
+    SERIALIZED_CONTEXT TEXT
+);
+
+CREATE TABLE commerce.BATCH_JOB_EXECUTION_CONTEXT (
+    JOB_EXECUTION_ID   BIGINT        NOT NULL PRIMARY KEY,
+    SHORT_CONTEXT      VARCHAR(2500) NOT NULL,
+    SERIALIZED_CONTEXT TEXT
+);
+
+CREATE SEQUENCE commerce.BATCH_STEP_EXECUTION_SEQ MAXVALUE 9223372036854775807 NO CYCLE;
+CREATE SEQUENCE commerce.BATCH_JOB_EXECUTION_SEQ MAXVALUE 9223372036854775807 NO CYCLE;
+CREATE SEQUENCE commerce.BATCH_JOB_SEQ MAXVALUE 9223372036854775807 NO CYCLE;

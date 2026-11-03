@@ -15,6 +15,17 @@ class PayoutTest {
   private static final Instant SUCCEEDED_AT = Instant.parse("2026-10-30T01:00:03.1234567Z");
 
   @Test
+  @DisplayName("미확정 조회를 반복해도 최초 미확정 시각과 경보 나이를 되감지 않는다")
+  void keepsFirstUnknownTimeAcrossLookups() {
+    var payout = processing();
+    payout.markUnknown(SUCCEEDED_AT);
+    payout.markUnknown(SUCCEEDED_AT.plusSeconds(300));
+
+    assertThat(payout.getUnknownSince()).isEqualTo(Instant.parse("2026-10-30T01:00:03.123456Z"));
+    assertThat(payout.getUpdatedAt()).isEqualTo(Instant.parse("2026-10-30T01:05:03.123456Z"));
+  }
+
+  @Test
   @DisplayName("처리 중인 지급은 대역의 최초 성공 시각을 그대로 남기고 보류 사유를 지운다")
   void succeedCopiesProviderSuccessTime() {
     Payout payout = processing();

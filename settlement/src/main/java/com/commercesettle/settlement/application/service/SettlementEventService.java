@@ -35,6 +35,7 @@ public class SettlementEventService {
   private final InboxStore inbox;
   private final SettlementItemRepository items;
   private final SettlementEntryRepository entries;
+  private final RefundEventService refunds;
   private final Clock clock;
   private final Duration waitingRecheckDelay;
 
@@ -42,11 +43,13 @@ public class SettlementEventService {
       InboxStore inbox,
       SettlementItemRepository items,
       SettlementEntryRepository entries,
+      RefundEventService refunds,
       Clock clock,
       @Value("${settlement.inbox-processor.interval-ms}") long waitingRecheckMillis) {
     this.inbox = inbox;
     this.items = items;
     this.entries = entries;
+    this.refunds = refunds;
     this.clock = clock;
     this.waitingRecheckDelay = Duration.ofMillis(waitingRecheckMillis);
   }
@@ -116,14 +119,19 @@ public class SettlementEventService {
     }
   }
 
-  /** WAITING 구매확정 하나를 다시 판정한다. 대기 중인 건이 없으면 false. */
+  /** WAITING 구매확정이나 환불 예약 요청 하나를 다시 판정한다. 대기 중인 건이 없으면 false. */
   @Transactional
   public boolean processNextWaiting() {
-    Optional<InboxStore.WaitingPurchase> waiting = inbox.claimNextWaiting();
+    Optional<InboxStore.Waiting> waiting = inbox.claimNextWaiting();
     if (waiting.isEmpty()) {
       return false;
     }
-    applyPurchase(waiting.get().inboxId(), waiting.get().event());
+    switch (waiting.get()) {
+      case InboxStore.Waiting.Purchase purchase ->
+          applyPurchase(purchase.inboxId(), purchase.event());
+      case InboxStore.Waiting.RefundReservation refund ->
+          refunds.processWaitingReservation(refund.inboxId(), refund.event());
+    }
     return true;
   }
 
@@ -162,7 +170,7 @@ public class SettlementEventService {
           review(inboxId, event, "PURCHASE_ALREADY_RECORDED_WITH_DIFFERENT_VALUES", now);
         }
       }
-      // 환불 흐름 구현 전이라 생기지 않는다. 환불 작업에서 다시 정한다.
+      // 계약상 오지 않는다. Commerce는 진행 중인 환불이 있으면 구매확정하지 않고, 해제 뒤에는 항목이 원상태로 돌아와 있다.
       case REFUND_RESERVED, REFUNDED -> review(inboxId, event, "PURCHASE_DURING_REFUND", now);
     }
   }

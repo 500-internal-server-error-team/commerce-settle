@@ -6,6 +6,7 @@ import static org.awaitility.Awaitility.await;
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PaymentConfirmedPayload;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
+import com.commercesettle.settlement.application.event.RefundReservationRequestedPayload;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -45,6 +46,7 @@ import org.testcontainers.kafka.KafkaContainer;
     properties = {
       "management.tracing.enabled=false",
       "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123",
+      "app.internal-auth.senders[service\\:commerce].current=test-commerce-retention-credential-0123456789abcdef",
       "settlement.payout.mock-credential=test-settlement-credential-0123456789abcdef0123",
       "spring.kafka.admin.auto-create=false",
       "settlement.daily-batch.schedule-enabled=false",
@@ -135,6 +137,36 @@ class SettlementEventListenerIntegrationTest {
 
   @Test
   @Order(2)
+  @DisplayName("결제확정 뒤 환불 예약 요청을 받으면 항목을 REFUND_RESERVED로 바꾸고 RESERVED 결과를 Outbox에 남긴다")
+  void consumesRefundReservationRequest() throws Exception {
+    UUID paymentId = UUID.randomUUID();
+    UUID refundId = UUID.randomUUID();
+    send(PAYMENT_TOPIC, 2, paymentId, payment(paymentId, UUID.randomUUID()));
+    send(PAYMENT_TOPIC, 2, paymentId, refundReservation(refundId, paymentId, 8_500));
+
+    await()
+        .atMost(Duration.ofSeconds(30))
+        .ignoreException(EmptyResultDataAccessException.class)
+        .untilAsserted(
+            () ->
+                assertThat(
+                        jdbc.queryForObject(
+                            "SELECT status FROM settlement.settlement_items WHERE payment_id = ?",
+                            String.class,
+                            paymentId))
+                    .isEqualTo("REFUND_RESERVED"));
+    String body =
+        new String(
+            jdbc.queryForObject(
+                "SELECT raw_body FROM settlement.outbox WHERE message_key = ?",
+                byte[].class,
+                paymentId.toString()),
+            StandardCharsets.UTF_8);
+    assertThat(body).contains("\"result\":\"RESERVED\"").contains(refundId.toString());
+  }
+
+  @Test
+  @Order(3)
   @DisplayName("해석할 수 없는 대상 이벤트는 offset을 커밋하지 않고 수신 컨테이너를 멈춘다")
   void stopsWithoutCommitOnInvalidTargetEvent() throws Exception {
     UUID paymentId = UUID.randomUUID();
@@ -209,6 +241,18 @@ class SettlementEventListenerIntegrationTest {
   }
 
   /** Settlement가 처리하지 않는 같은 토픽의 이벤트. 본문은 eventType만 읽는다. */
+  private byte[] refundReservation(UUID refundId, UUID paymentId, long netAmount) throws Exception {
+    return mapper.writeValueAsBytes(
+        new EventEnvelope<>(
+            UUID.randomUUID(),
+            "RefundReservationRequested",
+            1,
+            OffsetDateTime.parse("2026-10-21T12:00:00+09:00"),
+            refundId,
+            0,
+            new RefundReservationRequestedPayload(refundId, paymentId, netAmount)));
+  }
+
   private static byte[] paymentAccepted(UUID paymentId) {
     return ("{\"eventId\":\""
             + UUID.randomUUID()

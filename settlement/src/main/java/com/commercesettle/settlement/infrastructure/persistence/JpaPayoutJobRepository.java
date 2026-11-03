@@ -4,8 +4,14 @@ import com.commercesettle.settlement.domain.model.PayoutJob;
 import com.commercesettle.settlement.domain.model.PayoutJobStatus;
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcOperations;
 import org.springframework.stereotype.Repository;
@@ -33,8 +39,71 @@ class JpaPayoutJobRepository implements PayoutJobRepository {
   }
 
   @Override
+  public PayoutJob saveNow(PayoutJob job) {
+    return repository.saveAndFlush(job);
+  }
+
+  @Override
+  public Optional<PayoutJob> findById(UUID id) {
+    return repository.findById(id);
+  }
+
+  @Override
+  public Optional<PayoutJob> findByIdForUpdate(UUID id) {
+    // 다른 트랜잭션이 잡은 작업 잠금은 상한까지만 기다린다. 넘으면 호출한 트랜잭션 전체를 롤백한다.
+    jdbc.queryForList(
+        "SELECT set_config('lock_timeout', '1000', true)", new MapSqlParameterSource());
+    return repository.findByIdForUpdate(id);
+  }
+
+  @Override
+  public List<PayoutJob> findPage(int page, int size) {
+    return repository
+        .findAll(
+            PageRequest.of(
+                page, size, Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"))))
+        .getContent();
+  }
+
+  @Override
+  public long count() {
+    return repository.count();
+  }
+
+  @Override
+  public void recordReplay(
+      UUID jobId,
+      long expectedVersion,
+      PayoutJobStatus previousStatus,
+      int previousAttempts,
+      String operatorId,
+      String reason,
+      Instant now) {
+    jdbc.update(
+        """
+        INSERT INTO settlement.payout_job_replays (id, job_id, expected_version, previous_status,
+            previous_attempts, operator_id, reason, created_at)
+        VALUES (:id, :jobId, :expectedVersion, :previousStatus, :previousAttempts, :operatorId,
+            :reason, :now)
+        """,
+        new MapSqlParameterSource("id", UUID.randomUUID())
+            .addValue("jobId", jobId)
+            .addValue("expectedVersion", expectedVersion)
+            .addValue("previousStatus", previousStatus.name())
+            .addValue("previousAttempts", previousAttempts)
+            .addValue("operatorId", operatorId)
+            .addValue("reason", reason)
+            .addValue("now", now.atOffset(ZoneOffset.UTC)));
+  }
+
+  @Override
   public Optional<PayoutJob> findByPayoutId(UUID payoutId) {
     return repository.findByPayoutId(payoutId);
+  }
+
+  @Override
+  public List<PayoutJob> findByPayoutIds(Collection<UUID> payoutIds) {
+    return repository.findByPayoutIdIn(payoutIds);
   }
 
   @Override

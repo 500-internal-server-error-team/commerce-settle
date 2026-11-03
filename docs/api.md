@@ -8,8 +8,8 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 
 - 요청 형식·범위는 `@Valid`와 OpenAPI, 업무 불변식은 도메인, 최종 경합은 DB에서 검증합니다. [검증 경계](../CONTRIBUTING.md#검증-경계)를 따릅니다. 생성/수정 시각·행위 감사 필드는 서버가 기록하며 요청 DTO로 받지 않습니다.
 - 공개 `/api` 경로는 Gateway가 명세의 HTTP 메서드·경로·`x-owner-service`에 따라 소유 앱으로 전달합니다. `/internal`·`/mock`는 Gateway에 공개하지 않습니다. 상세 라우팅은 [네트워크와 관측](architecture.md#네트워크와-관측)을 따릅니다.
-- 현재 커머스의 일반 주문 생성·조회, 상품·재고 API, 선착순 이벤트의 판매자 등록·변경·공개·조기 종료와 공개 목록·조회·게이지와 주문 생성의 선착순 참여, 판매자 가입, 구매자·판매자 로그인·로그아웃·본인 계정 조회·비밀번호 복구, 판매자 본인 정보 조회·변경, 구매자 주소록과 해당 MVC 오류 처리, 금융 Mock의 지급 실행·원지급 조회(`/mock/payouts`)와 PG 승인·원거래 조회·전액 환불(`/mock/providers/**`)을 제공합니다. 주문 견적·판매자 주문 조회·결제 재시도/취소·발송·취소/반품 API와 Payment 내부 주문 컨텍스트, Settlement 내부 상품 지급 컨텍스트도 제공합니다. 본인 거래 알림과 운영 발송/시도/모의 수신 조회·원키 재처리도 제공합니다. 그 밖의 업무 API는 구현 전입니다. 지급 대역은 `service:settlement`, PG 승인·조회·환불은 `service:payment` 자격만 받습니다. 세션 검증·신원 헤더·백엔드 호출 자격의 구현 범위는 [인증 경계](architecture.md#사용자-인증과-내부-신원-전달)에서 확인합니다. 커머스·Payment·Settlement·Finance Mock은 컨트롤러 전에 내부 호출 자격을 판정합니다. 내부 HTTP가 평문이므로 로컬 개발 환경에서만 사용합니다.
-- 주문은 실제 DB에 저장하며 결제 확정·거절·승인 차단 취소와 환불 결과를 영속 Inbox로 반영합니다. 재고·금액·배송지 사본과 Outbox는 같은 로컬 트랜잭션에 보존합니다. 선착순 이벤트는 `OrderBenefits` 구현으로 연결했고, 쿠폰과 실패 환불의 운영 종결 근거(`RefundClosureEvidence`)는 소유 어댑터가 필요합니다. 기본 설정에서 미연결 의존 입력은 503으로 중단하며 금융 성공을 만들지 않습니다. [실행·검증 범위](development.md#주문-업무-흐름)를 따릅니다. 메모리 stub은 별도의 생성/조회 학습용입니다.
+- 현재 커머스의 일반 주문 생성·조회, 상품·재고 API, 선착순 이벤트의 판매자 등록·변경·공개·조기 종료와 공개 목록·조회·게이지와 주문 생성의 선착순 참여, 웰컴·판매자 쿠폰의 주문 사용과 본인 쿠폰 목록, 판매자 쿠폰 캠페인 등록·조회·발급 종료와 구매자 발급, 웰컴 쿠폰을 함께 발급하는 구매자 가입과 판매자 가입, 구매자·판매자 로그인·로그아웃·본인 계정 조회·비밀번호 복구, 판매자 본인 정보 조회·변경, 구매자 주소록과 해당 MVC 오류 처리, 금융 Mock의 지급 실행·원지급 조회(`/mock/payouts`)와 PG 승인·원거래 조회·전액 환불(`/mock/providers/**`)을 제공합니다. 주문 견적·판매자 주문 조회·결제 재시도/취소·발송·취소/반품 API와 Payment 내부 주문 컨텍스트, Settlement 내부 상품 지급 컨텍스트도 제공합니다. 본인 거래 알림과 운영 발송/시도/모의 수신 조회·원키 재처리도 제공합니다. Settlement는 판매자 본인의 정산 항목·배치·지급 조회와 운영자 전용 지급 작업 조회·재처리, 정산 배치 생성·재개를 제공합니다. 그 밖의 업무 API는 구현 전입니다. 지급 대역은 `service:settlement`, PG 승인·조회·환불은 `service:payment` 자격만 받습니다. 세션 검증·신원 헤더·백엔드 호출 자격의 구현 범위는 [인증 경계](architecture.md#사용자-인증과-내부-신원-전달)에서 확인합니다. 커머스·Payment·Settlement·Finance Mock은 컨트롤러 전에 내부 호출 자격을 판정합니다. 내부 HTTP가 평문이므로 로컬 개발 환경에서만 사용합니다.
+- 주문은 실제 DB에 저장하며 결제 확정·거절·승인 차단 취소와 환불 결과를 영속 Inbox로 반영합니다. 재고·금액·배송지 사본과 Outbox는 같은 로컬 트랜잭션에 보존합니다. 선착순 이벤트와 쿠폰은 `OrderBenefits` 구현으로 연결했습니다. 쿠폰은 웰컴·판매자 쿠폰 발급, 월간 우수고객 자동 선정·발급, 기한 경과 만료를 구현했고 월간 혜택 운영 조회·교정 API는 구현 전입니다. 실패 환불의 운영 종결은 소유 서비스의 인증된 읽기와 구매자 확인 기록을 대조하는 `RefundClosureEvidence`로 연결합니다. #131의 금융 환불 구현과 #154의 실제 예약 해제는 선행 의존이며 미설치·미연결 상태는 503으로 중단합니다. 기본 설정에서 미연결 의존 입력은 503으로 중단하며 금융 성공을 만들지 않습니다. [실행·검증 범위](development.md#주문-업무-흐름)를 따릅니다. 메모리 stub은 별도의 생성/조회 학습용입니다.
 - `x-actor`는 소비자 권한, `x-owner-service`는 처리 앱입니다. 자기 역할과 리소스 소유권을 함께 검사합니다. 구매자/판매자 토큰을 서비스 자격으로 쓸 수 없습니다.
 - 사용자 Bearer 토큰은 [Redis 세션 정책](policies.md#인증공통-api-기준)을 따릅니다. 커머스가 발급·폐기를 맡고 Gateway는 보호 요청마다 Redis 세션·계정 가드를 확인합니다. 외부 보안 스키마 accountSession과 백엔드의 Gateway 호출 자격은 [신원 전달 계약](architecture.md#사용자-인증과-내부-신원-전달)으로 구분합니다. 고정 30분이며 세션 없음·폐기/만료·버전 불일치·정지/삭제는 401, 변경 중 가드·가드 누락·Redis 검증 불가·복구 차단은 503입니다. PUBLIC은 메서드와 경로를 함께 대조합니다.
 - POST 주문은 주문 리소스 생성 `201`과 Location을 반환하며 결제는 비동기입니다. 비동기 재처리·대역 접수는 `202`+Location이고 승인/환불 완료를 뜻하지 않습니다. 상태 조회 응답으로 후속 완료를 확인합니다.
@@ -25,7 +25,7 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 
 ### 용량 부족 시 신규 접수
 
-`POST /api/orders`와 `POST /api/orders/{orderId}/payment-retries`는 [접수 제한·재개 기준](policies.md#신규-접수-제한과-재개)에 따라 신규 작업만 `503 COMMON_CAPACITY_EXCEEDED`와 `Retry-After: 30`으로 거절합니다. 기존 멱등 결과·본문 충돌 판정이 먼저이며 신규 예약·업무 저장 전 검사합니다. 거절을 멱등 완료로 캐시하지 않고 같은 키·본문의 재시도를 허용합니다. 기존 거래의 취소·환불·지급·재처리·조회는 이 gate의 대상이 아닙니다. DB 주문 경로에 적용하며, 기본 환경은 필수 외부 관측이 아직 없어 신규 접수가 닫힙니다. 관측 연결·운영 중단 설정은 [개발 환경](development.md#신규-주문-접수-제한)을 따릅니다.
+`POST /api/orders`와 `POST /api/orders/{orderId}/payment-retries`는 [접수 제한·재개 기준](policies.md#신규-접수-제한과-재개)에 따라 신규 작업만 `503 COMMON_CAPACITY_EXCEEDED`와 `Retry-After: 30`으로 거절합니다. 기존 멱등 결과·본문 충돌 판정이 먼저이며 신규 예약·업무 저장 전 검사합니다. 거절을 멱등 완료로 캐시하지 않고 같은 키·본문의 재시도를 허용합니다. 기존 거래의 취소·환불·지급·재처리·조회는 이 gate의 대상이 아닙니다. DB 주문 경로에 적용하며, 기본 Compose의 실제 수집기·필수 그룹 offset을 준비한 뒤 60초 회복 조건을 충족하면 접수를 엽니다. 관측 연결·운영 중단 설정은 [개발 환경](development.md#신규-주문-접수-제한)을 따릅니다.
 
 ## 기능 목록
 
@@ -95,6 +95,9 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 | GET | `/internal/payments/{paymentId}/settlement-context` | 확정 결제·원금액 컨텍스트 | SERVICE:settlement | `—` | `SettlementContext` | — | 200 |
 | GET | `/internal/payment-reconciliation-events` | 마감 시점의 불변 금융 이벤트·발행 위치 | SERVICE:settlement | `cutoffAt`, `cursor`, `size` | `PaymentReconciliationEventPage` | — | 200 |
 | POST | `/internal/refund-requests/{requestId}/closure` | 실패 환불의 안전한 운영 종결 | OPERATOR | `FailedRefundClosure` | `OrderRefundRequest` | `Idempotency-Key` | 200 |
+| POST | `/api/refund-requests/{requestId}/closure-confirmations` | 본인 실패 환불의 종결 의사 확인 | BUYER | `{expectedVersion}` | `RefundClosureConfirmation` | `Idempotency-Key` | 201 |
+| GET | `/internal/refunds/{refundId}/financial-closure-evidence` | Payment의 원환불·미복원 증빙 | SERVICE:commerce | — | `FinancialClosureEvidence` | — | 200 |
+| GET | `/internal/refunds/{refundId}/reservation-closure-evidence` | Settlement의 원예약 해제 증빙 | SERVICE:commerce | — | `ReservationClosureEvidence` | — | 200 |
 | GET | `/internal/coupon-issue-runs` | 월간 혜택 회차 목록 | OPERATOR | query `targetMonth/status/page/size` | `CouponIssueRunPage` | — | 200 |
 | GET | `/internal/coupon-issue-runs/{runId}` | 회차·취소·대체 결과 조회 | OPERATOR | `—` | `CouponIssueRun` | — | 200 |
 | POST | `/internal/coupon-issue-runs/{runId}/replacements` | 발급 전 오류 교정 | OPERATOR | `CouponIssueRunReplacementRequest` | `CouponIssueRun` | `Idempotency-Key` | 201 |
@@ -102,6 +105,7 @@ API 이름·HTTP 메서드·명세 변경은 [API 경로와 명세 규칙](../CO
 | POST | `/internal/payment-jobs/{jobId}/replays` | 원업무 작업 재처리 | OPERATOR | `ReplayRequest` | `Job` | `Idempotency-Key` | 202 |
 | GET | `/internal/payout-jobs` | 운영 작업 목록 | OPERATOR | `—` | `JobPage` | — | 200 |
 | POST | `/internal/payout-jobs/{jobId}/replays` | 원업무 작업 재처리 | OPERATOR | `ReplayRequest` | `Job` | `Idempotency-Key` | 202 |
+| POST | `/internal/settlement-retention` | 알림 보존용 배치 종결 묶음 조회 | SERVICE:commerce | `SettlementRetentionLookup` | `SettlementBatchClosure[]` | — | 200 |
 | POST | `/internal/settlement-batches` | 정산 배치 생성·재개 | OPERATOR | `BatchCreate` | `SettlementBatch` | `Idempotency-Key` | 202 |
 | POST | `/mock/providers/{providerId}/payments` | 모의 외부 승인 | SERVICE:payment | `MockApproval` | `MockTransaction` | `Idempotency-Key` | 202 |
 | GET | `/mock/providers/{providerId}/transactions/{businessKey}` | 원대역 거래 조회 | SERVICE:payment | `—` | `MockTransaction` | — | 200 |
@@ -198,7 +202,22 @@ Kafka key는 위 표를 따르며 envelope의 aggregateId와 같다는 뜻은 �
 
 Commerce는 `PaymentAccepted` v1을 수신해 본인 주문 조회의 `paymentId`를 연결합니다. 원문·출처와 Inbox 대기를 커밋한 뒤 ACK하고, 주문 연결·Inbox 완료를 같은 트랜잭션에 저장합니다. 동일 연결은 주문 버전 증가 뒤에도 무변경으로 처리하며, 이전 회차·버전·다른 ID의 충돌은 사유와 함께 보존합니다. 이 접수 통지로 주문 상태·금액·재고 예약은 바꾸지 않습니다. 소비·처리기는 기본 비활성이고 [활성화와 복구](development.md#결제-접수-결과-수신)를 따릅니다. 같은 소비 경계가 PaymentConfirmed·PaymentDeclined·PaymentCancelled·PaymentCancellationRejected·RefundAccepted·RefundCompleted·RefundFailed도 인계합니다. 선행 주문·환불 접수가 없으면 기다리고, 이전 회차는 무변경 처리하며 모순 결과는 검토 대상으로 남깁니다. 결제·환불 반영과 해당 재고/혜택·감사·Outbox는 원자 저장합니다.
 
-Settlement는 `PaymentConfirmed`·`PurchaseConfirmed` v1을 수신합니다. 두 토픽의 다른 eventType은 저장 없이 ACK하고, 대상 이벤트는 종류·버전·생산자 토픽·key(`paymentId`)·필드 타입을 엄격하게 검사합니다. 해석할 수 없는 입력은 원문 격리(`app.kafka.quarantine.enabled`, 기본 `false`)가 켜져 있으면 원문과 DLT 발행 작업을 저장한 뒤 ACK하고, 꺼져 있으면 ACK하지 않고 수신 컨테이너를 멈춥니다. `PaymentConfirmed`는 금액 계약을 검사해 정산 항목과 최초 원장 5 leg를, `PurchaseConfirmed`는 시각 계약과 주문 일치를 검사해 항목을 `PAYABLE`로 바꾸며 Inbox와 같은 트랜잭션에 커밋한 뒤 ACK합니다. 금액·시각 계약 위반과 같은 결제의 다른 값은 `REVIEW_REQUIRED`로 남기고 다음 메시지를 처리합니다. 결제 항목이 아직 없는 구매확정은 1초부터 최대 60초 간격으로 10회까지 다시 판정하고, 소진하면 `REVIEW_REQUIRED`(`PAYMENT_NOT_ARRIVED`)로 남깁니다. 그 뒤 같은 결제의 `PaymentConfirmed`가 새 항목을 만들면 같은 트랜잭션에서 그 구매확정만 다시 대기시키고 처리기가 같은 검사로 반영합니다. 다른 사유의 `REVIEW_REQUIRED`는 되돌리지 않습니다. 수신은 `app.kafka.settlement-events.enabled`(기본 `false`)로 켜며 신규 그룹 `settlement.v1`의 offset 초기화는 [Kafka 전달 기반](development.md#kafka-전달-기반)과 같습니다. `PaymentConfirmed` 발행과 환불 이벤트 수신은 구현 전입니다. Commerce의 `PurchaseConfirmed` 발행은 구현했으며 Settlement와의 실제 서비스 연동은 아직 검증하지 않았습니다.
+Settlement는 `PaymentConfirmed`·`PurchaseConfirmed`와 환불 SAGA 요청 `RefundReservationRequested`·`RefundFinancialCompleted`·`RefundReleaseRequested` v1을 수신합니다. 두 토픽의 다른 eventType은 저장 없이 ACK하고, 대상 이벤트는 종류·버전·생산자 토픽·key(`paymentId`)·필드 타입을 엄격하게 검사합니다. 해석할 수 없는 입력은 원문 격리(`app.kafka.quarantine.enabled`, 기본 `false`)가 켜져 있으면 원문과 DLT 발행 작업을 저장한 뒤 ACK하고, 꺼져 있으면 ACK하지 않고 수신 컨테이너를 멈춥니다. `PaymentConfirmed`는 금액 계약을 검사해 정산 항목과 최초 원장 5 leg를, `PurchaseConfirmed`는 시각 계약과 주문 일치를 검사해 항목을 `PAYABLE`로 바꾸며 Inbox와 같은 트랜잭션에 커밋한 뒤 ACK합니다. 금액·시각 계약 위반과 같은 결제의 다른 값은 `REVIEW_REQUIRED`로 남기고 다음 메시지를 처리합니다. 결제 항목이 아직 없는 구매확정은 1초부터 최대 60초 간격으로 10회까지 다시 판정하고, 소진하면 `REVIEW_REQUIRED`(`PAYMENT_NOT_ARRIVED`)로 남깁니다. 그 뒤 같은 결제의 `PaymentConfirmed`가 새 항목을 만들면 같은 트랜잭션에서 그 구매확정만 다시 대기시키고 처리기가 같은 검사로 반영합니다. 다른 사유의 `REVIEW_REQUIRED`는 되돌리지 않습니다. 수신은 `app.kafka.settlement-events.enabled`(기본 `false`)로 켜며 신규 그룹 `settlement.v1`의 offset 초기화는 [Kafka 전달 기반](development.md#kafka-전달-기반)과 같습니다. 환불 SAGA 요청은 [Settlement 환불 SAGA](#settlement-환불-saga)를 따릅니다. Payment의 `PaymentConfirmed`·환불 요청과 Commerce의 `PurchaseConfirmed` 발행은 구현했으며, Settlement 쪽은 계약대로 만든 메시지로 검증했습니다. Payment·Commerce와 Settlement의 실제 서비스 연동은 아직 검증하지 않았습니다.
+
+### Settlement 환불 SAGA
+
+Settlement는 환불 요청을 Inbox와 같은 트랜잭션에 반영하고 결과를 자기 Outbox에 저장한 뒤 `commerce-settle.settlement.v1`으로 발행합니다. 결과 이벤트의 key와 aggregateId는 `paymentId`, aggregateVersion은 정산 항목 버전입니다. 결제와 정산 항목은 1:1이라 항목이 생기기 전의 `WAITING`도 뒤의 결과보다 먼저 나갑니다. Relay는 `app.outbox.enabled`(기본 `false`)로 켜며, 꺼져 있어도 결과는 Outbox에 PENDING으로 쌓입니다.
+
+1. `RefundReservationRequested`: 항목이 `WAITING_CONFIRMATION`·`PAYABLE`이고 지급에 배정되지 않았으면 `REFUND_RESERVED`로 바꾸고 직전 상태·순액으로 ACTIVE `REFUND` 예약을 만든 뒤 `RESERVED`(reservationId)로 답합니다. 지급 선점과 같은 항목 행을 조건부 UPDATE로 다투므로 둘 중 하나만 이깁니다.
+2. 거절은 상태를 바꾸지 않고 `REJECTED`와 reasonCode로 답합니다. `PAYOUT_RESERVED`(지급 배정·지급 완료, 지급 예약 후 환불 미지원), `ALREADY_REFUNDED`(환불 완료·다른 환불 예약 중), `REFUND_AMOUNT_MISMATCH`(요청 netAmount ≠ 항목 순액)입니다.
+3. 결제 항목이 아직 없으면 Inbox를 WAITING으로 두고 처음 한 번만 `WAITING`으로 답합니다. 구매확정 대기와 같이 1~60초 간격 10회까지 다시 판정해 `RESERVED`·`REJECTED`로 답하고, 소진하면 결과 없이 `REVIEW_REQUIRED`로 남깁니다.
+4. `RefundFinancialCompleted`: 같은 환불의 ACTIVE 예약이 있고 외부·마일리지 금액이 원거래와 같으면 최초 원장 5 leg마다 반대 부호 줄(0원 포함)을 만들고 항목 `REFUNDED`, 예약 CONSUMED로 바꾼 뒤 `RefundLedgerReversed`로 답합니다. 예약이 없거나 금액이 다르면 결과 없이 `REVIEW_REQUIRED`입니다.
+5. `RefundReleaseRequested`: 같은 결제·같은 환불의 ACTIVE 예약을 풀고 항목을 직전 상태로 되돌린 뒤 `RefundReservationReleased`로 답합니다. 상쇄가 끝났거나 맞는 예약이 없으면 `REVIEW_REQUIRED`입니다.
+6. 같은 환불의 재요청(다른 eventId)은 결과(예약·거절)나 대기 여부와 상관없이 먼저 받은 원요청의 결제·순액과 대조합니다. 같으면 결과를 다시 보내지 않고(원요청이 `REVIEW_REQUIRED`면 함께 `REVIEW_REQUIRED`), 다르면 `REVIEW_REQUIRED`입니다. 원래 결과는 Outbox가 전달하며, 원요청이 대기 중이면 대기를 마친 원요청이 냅니다.
+
+판매자 알림 요청 `SettlementNoticeRequested`(key·aggregateId=batchId)도 같은 Outbox로 보냅니다. 일배치 확정 때 `SETTLEMENT_READY`, 지급 성공 반영 때 `PAYOUT_COMPLETED`, 확정 거절 반영 때 `PAYOUT_ACTION_REQUIRED`(`PROVIDER_DECLINED`)이며 업무 변경과 같은 트랜잭션에 저장합니다.
+
+Payment는 같은 Commerce 토픽에서 `RefundApproved`·`RefundOrderRestored` v1을 결제 요청과 같은 Inbox 경계로 수신하고(key는 `paymentId`), `RefundAccepted`·`RefundReservationRequested`·`RefundFinancialCompleted`·`RefundReleaseRequested`·`RefundCompleted`·`RefundFailed`를 원결제 집계의 Outbox로 발행합니다. Settlement 응답(`RefundReservationResult`·`RefundLedgerReversed`·`RefundReservationReleased`) 수신과 finance-mock 환불 호출은 아직 연결하지 않았고 개발용 stub이 즉시 성공을 대신합니다. 진행은 `GET /api/refunds/{refundId}`로 조회하며 `INTERNAL_PENDING`은 원장 상쇄·주문 복구 확인 대기입니다. 저장·전이는 [refunds](data-model.md#refunds)·[refund_sagas](data-model.md#refund_sagas)를 따릅니다.
 
 PaymentAccepted·RefundAccepted 이벤트로 주문 조회에 금융 처리 ID를 먼저 연결합니다. 결제/실패/취소 결과는 현재 paymentCycleId와 대조하며 오래된 회차 결과로 새 예약을 해제하지 않습니다.
 
@@ -253,6 +272,8 @@ Commerce의 기본 MOCK_KAKAO 저장·조회·발송·복구와 명시적 [본�
 | COMMON_VERSION_CONFLICT / COMMON_IDEMPOTENCY_CONFLICT |409|버전 또는 같은키 다른본문|
 | COUPON_EXPIRED / COUPON_NOT_APPLICABLE |409|만료·상품/소유/최소 금액·허용 수단 조건 위반|
 | COUPON_BUDGET_EXHAUSTED |409|판매자 캠페인의 명목 예산 또는 발급 수 소진; 플랫폼 자동 발급·가입에는 적용하지 않음|
+| COUPON_ALREADY_ISSUED |409|같은 판매자 캠페인으로 이미 쿠폰을 받은 구매자에게 새 발급 요청. 같은 멱등키·본문 재요청은 기존 결과를 반환|
+| COUPON_CAMPAIGN_NOT_ISSUABLE |409|판매자 캠페인이 발급 종료됐거나 발급 기간 전·후라 새 발급 불가. 이미 종료한 캠페인의 종료 요청 포함. detail은 사람이 읽는 안내이며 분기는 code로 하고, 종료·기간 전후 구분이 필요하면 캠페인 조회의 status·validFrom·validUntil을 사용|
 | INVENTORY_INSUFFICIENT / EVENT_ADMISSION_CLOSED |409|재고/기간/참여한도/매진|
 | PRODUCT_EVENT_IN_PROGRESS |409|공개 후 종료 전 이벤트가 있는 상품의 변경·논리삭제, 같은 상품에 기간이 겹치는 이벤트 공개|
 | MILEAGE_INSUFFICIENT / PAYMENT_STATE_CONFLICT |409|잔액 부족·미확정 재시도 등|
@@ -262,3 +283,19 @@ Commerce의 기본 MOCK_KAKAO 저장·조회·발송·복구와 명시적 [본�
 | COMMON_RATE_LIMITED / COMMON_TEMPORARILY_UNAVAILABLE |429/503|제한·의존 저장소 장애·변경 중/누락된 인증 가드·인증 복구 차단|
 
 구조 검증은 JSON·로컬 ref·경로 변수·operationId·명시 권한/오류·DTO 검사를 다룹니다. 컨트롤러·Gateway·DB·금융 동시성 검증은 구현 단계에서 별도로 수행합니다. OpenAPI 형식 기준은 [공식 OAS3.1.1](https://spec.openapis.org/oas/v3.1.1.html)입니다.
+
+주문에 연결된 알림의 운영 재처리는 [보존 기한](policies.md#보존과-삭제) 안에서만 허용합니다. 기한 초과는 기존 상태 충돌 409이며 보존 보류가 재처리 기한을 연장하지 않습니다. 이미 정리한 알림은 조회에서 404이고 늦은 원업무 중복 수신으로 본문·발송을 다시 만들지 않습니다.
+정산·지급 알림은 Settlement 소유 배치 종결 시각을 내부 묶음 조회로 확인합니다. 미종결은 closedAt=null이며, 없는 ID는 결과에서 생략합니다. Commerce는 미확인 원천의 재처리를 503으로 중단하고 기존에 완료된 동일 멱등 요청은 재사용합니다. 배치별 알림 보존 보류는 Commerce가 삭제와 직렬화하며 지급의 금융 보류를 바꾸지 않습니다.
+
+
+### 실패 환불의 운영 종결
+
+인증된 구매자가 본인 `FAILED_REVIEW`·미입고 요청에 `closure-confirmations`를 호출하면 서버가 원환불·구매자·요청/주문 버전·확인 시각을 보존하고 확인 ID를 반환합니다. 운영자는 그 ID를 기존 `customerConfirmationRef`로 전달합니다. 직접 작성한 문구나 운영자의 고객 확인 자기신고는 증빙이 아닙니다. 구매자 확인은 원외부 환불 확정 거절과 실제 예약 해제 이후여야 하며, 그 뒤 주문/요청 버전이 달라졌으면 새 확인이 필요합니다.
+
+생성 응답은 `201 Created`이며 `Location`은 `/api/refund-requests/{requestId}/closure-confirmations/{confirmationId}`로 생성한 확인 기록을 식별합니다. 같은 멱등키 재요청은 같은 확인 ID·본문·Location을 반환합니다. 별도 GET API는 제공하지 않으며 확인 내용은 생성 응답 본문으로 받습니다.
+
+Commerce는 DB 트랜잭션 밖에서 Payment의 원환불과 `RESTORE` 원장, Settlement의 원예약·현재 항목을 읽습니다. 각 소유 서비스는 자기 DB의 한 SQL 스냅샷만 반환합니다. 타 서비스 DB를 직접 읽거나 호출자가 보낸 성공 플래그를 사용하지 않습니다. `DECLINED` 원외부 환불·마일리지 미복원, `RELEASED` 원예약·활성 예약 없음·지급 미배정과 구매자 확인을 모두 요구하며, 각 증빙을 한 번 더 읽어 확인 중 버전/내용 변경도 거절합니다(최대 네 번의 GET, 자동 재시도 없음).
+
+이 읽기 계약은 #131의 `DECLINED` 금융 환불과 #154의 `RELEASED` 원예약을 **같은 원환불로 재실행·재활성화하지 않는 불변 종결 사실**로 정의합니다. 재실행 가능한 중간 상태나 UNKNOWN은 종결 증빙이 될 수 없습니다. 선행 구현의 종결 불변식과 스키마를 확인하기 전에는 어댑터를 활성화하지 않습니다. 반복 조회는 분산 트랜잭션이나 변경 가능한 상태의 장기 잠금을 대신하지 않습니다.
+
+최종 저장은 같은 주문 버전을 잠금 아래 재검사하고, 운영자 신원·구매자 확인·소유 서비스 응답 사본·조회 시각을 `refund_closure_evidence`에 보존하는 로컬 트랜잭션입니다. 종결 상태·증빙 reference·감사도 함께 커밋하거나 롤백합니다. 같은 종결 키는 외부 재조회 없이 기존 결과로 연결합니다. 누락·다른 환불·고객/버전/시점 불일치·미확정·해제 전 상태는 409, 인증 설정·통신·선행 스키마 장애는 503이며 주문은 `REFUND_PENDING`을 유지합니다. 검증된 운영 종결만 기존 주문 재개 정책을 적용하며 금융 실패 자체로 PAID·자동 구매확정을 만들지 않습니다.

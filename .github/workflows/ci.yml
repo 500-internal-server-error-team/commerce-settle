@@ -33,6 +33,8 @@ jobs:
           python3 scripts/test_init_env.py
           python3 scripts/test_sync_redis_run_id.py
           python3 scripts/test_pr_body.py
+          python3 -B -m unittest discover -s scripts -p 'test_storage_metrics.py'
+          python3 -B -m unittest discover -s scripts -p 'test_admission_runner.py'
           python3 -B -m unittest discover -s scripts -p 'test_ci_helpers.py'
           python3 -B scripts/test_kakao_login.py
       - name: Check Java formatting and Checkstyle (main and test)
@@ -46,12 +48,16 @@ jobs:
         run: python3 scripts/init_env.py
       - name: Verify quarantine and notification alert delivery
         run: python3 scripts/test_observability.py
+      - name: Verify actual financial observations and order admission recovery
+        run: python3 scripts/test_admission.py
       - name: Start the stack from empty volumes
         run: |
           python3 scripts/sync_redis_run_id.py
           docker compose up -d --build --wait --wait-timeout 300
       - name: Verify service, database and messaging boundaries
         run: python3 scripts/smoke.py
+      - name: Verify source-backed notification retention
+        run: python3 -B scripts/smoke_retention.py
       - name: Verify auth stays blocked after a Redis restart until re-approval
         run: python3 scripts/smoke_redis_restart.py
       - name: Verify the load tool at a small arrival rate

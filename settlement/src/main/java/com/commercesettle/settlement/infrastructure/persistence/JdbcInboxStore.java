@@ -2,6 +2,7 @@ package com.commercesettle.settlement.infrastructure.persistence;
 
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
+import com.commercesettle.settlement.application.event.RefundReservationRequestedPayload;
 import com.commercesettle.settlement.application.port.InboxStore;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -104,27 +105,43 @@ class JdbcInboxStore implements InboxStore {
   }
 
   @Override
-  public Optional<WaitingPurchase> claimNextWaiting() {
+  public Optional<Waiting> claimNextWaiting() {
     applyTransactionLimits();
-    List<Original> rows =
+    List<Stored> rows =
         jdbc.query(
             """
-            SELECT id, raw_body FROM settlement.inbox
+            SELECT id, event_type, raw_body FROM settlement.inbox
             WHERE consumer = :consumer AND status = 'WAITING' AND next_run_at <= clock_timestamp()
             ORDER BY next_run_at, id
             LIMIT 1
             FOR UPDATE SKIP LOCKED
             """,
             new MapSqlParameterSource("consumer", consumer),
-            (rs, row) -> new Original(rs.getObject("id", UUID.class), rs.getBytes("raw_body")));
+            (rs, row) ->
+                new Stored(
+                    rs.getObject("id", UUID.class),
+                    rs.getString("event_type"),
+                    rs.getBytes("raw_body")));
     if (rows.isEmpty()) {
       return Optional.empty();
     }
-    Original row = rows.get(0);
+    Stored row = rows.get(0);
     try {
-      EventEnvelope<PurchaseConfirmedPayload> event =
-          mapper.readValue(row.body(), new TypeReference<>() {});
-      return Optional.of(new WaitingPurchase(row.id(), event));
+      return Optional.of(
+          switch (row.eventType()) {
+            case "PurchaseConfirmed" ->
+                new Waiting.Purchase(
+                    row.id(),
+                    mapper.<EventEnvelope<PurchaseConfirmedPayload>>readValue(
+                        row.body(), new TypeReference<>() {}));
+            case "RefundReservationRequested" ->
+                new Waiting.RefundReservation(
+                    row.id(),
+                    mapper.<EventEnvelope<RefundReservationRequestedPayload>>readValue(
+                        row.body(), new TypeReference<>() {}));
+            default ->
+                throw new IllegalStateException("Unexpected waiting inbox type: " + row.id());
+          });
     } catch (IOException exception) {
       // 수신 때 엄격하게 해석한 원문이므로 읽기 실패는 데이터 손상이다. 원문을 예외에 싣지 않는다.
       throw new IllegalStateException("Stored inbox body cannot be read: " + row.id());
@@ -190,6 +207,33 @@ class JdbcInboxStore implements InboxStore {
         (rs, row) -> rs.getObject(1, UUID.class));
   }
 
+  @Override
+  public Optional<EarlierRefundRequest> findEarlierRefundRequest(UUID refundId, UUID inboxId) {
+    return jdbc
+        .query(
+            """
+            SELECT status, (payload->'payload'->>'paymentId')::uuid AS payment_id,
+                (payload->'payload'->>'netAmount')::bigint AS net_amount, result_ref
+            FROM settlement.inbox
+            WHERE consumer = :consumer AND event_type = 'RefundReservationRequested'
+              AND (payload->'payload'->>'refundId')::uuid = :refundId
+              AND (created_at, id) < (SELECT created_at, id FROM settlement.inbox WHERE id = :inboxId)
+            ORDER BY created_at, id
+            LIMIT 1
+            """,
+            new MapSqlParameterSource("consumer", consumer)
+                .addValue("refundId", refundId)
+                .addValue("inboxId", inboxId),
+            (rs, row) ->
+                new EarlierRefundRequest(
+                    rs.getString("status"),
+                    rs.getObject("payment_id", UUID.class),
+                    rs.getLong("net_amount"),
+                    rs.getObject("result_ref", UUID.class)))
+        .stream()
+        .findFirst();
+  }
+
   private void finish(UUID inboxId, String status, UUID resultRef, Instant now) {
     int updated =
         jdbc.update(
@@ -234,4 +278,6 @@ class JdbcInboxStore implements InboxStore {
   }
 
   private record Original(UUID id, byte[] body) {}
+
+  private record Stored(UUID id, String eventType, byte[] body) {}
 }

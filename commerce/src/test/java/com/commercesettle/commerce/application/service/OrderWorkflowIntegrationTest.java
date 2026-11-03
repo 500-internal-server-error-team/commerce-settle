@@ -2,6 +2,8 @@ package com.commercesettle.commerce.application.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.anything;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 import com.commercesettle.commerce.application.event.EventEnvelope;
 import com.commercesettle.commerce.application.port.NotificationGateway;
@@ -9,10 +11,12 @@ import com.commercesettle.commerce.application.port.NotificationStore;
 import com.commercesettle.commerce.application.port.OrderBenefits;
 import com.commercesettle.commerce.application.port.PaymentAcceptanceInbox;
 import com.commercesettle.commerce.application.port.RefundClosureEvidence;
+import com.commercesettle.commerce.application.port.RefundClosureStore;
 import com.commercesettle.commerce.domain.model.Notification;
 import com.commercesettle.commerce.domain.model.Order;
 import com.commercesettle.commerce.domain.model.ProductStatus;
 import com.commercesettle.commerce.domain.model.ShippingAddress;
+import com.commercesettle.commerce.infrastructure.client.HttpRefundClosureEvidence;
 import com.commercesettle.commerce.infrastructure.messaging.PaymentAcceptedListener;
 import com.commercesettle.commerce.support.KakaoDemoFixture;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -22,6 +26,7 @@ import com.networknt.schema.InputFormat;
 import com.networknt.schema.SchemaLocation;
 import com.networknt.schema.SchemaRegistry;
 import com.networknt.schema.SpecificationVersion;
+import java.net.URI;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
@@ -50,7 +55,10 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.web.client.ExpectedCount;
+import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.web.client.RestClient;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -103,6 +111,7 @@ class OrderWorkflowIntegrationTest {
   java.util.concurrent.ExecutorService notificationCalls;
 
   @TempDir Path demoDirectory;
+  @Autowired RefundClosureStore closureStore;
 
   @BeforeEach
   void reset() {
@@ -116,6 +125,8 @@ class OrderWorkflowIntegrationTest {
             "notification_mock_receipts",
             "notification_inbox_quarantines")) jdbc.update("DELETE FROM commerce." + table);
     jdbc.update("DELETE FROM commerce.inbox WHERE consumer='commerce-notifications.v1'");
+    closure.duringLookup = () -> {};
+    closure.delegate = null;
     jdbc.execute(
         "CREATE TABLE IF NOT EXISTS commerce.test_benefit_calls (order_id uuid, operation varchar(20))");
   }
@@ -540,6 +551,10 @@ class OrderWorkflowIntegrationTest {
     var order =
         call("BUYER", f.buyer(), "/api/orders", orderBody(f).put("mileageAmount", mileage), 201);
     var id = uuid(order, "id");
+    org.mockito.Mockito.doThrow(
+            new com.commercesettle.commerce.application.exception.OrderCapacityExceededException())
+        .when(admission)
+        .requireAdmission();
     var ctx = context(id);
     var payment = UUID.randomUUID();
     receive("PaymentConfirmed", confirmed(order, ctx).put("paymentId", payment.toString()), true);
@@ -704,6 +719,234 @@ class OrderWorkflowIntegrationTest {
         .isEqualTo(closed);
     assertThat(buyer(f, id).path("status").asText()).isEqualTo("PAID");
     assertStock(f, 1, 0, 1);
+  }
+
+  @Test
+  @DisplayName("구매자 확인은 본인 실패 환불의 서버 버전·시각에 결속되고 같은 키로 재조회된다")
+  void bindsBuyerConfirmationAndRejectsOtherActors() throws Exception {
+    var f = fixture();
+    var r = failedRefund(f);
+    var rid = uuid(r, "id");
+    var path = "/api/refund-requests/" + rid + "/closure-confirmations";
+    String key = UUID.randomUUID().toString();
+    call("BUYER", fixture().buyer(), path, version(r), 404);
+    internal(path, OPERATOR, version(r), 403);
+    call(
+        "BUYER",
+        f.buyer(),
+        path,
+        version(r).put("expectedVersion", r.path("version").asLong() - 1),
+        409);
+
+    var headers = new HttpHeaders();
+    headers.setBearerAuth(GATEWAY);
+    headers.set("X-Authenticated-Actor-Kind", "BUYER");
+    headers.set("X-Authenticated-Actor-Id", f.buyer().toString());
+    headers.setContentType(MediaType.APPLICATION_JSON);
+    headers.set("Idempotency-Key", key);
+    var request = new HttpEntity<>(version(r), headers);
+    var created = http.postForEntity(path, request, JsonNode.class);
+    var replay = http.postForEntity(path, request, JsonNode.class);
+    assertThat(created.getStatusCode().value()).isEqualTo(201);
+    assertThat(replay.getStatusCode().value()).isEqualTo(201);
+    var c = created.getBody();
+    assertThat(replay.getBody()).isEqualTo(c);
+    assertThat(c.path("refundId")).isEqualTo(r.path("refundId"));
+    assertThat(java.time.OffsetDateTime.parse(c.path("confirmedAt").asText()).toInstant())
+        .isEqualTo(NOW);
+    assertThat(
+            number(
+                "select count(*) from commerce.refund_closure_confirmations where request_id=?",
+                rid))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "select buyer_id from commerce.refund_closure_confirmations where id=?",
+                UUID.class,
+                uuid(c, "id")))
+        .isEqualTo(f.buyer());
+    var location = URI.create(path + "/" + uuid(c, "id"));
+    assertThat(created.getHeaders().getLocation()).isEqualTo(location);
+    assertThat(replay.getHeaders().getLocation()).isEqualTo(location);
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+  @DisplayName("증빙 조회 중 주문 또는 환불 요청 버전이 바뀌면 종결·감사·증빙 저장을 거절한다")
+  void rejectsLocalVersionChangesDuringEvidenceLookup(boolean orderChanges) throws Exception {
+    var f = fixture();
+    var r = failedRefund(f);
+    UUID rid = uuid(r, "id");
+    UUID order = uuid(r, "orderId");
+    long audits = number("select count(*) from commerce.audit_logs where aggregate_id=?", rid);
+    long outbox = number("select count(*) from commerce.outbox where aggregate_id=?", order);
+    closure.safe = true;
+    closure.duringLookup =
+        () ->
+            jdbc.update(
+                orderChanges
+                    ? "update commerce.orders set version=version+1 where id=?"
+                    : "update commerce.order_refund_requests set version=version+1 where id=?",
+                orderChanges ? order : rid);
+
+    internal(
+        "/internal/refund-requests/" + rid + "/closure",
+        OPERATOR,
+        version(r).put("reason", "확인").put("customerConfirmationRef", "test"),
+        409);
+
+    assertThat(
+            number("select count(*) from commerce.refund_closure_evidence where request_id=?", rid))
+        .isZero();
+    assertThat(number("select count(*) from commerce.audit_logs where aggregate_id=?", rid))
+        .isEqualTo(audits);
+    assertThat(number("select count(*) from commerce.outbox where aggregate_id=?", order))
+        .isEqualTo(outbox);
+    assertThat(buyer(f, order).path("status").asText()).isEqualTo("REFUND_PENDING");
+  }
+
+  @Test
+  @DisplayName("실패 환불 종결의 주문 잠금 대기는 상한을 지키고 증빙·상태·감사를 롤백한다")
+  void rollsBackClosureOnBoundedOrderLockWait() throws Exception {
+    var f = fixture();
+    var r = failedRefund(f);
+    UUID rid = uuid(r, "id");
+    UUID order = uuid(r, "orderId");
+    long audits = number("select count(*) from commerce.audit_logs where aggregate_id=?", rid);
+    closure.safe = true;
+    try (var connection = jdbc.getDataSource().getConnection()) {
+      connection.setAutoCommit(false);
+      try (var statement =
+          connection.prepareStatement("select id from commerce.orders where id=? for update")) {
+        statement.setObject(1, order);
+        statement.executeQuery().close();
+      }
+      // 이 시험은 잠금 보유 커넥션이 하나 있으므로 대역의 풀 0개 단언을 별도로 끈다.
+      closure.lockHolder = true;
+      try {
+        internal(
+            "/internal/refund-requests/" + rid + "/closure",
+            OPERATOR,
+            version(r).put("reason", "확인").put("customerConfirmationRef", "test"),
+            503);
+      } finally {
+        closure.lockHolder = false;
+        connection.rollback();
+      }
+    }
+    assertThat(
+            number("select count(*) from commerce.refund_closure_evidence where request_id=?", rid))
+        .isZero();
+    assertThat(number("select count(*) from commerce.audit_logs where aggregate_id=?", rid))
+        .isEqualTo(audits);
+    assertThat(buyer(f, order).path("status").asText()).isEqualTo("REFUND_PENDING");
+  }
+
+  private JsonNode failedRefund(Fixture f) throws Exception {
+    var order = create(f);
+    var id = uuid(order, "id");
+    var payment = UUID.randomUUID();
+    receive(
+        "PaymentConfirmed",
+        confirmed(order, context(id)).put("paymentId", payment.toString()),
+        true);
+    var r = refund(f, id, "CANCEL");
+    var rid = uuid(r, "id");
+    var p =
+        mapper
+            .createObjectNode()
+            .put("orderId", id.toString())
+            .put("paymentId", payment.toString())
+            .put("refundId", UUID.randomUUID().toString());
+    receive("RefundAccepted", p.deepCopy().put("requestId", rid.toString()), true);
+    receive(
+        "RefundFailed",
+        p.deepCopy().put("reasonCode", "DECLINED").put("reservationReleased", true),
+        true);
+    return call("BUYER", f.buyer(), "/api/refund-requests/" + rid, null, 200);
+  }
+
+  @Test
+  @DisplayName("실제 증빙 어댑터와 구매자 확인을 사용한 종결은 원응답·주체를 DB에 원자 보존한다")
+  void preservesConnectedAdapterEvidenceAndBuyerConfirmation() throws Exception {
+    var f = fixture();
+    var r = failedRefund(f);
+    var rid = uuid(r, "id");
+    var orderId = uuid(r, "orderId");
+    var o = buyer(f, orderId);
+    var c =
+        call(
+            "BUYER",
+            f.buyer(),
+            "/api/refund-requests/" + rid + "/closure-confirmations",
+            version(r),
+            201);
+    var p = RestClient.builder().baseUrl("http://payment");
+    var s = RestClient.builder().baseUrl("http://settlement");
+    var paymentServer = MockRestServiceServer.bindTo(p).build();
+    var settlementServer = MockRestServiceServer.bindTo(s).build();
+    var financial =
+        mapper
+            .createObjectNode()
+            .put("refundId", r.path("refundId").asText())
+            .put("requestId", rid.toString())
+            .put("paymentId", o.path("paymentId").asText())
+            .put("orderId", orderId.toString())
+            .put("buyerId", f.buyer().toString())
+            .put("status", "DECLINED")
+            .put("externalStatus", "DECLINED")
+            .put("mileageNotRestored", true)
+            .put("version", 4)
+            .put("decidedAt", NOW.minusSeconds(2).toString());
+    var reservation =
+        mapper
+            .createObjectNode()
+            .put("refundId", r.path("refundId").asText())
+            .put("paymentId", o.path("paymentId").asText())
+            .put("orderId", orderId.toString())
+            .put("reservationId", UUID.randomUUID().toString())
+            .put("status", "RELEASED")
+            .put("itemStatus", "WAITING_CONFIRMATION")
+            .putNull("payoutId")
+            .put("activeReservation", false)
+            .put("reservationVersion", 1)
+            .put("itemVersion", 2)
+            .put("releasedAt", NOW.minusSeconds(1).toString());
+    paymentServer
+        .expect(ExpectedCount.twice(), anything())
+        .andRespond(withSuccess(financial.toString(), MediaType.APPLICATION_JSON));
+    settlementServer
+        .expect(ExpectedCount.twice(), anything())
+        .andRespond(withSuccess(reservation.toString(), MediaType.APPLICATION_JSON));
+    closure.delegate =
+        new HttpRefundClosureEvidence(p.build(), s.build(), closureStore, mapper, clock);
+    String key = UUID.randomUUID().toString();
+    var body =
+        version(r).put("reason", "구매자 확인 종결").put("customerConfirmationRef", c.path("id").asText());
+
+    var result =
+        internal("/internal/refund-requests/" + rid + "/closure", OPERATOR, body, 200, key);
+
+    assertThat(result.path("status").asText()).isEqualTo("CLOSED");
+    var stored =
+        mapper.readTree(
+            jdbc.queryForObject(
+                "select snapshot::text from commerce.refund_closure_evidence where request_id=?",
+                String.class,
+                rid));
+    assertThat(stored.path("payment")).isEqualTo(financial);
+    assertThat(stored.path("settlement")).isEqualTo(reservation);
+    assertThat(stored.at("/confirmation/id").asText()).isEqualTo(c.path("id").asText());
+    assertThat(
+            jdbc.queryForObject(
+                "select operator_ref from commerce.refund_closure_evidence where request_id=?",
+                String.class,
+                rid))
+        .isEqualTo("operator:test");
+    assertThat(internal("/internal/refund-requests/" + rid + "/closure", OPERATOR, body, 200, key))
+        .isEqualTo(result);
+    paymentServer.verify();
+    settlementServer.verify();
   }
 
   @Test
@@ -1480,16 +1723,23 @@ class OrderWorkflowIntegrationTest {
     }
 
     volatile boolean safe;
+    volatile boolean lockHolder;
+    volatile Runnable duringLookup = () -> {};
+    volatile RefundClosureEvidence delegate;
 
-    public Evidence verify(UUID id, String customer) {
+    public Evidence verify(Subject subject, String customer) {
       assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
       assertThat(TransactionSynchronizationManager.hasResource(source)).isFalse();
-      assertThat(
-              ((com.zaxxer.hikari.HikariDataSource) source)
-                  .getHikariPoolMXBean()
-                  .getActiveConnections())
-          .isZero();
-      return new Evidence(id, safe, safe, safe, safe, "verified-test-evidence");
+      if (!lockHolder)
+        assertThat(
+                ((com.zaxxer.hikari.HikariDataSource) source)
+                    .getHikariPoolMXBean()
+                    .getActiveConnections())
+            .isZero();
+      duringLookup.run();
+      if (delegate != null) return delegate.verify(subject, customer);
+      return new Evidence(
+          subject.refundId(), safe, safe, safe, safe, UUID.randomUUID().toString(), "{}");
     }
   }
 

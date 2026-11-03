@@ -3,6 +3,15 @@ package com.commercesettle.payment.infrastructure.persistence.outbox;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationResultPayload;
+import com.commercesettle.payment.application.event.PaymentConfirmedPayload;
+import com.commercesettle.payment.application.event.PaymentDeclinedPayload;
+import com.commercesettle.payment.application.event.RefundAcceptedPayload;
+import com.commercesettle.payment.application.event.RefundCompletedPayload;
+import com.commercesettle.payment.application.event.RefundEventPayload;
+import com.commercesettle.payment.application.event.RefundFailedPayload;
+import com.commercesettle.payment.application.event.RefundFinancialCompletedPayload;
+import com.commercesettle.payment.application.event.RefundReleaseRequestedPayload;
+import com.commercesettle.payment.application.event.RefundReservationRequestedPayload;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
 import com.commercesettle.payment.infrastructure.messaging.OutboxAppended;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -20,6 +29,16 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
+  /** 발행하는 환불 이벤트 종류와 본문 타입. */
+  private static final Map<String, Class<? extends RefundEventPayload>> REFUND_EVENTS =
+      Map.of(
+          "RefundAccepted", RefundAcceptedPayload.class,
+          "RefundReservationRequested", RefundReservationRequestedPayload.class,
+          "RefundFinancialCompleted", RefundFinancialCompletedPayload.class,
+          "RefundReleaseRequested", RefundReleaseRequestedPayload.class,
+          "RefundCompleted", RefundCompletedPayload.class,
+          "RefundFailed", RefundFailedPayload.class);
+
   private final NamedParameterJdbcTemplate jdbc;
   private final ObjectMapper mapper;
   private final ApplicationEventPublisher events;
@@ -46,6 +65,34 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
   public UUID appendCancellationResult(EventEnvelope<PaymentCancellationResultPayload> event) {
     if (!"PaymentCancelled".equals(event.eventType())
         && !"PaymentCancellationRejected".equals(event.eventType())) {
+      throw new IllegalArgumentException("Invalid payment outbox event");
+    }
+    return append(event, event.payload().paymentId());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID appendPaymentConfirmed(EventEnvelope<PaymentConfirmedPayload> event) {
+    if (!"PaymentConfirmed".equals(event.eventType())) {
+      throw new IllegalArgumentException("Invalid payment outbox event");
+    }
+    return append(event, event.payload().paymentId());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID appendPaymentDeclined(EventEnvelope<PaymentDeclinedPayload> event) {
+    if (!"PaymentDeclined".equals(event.eventType())) {
+      throw new IllegalArgumentException("Invalid payment outbox event");
+    }
+    return append(event, event.payload().paymentId());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID appendRefundEvent(EventEnvelope<? extends RefundEventPayload> event) {
+    Class<?> payload = REFUND_EVENTS.get(event.eventType());
+    if (payload == null || !payload.isInstance(event.payload())) {
       throw new IllegalArgumentException("Invalid payment outbox event");
     }
     return append(event, event.payload().paymentId());

@@ -1,0 +1,392 @@
+package com.commercesettle.commerce.application.service;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.commercesettle.commerce.domain.model.CouponFunder;
+import com.commercesettle.commerce.domain.model.CouponIssueRun;
+import com.commercesettle.commerce.domain.model.CouponIssueRunStatus;
+import com.commercesettle.commerce.domain.model.Order;
+import com.commercesettle.commerce.infrastructure.batch.GradeCouponLauncher;
+import com.commercesettle.commerce.infrastructure.scheduling.GradeCouponScheduler;
+import java.sql.Timestamp;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+/**
+ * 실제 PostgreSQL과 Spring Batch로 월간 우수고객 회차의 대상 선정·검증·발급·재개·만료를 확인한다. 회차는 혜택 월마다 하나라 시험마다 다른 월을 쓰고
+ * 시각을 그 월에 맞춘다.
+ */
+// 인증 설정은 필수 기동 값이다. 회차는 직접 실행하므로 스케줄러를 끈다.
+@SpringBootTest(
+    properties = {
+      "management.tracing.enabled=false",
+      "app.coupons.grade-scheduler-enabled=false",
+      "app.coupons.expiry-scheduler-enabled=false",
+      "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
+      "app.auth.rate-limit.identifier-hmac-key=grade-coupon-test-hmac-key-32bytes-long",
+      "app.auth.password-reset.delivery-key=grade-coupon-test-delivery-key-32bytes",
+      "app.address.encryption-key=grade-coupon-test-address-key-32bytes-long",
+      "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123"
+    })
+@Testcontainers
+@Import(GradeCouponIntegrationTest.Beans.class)
+class GradeCouponIntegrationTest {
+  private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+
+  @Container @ServiceConnection
+  static final PostgreSQLContainer<?> POSTGRES =
+      new PostgreSQLContainer<>("postgres:18.3").withInitScript("db/commerce.sql");
+
+  @Autowired GradeCouponLauncher launcher;
+  @Autowired GradeCouponService grades;
+  @Autowired CouponService coupons;
+  @Autowired JdbcTemplate jdbc;
+  @Autowired TestClock clock;
+
+  @Test
+  @DisplayName("100위 동점자를 모두 포함해 104명을 고정하고 등급별로 발급하며, 같은 월을 다시 실행해도 바꾸지 않는다")
+  void selectsTiesAndIssuesOnce() {
+    LocalDate month = LocalDate.of(2031, 2, 1);
+    List<UUID> ranked = new ArrayList<>();
+    for (int i = 0; i < 99; i++) {
+      UUID buyer = UUID.randomUUID();
+      ranked.add(buyer);
+      confirmed(buyer, 600_000 - i * 5_000L, month.minusMonths(1));
+    }
+    List<UUID> tied = new ArrayList<>();
+    for (int i = 0; i < 5; i++) {
+      UUID buyer = UUID.randomUUID();
+      tied.add(buyer);
+      confirmed(buyer, 10_000, month.minusMonths(1));
+    }
+    UUID below = UUID.randomUUID();
+    confirmed(below, 9_000, month.minusMonths(1));
+    UUID unconfirmed = UUID.randomUUID();
+    order(unconfirmed, 900_000, "PAID", null);
+    UUID otherMonth = UUID.randomUUID();
+    confirmed(otherMonth, 900_000, month);
+    clock.at(month, 0, 20);
+
+    assertThat(launcher.run(month)).contains(CouponIssueRunStatus.COMPLETED);
+
+    CouponIssueRun run = grades.currentRun(month).orElseThrow();
+    assertThat(run.getTargetCount()).isEqualTo(104);
+    assertThat(run.getCutoffSpend()).isEqualTo(10_000L);
+    assertThat(count("coupon_issue_targets where run_id = ? and status = 'ISSUED'", run.getId()))
+        .isEqualTo(104);
+    assertThat(
+            jdbc.queryForList(
+                "select rank_no from commerce.coupon_issue_targets where run_id = ? and buyer_id = any(?)",
+                Integer.class,
+                run.getId(),
+                tied.toArray(UUID[]::new)))
+        .containsOnly(100);
+    assertThat(count("buyer_coupons where buyer_id in (?, ?, ?)", below, unconfirmed, otherMonth))
+        .isZero();
+    assertThat(gradeOf(ranked.get(0), month)).isEqualTo("GOLD");
+    assertThat(gradeOf(ranked.get(98), month)).isEqualTo("BRONZE");
+    assertThat(
+            jdbc.queryForObject(
+                "select sum(discount_amount) from commerce.buyer_coupons where kind = 'GRADE'"
+                    + " and target_month = ?",
+                Long.class,
+                month))
+        .isEqualTo(grade(ranked, tied));
+    assertThat(
+            jdbc.queryForObject(
+                "select expires_at from commerce.buyer_coupons where buyer_id = ?",
+                Timestamp.class,
+                ranked.get(0)))
+        .isEqualTo(Timestamp.from(CouponIssueRun.monthStart(month.plusMonths(1))));
+
+    long coupons = count("buyer_coupons where kind = 'GRADE' and target_month = ?", month);
+    assertThat(launcher.run(month)).contains(CouponIssueRunStatus.COMPLETED);
+    assertThat(count("buyer_coupons where kind = 'GRADE' and target_month = ?", month))
+        .isEqualTo(coupons);
+  }
+
+  @Test
+  @DisplayName("발급한 월간 쿠폰은 플랫폼 부담 할인으로 주문 견적에 쓸 수 있다")
+  void issuedCouponIsUsableInOrders() {
+    LocalDate month = LocalDate.of(2031, 3, 1);
+    UUID buyer = UUID.randomUUID();
+    confirmed(buyer, 120_000, month.minusMonths(1));
+    clock.at(month, 0, 20);
+    launcher.run(month);
+    UUID coupon =
+        jdbc.queryForObject(
+            "select id from commerce.buyer_coupons where buyer_id = ?", UUID.class, buyer);
+
+    CouponService.Discount discount =
+        coupons.quote(
+            buyer,
+            coupon,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            50_000,
+            Order.ExternalMethod.CREDIT_CARD,
+            clock.instant());
+
+    assertThat(discount.amount()).isEqualTo(3_000);
+    assertThat(discount.funder()).isEqualTo(CouponFunder.PLATFORM);
+  }
+
+  @Test
+  @DisplayName("전월 구매 확정이 없으면 대상 0명으로 완료한다")
+  void completesEmptyMonth() {
+    LocalDate month = LocalDate.of(2031, 4, 1);
+    clock.at(month, 0, 20);
+
+    assertThat(launcher.run(month)).contains(CouponIssueRunStatus.COMPLETED);
+
+    CouponIssueRun run = grades.currentRun(month).orElseThrow();
+    assertThat(run.getTargetCount()).isZero();
+    assertThat(run.getCutoffSpend()).isNull();
+  }
+
+  @Test
+  @DisplayName("저장한 대상이 원자료 순위와 다르면 검증에 실패해 PREPARING을 보존하고 발급하지 않는다")
+  void keepsPreparingWhenVerificationFails() {
+    LocalDate month = LocalDate.of(2031, 5, 1);
+    for (int i = 0; i < 3; i++) {
+      confirmed(UUID.randomUUID(), 100_000 + i, month.minusMonths(1));
+    }
+    clock.at(month, 0, 20);
+    UUID runId = grades.currentRun(month).orElseThrow().getId();
+    UUID template = UUID.randomUUID();
+    jdbc.update(
+        "insert into commerce.coupon_templates (id, kind, funder, grade, target_month, name,"
+            + " discount_amount, min_order_amount, min_seller_net_amount, allowed_methods,"
+            + " pg_cost_ceiling_bps, other_cost_allowance, issued_count, committed_budget,"
+            + " consumed_budget, valid_from, valid_until, status, created_at, updated_at, version)"
+            + " values (?, 'GRADE', 'PLATFORM', 'BRONZE', ?, '월간 우수고객 BRONZE', 3000, 50000, 0,"
+            + " '{CREDIT_CARD}', 400, 1000, 0, 0, 0, ?, ?, 'ACTIVE', now(), now(), 0)",
+        template,
+        month,
+        Timestamp.from(CouponIssueRun.monthStart(month)),
+        Timestamp.from(CouponIssueRun.monthStart(month.plusMonths(1))));
+    jdbc.update(
+        "insert into commerce.coupon_issue_targets (id, run_id, template_id, buyer_id,"
+            + " external_spend, rank_no, status, created_at, updated_at, version)"
+            + " values (?, ?, ?, ?, 1, 100, 'PENDING', now(), now(), 0)",
+        UUID.randomUUID(),
+        runId,
+        template,
+        UUID.randomUUID());
+
+    assertThat(launcher.run(month)).contains(CouponIssueRunStatus.PREPARING);
+
+    assertThat(count("buyer_coupons where kind = 'GRADE' and target_month = ?", month)).isZero();
+  }
+
+  @Test
+  @DisplayName("일부 발급 뒤 다시 실행하면 확정한 대상을 다시 선정하지 않고 남은 대상만 발급한다")
+  void resumesRemainingTargetsOnly() {
+    LocalDate month = LocalDate.of(2031, 6, 1);
+    for (int i = 0; i < 5; i++) {
+      confirmed(UUID.randomUUID(), 200_000 + i, month.minusMonths(1));
+    }
+    clock.at(month, 0, 20);
+    UUID runId = grades.currentRun(month).orElseThrow().getId();
+    grades.prepare(runId);
+    List<UUID> firstTwo = grades.pendingTargetIds(runId, 2);
+    firstTwo.forEach(target -> grades.issue(runId, target));
+    Map<String, Object> issuedBefore = couponOfTarget(firstTwo.get(0));
+    confirmed(UUID.randomUUID(), 900_000, month.minusMonths(1));
+
+    assertThat(launcher.run(month)).contains(CouponIssueRunStatus.COMPLETED);
+
+    assertThat(count("coupon_issue_targets where run_id = ?", runId)).isEqualTo(5);
+    assertThat(count("buyer_coupons where kind = 'GRADE' and target_month = ?", month))
+        .isEqualTo(5);
+    assertThat(couponOfTarget(firstTwo.get(0))).isEqualTo(issuedBefore);
+  }
+
+  @Test
+  @DisplayName("원래 기한이 지나면 새 쿠폰 없이 남은 대상과 회차를 EXPIRED로 종결한다")
+  void expiresRemainingTargetsAfterDeadline() {
+    LocalDate month = LocalDate.of(2031, 7, 1);
+    for (int i = 0; i < 3; i++) {
+      confirmed(UUID.randomUUID(), 150_000 + i, month.minusMonths(1));
+    }
+    clock.at(month, 0, 20);
+    UUID runId = grades.currentRun(month).orElseThrow().getId();
+    grades.prepare(runId);
+    grades.issue(runId, grades.pendingTargetIds(runId, 1).get(0));
+    clock.at(month.plusMonths(1), 0, 0);
+
+    assertThat(launcher.run(month)).contains(CouponIssueRunStatus.EXPIRED);
+
+    assertThat(count("coupon_issue_targets where run_id = ? and status = 'EXPIRED'", runId))
+        .isEqualTo(2);
+    assertThat(count("buyer_coupons where kind = 'GRADE' and target_month = ?", month))
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("스케줄러는 지난달에 끝나지 않은 회차도 실행해, 원래 기한이 지났으면 새 발급 없이 남은 대상과 회차를 EXPIRED로 종결한다")
+  void schedulerExpiresUnfinishedPreviousMonth() {
+    LocalDate november = LocalDate.of(2034, 11, 1);
+    for (int i = 0; i < 2; i++) {
+      confirmed(UUID.randomUUID(), 100_000 + i, november.minusMonths(1));
+    }
+    clock.at(november, 0, 20);
+    UUID run = grades.currentRun(november).orElseThrow().getId();
+    grades.prepare(run);
+    grades.issue(run, grades.pendingTargetIds(run, 1).get(0));
+
+    clock.at(november.plusMonths(1), 0, 20);
+    new GradeCouponScheduler(launcher, clock).run();
+
+    assertThat(
+            jdbc.queryForObject(
+                "select status from commerce.coupon_issue_runs where id = ?", String.class, run))
+        .isEqualTo("EXPIRED");
+    assertThat(count("coupon_issue_targets where run_id = ? and status = 'ISSUED'", run))
+        .isEqualTo(1);
+    assertThat(count("coupon_issue_targets where run_id = ? and status = 'EXPIRED'", run))
+        .isEqualTo(1);
+    assertThat(count("buyer_coupons where target_month = ?", java.sql.Date.valueOf(november)))
+        .isEqualTo(1);
+    assertThat(grades.currentRun(november.plusMonths(1))).isPresent();
+  }
+
+  @Test
+  @DisplayName("혜택 월이 마감되기 전에는 회차를 만들지 않는다")
+  void doesNotOpenBeforeCutoff() {
+    LocalDate month = LocalDate.of(2031, 9, 1);
+    clock.at(month.minusMonths(1), 12, 0);
+
+    assertThat(launcher.run(month)).isEmpty();
+    assertThat(count("coupon_issue_runs where target_month = ?", month)).isZero();
+  }
+
+  private long grade(List<UUID> ranked, List<UUID> tied) {
+    return jdbc.queryForObject(
+        "select sum(case when spend >= 500000 then 7000 when spend >= 300000 then 5000 else 3000"
+            + " end) from (select buyer_id, sum(external_amount) as spend from commerce.orders"
+            + " where buyer_id = any(?) group by buyer_id) s",
+        Long.class,
+        (Object)
+            java.util.stream.Stream.concat(ranked.stream(), tied.stream()).toArray(UUID[]::new));
+  }
+
+  private String gradeOf(UUID buyer, LocalDate month) {
+    return jdbc.queryForObject(
+        "select t.grade from commerce.buyer_coupons c join commerce.coupon_templates t"
+            + " on t.id = c.template_id where c.buyer_id = ? and c.target_month = ?",
+        String.class,
+        buyer,
+        month);
+  }
+
+  private Map<String, Object> couponOfTarget(UUID target) {
+    return jdbc.queryForMap(
+        "select c.id, c.created_at from commerce.coupon_issue_targets t"
+            + " join commerce.buyer_coupons c on c.id = t.buyer_coupon_id where t.id = ?",
+        target);
+  }
+
+  /** 대상 월 중순에 구매 확정된 주문 한 건. */
+  private void confirmed(UUID buyer, long externalAmount, LocalDate month) {
+    order(
+        buyer,
+        externalAmount,
+        "PURCHASE_CONFIRMED",
+        month.withDayOfMonth(15).atTime(12, 0).atZone(KST).toInstant());
+  }
+
+  private void order(UUID buyer, long amount, String status, Instant confirmedAt) {
+    Instant created =
+        confirmedAt == null
+            ? Instant.parse("2031-01-10T00:00:00Z")
+            : confirmedAt.minusSeconds(864_000);
+    Instant delivered = created.plusSeconds(86_400);
+    jdbc.update(
+        "insert into commerce.orders (id, buyer_id, seller_id, product_id, product_name,"
+            + " unit_price, quantity, gross_amount, coupon_amount, seller_coupon_amount,"
+            + " platform_coupon_amount, settlement_base_amount, total_amount, mileage_amount,"
+            + " external_amount, payment_cycle_id, external_method, method_account_ref, status,"
+            + " fulfillment_status, simulation_seed, delivery_business_days,"
+            + " delivery_calendar_version, delivery_calendar, shipped_at, delivery_due_at,"
+            + " delivered_at, refund_deadline_at, purchase_confirmed_at, closed_at, payment_wait_until,"
+            + " policy_version, created_at, updated_at, version)"
+            + " values (?, ?, ?, ?, '시험 상품', ?, 1, ?, 0, 0, 0, ?, ?, 0, ?, ?, 'CREDIT_CARD',"
+            + " 'test-card', ?, ?, 1, 2, 'test', '{}'::jsonb, ?, ?, ?, ?, ?, ?, ?, 'test', ?, ?, 0)",
+        UUID.randomUUID(),
+        buyer,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        amount,
+        amount,
+        amount,
+        amount,
+        amount,
+        UUID.randomUUID(),
+        status,
+        confirmedAt == null ? "UNSHIPPED" : "DELIVERED",
+        confirmedAt == null ? null : Timestamp.from(created),
+        confirmedAt == null ? null : Timestamp.from(delivered),
+        confirmedAt == null ? null : Timestamp.from(delivered),
+        confirmedAt == null ? null : Timestamp.from(delivered.plusSeconds(168 * 3_600)),
+        confirmedAt == null ? null : Timestamp.from(confirmedAt),
+        confirmedAt == null ? null : Timestamp.from(confirmedAt),
+        Timestamp.from(created.plusSeconds(600)),
+        Timestamp.from(created),
+        Timestamp.from(created));
+  }
+
+  private long count(String fromWhere, Object... args) {
+    return jdbc.queryForObject("select count(*) from commerce." + fromWhere, Long.class, args);
+  }
+
+  @TestConfiguration
+  static class Beans {
+    @Bean
+    @Primary
+    TestClock testClock() {
+      return new TestClock();
+    }
+  }
+
+  static class TestClock extends Clock {
+    final AtomicReference<Instant> now = new AtomicReference<>(Instant.now());
+
+    void at(LocalDate day, int hour, int minute) {
+      now.set(LocalDateTime.of(day, java.time.LocalTime.of(hour, minute)).atZone(KST).toInstant());
+    }
+
+    public ZoneId getZone() {
+      return ZoneId.of("UTC");
+    }
+
+    public Clock withZone(ZoneId zone) {
+      return this;
+    }
+
+    public Instant instant() {
+      return now.get();
+    }
+  }
+}

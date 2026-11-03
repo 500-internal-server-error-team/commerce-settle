@@ -1,6 +1,6 @@
 route:
   receiver: slack
-  group_by: [environment, application, consumer, alertname, kind]
+  group_by: [environment, application, consumer, alertname, kind, queue, operation, group, store]
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 1h
@@ -14,4 +14,4 @@ receivers:
 inhibit_rules:
   - source_matchers: ['severity="critical"']
     target_matchers: ['severity="warning"']
-    equal: [environment, application, consumer, alertname, kind]
+    equal: [environment, application, consumer, alertname, kind, queue, operation, group, store]

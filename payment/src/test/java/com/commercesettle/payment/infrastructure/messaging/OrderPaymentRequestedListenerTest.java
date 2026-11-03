@@ -9,11 +9,14 @@ import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
+import com.commercesettle.payment.application.event.RefundApprovedPayload;
+import com.commercesettle.payment.application.event.RefundOrderRestoredPayload;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor;
 import com.commercesettle.payment.infrastructure.config.OrderPaymentRequestedListenerConfiguration;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.DisplayName;
@@ -36,6 +39,7 @@ import org.springframework.kafka.support.Acknowledgment;
 class OrderPaymentRequestedListenerTest {
   private static final String TOPIC = "commerce-settle.commerce.v1";
   private static final String KEY = "00000000-0000-0000-0000-000000000001";
+  private static final String PAYMENT_ID = "00000000-0000-0000-0000-0000000000e1";
   @Autowired private ObjectMapper mapper;
   @Mock private OrderPaymentRequestAcceptor acceptor;
   @Mock private Acknowledgment acknowledgment;
@@ -123,6 +127,89 @@ class OrderPaymentRequestedListenerTest {
                     record(body, "00000000-0000-0000-0000-0000000000ff"), acknowledgment))
         .isInstanceOf(IllegalArgumentException.class);
     verifyNoInteractions(acceptor, acknowledgment);
+  }
+
+  @Test
+  @DisplayName("같은 토픽의 환불 승인은 원결제 ID를 키로 환불 접수에 인계한 뒤 offset을 승인한다")
+  @SuppressWarnings("unchecked")
+  void acceptsRefundApproved() throws Exception {
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1");
+
+    listener.receive(record(refundApproved(PAYMENT_ID), PAYMENT_ID), acknowledgment);
+
+    var event = ArgumentCaptor.forClass(EventEnvelope.class);
+    var order = inOrder(acceptor, acknowledgment);
+    order.verify(acceptor).acceptRefundEvent(event.capture(), any());
+    order.verify(acknowledgment).acknowledge();
+    // 서비스 Jackson 설정은 시각을 Asia/Seoul로 맞추므로 같은 순간인지만 비교한다.
+    assertThat(event.getValue().payload())
+        .usingRecursiveComparison()
+        .withComparatorForType(OffsetDateTime.timeLineOrder(), OffsetDateTime.class)
+        .isEqualTo(
+            new RefundApprovedPayload(
+                UUID.fromString("00000000-0000-0000-0000-000000000008"),
+                UUID.fromString(KEY),
+                UUID.fromString(PAYMENT_ID),
+                OffsetDateTime.parse("2026-01-02T00:00:00Z"),
+                OffsetDateTime.parse("2026-01-02T00:01:00Z"),
+                3));
+  }
+
+  @Test
+  @DisplayName("같은 토픽의 주문 복구 확인은 환불 접수에 인계한 뒤 offset을 승인한다")
+  @SuppressWarnings("unchecked")
+  void acceptsRefundOrderRestored() throws Exception {
+    var body =
+        """
+        {"eventId":"00000000-0000-0000-0000-00000000000b","eventType":"RefundOrderRestored",
+         "eventVersion":1,"occurredAt":"2026-01-02T00:05:00Z",
+         "aggregateId":"%1$s","aggregateVersion":5,
+         "payload":{"refundId":"00000000-0000-0000-0000-00000000000c","paymentId":"%2$s",
+           "orderId":"%1$s","orderVersion":5}}
+        """
+            .formatted(KEY, PAYMENT_ID);
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1");
+
+    listener.receive(record(body, PAYMENT_ID), acknowledgment);
+
+    var event = ArgumentCaptor.forClass(EventEnvelope.class);
+    var order = inOrder(acceptor, acknowledgment);
+    order.verify(acceptor).acceptRefundEvent(event.capture(), any());
+    order.verify(acknowledgment).acknowledge();
+    assertThat(event.getValue().payload())
+        .isEqualTo(
+            new RefundOrderRestoredPayload(
+                UUID.fromString("00000000-0000-0000-0000-00000000000c"),
+                UUID.fromString(PAYMENT_ID),
+                UUID.fromString(KEY),
+                5));
+  }
+
+  @Test
+  @DisplayName("키가 원결제 ID와 다르거나 모르는 필드가 있는 환불 승인은 접수하지 않는다")
+  void rejectsInvalidRefundApproved() {
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1");
+    var withExtraField =
+        refundApproved(PAYMENT_ID).replace("\"orderVersion\":3", "\"orderVersion\":3,\"x\":1");
+
+    assertThatThrownBy(
+            () -> listener.receive(record(refundApproved(PAYMENT_ID), KEY), acknowledgment))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> listener.receive(record(withExtraField, PAYMENT_ID), acknowledgment))
+        .isInstanceOf(IllegalArgumentException.class);
+    verifyNoInteractions(acceptor, acknowledgment);
+  }
+
+  private static String refundApproved(String paymentId) {
+    return """
+        {"eventId":"00000000-0000-0000-0000-00000000000a","eventType":"RefundApproved",
+         "eventVersion":1,"occurredAt":"2026-01-02T00:01:00Z",
+         "aggregateId":"%1$s","aggregateVersion":3,
+         "payload":{"requestId":"00000000-0000-0000-0000-000000000008","orderId":"%1$s",
+           "paymentId":"%2$s","acceptedAt":"2026-01-02T00:00:00Z",
+           "approvedAt":"2026-01-02T00:01:00Z","orderVersion":3}}
+        """
+        .formatted(KEY, paymentId);
   }
 
   @Test

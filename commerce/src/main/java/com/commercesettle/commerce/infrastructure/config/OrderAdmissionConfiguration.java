@@ -6,6 +6,7 @@ import com.commercesettle.commerce.domain.model.OrderAdmissionState;
 import com.commercesettle.commerce.domain.model.OrderAdmissionState.Key;
 import com.commercesettle.commerce.domain.model.OrderAdmissionState.Signal;
 import com.commercesettle.commerce.infrastructure.observability.CommerceQueueMetrics;
+import com.commercesettle.commerce.infrastructure.observability.KafkaLagMetrics;
 import com.commercesettle.commerce.infrastructure.observability.PrometheusAdmissionMetrics;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Gauge;
@@ -18,9 +19,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -67,10 +71,23 @@ public class OrderAdmissionConfiguration {
 
   @Bean
   CommerceQueueMetrics commerceQueueMetrics(
-      DataSource dataSource, ObjectProvider<PrometheusMeterRegistry> registries) {
+      DataSource dataSource,
+      ObjectProvider<PrometheusMeterRegistry> registries,
+      ObjectProvider<KafkaLagMetrics> kafka) {
     var registry = registries.getIfAvailable();
     return new CommerceQueueMetrics(
-        dataSource, registry == null ? null : registry.getPrometheusRegistry());
+        dataSource,
+        registry == null ? null : registry.getPrometheusRegistry(),
+        kafka.getIfAvailable());
+  }
+
+  @Bean(initMethod = "start", destroyMethod = "close")
+  @ConditionalOnProperty(name = "app.order-admission.observation-enabled", matchIfMissing = true)
+  KafkaLagMetrics financialKafkaMetrics(KafkaProperties kafka) {
+    var properties = new java.util.HashMap<String, Object>(kafka.buildAdminProperties(null));
+    properties.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, 4000);
+    properties.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, 3000);
+    return new KafkaLagMetrics(Admin.create(properties));
   }
 
   @Bean(destroyMethod = "close")

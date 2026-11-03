@@ -150,6 +150,37 @@ CREATE TABLE payment.payment_jobs (
 );
 CREATE INDEX ix_payment_jobs_status_next_run ON payment.payment_jobs (status, next_run_at, lease_until, id);
 
+-- 외부 승인 시도. 외부 호출 전에 provider·결제수단·계정·재원·금액·시나리오를 고정해 재전송·조회에 같은 값을 쓴다.
+CREATE TABLE payment.payment_attempts (
+    id                  uuid         PRIMARY KEY,
+    payment_id          uuid         NOT NULL,
+    attempt_no          integer      NOT NULL,
+    cycle_id            uuid         NOT NULL,
+    provider_id         varchar(16)  NOT NULL,
+    method              varchar(24)  NOT NULL,
+    account_ref         varchar(100) NOT NULL,
+    funding_account_ref varchar(100) NOT NULL,
+    business_key        uuid         NOT NULL,
+    external_ref        uuid,
+    amount              bigint       NOT NULL,
+    status              varchar(24)  NOT NULL,
+    scenario_version    varchar(32)  NOT NULL,
+    created_at          timestamptz  NOT NULL,
+    updated_at          timestamptz  NOT NULL,
+    version             bigint       NOT NULL,
+
+    CONSTRAINT uk_payment_attempts_payment_attempt UNIQUE (payment_id, attempt_no),
+    CONSTRAINT uk_payment_attempts_provider_business_key UNIQUE (provider_id, business_key),
+    CONSTRAINT ck_payment_attempts_status
+        CHECK (status IN ('PENDING', 'PROCESSING', 'UNKNOWN', 'APPROVED', 'DECLINED', 'CANCELLED')),
+    CONSTRAINT ck_payment_attempts_provider CHECK (provider_id IN ('PG_A', 'PG_B', 'PG_C', 'EASY_PAY')),
+    CONSTRAINT ck_payment_attempts_method CHECK (method IN ('CREDIT_CARD', 'DEBIT_CARD', 'EASY_PAY')),
+    CONSTRAINT ck_payment_attempts_counts CHECK (attempt_no > 0 AND amount > 0 AND version >= 0)
+);
+CREATE INDEX ix_payment_attempts_status_updated ON payment.payment_attempts (status, updated_at, id);
+CREATE UNIQUE INDEX uk_payment_attempts_active ON payment.payment_attempts (payment_id)
+    WHERE status IN ('PENDING', 'PROCESSING', 'UNKNOWN', 'APPROVED');
+
 CREATE TABLE payment.mileage_wallets (
     id              uuid        PRIMARY KEY,
     buyer_id        uuid        NOT NULL,
@@ -203,6 +234,72 @@ CREATE TABLE payment.mileage_entries (
 CREATE INDEX ix_mileage_entries_wallet_created ON payment.mileage_entries (wallet_id, created_at, id);
 CREATE UNIQUE INDEX uk_mileage_entries_payment_once
     ON payment.mileage_entries (payment_id, kind) WHERE kind IN ('DEBIT', 'RESTORE');
+
+-- 원결제의 전액 환불. 외부 결제액·사용 마일리지는 원결제에서 복사하며 바꾸지 않는다.
+CREATE TABLE payment.refunds (
+    id                      uuid        PRIMARY KEY,
+    payment_id              uuid        NOT NULL,
+    order_refund_request_id uuid        NOT NULL,
+    external_amount         bigint      NOT NULL,
+    mileage_amount          bigint      NOT NULL,
+    status                  varchar(32) NOT NULL,
+    business_key            uuid        NOT NULL,
+    external_status         varchar(24) NOT NULL,
+    external_ref            uuid,
+    mileage_restored_at     timestamptz,
+    created_at              timestamptz NOT NULL,
+    updated_at              timestamptz NOT NULL,
+    version                 bigint      NOT NULL,
+
+    CONSTRAINT uk_refunds_order_refund_request UNIQUE (order_refund_request_id),
+    CONSTRAINT uk_refunds_business_key UNIQUE (business_key),
+    CONSTRAINT ck_refunds_status CHECK (status IN ('RESERVING', 'EXTERNAL_PENDING', 'RESTORING',
+        'INTERNAL_PENDING', 'COMPLETED', 'COMPENSATING', 'DECLINED', 'UNKNOWN')),
+    CONSTRAINT ck_refunds_external_status CHECK (external_status IN ('NOT_REQUIRED', 'PENDING',
+        'REQUESTED', 'SUCCEEDED', 'DECLINED', 'UNKNOWN')),
+    CONSTRAINT ck_refunds_amounts
+        CHECK (external_amount >= 0 AND mileage_amount >= 0 AND external_amount + mileage_amount >= 1),
+    -- 외부 결제액이 없으면 외부 환불을 호출하지 않는다.
+    CONSTRAINT ck_refunds_external_required
+        CHECK ((external_amount = 0) = (external_status = 'NOT_REQUIRED')),
+    CONSTRAINT ck_refunds_external_ref
+        CHECK (external_status <> 'SUCCEEDED' OR external_ref IS NOT NULL),
+    CONSTRAINT ck_refunds_restored
+        CHECK (status NOT IN ('INTERNAL_PENDING', 'COMPLETED') OR mileage_restored_at IS NOT NULL),
+    CONSTRAINT ck_refunds_version CHECK (version >= 0)
+);
+-- 같은 원결제에 진행 중이거나 완료된 환불은 하나뿐이다. 확정 거절(DECLINED) 뒤에만 새 환불을 받는다.
+CREATE UNIQUE INDEX uk_refunds_payment_active ON payment.refunds (payment_id)
+    WHERE status IN ('RESERVING', 'EXTERNAL_PENDING', 'RESTORING', 'INTERNAL_PENDING', 'COMPLETED',
+        'UNKNOWN', 'COMPENSATING');
+CREATE INDEX ix_refunds_payment_created ON payment.refunds (payment_id, created_at, id);
+CREATE INDEX ix_refunds_status_updated ON payment.refunds (status, updated_at, id);
+
+-- 환불 하나의 정산 예약·외부 환불·마일리지 복원·원장 상쇄·주문 복구 진행.
+CREATE TABLE payment.refund_sagas (
+    id                 uuid        PRIMARY KEY,
+    refund_id          uuid        NOT NULL,
+    step               varchar(40) NOT NULL,
+    reservation_ref    uuid,
+    ledger_reversed_at timestamptz,
+    order_restored_at  timestamptz,
+    last_error_code    varchar(80),
+    created_at         timestamptz NOT NULL,
+    updated_at         timestamptz NOT NULL,
+    version            bigint      NOT NULL,
+
+    CONSTRAINT uk_refund_sagas_refund UNIQUE (refund_id),
+    CONSTRAINT ck_refund_sagas_step CHECK (step IN ('RESERVATION_REQUESTED', 'EXTERNAL_REFUND_PENDING',
+        'MILEAGE_RESTORE_PENDING', 'LEDGER_REVERSAL_PENDING', 'ORDER_RESTORE_PENDING', 'COMPLETED',
+        'RELEASE_PENDING', 'FAILED')),
+    CONSTRAINT ck_refund_sagas_reserved CHECK (step IN ('RESERVATION_REQUESTED', 'FAILED')
+        OR reservation_ref IS NOT NULL),
+    CONSTRAINT ck_refund_sagas_ledger CHECK (step NOT IN ('ORDER_RESTORE_PENDING', 'COMPLETED')
+        OR ledger_reversed_at IS NOT NULL),
+    CONSTRAINT ck_refund_sagas_order CHECK (step <> 'COMPLETED' OR order_restored_at IS NOT NULL),
+    CONSTRAINT ck_refund_sagas_version CHECK (version >= 0)
+);
+CREATE INDEX ix_refund_sagas_step_updated ON payment.refund_sagas (step, updated_at, id);
 
 CREATE TABLE payment.outbox (
     id uuid PRIMARY KEY,

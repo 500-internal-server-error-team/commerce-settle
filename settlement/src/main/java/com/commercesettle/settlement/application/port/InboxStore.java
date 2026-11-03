@@ -2,6 +2,7 @@ package com.commercesettle.settlement.application.port;
 
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
+import com.commercesettle.settlement.application.event.RefundReservationRequestedPayload;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -16,8 +17,11 @@ public interface InboxStore {
    */
   Optional<UUID> receive(EventEnvelope<?> event, Source source);
 
-  /** 처리 시각이 된 WAITING 하나를 잠그고 원문에서 다시 읽는다. 다른 처리기가 잠근 행은 건너뛴다. WAITING은 구매확정만 생긴다. */
-  Optional<WaitingPurchase> claimNextWaiting();
+  /**
+   * 처리 시각이 된 WAITING 하나를 잠그고 원문에서 다시 읽는다. 다른 처리기가 잠근 행은 건너뛴다. WAITING은 선행 결제를 기다리는 구매확정과 환불 예약 요청만
+   * 생긴다.
+   */
+  Optional<Waiting> claimNextWaiting();
 
   void markApplied(UUID inboxId, UUID resultRef, Instant now);
 
@@ -36,8 +40,26 @@ public interface InboxStore {
    */
   List<UUID> reviveExhaustedPurchases(UUID paymentId, int maxAttempts, Instant now);
 
+  /**
+   * {@code inboxId}보다 먼저 받은 같은 환불의 예약 요청 중 가장 오래된 것. 결과(예약·거절)와 상관없이 같은 환불의 원요청을 찾는다. 이미 커밋된 행만
+   * 보인다.
+   */
+  Optional<EarlierRefundRequest> findEarlierRefundRequest(UUID refundId, UUID inboxId);
+
   /** 수신 위치와 최초 bytes. */
   record Source(String topic, int partition, long offset, byte[] body) {}
 
-  record WaitingPurchase(UUID inboxId, EventEnvelope<PurchaseConfirmedPayload> event) {}
+  /** 같은 환불의 원요청과 그 판정. 대기 중이면 {@code resultRef}가 없다. */
+  record EarlierRefundRequest(String status, UUID paymentId, long netAmount, UUID resultRef) {}
+
+  /** 이벤트 종류별로 원문을 다시 읽은 대기 건. */
+  sealed interface Waiting {
+    UUID inboxId();
+
+    record Purchase(UUID inboxId, EventEnvelope<PurchaseConfirmedPayload> event)
+        implements Waiting {}
+
+    record RefundReservation(UUID inboxId, EventEnvelope<RefundReservationRequestedPayload> event)
+        implements Waiting {}
+  }
 }

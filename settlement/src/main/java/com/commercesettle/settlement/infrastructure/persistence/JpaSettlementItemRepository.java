@@ -12,6 +12,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.jdbc.UncategorizedSQLException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcOperations;
@@ -24,6 +26,8 @@ class JpaSettlementItemRepository implements SettlementItemRepository {
       "seller_id = :sellerId AND status = 'PAYABLE' AND payout_id IS NULL AND ready_at < :cutoffAt";
 
   private static final String LOCK_NOT_AVAILABLE = "55P03";
+  private static final Sort NEWEST_FIRST =
+      Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
 
   private final SpringDataSettlementItemRepository repository;
   private final NamedParameterJdbcOperations jdbc;
@@ -47,6 +51,16 @@ class JpaSettlementItemRepository implements SettlementItemRepository {
   @Override
   public Optional<SettlementItem> findByPaymentId(UUID paymentId) {
     return repository.findByPaymentId(paymentId);
+  }
+
+  @Override
+  public List<SettlementItem> findBySeller(UUID sellerId, int page, int size) {
+    return repository.findBySellerId(sellerId, PageRequest.of(page, size, NEWEST_FIRST));
+  }
+
+  @Override
+  public long countBySeller(UUID sellerId) {
+    return repository.countBySellerId(sellerId);
   }
 
   @Override

@@ -20,6 +20,11 @@ enum ErrorCode {
   ORDER_REFUND_WINDOW_CLOSED(HttpStatus.CONFLICT, "환불 요청 기한이 지났습니다."),
   ORDER_REFUND_IN_PROGRESS(HttpStatus.CONFLICT, "진행 중인 취소·반품이 있습니다."),
   INVENTORY_INSUFFICIENT(HttpStatus.CONFLICT, "가용 재고가 부족합니다."),
+  COUPON_EXPIRED(HttpStatus.CONFLICT, "사용 기한이 지난 쿠폰입니다."),
+  COUPON_NOT_APPLICABLE(HttpStatus.CONFLICT, "이 주문에 사용할 수 없는 쿠폰입니다."),
+  COUPON_BUDGET_EXHAUSTED(HttpStatus.CONFLICT, "캠페인의 발급 수나 할인 예산이 소진됐습니다."),
+  COUPON_ALREADY_ISSUED(HttpStatus.CONFLICT, "이미 이 캠페인의 쿠폰을 받은 구매자입니다."),
+  COUPON_CAMPAIGN_NOT_ISSUABLE(HttpStatus.CONFLICT, "지금은 이 캠페인으로 발급할 수 없습니다."),
   EVENT_ADMISSION_CLOSED(HttpStatus.CONFLICT, "이벤트에 참여할 수 없습니다."),
   PRODUCT_EVENT_IN_PROGRESS(
       HttpStatus.CONFLICT, "공개 후 종료 전 이벤트가 있는 상품은 바꿀 수 없습니다. 이벤트를 먼저 종료해 주세요."),

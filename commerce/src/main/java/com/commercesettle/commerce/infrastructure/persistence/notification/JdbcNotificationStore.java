@@ -48,6 +48,28 @@ public class JdbcNotificationStore implements NotificationStore {
   public void append(Draft draft) {
     TransactionLimits.apply(jdbc);
     validate(draft);
+    NotificationRetentionGuard.registerBatch(jdbc, draft);
+    NotificationRetentionGuard.lock(
+        jdbc,
+        draft.source(),
+        draft.kind().name(),
+        draft.businessRef(),
+        draft.recipientKind().name(),
+        draft.recipientId());
+    var retired =
+        NotificationRetentionGuard.retired(
+            jdbc,
+            draft.source(),
+            draft.kind().name(),
+            draft.businessRef(),
+            draft.recipientKind().name(),
+            draft.recipientId(),
+            draft.payload().toString());
+    if (retired.isPresent()) {
+      if (!retired.get())
+        throw new Notification.ContentConflictException("Notification business payload conflict");
+      return;
+    }
     UUID candidate = UUID.randomUUID();
     UUID item = UUID.randomUUID();
     Instant received = databaseNow();
@@ -367,6 +389,7 @@ public class JdbcNotificationStore implements NotificationStore {
   @Transactional(propagation = Propagation.MANDATORY)
   public void replay(UUID id, long expected, String operator, String reason, Instant now) {
     TransactionLimits.apply(jdbc);
+    NotificationRetentionGuard.lockBatches(jdbc, id);
     var n =
         jdbc
             .query(
@@ -378,7 +401,8 @@ public class JdbcNotificationStore implements NotificationStore {
             .orElseThrow(this::notFound);
     if (n.version() != expected)
       throw new VersionConflictException("notification", expected, n.version());
-    if (!n.replayable()) throw new Notification.StateConflictException();
+    if (!n.replayable() || NotificationRetentionGuard.replayExpired(jdbc, id, now))
+      throw new Notification.StateConflictException();
     var last =
         jdbc.query(
             "SELECT status FROM commerce.notification_attempts WHERE delivery_id=? AND operation<>'REPLAY' ORDER BY attempt_no DESC LIMIT 1",

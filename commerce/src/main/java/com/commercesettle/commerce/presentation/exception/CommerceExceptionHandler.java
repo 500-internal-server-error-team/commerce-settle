@@ -7,11 +7,17 @@ import com.commercesettle.commerce.application.exception.AuthenticationUnavailab
 import com.commercesettle.commerce.application.exception.IdempotencyConflictException;
 import com.commercesettle.commerce.application.exception.OrderRequestException;
 import com.commercesettle.commerce.application.exception.OrderStubException;
+import com.commercesettle.commerce.domain.exception.AccountNotFoundException;
 import com.commercesettle.commerce.domain.exception.BuyerAddressNotFoundException;
+import com.commercesettle.commerce.domain.exception.CouponCampaignConflictException;
+import com.commercesettle.commerce.domain.exception.CouponRecipientNotFoundException;
+import com.commercesettle.commerce.domain.exception.CouponRejectedException;
+import com.commercesettle.commerce.domain.exception.CouponTemplateNotFoundException;
 import com.commercesettle.commerce.domain.exception.DefaultAddressConflictException;
 import com.commercesettle.commerce.domain.exception.DuplicateAccountEmailException;
 import com.commercesettle.commerce.domain.exception.EventAdmissionClosedException;
 import com.commercesettle.commerce.domain.exception.InsufficientInventoryException;
+import com.commercesettle.commerce.domain.exception.InvalidCouponTermsException;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.exception.SaleEventConflictException;
 import com.commercesettle.commerce.domain.exception.SaleEventNotFoundException;
@@ -101,7 +107,7 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
   ResponseEntity<Object> orderFailure(OrderRequestException e, WebRequest request) {
     return switch (e.kind()) {
       case NOT_FOUND -> respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, request);
-      case INVALID_REQUEST -> invalid(List.of(error(e.field(), "입력값의 조합을 확인해 주세요.")), request);
+      case INVALID_REQUEST -> invalid(List.of(error(e.field(), e.reason())), request);
     };
   }
 
@@ -147,6 +153,11 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
     return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "주소를 찾을 수 없습니다.", null, request);
   }
 
+  @ExceptionHandler(AccountNotFoundException.class)
+  ResponseEntity<Object> accountNotFound(AccountNotFoundException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "계정을 찾을 수 없습니다.", null, request);
+  }
+
   @ExceptionHandler({
     VersionConflictException.class,
     OptimisticLockingFailureException.class,
@@ -165,6 +176,61 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
   ResponseEntity<Object> insufficientInventory(
       InsufficientInventoryException e, WebRequest request) {
     return respond(ErrorCode.INVENTORY_INSUFFICIENT, request);
+  }
+
+  @ExceptionHandler(CouponTemplateNotFoundException.class)
+  ResponseEntity<Object> couponTemplateNotFound(
+      CouponTemplateNotFoundException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "쿠폰 캠페인을 찾을 수 없습니다.", null, request);
+  }
+
+  @ExceptionHandler(CouponRecipientNotFoundException.class)
+  ResponseEntity<Object> couponRecipientNotFound(
+      CouponRecipientNotFoundException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "쿠폰을 받을 구매자를 찾을 수 없습니다.", null, request);
+  }
+
+  @ExceptionHandler(InvalidCouponTermsException.class)
+  ResponseEntity<Object> invalidCouponTerms(InvalidCouponTermsException e, WebRequest request) {
+    return invalid(List.of(error(e.field(), e.getMessage())), request);
+  }
+
+  /**
+   * 캠페인 상태 충돌은 다시 시도해도 성공하지 않으므로 버전 충돌과 구분한 전용 코드로 알린다. 소진·중복 발급·발급 불가 기간/종료를 나누고, 발급 불가는 사유를 설명에
+   * 담는다.
+   */
+  @ExceptionHandler(CouponCampaignConflictException.class)
+  ResponseEntity<Object> couponCampaignConflict(
+      CouponCampaignConflictException e, WebRequest request) {
+    return switch (e.reason()) {
+      case EXHAUSTED -> respond(ErrorCode.COUPON_BUDGET_EXHAUSTED, request);
+      case ALREADY_ISSUED -> respond(ErrorCode.COUPON_ALREADY_ISSUED, request);
+      case CLOSED -> notIssuable("신규 발급을 종료한 캠페인입니다.", request);
+      case NOT_STARTED -> notIssuable("아직 발급 기간이 아닌 캠페인입니다.", request);
+      case ENDED -> notIssuable("발급 기간이 끝난 캠페인입니다.", request);
+    };
+  }
+
+  private ResponseEntity<Object> notIssuable(String detail, WebRequest request) {
+    return respond(ErrorCode.COUPON_CAMPAIGN_NOT_ISSUABLE, detail, null, request);
+  }
+
+  @ExceptionHandler(CouponRejectedException.class)
+  ResponseEntity<Object> couponRejected(CouponRejectedException e, WebRequest request) {
+    if (e.reason() == CouponRejectedException.Reason.EXPIRED) {
+      return respond(ErrorCode.COUPON_EXPIRED, request);
+    }
+    String detail =
+        switch (e.reason()) {
+          case NOT_STARTED -> "아직 사용할 수 없는 쿠폰입니다.";
+          case NOT_AVAILABLE -> "다른 주문에 예약됐거나 이미 사용한 쿠폰입니다.";
+          case NOT_OWNED -> "본인 쿠폰이 아닙니다.";
+          case METHOD_NOT_ALLOWED -> "이 결제수단에는 쓸 수 없는 쿠폰입니다.";
+          case PRODUCT_MISMATCH -> "이 상품에는 쓸 수 없는 쿠폰입니다.";
+          case BELOW_MIN_ORDER -> "최소 주문금액보다 상품대금이 작습니다.";
+          case EXPIRED -> throw new IllegalStateException("handled above");
+        };
+    return respond(ErrorCode.COUPON_NOT_APPLICABLE, detail, null, request);
   }
 
   @ExceptionHandler(EventAdmissionClosedException.class)
@@ -243,7 +309,12 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
         request);
   }
 
-  @ExceptionHandler({TransientDataAccessException.class, CannotCreateTransactionException.class})
+  @ExceptionHandler({
+    TransientDataAccessException.class,
+    CannotCreateTransactionException.class,
+    com.commercesettle.commerce.application.port.SettlementRetentionGateway.UnavailableException
+        .class
+  })
   ResponseEntity<Object> temporarilyUnavailable(RuntimeException e, WebRequest request) {
     String traceId = traceId();
     LOGGER

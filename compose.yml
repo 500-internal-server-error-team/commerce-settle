@@ -180,6 +180,12 @@ services:
         MODULE: commerce
     environment:
       <<: *app-env
+      SETTLEMENT_COMMERCE_CREDENTIAL: ${SETTLEMENT_COMMERCE_CREDENTIAL:?Run python3 scripts/init_env.py}
+      SETTLEMENT_URL: ${SETTLEMENT_URL:-http://settlement:8080}
+      COMMERCE_RETENTION_ENABLED: ${COMMERCE_RETENTION_ENABLED:-false}
+      COMMERCE_RETENTION_BATCH_SIZE: ${COMMERCE_RETENTION_BATCH_SIZE:-100}
+      COMMERCE_RETENTION_MAX_BATCHES: ${COMMERCE_RETENTION_MAX_BATCHES:-10}
+      COMMERCE_RETENTION_CRON: ${COMMERCE_RETENTION_CRON:-0 0 3 * * *}
       DB_URL: jdbc:postgresql://postgres:5432/commerce
       DB_USERNAME: commerce
       DB_PASSWORD: ${COMMERCE_DB_PASSWORD:?Run python3 scripts/init_env.py}
@@ -276,6 +282,8 @@ services:
       SPRING_DATA_REDIS_PASSWORD: ${SETTLEMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
       SETTLEMENT_GATEWAY_CREDENTIAL: ${SETTLEMENT_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
       SETTLEMENT_GATEWAY_CREDENTIAL_PREVIOUS: ${SETTLEMENT_GATEWAY_CREDENTIAL_PREVIOUS:-}
+      SETTLEMENT_COMMERCE_CREDENTIAL: ${SETTLEMENT_COMMERCE_CREDENTIAL:?Run python3 scripts/init_env.py}
+      SETTLEMENT_COMMERCE_CREDENTIAL_PREVIOUS: ${SETTLEMENT_COMMERCE_CREDENTIAL_PREVIOUS:-}
       FINANCE_MOCK_SETTLEMENT_CREDENTIAL: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
       COMMERCE_SETTLEMENT_CREDENTIAL: ${COMMERCE_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
     depends_on:
@@ -314,14 +322,29 @@ services:
 
   prometheus:
     image: prom/prometheus:v3.2.1
-    profiles: [observability]
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./infra/prometheus/quarantine.rules.yml:/etc/prometheus/quarantine.rules.yml:ro
       - ./infra/prometheus/notification.rules.yml:/etc/prometheus/notification.rules.yml:ro
+      - ./infra/prometheus/financial.rules.yml:/etc/prometheus/financial.rules.yml:ro
       - prometheus-data:/prometheus
     ports:
       - 127.0.0.1:${PROMETHEUS_PORT:-9090}:9090
+    networks: [backend]
+
+  data-storage-metrics:
+    image: python:3.13.7-alpine
+    restart: unless-stopped
+    command: [python, -B, /storage_metrics.py]
+    environment:
+      DATA_FILESYSTEM_PATHS_JSON: '{"kafka":["/data/kafka"],"postgres":["/data/postgres"]}'
+    volumes:
+      - ./infra/observability/storage_metrics.py:/storage_metrics.py:ro
+      - kafka-data:/data/kafka:ro
+      - postgres-data:/data/postgres:ro
+    read_only: true
+    cap_drop: [ALL]
+    mem_limit: 64m
     networks: [backend]
 
   alertmanager:

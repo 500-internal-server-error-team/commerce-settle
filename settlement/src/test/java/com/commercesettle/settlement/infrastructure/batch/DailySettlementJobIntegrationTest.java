@@ -10,6 +10,7 @@ import com.commercesettle.settlement.domain.model.SettlementAmounts;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
 import com.commercesettle.settlement.domain.model.SettlementItem;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
+import com.commercesettle.settlement.support.EventContract;
 import com.zaxxer.hikari.HikariDataSource;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -48,6 +49,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     properties = {
       "management.tracing.enabled=false",
       "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123",
+      "app.internal-auth.senders[service\\:commerce].current=test-commerce-retention-credential-0123456789abcdef",
       "settlement.payout.mock-credential=test-settlement-credential-0123456789abcdef0123",
       "spring.kafka.admin.auto-create=false",
       "settlement.daily-batch.schedule-enabled=false",
@@ -74,7 +76,8 @@ class DailySettlementJobIntegrationTest {
             "settlement_batches",
             "payouts",
             "payout_jobs",
-            "settlement_reservations")) {
+            "settlement_reservations",
+            "outbox")) {
       jdbc.update("DELETE FROM settlement." + table);
     }
     contexts.reset();
@@ -125,6 +128,17 @@ class DailySettlementJobIntegrationTest {
                 Long.class,
                 payout.get("id")))
         .containsExactlyInAnyOrder(8_500L, 17_000L);
+    byte[] notice =
+        jdbc.queryForObject(
+            "SELECT raw_body FROM settlement.outbox WHERE message_key = ?",
+            byte[].class,
+            batch.get("id").toString());
+    EventContract.assertValid(notice);
+    assertThat(new String(notice, java.nio.charset.StandardCharsets.UTF_8))
+        .contains("\"kind\":\"SETTLEMENT_READY\"")
+        .contains("\"amount\":25500")
+        .contains("\"batchDate\":\"2026-09-01\"")
+        .contains("\"payoutId\":\"" + payout.get("id") + "\"");
   }
 
   @Test
@@ -166,6 +180,14 @@ class DailySettlementJobIntegrationTest {
     assertThat(count("settlement_batches WHERE seller_id = ?", rejected)).isZero();
     assertThat(statusOf(rejectedItem)).isEqualTo("PAYABLE");
     assertThat(count("settlement_reservations WHERE item_id = ?", rejectedItem.getId())).isZero();
+    // 롤백한 판매자의 알림 요청은 남지 않는다.
+    assertThat(count("outbox")).isEqualTo(1);
+    assertThat(
+            count(
+                "outbox WHERE message_key = (SELECT id::text FROM settlement.settlement_batches"
+                    + " WHERE seller_id = ?)",
+                accepted))
+        .isEqualTo(1);
   }
 
   @Test

@@ -75,6 +75,13 @@ public class MileageWallet extends AuditableEntity {
     touch(now);
   }
 
+  /** 환불로 원결제의 사용 마일리지를 돌려준다. 예약액은 바뀌지 않는다. */
+  public void restore(long amount, Instant now) {
+    requirePositive(amount);
+    balance = Math.addExact(balance, amount);
+    touch(now);
+  }
+
   private static void requirePositive(long amount) {
     if (amount <= 0) {
       throw new IllegalArgumentException("마일리지 금액은 0보다 커야 합니다.");

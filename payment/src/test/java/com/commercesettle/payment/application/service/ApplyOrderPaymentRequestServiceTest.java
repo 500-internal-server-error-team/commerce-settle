@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 import static org.assertj.core.api.Assertions.tuple;
+import static org.mockito.Mockito.mock;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
@@ -12,6 +13,9 @@ import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationResultPayload;
+import com.commercesettle.payment.application.event.PaymentConfirmedPayload;
+import com.commercesettle.payment.application.event.PaymentDeclinedPayload;
+import com.commercesettle.payment.application.event.RefundEventPayload;
 import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
@@ -31,6 +35,7 @@ import com.commercesettle.payment.domain.repository.MileageEntryRepository;
 import com.commercesettle.payment.domain.repository.MileageReservationRepository;
 import com.commercesettle.payment.domain.repository.MileageWalletRepository;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository;
+import com.commercesettle.payment.domain.repository.PaymentJobRepository.LeasedJob;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -74,6 +79,7 @@ class ApplyOrderPaymentRequestServiceTest {
           reservations,
           entries,
           outbox,
+          mock(RefundEventHandler.class),
           TransactionOperations.withoutTransaction(),
           Clock.fixed(NOW, ZoneOffset.UTC),
           30_000);
@@ -506,8 +512,7 @@ class ApplyOrderPaymentRequestServiceTest {
   @CsvSource({"1, 1", "2, 2", "3, 4", "6, 32", "7, 60", "9, 60"})
   @DisplayName("재시도 대기는 1초부터 두 배씩 늘고 60초를 넘지 않는다")
   void growsRetryDelayUpToSixtySeconds(int attempts, long seconds) {
-    assertThat(ApplyOrderPaymentRequestService.retryDelay(attempts))
-        .isEqualTo(Duration.ofSeconds(seconds));
+    assertThat(PaymentRetryPolicy.delayAfter(attempts)).isEqualTo(Duration.ofSeconds(seconds));
   }
 
   @Test
@@ -1133,6 +1138,11 @@ class ApplyOrderPaymentRequestServiceTest {
     }
 
     @Override
+    public Optional<Payment> findByIdForUpdate(UUID id) {
+      return findById(id);
+    }
+
+    @Override
     public Optional<Payment> findByOrderId(UUID orderId) {
       return byId.values().stream().filter(p -> p.getOrderId().equals(orderId)).findFirst();
     }
@@ -1172,6 +1182,23 @@ class ApplyOrderPaymentRequestServiceTest {
       return saved.stream()
           .filter(j -> j.getOperation() == operation && j.getBusinessKey().equals(businessKey))
           .findFirst();
+    }
+
+    @Override
+    public Optional<LeasedJob> leaseNext(
+        PaymentJobOperation operation, String owner, Duration leaseDuration) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean holdsLease(UUID jobId, UUID leaseToken, Duration minRemaining) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean releaseLease(
+        UUID jobId, UUID leaseToken, PaymentJobStatus status, Duration runAfter, String errorCode) {
+      throw new UnsupportedOperationException();
     }
   }
 
@@ -1229,6 +1256,18 @@ class ApplyOrderPaymentRequestServiceTest {
     private final List<EventEnvelope<PaymentAcceptedPayload>> accepted = new ArrayList<>();
     private final List<EventEnvelope<PaymentCancellationResultPayload>> cancellations =
         new ArrayList<>();
+    private final List<EventEnvelope<PaymentConfirmedPayload>> confirmed = new ArrayList<>();
+
+    @Override
+    public UUID appendPaymentConfirmed(EventEnvelope<PaymentConfirmedPayload> event) {
+      confirmed.add(event);
+      return event.eventId();
+    }
+
+    @Override
+    public UUID appendPaymentDeclined(EventEnvelope<PaymentDeclinedPayload> event) {
+      throw new UnsupportedOperationException();
+    }
 
     @Override
     public UUID appendCancellationResult(EventEnvelope<PaymentCancellationResultPayload> event) {
@@ -1240,6 +1279,11 @@ class ApplyOrderPaymentRequestServiceTest {
     public UUID appendPaymentAccepted(EventEnvelope<PaymentAcceptedPayload> event) {
       accepted.add(event);
       return event.eventId();
+    }
+
+    @Override
+    public UUID appendRefundEvent(EventEnvelope<? extends RefundEventPayload> event) {
+      throw new UnsupportedOperationException();
     }
   }
 }

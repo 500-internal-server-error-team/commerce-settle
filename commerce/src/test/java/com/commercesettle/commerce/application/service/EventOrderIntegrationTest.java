@@ -68,7 +68,36 @@ class EventOrderIntegrationTest {
   @Autowired SaleEventService events;
   @Autowired OrderResultService results;
   @Autowired PaymentAcceptedService accepted;
+  @Autowired CouponService coupons;
   @MockitoBean OrderAdmissionService admission;
+
+  @Test
+  @DisplayName("선착순 주문에도 쿠폰 한 장을 쓸 수 있고, 최소 주문금액은 정가가 아니라 이벤트 가격으로 판단한다")
+  void appliesCouponAtEventPrice() throws Exception {
+    Sale eligible = sale(2, Duration.ofHours(-1), 30_000, 25_000);
+    Sale cheap = sale(2, Duration.ofHours(-1), 30_000, 19_000);
+    Buyer buyer = buyer();
+    UUID coupon = coupons.issueWelcome(buyer.id(), Instant.now()).getId();
+
+    JsonNode rejected =
+        exchange(buyer.id(), "/api/orders", couponBody(cheap, buyer, coupon, 16_000), 409);
+    assertThat(rejected.path("code").asText()).isEqualTo("COUPON_NOT_APPLICABLE");
+    assertThat(rejected.path("detail").asText()).isEqualTo("최소 주문금액보다 상품대금이 작습니다.");
+    assertSlots(cheap, 0, 0);
+
+    JsonNode order =
+        exchange(buyer.id(), "/api/orders", couponBody(eligible, buyer, coupon, 22_000), 201);
+    assertThat(order.path("grossAmount").asLong()).isEqualTo(25_000);
+    assertThat(order.path("platformCouponAmount").asLong()).isEqualTo(3_000);
+    assertThat(order.path("totalAmount").asLong()).isEqualTo(22_000);
+    assertSlots(eligible, 0, 1);
+    confirm(order);
+    assertSlots(eligible, 1, 0);
+    assertThat(
+            jdbc.queryForObject(
+                "select status from commerce.buyer_coupons where id = ?", String.class, coupon))
+        .isEqualTo("USED");
+  }
 
   @Test
   @DisplayName("선착순 주문은 이벤트 가격으로 R을 잡고, 참여·확정이 이벤트 버전을 바꾸지 않아 같은 버전으로 계속 주문하며 남은 수량이 없으면 거절한다")
@@ -236,6 +265,12 @@ class EventOrderIntegrationTest {
         expected);
   }
 
+  private ObjectNode couponBody(Sale sale, Buyer buyer, UUID coupon, long expectedTotal) {
+    return body(sale.productId(), sale.eventId(), sale.version(), buyer)
+        .put("buyerCouponId", coupon.toString())
+        .put("expectedTotalAmount", expectedTotal);
+  }
+
   private ObjectNode body(UUID product, UUID event, long eventVersion, Buyer buyer) {
     return mapper
         .createObjectNode()
@@ -334,8 +369,12 @@ class EventOrderIntegrationTest {
     return sale(quota, Duration.ofHours(-1));
   }
 
-  /** 판매자·가용 10개 상품을 만들고 startsIn 뒤에 시작하는 이벤트를 공개한다. */
   private Sale sale(long quota, Duration startsIn) {
+    return sale(quota, startsIn, 10_000, EVENT_PRICE);
+  }
+
+  /** 판매자·가용 10개 상품을 만들고 startsIn 뒤에 시작하는 이벤트를 공개한다. */
+  private Sale sale(long quota, Duration startsIn, long unitPrice, long eventPrice) {
     UUID seller = UUID.randomUUID();
     jdbc.update(
         "insert into commerce.seller_accounts(id,email_normalized,password_hash,display_name,status,"
@@ -343,7 +382,8 @@ class EventOrderIntegrationTest {
             + " values (?,?,'hash','seller','ACTIVE','test-account',now(),now(),0)",
         seller,
         seller + "@example.com");
-    UUID product = products.register(seller, key(), "한정 상품", 10_000, ProductStatus.ON_SALE).getId();
+    UUID product =
+        products.register(seller, key(), "한정 상품", unitPrice, ProductStatus.ON_SALE).getId();
     products.adjustAvailable(seller, product, key(), 10, 0, "입고");
     Instant start = Instant.now().truncatedTo(ChronoUnit.SECONDS).plus(startsIn);
     SaleEvent draft =
@@ -352,7 +392,7 @@ class EventOrderIntegrationTest {
             key(),
             product,
             "주말 특가",
-            EVENT_PRICE,
+            eventPrice,
             quota,
             start,
             start.plus(Duration.ofHours(3)));

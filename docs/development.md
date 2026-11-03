@@ -110,7 +110,7 @@ APP_DEV_FIXTURES_ENABLED=false SETTLEMENT_DAILY_BATCH_ENABLED=false \
 SETTLEMENT_PAYOUT_WORKER_ENABLED=true docker compose up -d --wait settlement
 ```
 
-Payment·Settlement에는 업무 조회 HTTP API가 없어 서비스별 DB로 확인합니다. 서비스 간 DB를 조인하거나 loader가 타 서비스 DB를 읽지 않습니다.
+Payment의 본인 결제 조회는 [결제 API](api.md#기능-목록)로 확인할 수 있으며 fixture의 저장 상태 대조는 아래 서비스별 DB 조회를 사용합니다. 서비스 간 DB를 조인하거나 loader가 타 서비스 DB를 읽지 않습니다.
 
 ```bash
 docker compose exec postgres psql -U postgres -d commerce -c \
@@ -165,7 +165,24 @@ DB 주문의 신규 접수와 새 결제 회차에는 기본으로 gate를 적�
 
 전용 단일 실행기가 Commerce DB 관측과 Prometheus instant query를 15초 간격으로 수행합니다. DB 쿼리는 2초, HTTP는 전체 5초·응답 2 MiB 상한이며 요청 트랜잭션에서 원격 조회하지 않습니다. 수집 실패·지표 누락·오래된 원본 시각이면 닫습니다. `commerce_order_admission_open`은 열림 1/닫힘 0이며, Commerce의 두 금융 대기열 값과 원본 수집 시각을 `/actuator/prometheus`로 제공합니다. 상세 metric·필수 대상·임계값은 [접수 정책](policies.md#신규-접수-제한과-재개)을 따릅니다.
 
-현재 외부 소유 수집기는 연결 전이므로 기본 Compose에서 신규 주문을 보내면 `503 COMMON_CAPACITY_EXCEEDED`, `Retry-After: 30`입니다. 누락을 0으로 채우거나 gate를 우회해 정상 동작으로 표시하지 않습니다. Payment·Settlement·lag·데이터 파일시스템 관측 연결과 실제 환경 회복 검증은 [#120](https://github.com/500-internal-server-error-team/commerce-settle/issues/120)에 남아 있습니다. 주문 측 HTTP·DB 회귀는 실제 gate의 관측 누락 거절, 기존 결과/본문 충돌 우선, 거절 키 재사용, 결제 재시도 롤백·취소 비제한을 검사합니다. 임계값·복제 관측·원본 시각·히스테리시스와 실제 HTTP 관측 어댑터는 별도 좁은 테스트로 확인합니다.
+### 금융 관측과 접수 복구
+
+Payment API·Worker는 같은 소유 DB를 각각 관측합니다. Settlement도 자기 Inbox·Outbox·지급 Job을 관측하며, 중복 인스턴스를 합산하지 않습니다. 미래 재시도·유효 임대·수동 확인은 자동 실행 지연에서 제외합니다. 금융 UNKNOWN·환불·미지급·수동 확인 경보는 `infra/prometheus/financial.rules.yml`에서 기존 Alertmanager와 [Slack overlay](#dlt-관측과-조치)에 연결합니다. 격리·DLT와 알림 전용 경보는 기존 소유 규칙을 유지합니다.
+
+Kafka는 `commerce.v1 → payment.v1 토픽`, `payment.v1 → commerce.v1·settlement.v1 토픽`, `settlement.v1 → payment.v1·commerce.v1 토픽`의 **모든 파티션**을 수집합니다. 여기서 토픽은 `commerce-settle.` 접두사를 포함합니다. 초기 offset 부재·보존 범위 밖 offset·누락/실패 파티션을 0 lag로 바꾸지 않습니다. 신규 전용 환경에서 소비자를 켜기 전에 기존 offset 초기화 절차로 각 그룹의 모든 계약 토픽을 준비합니다. 예를 들어 새 Payment 그룹은 다음과 같습니다.
+
+```bash
+docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server kafka:9092 --group payment.v1 --reset-offsets \
+  --topic commerce-settle.commerce.v1 --topic commerce-settle.settlement.v1 \
+  --to-earliest --execute
+```
+
+운영 중인 그룹이나 공유 데이터에서 offset을 임의로 재설정하지 않습니다. 토픽 파티션을 늘리면 새 파티션의 시작점도 명시적으로 준비합니다. 기본 Outbox·Consumer/Worker 활성화 정책은 바꾸지 않으므로 전체 업무 시연에는 각 소유 기능의 실행 설정도 필요합니다. 미발행 금융 작업을 계속 쌓아 도래 지연이 60초에 도달하면 관측이 정상이어도 신규 접수가 닫힙니다.
+
+`python3 scripts/test_admission.py`는 새 이름의 전용 Compose 프로젝트·빈 볼륨·시험 계정/상품을 생성합니다. 실제 세 서비스 수집기·Kafka Admin·데이터 볼륨·Prometheus에서 유효 신호를 준비하고, 최소 60초 회복 뒤 Gateway로 일반 주문을 접수해 주문·Outbox 저장을 확인합니다. 데이터 볼륨 수집 중단 뒤 신규 주문 503·기존 키 재요청·조회·취소 접수 유지, 실제 Alertmanager의 수집 실패 경보 수신, 수집 재개와 다시 60초 회복 후 신규 주문을 검사합니다. 금융 수치는 고정하거나 gate를 끄지 않습니다. Commerce Outbox만 시험 인스턴스에서 활성화하며 전체 외부 결제·환불 왕복 시험은 아닙니다. 전용 컨테이너·볼륨·설정은 종료 시 제거하고, 정리 확인에 실패하면 정확한 시험 설정 위치를 남깁니다. 기본 CI에도 포함합니다.
+
+`KafkaLagMetricsIntegrationTest`는 실제 Kafka에서 세 그룹·다중 파티션 lag 합산, 미초기화·증설 파티션의 실패와 회복, 브로커 중단을 검사합니다. 각 소유 DB의 `FinancialQueueMetricsIntegrationTest`는 실제 PostgreSQL에서 미완료·미래 대기·유효 임대·수동 확인 구분, 같은 캡처의 값/시각과 수집 실패/회복을 확인합니다. 환불 결과 복구는 기존 `OrderWorkflowIntegrationTest`에서 접수 gate가 거절하는 동안에도 검증하며 금융 결과 입력은 시험 이벤트입니다. 전체 금융·알림 왕복의 최종 판정은 #120의 범위입니다.
 
 ## 결제 접수 결과 수신
 
@@ -207,9 +224,17 @@ SELLER: POST /api/sellers/me/refund-requests/{requestId}/receipt
 
 주문 스케줄러는 `APP_ORDER_WORKFLOW_ENABLED=true`, 결과 처리기는 `APP_ORDER_RESULT_PROCESSOR_ENABLED=true`로 시험 인스턴스에서 활성화합니다. 결과 수신은 기존 `APP_KAFKA_PAYMENT_ACCEPTED_ENABLED=true`를 공유하며, 접수 ID 처리기는 기존 플래그를 별도로 유지합니다. 기본값은 모두 false입니다. 이 설정은 인스턴스 환경에 전달해야 하며 `.env` 추가만으로 기존 Compose 컨테이너에 전달되지 않습니다. 빈 전용 DB에는 갱신한 초기 SQL을 적용하고 기존 볼륨을 초기화하지 않습니다.
 
-Payment 내부 조회와 운영 종결은 ADR 0010의 `service:payment`·`operator:<식별자>` 자격을 인스턴스의 `app.internal-auth.senders`에 설정해야 합니다. 사용자 토큰이나 Gateway 자격으로 호출할 수 없습니다. 운영 종결은 외부 확정 거절·마일리지 미복원·정산 예약 해제·고객 확인을 모두 검증한 `RefundClosureEvidence`가 필요합니다. 기본 미연결 구현은 503이며 금융 실패만으로 주문을 PAID로 되돌리거나 자동 구매확정을 진행하지 않습니다.
+Payment 내부 조회와 운영 종결은 ADR 0010의 `service:payment`·`operator:<식별자>` 자격을 인스턴스의 `app.internal-auth.senders`에 설정해야 합니다. 사용자 토큰이나 Gateway 자격으로 호출할 수 없습니다. 운영 종결은 [소유 증빙과 구매자 확인](api.md#실패-환불의-운영-종결)을 모두 대조하는 `RefundClosureEvidence`를 사용합니다. 기본은 비활성(503)이며 금융 실패만으로 주문을 PAID로 되돌리거나 자동 구매확정을 진행하지 않습니다.
 
-`OrderBenefitsService`가 선착순 이벤트의 견적·예약·재시도·확정·해제·환불 복원·반품 입고를 주문 트랜잭션 안에서 처리하며 `EventOrderIntegrationTest`가 HTTP 경로로 검증합니다. 쿠폰은 구현 전이라 쿠폰을 쓴 주문은 503으로 중단합니다. `OrderWorkflowIntegrationTest`의 DB 기록 대역은 해당 호출·금액 사본·로컬 롤백만 검증하며 실제 쿠폰 예산 구현의 완료가 아닙니다. Payment/Settlement의 실제 회차 재접수·마일리지 재예약·승인 차단·원환불/예약 해제 조회·환불 복구 확인 왕복은 각 소유 서비스와 통합 검증해야 합니다. 금융 성공을 임의로 반환하는 기본 어댑터는 없습니다. 거래 알림은 [모의 거래 알림](#모의-거래-알림) 범위를 구현했습니다. 신규 접수 용량 gate는 별도 [PR #125](https://github.com/500-internal-server-error-team/commerce-settle/pull/125)에서 구현했으며 이 알림 변경의 일부가 아닙니다.
+증빙 읽기를 연결하려면 #131의 금융 환불 스키마·불변 DECLINED 상태와 #154의 실제 원예약 해제를 먼저 적용·검증합니다. Payment의 읽기 구현은 `refunds`와 원결제의 `RESTORE` 원장을 사용하며 #131 스키마가 없으면 503입니다. Settlement는 기존 `settlement_reservations`와 항목을 읽으며 없는 원예약은 404입니다. 두 읽기 API는 Gateway에 공개하지 않고 `SERVICE:commerce`만 허용합니다.
+
+- Commerce: `APP_REFUND_CLOSURE_ENABLED=true`, `PAYMENT_URL`, `SETTLEMENT_URL`, 각 대상에 발급한 `PAYMENT_COMMERCE_CREDENTIAL`, `SETTLEMENT_COMMERCE_CREDENTIAL`을 설정합니다. 현재 클라이언트는 각 GET 연결/응답을 3초로 제한하고 리다이렉트·자동 재시도를 하지 않습니다. 활성화 때 자격 누락·짧은 값은 기동 실패입니다.
+- Payment와 Settlement: 각각 `app.internal-auth.senders[service:commerce].current`에 자기 대상의 동일 자격을 추가합니다. Gateway·서로 다른 대상 자격을 재사용하지 않습니다. 기존 [내부 자격 설정](#내부-호출-자격)과 같이 외부 설정/Compose override로 전달합니다. 기본 Compose에는 이 선택 연동을 활성화하지 않습니다.
+- 새 빈 전용 Commerce DB에는 변경한 초기 SQL을 적용합니다. 기존 공유 볼륨을 지우거나 전체 SQL을 재실행하지 않습니다.
+
+검증은 `:commerce:test --tests '*HttpRefundClosureEvidenceTest' --tests '*OrderWorkflowIntegrationTest'`와 각 소유 모듈의 `*RefundClosureEvidenceIntegrationTest`로 재현합니다. Commerce의 HTTP 응답 대역 검사는 금융/예약 증빙 변경·누락·UNKNOWN·고객 확인 불일치를, 실제 PostgreSQL 주문 시험은 확인 기록·멱등·권한·주문/요청 버전 경합·잠금 상한·증빙 저장을 검사합니다. 소유 서비스 시험은 실제 SQL+인증 필터+MVC 왕복입니다. Payment의 `refunds`는 #131 미병합에 따른 명시적 읽기 계약 fixture이므로 실제 금융 실행이나 전체 SAGA 왕복 통과를 의미하지 않습니다. 선행 #131/#154 적용 후 실제 서비스 간 왕복은 상위 #120의 통합 검증으로 남습니다.
+
+`OrderBenefitsService`가 선착순 이벤트의 견적·예약·재시도·확정·해제·환불 복원·반품 입고를 주문 트랜잭션 안에서 처리하며 `EventOrderIntegrationTest`가 HTTP 경로로 검증합니다. 쿠폰도 같은 구현이 견적·예약·재시도·사용·해제·전액 환불 복구를 처리하며 `CouponOrderIntegrationTest`가 웰컴 쿠폰으로, `SellerCouponIntegrationTest`가 판매자 쿠폰 캠페인·발급·주문으로 검증합니다. 월간 우수고객은 매월 1일 00:10 KST부터 10분마다 스케줄러(`app.coupons.grade-scheduler-enabled`)가 Spring Batch Job(`gradeCouponJob`)을 실행하고, 이전 월에 끝나지 않은 회차도 먼저 실행해 원래 기한이 지났으면 새 발급 없이 EXPIRED로 종결합니다. `GradeCouponIntegrationTest`가 선정·발급·재개·만료를 검증합니다. 웰컴 쿠폰은 구매자 가입(`POST /api/buyers`)이 계정·멱등 기록과 같은 트랜잭션에서 `CouponService.issueWelcome`으로 발급하며, `BuyerRegistrationIntegrationTest`가 재요청·본문 충돌·이메일 경합·발급 실패 롤백을 검증합니다. 기한이 지난 미사용 쿠폰은 매분 만료 스케줄러(`app.coupons.expiry-*`)가 만료하고 약속액을 상쇄합니다. `OrderWorkflowIntegrationTest`의 DB 기록 대역은 해당 호출·금액 사본·로컬 롤백만 검증합니다. Payment/Settlement의 실제 회차 재접수·마일리지 재예약·승인 차단·원환불/예약 해제 조회·환불 복구 확인 왕복은 각 소유 서비스와 통합 검증해야 합니다. 금융 성공을 임의로 반환하는 기본 어댑터는 없습니다. 거래 알림은 [모의 거래 알림](#모의-거래-알림) 범위를 구현했습니다. 신규 접수 용량 제한은 [금융 관측과 접수 복구](#금융-관측과-접수-복구)를 따릅니다.
 
 ```bash
 ./gradlew :commerce:test --tests '*OrderWorkflow*' --tests '*OrderIntegrationTest' --tests '*PaymentAcceptedIntegrationTest'
@@ -234,6 +259,22 @@ Payment·Settlement notice를 받으려면 `APP_NOTIFICATIONS_CONSUMER_ENABLED=t
 해석 불가·계약 위반 원문은 `notification_inbox_quarantines`에 bytes·키·위치·사유를 커밋한 뒤 ACK합니다. 같은 eventId의 다른 본문도 격리하며 원본 Inbox/항목을 덮어쓰지 않습니다. DB 인계/격리 실패는 알림 Listener만 중단하고 offset을 보존합니다. 저장 결과와 원인을 확인한 뒤 재기동하면 같은 원문을 재개합니다. 격리 원문의 자동 재처리/DLT 발행은 제공하지 않습니다. 생산자 오류를 고쳐 같은 원업무 ID·원결과로 정정 알림을 발행하고 격리 출처와 대조하는 소유 서비스의 복구가 필요하며 #120에서 통합 확인합니다. 원금융 거래 재실행·원문 삭제·임의 offset 이동으로 복구하지 않습니다.
 
 신규 테이블은 초기 Commerce SQL에 있으므로 새 빈 개발 DB에서 검증합니다. 기존 볼륨의 앱 재시작으로 테이블이 생기지 않으며 [DB 적용 정책](migrations.md)을 따릅니다. 실제 카카오 시연은 [별도 설정](#본인-카카오톡-시연)으로 켭니다. 전체 금융 생산부·본인 카카오 실제 수신이나 처리량 목표의 완료를 자동 테스트 통과로 주장하지 않습니다.
+
+## 주문 주소·알림 보존 실행
+
+주문 주소와 주문 연결 알림, Settlement 배치에 연결된 정산·지급 알림의 보존 처리를 제공합니다. 금융 상태·원장·작업을 삭제하지 않으며 실제 서비스 간 검증 범위는 해당 PR과 아래 CI 검사로 구분합니다.
+
+변경한 Commerce·Settlement 초기 스키마와 내부 호출 자격을 새 빈 개발 DB에 적용한 뒤 `COMMERCE_RETENTION_ENABLED=true`를 사용합니다. `python3 scripts/init_env.py`가 `SETTLEMENT_COMMERCE_CREDENTIAL`을 만들고 Compose가 두 서비스에 연결합니다. 기존 자격 교체 중에는 Settlement에 `_PREVIOUS`를 함께 설정합니다. 원천 URL은 `SETTLEMENT_URL`(기본 `http://settlement:8080`)입니다. 기존 DB·볼륨은 초기화하지 않으며 [DB 변경 경계](migrations.md)를 따릅니다. 기본값은 비활성입니다. 활성화하면 전용 단일 실행 스레드에서 기동 시 한 번과 매일 03:00 KST에 실행합니다. `COMMERCE_RETENTION_CRON`은 KST cron, `COMMERCE_RETENTION_BATCH_SIZE`는 1~1000(기본 100), `COMMERCE_RETENTION_MAX_BATCHES`는 1~100(기본 10)으로 종류별 실행량을 제한합니다.
+
+`RetentionService.run(batchSize,maxBatches)`은 내부 수동 재실행 경계이며 공개 HTTP API가 아닙니다. 대상마다 별도 트랜잭션으로 재검사하고, 주문/발송 잠금은 건너뛰며 주소 잠금 대기는 1초·SQL은 5초·대상 트랜잭션은 10초 상한을 적용합니다. 보류·실패의 다음 실행 시각과 이력은 DB에 남아 새 인스턴스도 이어갑니다. 한 실행의 한도에 도달한 대상과 실패한 대상은 다음 실행에서 재조회합니다. 보류 해제는 `RetentionService.hold(orderId,null)`, 분쟁 등 보존 보류는 같은 내부 운영 경계에서 이유를 전달합니다. 인증된 운영 진입점이 호출해야 하며 별도 공개 관리 API는 추가하지 않았습니다.
+
+잠금 등으로 건너뛰거나 처리에 실패한 대상은 현재 실행의 다음 묶음에서 제외해 뒤의 처리 가능한 대상이 진행하도록 합니다. 실패 이력을 저장하지 못해도 같은 대상을 반복 선택하지 않습니다. 종결 캐시도 잠기지 않은 배치만 갱신해 한 배치의 경합이 다른 배치를 막지 않게 합니다. 재처리는 필요한 종결 사실을 캐시에 반영하지 못하면 503으로 중단합니다. 제외 목록은 실행이 끝나면 버리므로 다음 실행에서 다시 조회합니다.
+
+정산·지급 알림은 묶음당 한 번의 Settlement 조회로 미확인 배치의 종결을 확인합니다. 이 HTTP 대기 중에는 DB 트랜잭션·커넥션을 유지하지 않습니다. 종결 캐시는 되돌릴 수 없는 완료 사실만 저장하고, 부재·미종결·장애·판매자 불일치는 삭제하지 않습니다. 응답의 누락·판매자 불일치·미래 종결 시각·중복 ID는 해당 배치만 보존하고 검증된 다른 배치는 계속 처리합니다. 통신·응답 해석 실패는 전체 미확인 대상을 보존하며, 운영 재처리는 필요한 모든 원천의 검증을 통과해야 합니다. 보존 보류는 `RetentionService.holdSettlement(batchId,reason)`와 같은 내부 운영 경계에서 관리하며 null로 해제합니다. 운영 재처리도 스케줄 실행 전부터 원천을 확인하고, 원천 장애 중에는 기존에 완료된 같은 멱등 요청만 반환합니다.
+
+`retention_checks`·`retention_history`에서 결과와 재조회 시각을 확인합니다. 주소는 되돌릴 수 없는 마스킹이며 삭제된 알림 본문도 복구하지 않습니다. `HELD`는 보호 조건 유지, `FAILED`는 해당 대상 롤백입니다. 로그에는 대상 ID·종류·예외 종류만 남기며 본문·주소·보류 사유는 출력하지 않습니다. 정책과 제외 범위는 [보존과 삭제](policies.md#보존과-삭제)를 따릅니다.
+
+`./gradlew :commerce:test --tests '*RetentionIntegrationTest'`는 전용 PostgreSQL에서 90일 경계, 보류/반품·발송 임대 경합, 연결 알림 원자 삭제, 중단 뒤 재실행·중복·일부 실패 롤백을 확인합니다. 실제 DB·스케줄러 활성화 동작의 검증 결과는 해당 PR에 남기며 전체 금융 왕복의 판정은 #120에서 수행합니다. CI의 `scripts/smoke_retention.py`는 임시 `commerce-settle-ci` 프로젝트에서 실제 Commerce→Settlement HTTP 조회와 만료 알림 연결 기록 삭제, 미종결·보류 보호, 원천 금융 배치 보존을 검사합니다. 일반 로컬·운영 프로젝트에서 실행하지 않으며 기존 사용자 DB를 초기화하지 않습니다.
 
 ## 주문 API stub
 
@@ -303,7 +344,7 @@ Compose와 Gradle `bootRun`은 JVM 시간대를 `Asia/Seoul`로 지정합니다.
 | Payment 명세 | <http://localhost:8080/v3/api-docs/payment> | 기본 구성 |
 | Settlement 명세 | <http://localhost:8080/v3/api-docs/settlement> | 기본 구성 |
 | Zipkin | <http://localhost:9411> | 기본 구성, 메모리 저장소 |
-| Prometheus | <http://localhost:9090> | `observability` |
+| Prometheus | <http://localhost:9090> | 기본 구성 |
 | Alertmanager | <http://localhost:9093> | `observability`, 기본 외부 발송 없음 |
 | Grafana | <http://localhost:3000> | `observability`, 사용자 `admin`, 비밀번호 `.env`의 `GRAFANA_ADMIN_PASSWORD` |
 | Kafka-UI | <http://localhost:8081> | `observability` |
@@ -409,6 +450,8 @@ Payment의 `AcceptOrderPaymentRequestService`는 Inbox의 `WAITING`·`next_run_a
 
 `app.outbox.enabled`와 `app.kafka.order-payment-requested.enabled`는 기본 `false`입니다. 빈 개발 DB에 서비스별 초기 SQL을 적용하고 아래 신규 그룹 초기화를 마친 뒤 각각 활성화합니다. 수신 구현 Bean이 없으면 활성화한 Listener는 시작에 실패합니다. 테스트 대역을 운영 구현으로 등록하지 않습니다. 기존 개발 컨테이너에 초기 SQL을 재실행하거나 볼륨을 임의로 초기화하지 않습니다.
 
+Payment 환불 SAGA는 `PAYMENT_ROLE=worker`에서 `app.refund.enabled=true`로 켭니다(기본 `false`). `RefundApproved`·`RefundOrderRestored` 반영은 결제 요청 처리기(`app.payment-request-processor.enabled`)가 맡고, 이 설정은 외부 환불·마일리지 복원 Worker와 Settlement 응답 stub(`app.refund.settlement-stub.enabled`, 기본 `true`)을 켭니다. 외부 환불(`app.refund.gateway`)은 즉시 성공하는 `stub`만 제공합니다. 환불 준비·결과 반영·Settlement 응답 반영은 환불 행을 잠그기 전에 잠금 대기 1초·SQL 실행 5초 상한을 걸고, 시간 초과 시 트랜잭션 전체를 롤백합니다. Worker는 잠근 뒤와 외부 호출 직전에 임대가 호출 제한 시간만큼 남았는지 다시 확인합니다. 새 테이블(`refunds`·`refund_sagas`)은 빈 개발 DB에 초기 SQL을 적용해야 생깁니다.
+
 기술용 Outbox·Inbox 저장은 같은 DataSource의 JdbcTemplate로 bytea 원문·조건부 갱신·SKIP LOCKED를 다룹니다. 트랜잭션은 응용 서비스에서 시작하며 운영 앱의 JpaTransactionManager에 참여합니다. 별도 운영 트랜잭션 매니저나 공유 DB를 추가하지 않습니다. Commerce Outbox DB 시험은 HikariCP·JpaTransactionManager로 JDBC의 트랜잭션 참여와 롤백을 확인합니다. Payment Inbox 시험은 DataSourceTransactionManager를 사용하므로 Payment의 운영 JpaTransactionManager 참여까지 검증한 것은 아닙니다.
 
 Outbox의 소진 전환과 실행 선점은 각각 요청한 배치 크기 안에서 잠긴 행을 건너뜁니다. 잠긴 선행 이벤트가 있어도 같은 주문의 후행 이벤트는 추월하지 않습니다. Outbox 저장·선점·결과 갱신은 해당 로컬 트랜잭션에 잠금 대기 1초·SQL 실행 5초 상한을 적용하며 호출자가 정한 더 짧은 상한은 유지합니다. 상한은 트랜잭션 종료 때 복원됩니다. 잠금 시간 초과는 로컬 저장을 롤백하며 금융 실패나 예약 해제를 뜻하지 않습니다. 결과 갱신은 먼저 행 잠금을 얻고 다음 SQL에서 임대·버전을 검사하여 대기 중 만료된 임대도 거절합니다. 발행 결과 저장이 실패하면 원본의 RUNNING 임대를 만료 뒤 회수합니다.
@@ -441,6 +484,8 @@ Payment 원문 격리는 새 빈 DB의 초기 SQL을 검증한 뒤 `app.kafka.qu
 
 Settlement 원문 격리도 같은 테이블 구조와 `app.kafka.quarantine.enabled`(기본 false)를 사용합니다. `PaymentConfirmed`·`PurchaseConfirmed`의 해석 실패만 격리하고, 반영 중 DB 오류와 격리 저장 실패는 ACK 없이 Listener를 중단합니다. Settlement `QuarantineRelay`는 전용 실행기 없이 공통 예약 스레드(4개)에서 Kafka 응답을 기다리며 주기·묶음·임대·결과 대기·재시도 규칙은 Payment와 같습니다. 대상 토픽은 `commerce-settle.settlement.v1.dlt`입니다. 운영 재처리·재개(`requestReplay`·`resumeDelivery`)도 Payment와 같은 검사·기록으로 원래 수신 토픽(`commerce-settle.payment.v1`·`commerce-settle.commerce.v1`)에 재발행합니다. 이 토픽은 Commerce·Payment·알림 소비 그룹도 읽으므로, 다른 그룹이 같은 원문을 이미 처리했는지 확인한 뒤 요청합니다. 같은 eventId·bytes 재전달은 각 Inbox가 중복으로 끝냅니다.
 
+Settlement 발행 Outbox는 Payment와 같은 Relay 규칙(커밋 후·결과 반영 후·시작 시 깨움, 1초 복구 조회, 미완료 발행 최대 8건, 임대 240초, 10회 소진 REVIEW_REQUIRED)을 따르며 `app.outbox.enabled`(`APP_OUTBOX_ENABLED`, 기본 false)로 켭니다. 환불 SAGA 응답과 판매자 알림 요청은 스위치와 관계없이 업무 트랜잭션에서 저장합니다. 일배치와 지급 결과 반영도 Outbox에 쓰므로 `settlement.outbox`가 없는 기존 개발 DB에서는 일배치가 실패합니다. 새 초기 SQL을 적용한 DB에서 실행합니다.
+
 ### DLT 관측과 조치
 
 격리 기능을 켠 Payment·Settlement는 15초마다 자기 DB를 전용 실행기에서 관측하고 `/actuator/prometheus`로 마지막 성공 표본을 노출합니다. SQL 제한 시간은 2초이며 scrape와 공통 예약 스레드에서 DB를 조회하지 않습니다. 원문·키·업무 ID는 지표 label에 넣지 않습니다.
@@ -460,7 +505,7 @@ SLACK_WEBHOOK_URL_FILE=/path/to/slack-webhook-url \
 docker compose -f compose.yml -f compose.alertmanager-slack.yml --profile observability up -d --wait --wait-timeout 300
 ```
 
-`python3 scripts/test_observability.py`는 규칙 경계·중복/오래된 표본과 실제 Prometheus→Alertmanager→전용 시험 수신기의 발생·복구 전달, WARNING 억제, 대시보드 등록을 검사합니다. 시험 알림 주기만 짧게 하고 실제 Slack은 사용하지 않습니다. 전용 Compose 프로젝트·임시 설정·컨테이너·볼륨은 종료 때 제거하며 기본 CI에도 포함합니다. 이 검사는 Kafka lag·금융 Inbox/Outbox/Job·전체 저장소 관측이나 신규 접수 gate를 검증하지 않습니다.
+`python3 scripts/test_observability.py`는 규칙 경계·중복/오래된 표본과 실제 Prometheus→Alertmanager→전용 시험 수신기의 발생·복구 전달, WARNING 억제, 대시보드 등록을 검사합니다. 시험 알림 주기만 짧게 하고 실제 Slack은 사용하지 않습니다. 전용 Compose 프로젝트·임시 설정·컨테이너·볼륨은 종료 때 제거하며 기본 CI에도 포함합니다. 이 격리 전달 시험은 금융 규칙의 정적 경계도 확인합니다. 실제 금융 관측·신규 접수 gate는 [별도 시나리오](#금융-관측과-접수-복구)로 검사합니다.
 
 `./gradlew :commerce:test :payment:test`는 Docker에서 전용 `apache/kafka:4.2.2` 컨테이너를 만들어 Outbox 원문 발행·위치 저장·ACK 후 저장 실패의 재발행과 실제 수신, 초기 offset 부재, 인계 실패 후 offset 보존과 소비자 재기동의 재전달을 검증합니다. Docker가 없으면 이 통합 시험은 실패하며 생략하지 않습니다. 시험 컨테이너와 데이터는 종료 때 제거하고 개발 Kafka·DB·볼륨을 사용하지 않습니다. 기본 `build`·CI에도 포함되며, smoke는 기동된 실제 7개 토픽의 설정을 추가로 검사합니다. Payment Kafka 수신 시험의 인계 구현은 메모리 대역입니다. Commerce Outbox의 실제 DB·Kafka 전달 시험도 주문·외부 결제 전체의 금융 정합성·업무 멱등성·처리량 검증을 대신하지 않습니다.
 
@@ -495,6 +540,8 @@ Gateway 자체 오류는 `application/problem+json`과 실제 추적의 `traceId
 
 운영자 자격은 첫 운영 API를 구현할 때 운영자 식별자와 배포 방식을 함께 정합니다.
 
+Settlement의 운영 API(`/internal/payout-jobs`·`/internal/settlement-batches`)는 `operator:<식별자>` 자격만 받습니다. Payment 운영 종결과 같이 인스턴스의 `app.internal-auth.senders`에 `"[operator:<식별자>]"` 키로 설정하며 Compose와 `.env.example`에는 넣지 않았습니다. 재처리·배치 생성은 `Idempotency-Key`(8~128자)가 필요하고, 감사는 `settlement.audit_logs`, 재처리 사유는 `settlement.payout_job_replays`에 남습니다.
+
 컨테이너 상태·로그는 아래처럼 확인합니다.
 
 ```bash
@@ -505,7 +552,7 @@ docker compose exec -T payment-api curl --fail http://localhost:9091/actuator/he
 
 ## Redis 세션 검증과 복구
 
-아래는 [Redis 세션 정책](policies.md#인증공통-api-기준)을 구현할 때의 검증·운영 기준입니다. 현재는 앱별 Redis ACL, Gateway의 세션 검증, 커머스의 로그인 세션 발급·로그아웃·로그인/복구 요청 제한, 비밀번호 재설정의 가드 차단·확정이 있습니다. `init_env.py`가 인증 세대 `AUTH_SESSION_EPOCH`, 제한 키용 `AUTH_RATE_LIMIT_HMAC_KEY`, 복구 토큰 전달 암호문용 `AUTH_RESET_DELIVERY_KEY`를 생성합니다. 세대를 바꾸면 기존 세션이 모두 무효가 되고, HMAC 키를 바꾸면 진행 중인 제한 시간창이 초기화되며, 전달 키를 바꾸면 아직 전달하지 않은 복구 토큰을 열 수 없습니다. Gateway·커머스는 승인한 Redis 실행 식별자 `AUTH_REDIS_RUN_ID`로 사용자 인증 게이트를 판정하며, 미확정 인증 변경의 재조정은 아직 없습니다. smoke는 판매자 가입·로그인·Gateway 경유 조회·본인 판매자 정보 변경(같은 키 재요청·버전 충돌 409)·로그아웃 뒤 401, 계정 존재 여부와 관계없이 같은 복구 요청 응답, 쓸 수 없는 복구 토큰의 401과, Redis에 직접 넣은 세션의 역할 403·변경 중 가드 503, DB에 직접 넣은 구매자 계정과 같은 방식의 세션으로 주소 등록·재요청·목록·삭제를 확인합니다. CI의 `smoke_redis_restart.py`는 Redis 재시작과 같은 run_id를 유지하는 연결 단절 뒤 이전 세션과 새 로그인의 503, 새 세대로 앱을 재기동한 뒤 이전 세션의 401과 새 로그인 성공을 확인합니다. Redis와 Gateway·커머스를 다시 띄우므로 다른 사람이 쓰는 스택에서는 실행하지 않습니다. 폐기·복구 흐름의 검증 완료로 간주하지 않습니다.
+아래는 [Redis 세션 정책](policies.md#인증공통-api-기준)을 구현할 때의 검증·운영 기준입니다. 현재는 앱별 Redis ACL, Gateway의 세션 검증, 커머스의 로그인 세션 발급·로그아웃·로그인/복구 요청 제한, 비밀번호 재설정의 가드 차단·확정이 있습니다. `init_env.py`가 인증 세대 `AUTH_SESSION_EPOCH`, 요청 제한 키와 구매자 가입 본문 비교용 `AUTH_RATE_LIMIT_HMAC_KEY`, 복구 토큰 전달 암호문용 `AUTH_RESET_DELIVERY_KEY`를 생성합니다. 세대를 바꾸면 기존 세션이 모두 무효가 되고, HMAC 키를 바꾸면 진행 중인 제한 시간창이 초기화되고 24시간 안의 구매자 가입 재요청이 본문 충돌 409가 되며, 전달 키를 바꾸면 아직 전달하지 않은 복구 토큰을 열 수 없습니다. Gateway·커머스는 승인한 Redis 실행 식별자 `AUTH_REDIS_RUN_ID`로 사용자 인증 게이트를 판정하며, 미확정 인증 변경의 재조정은 아직 없습니다. smoke는 판매자 가입·로그인·Gateway 경유 조회·본인 판매자 정보 변경(같은 키 재요청·버전 충돌 409)·로그아웃 뒤 401, 계정 존재 여부와 관계없이 같은 복구 요청 응답, 쓸 수 없는 복구 토큰의 401과, Redis에 직접 넣은 세션의 역할 403·변경 중 가드 503, Gateway 경유 구매자 가입의 같은 키 재요청·본문 충돌 409·웰컴 쿠폰 1장과, 그 계정의 로그인 세션으로 주소 등록·재요청·목록·삭제를 확인합니다. CI의 `smoke_redis_restart.py`는 Redis 재시작과 같은 run_id를 유지하는 연결 단절 뒤 이전 세션과 새 로그인의 503, 새 세대로 앱을 재기동한 뒤 이전 세션의 401과 새 로그인 성공을 확인합니다. Redis와 Gateway·커머스를 다시 띄우므로 다른 사람이 쓰는 스택에서는 실행하지 않습니다. 폐기·복구 흐름의 검증 완료로 간주하지 않습니다.
 
 인증 게이트는 기동 직후 확인 전 상태로 사용자 인증을 503으로 거절하고, 연결한 Redis의 `INFO server` run_id가 `AUTH_REDIS_RUN_ID`와 같을 때만 엽니다. Redis가 앱보다 늦게 떠도 1초 간격으로 다시 확인합니다. 연 뒤 연결이 끊기거나 run_id가 다르면 닫고, 재연결이나 스크립트 재적재가 성공해도 재기동 전까지 다시 열지 않습니다. 첫 확인에서 run_id가 다르면 앱은 기동한 채 닫힌 상태로 둡니다. 닫히면 Gateway는 보호 작업을, 커머스는 세션 발급·로그아웃·비밀번호 복구 요청·재설정·인증 관련 계정 변경을 Redis를 쓰지 않고 503으로 거절합니다. 공개 작업, 서비스·운영자 자격과 Worker는 영향을 받지 않습니다. 닫은 사유(`RUN_ID_MISMATCH`·`DISCONNECTED`)와 시각은 `auth.redis-gate` ERROR 로그로 확인합니다. 짧은 단절에도 닫히는 것은 [ADR 0003](decisions/0003-redis-sessions.md)이 감수한 가용성 비용입니다.
 

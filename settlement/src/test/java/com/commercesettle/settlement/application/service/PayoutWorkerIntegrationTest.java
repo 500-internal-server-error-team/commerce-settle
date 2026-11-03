@@ -11,7 +11,9 @@ import com.commercesettle.settlement.domain.repository.PayoutJobRepository;
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository.LeaseKind;
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository.LeasedJob;
 import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
+import com.commercesettle.settlement.support.EventContract;
 import com.commercesettle.settlement.support.FixedProductSettlementContexts;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -55,6 +57,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     properties = {
       "management.tracing.enabled=false",
       "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123",
+      "app.internal-auth.senders[service\\:commerce].current=test-commerce-retention-credential-0123456789abcdef",
       "settlement.payout.mock-credential=test-settlement-credential-0123456789abcdef0123",
       "spring.kafka.admin.auto-create=false",
       "settlement.daily-batch.schedule-enabled=false",
@@ -121,7 +124,8 @@ class PayoutWorkerIntegrationTest {
             "settlement_batches",
             "payouts",
             "payout_jobs",
-            "settlement_reservations")) {
+            "settlement_reservations",
+            "outbox")) {
       jdbc.update("DELETE FROM settlement." + table);
     }
     gateway.reset();
@@ -153,6 +157,18 @@ class PayoutWorkerIntegrationTest {
     assertThat(reservationStatuses()).containsOnly("CONSUMED");
     assertThat(batchStatus()).isEqualTo("COMPLETED");
     assertThat(worker.runOnce()).isFalse();
+    assertThat(notices(batchId)).containsExactly("SETTLEMENT_READY", "PAYOUT_COMPLETED");
+    assertThat(
+            new String(
+                jdbc.queryForObject(
+                    "SELECT raw_body FROM settlement.outbox"
+                        + " WHERE payload->'payload'->>'kind' = 'PAYOUT_COMPLETED'",
+                    byte[].class),
+                StandardCharsets.UTF_8))
+        .contains("\"businessRef\":\"" + payoutId + "\"")
+        // 대역의 최초 성공 시각을 같은 순간으로 싣는다. 직렬화 시간대는 설정을 따른다.
+        .containsPattern(
+            "\"succeededAt\":\"2026-10-01T(01:30:00\\.123456Z|10:30:00\\.123456\\+09:00)\"");
   }
 
   @Test
@@ -171,6 +187,7 @@ class PayoutWorkerIntegrationTest {
     assertThat(reservationStatuses()).containsOnly("ACTIVE");
     assertThat(worker.runOnce()).isFalse();
     assertThat(gateway.executed).hasSize(1);
+    assertThat(notices(batchId)).containsExactly("SETTLEMENT_READY", "PAYOUT_ACTION_REQUIRED");
   }
 
   @Test
@@ -182,6 +199,7 @@ class PayoutWorkerIntegrationTest {
     worker.runOnce();
 
     assertThat(payout()).containsEntry("status", "UNKNOWN").containsEntry("hold_reason", "UNKNOWN");
+    assertThat(payout().get("unknown_since")).isNotNull();
     assertThat(job()).containsEntry("status", "RETRY");
     assertThat(reservationStatuses()).containsOnly("ACTIVE");
 
@@ -190,6 +208,8 @@ class PayoutWorkerIntegrationTest {
     assertThat(payout()).containsEntry("status", "SUCCEEDED");
     assertThat(gateway.executed).hasSize(1);
     assertThat(gateway.lookedUp).hasSize(1);
+    // 미확정은 알림 없이 조회로만 안내한다.
+    assertThat(notices(batchId)).containsExactly("SETTLEMENT_READY", "PAYOUT_COMPLETED");
   }
 
   @Test
@@ -323,8 +343,15 @@ class PayoutWorkerIntegrationTest {
     assertThat(payout()).containsEntry("status", "SUCCEEDED");
     assertThat(job()).containsEntry("status", "REVIEW_REQUIRED");
     assertThat(batchStatus()).isEqualTo("REVIEW_REQUIRED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT closed_at FROM settlement.settlement_batches WHERE id=?",
+                java.time.OffsetDateTime.class,
+                batchId))
+        .isNull();
     assertThat(itemStatuses()).containsExactlyInAnyOrder("PAYOUT_RESERVED", "REFUND_RESERVED");
     assertThat(reservationStatuses()).containsOnly("ACTIVE");
+    assertThat(notices(batchId)).containsExactly("SETTLEMENT_READY");
   }
 
   @Test
@@ -549,6 +576,22 @@ class PayoutWorkerIntegrationTest {
 
   private void expireLease() {
     jdbc.update("UPDATE settlement.payout_jobs SET lease_until = now() - interval '1 second'");
+  }
+
+  /** 이 배치의 알림 요청 종류를 저장 순서대로 돌려준다. 원문은 OpenAPI 계약도 만족해야 한다. */
+  private List<String> notices(Object batchId) {
+    List<String> kinds = new ArrayList<>();
+    for (byte[] body :
+        jdbc.queryForList(
+            "SELECT raw_body FROM settlement.outbox WHERE event_type = 'SettlementNoticeRequested'"
+                + " AND message_key = ? ORDER BY sequence_no",
+            byte[].class,
+            batchId.toString())) {
+      EventContract.assertValid(body);
+      String json = new String(body, StandardCharsets.UTF_8);
+      kinds.add(json.replaceAll(".*\"kind\":\"([A-Z_]+)\".*", "$1"));
+    }
+    return kinds;
   }
 
   private Map<String, Object> payout() {

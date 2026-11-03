@@ -104,6 +104,19 @@ class MileageWalletTest {
     assertThatThrownBy(() -> wallet(-1)).isInstanceOf(IllegalArgumentException.class);
   }
 
+  @Test
+  @DisplayName("복원은 예약액을 그대로 두고 잔액만 늘린다")
+  void restoresBalanceWithoutTouchingReservation() {
+    MileageWallet wallet = wallet(1_000);
+    wallet.reserve(300, OPENED_AT);
+
+    wallet.restore(2_000, OPENED_AT);
+
+    assertThat(wallet.getBalance()).isEqualTo(3_000);
+    assertThat(wallet.getReservedAmount()).isEqualTo(300);
+    assertThat(wallet.available()).isEqualTo(2_700);
+  }
+
   private static MileageWallet wallet(long balance) {
     return MileageWallet.open(UUID.randomUUID(), balance, OPENED_AT);
   }
