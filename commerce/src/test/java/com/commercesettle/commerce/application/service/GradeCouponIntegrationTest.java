@@ -1,5 +1,7 @@
 package com.commercesettle.commerce.application.service;
 
+import static com.commercesettle.commerce.support.ConcurrentTransactions.holdTransaction;
+import static com.commercesettle.commerce.support.ConcurrentTransactions.runConcurrently;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.commercesettle.commerce.domain.model.CouponFunder;
@@ -9,6 +11,7 @@ import com.commercesettle.commerce.domain.model.Order;
 import com.commercesettle.commerce.infrastructure.batch.GradeCouponExecutions;
 import com.commercesettle.commerce.infrastructure.batch.GradeCouponLauncher;
 import com.commercesettle.commerce.infrastructure.scheduling.GradeCouponScheduler;
+import com.commercesettle.commerce.support.ConcurrentTransactions.HeldTransaction;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -18,6 +21,7 @@ import com.networknt.schema.SchemaRegistry;
 import com.networknt.schema.SpecificationVersion;
 import java.sql.Timestamp;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -26,9 +30,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.batch.core.JobExecution;
 import org.springframework.batch.core.JobParametersBuilder;
 import org.springframework.batch.core.repository.JobRepository;
@@ -46,6 +56,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -89,6 +100,7 @@ class GradeCouponIntegrationTest {
   @Autowired ObjectMapper mapper;
   @Autowired GradeCouponExecutions executions;
   @Autowired JobRepository jobs;
+  @Autowired TransactionTemplate tx;
 
   @Test
   @DisplayName("100위 동점자를 모두 포함해 104명을 고정하고 등급별로 발급하며, 같은 월을 다시 실행해도 바꾸지 않는다")
@@ -454,6 +466,84 @@ class GradeCouponIntegrationTest {
         .isEqualTo("FAILED");
   }
 
+  @Test
+  @Timeout(60)
+  @DisplayName("첫 발급이 회차 행을 잡고 있으면 교정은 잠금을 기다렸다가 커밋된 발급을 보고 NOT_REPLACEABLE로 거절한다")
+  void rejectsReplacementWaitingOnFirstIssue() throws Exception {
+    LocalDate month = LocalDate.of(2033, 1, 1);
+    for (int i = 0; i < 2; i++) {
+      confirmed(UUID.randomUUID(), 100_000 + i, month.minusMonths(1));
+    }
+    clock.at(month, 0, 20);
+    UUID run = grades.currentRun(month).orElseThrow().getId();
+    grades.prepare(run);
+    long version = grades.currentRun(month).orElseThrow().getVersion();
+    UUID first = grades.pendingTargetIds(run, 1).get(0);
+
+    ExecutorService replacing = Executors.newSingleThreadExecutor();
+    try {
+      Future<JsonNode> replaced;
+      try (HeldTransaction held =
+          holdTransaction(tx, () -> assertThat(grades.issue(run, first)).isTrue())) {
+        replaced = replacing.submit(() -> replace(run, version, 409, key()));
+        awaitLockWaiter(replaced);
+      }
+      assertThat(code(replaced.get(10, TimeUnit.SECONDS))).isEqualTo("COUPON_RUN_NOT_REPLACEABLE");
+    } finally {
+      replacing.shutdownNow();
+    }
+
+    CouponIssueRun current = grades.currentRun(month).orElseThrow();
+    assertThat(current.getId()).isEqualTo(run);
+    assertThat(current.getStatus()).isEqualTo(CouponIssueRunStatus.ISSUING);
+    assertThat(count("coupon_issue_targets where run_id = ? and status = 'ISSUED'", run))
+        .isEqualTo(1);
+  }
+
+  @Test
+  @Timeout(120)
+  @DisplayName("교정과 첫 발급을 동시에 실행하면 둘 중 하나만 반영되어, 취소된 회차에 발급이 남거나 둘 다 거절되지 않는다")
+  void serializesReplacementAndFirstIssue() throws Exception {
+    for (int round = 0; round < 5; round++) {
+      LocalDate month = LocalDate.of(2033, 2 + round, 1);
+      for (int i = 0; i < 2; i++) {
+        confirmed(UUID.randomUUID(), 100_000 + i, month.minusMonths(1));
+      }
+      clock.at(month, 0, 20);
+      UUID run = grades.currentRun(month).orElseThrow().getId();
+      grades.prepare(run);
+      long version = grades.currentRun(month).orElseThrow().getVersion();
+      UUID first = grades.pendingTargetIds(run, 1).get(0);
+      AtomicInteger role = new AtomicInteger();
+
+      List<Object> results =
+          runConcurrently(
+              2,
+              () ->
+                  role.getAndIncrement() == 0
+                      ? (Object) grades.issue(run, first)
+                      : replaceStatus(run, version));
+
+      Object issued = results.stream().filter(Boolean.class::isInstance).findFirst().orElseThrow();
+      Object status = results.stream().filter(Integer.class::isInstance).findFirst().orElseThrow();
+      long issuedTargets =
+          count("coupon_issue_targets where run_id = ? and status = 'ISSUED'", run);
+      String runStatus =
+          jdbc.queryForObject(
+              "select status from commerce.coupon_issue_runs where id = ?", String.class, run);
+      if (status.equals(201)) {
+        assertThat(issued).as("round %d", round).isEqualTo(false);
+        assertThat(issuedTargets).as("round %d", round).isZero();
+        assertThat(runStatus).as("round %d", round).isEqualTo("CANCELLED");
+      } else {
+        assertThat(status).as("round %d", round).isEqualTo(409);
+        assertThat(issued).as("round %d", round).isEqualTo(true);
+        assertThat(issuedTargets).as("round %d", round).isEqualTo(1);
+        assertThat(runStatus).as("round %d", round).isEqualTo("ISSUING");
+      }
+    }
+  }
+
   private JsonNode replace(UUID runId, long expectedVersion, int expected, String key) {
     ObjectNode body =
         mapper
@@ -482,6 +572,40 @@ class GradeCouponIntegrationTest {
           .hasPath(RUNS + "/" + response.getBody().path("id").asText());
     }
     return response.getBody();
+  }
+
+  /** 상태 코드를 단정하지 않고 돌려준다. 동시 실행 결과를 모을 때 쓴다. */
+  private int replaceStatus(UUID runId, long expectedVersion) {
+    HttpHeaders headers = new HttpHeaders();
+    headers.setBearerAuth(OPERATOR);
+    headers.setContentType(MediaType.APPLICATION_JSON);
+    headers.set("Idempotency-Key", key());
+    ObjectNode body =
+        mapper
+            .createObjectNode()
+            .put("expectedVersion", expectedVersion)
+            .put("reasonCode", "AGGREGATION_ERROR");
+    return http.exchange(
+            RUNS + "/" + runId + "/replacements",
+            HttpMethod.POST,
+            new HttpEntity<>(body, headers),
+            JsonNode.class)
+        .getStatusCode()
+        .value();
+  }
+
+  // 교정이 회차 행 잠금을 기다릴 때까지 기다린다. 잠금 대기 상한(1초)보다 짧은 간격으로 확인한다.
+  private void awaitLockWaiter(Future<?> waiting) throws InterruptedException {
+    long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+    while (jdbc.queryForObject(
+            "SELECT count(*) FROM pg_stat_activity"
+                + " WHERE datname = current_database() AND wait_event_type = 'Lock'",
+            Long.class)
+        == 0) {
+      assertThat(waiting).as("잠금 대기 전에 교정이 끝났다").isNotDone();
+      assertThat(System.nanoTime()).as("잠금 대기를 확인하지 못했다").isLessThan(deadline);
+      Thread.sleep(10);
+    }
   }
 
   private static String code(JsonNode error) {
