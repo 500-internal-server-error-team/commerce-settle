@@ -5,8 +5,9 @@ import { Field, Fields } from '../../shared/ui/SchemaFields';
 import { ReferencePicker, referenceSource } from './ReferencePicker';
 import { responseContext } from './responseContext';
 
-export function OperationForm({ operation, context, pending, allowed, run, role = 'BUYER', token }:
-  { operation: Operation; context: Record<string, Json>; pending: boolean; allowed: boolean; run: (v: RequestValues) => void; role?: string; token?: string }) {
+export function OperationForm({ operation, context, pending, allowed, run, role = 'BUYER', token, loginValues }:
+  { operation: Operation; context: Record<string, Json>; pending: boolean; allowed: boolean; run: (v: RequestValues) => void; role?: string; token?: string;
+    loginValues?: { email: string; password: string } }) {
   const [body, setBody] = useState<Json>(operation.schema ? defaults(operation.schema) : null);
   const [pathParameters, setPath] = useState<Record<string, string>>({});
   const [query, setQuery] = useState<Record<string, string>>({});
@@ -24,6 +25,9 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
     if (values && 'quantity' in fields) values.quantity = 1;
     if (values && 'mileageAmount' in fields) values.mileageAmount = 0;
     if (values) for (const k of Object.keys(fields)) if (context[k] !== undefined) values[k] = context[k];
+    if (values && loginValues && operation.path.endsWith('-sessions')) {
+      values.email = loginValues.email; values.password = loginValues.password;
+    }
     const resourceId = operation.parameters.find(p => p.in === 'path')?.name;
     if (values && 'expectedVersion' in fields) values.expectedVersion = operation.path.endsWith('/inventory-adjustments')
       ? context.inventoryProductId === context.productId ? context.inventoryVersion ?? '' : ''
@@ -35,7 +39,17 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
         ? resourceId && context[`${resourceId}VersionFor`] === context[resourceId] ? context[`${resourceId}Version`] ?? '' : ''
         : p.name.endsWith('Id') ? context[p.name] ?? p.schema.default ?? '' : p.schema.default ?? '')])));
     setKey(crypto.randomUUID());
-  }, [operation.id, context]);
+  }, [operation.id, context, loginValues]);
+  const signup = operation.method === 'POST' && (operation.path === '/api/buyers' || operation.path === '/api/sellers');
+  function fillPracticeSignup() {
+    if (pending) return;
+    const seller = operation.path === '/api/sellers';
+    const id = crypto.randomUUID().replaceAll('-', '');
+    setBody({ email: `practice-${seller ? 'seller' : 'buyer'}-${id}@example.test`,
+      password: `Practice-${crypto.randomUUID()}`, displayName: seller ? '연습 판매자' : '연습 구매자',
+      ...(seller ? { payoutAccountRef: `practice-seller-${id}` } : {}) });
+    setKey(crypto.randomUUID());
+  }
   const object = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
   const quote = operations.find(op => op.id === 'post_api_order_quotes')!;
   const quoteFields = Object.keys(resolve(quote.schema!).properties ?? {});
@@ -129,7 +143,7 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
     <div className="input-guide"><strong>입력값 안내</strong><p>{operation.path.endsWith('-sessions')
       ? '가입할 때 정한 이메일과 비밀번호를 입력하세요. 계정이 없으면 위의 할 작업에서 해당 역할의 가입을 선택하세요.'
       : operation.path === '/api/buyers' || operation.path === '/api/sellers'
-        ? '가입에 사용할 테스트용 이메일·비밀번호·표시 이름을 정하세요. 판매자는 지급용 시험계정도 미리 준비해야 합니다.'
+        ? '직접 값을 정하지 않아도 아래 버튼으로 연습용 가입값을 채울 수 있습니다. 요청 실행을 눌러야 실제로 가입됩니다.'
       : operation.method === 'GET'
         ? '조회할 ID와 조회 조건을 입력하세요. 목록이 제공되는 항목은 아래에서 선택할 수 있습니다.'
       : '목록이 있는 ID는 아래에서 선택하고, 나머지는 생성·조회 응답에서 확인하세요. 이름·가격·일정은 직접 정합니다.'}</p>
@@ -139,6 +153,8 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
       {operation.schema && resolve(operation.schema).description && <details><summary>API 입력 제약 원문</summary><p>{resolve(operation.schema).description}</p></details>}
     </div>
     <fieldset className="request-inputs" aria-label="요청 입력" disabled={pending}>
+    {signup && <div className="input-guide"><button type="button" className="secondary" onClick={fillPracticeSignup}>연습용 가입값 채우기</button>
+      <p className="caption">테스트 이메일·비밀번호·이름{operation.path === '/api/sellers' ? '·판매자 지급 대상' : ''}을 만듭니다. 가입에 성공하면 같은 정보로 로그인할 수 있습니다.</p></div>}
     <div className="fields">{operation.parameters.filter(p => p.in === 'path' || p.in === 'query').map(p =>
       <Field key={p.name} name={p.name} schema={p.schema} required={p.required}
         value={(p.in === 'path' ? pathParameters : query)[p.name] ?? ''}

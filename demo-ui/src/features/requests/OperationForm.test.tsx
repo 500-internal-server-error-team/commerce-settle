@@ -6,6 +6,21 @@ import { OperationForm } from './OperationForm';
 import { mergeResponseContext, responseContext } from './responseContext';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+it.each(['buyers', 'sellers'])('%s 연습값은 유효한 폼을 채우고 요청 대기 중에는 다시 바꾸지 않는다', resource => {
+  const run = vi.fn(); const context = {};
+  const operation = operations.find(op => op.id === `post_api_${resource}`)!;
+  const view = render(<OperationForm operation={operation} context={context} pending={false} allowed run={run} />);
+  fireEvent.click(screen.getByRole('button', { name: '연습용 가입값 채우기' }));
+  const email = (screen.getByLabelText(/이메일/) as HTMLInputElement).value;
+  const password = (screen.getByLabelText(/비밀번호/) as HTMLInputElement).value;
+  expect(email).toMatch(/@example\.test$/); expect(password.length).toBeGreaterThanOrEqual(12);
+  expect((screen.getByRole('form', { name: 'API 요청' }) as HTMLFormElement).checkValidity()).toBe(true);
+  expect(run).not.toHaveBeenCalled();
+  view.rerender(<OperationForm operation={operation} context={context} pending allowed run={run} />);
+  fireEvent.click(screen.getByRole('button', { name: '연습용 가입값 채우기' }));
+  expect((screen.getByLabelText(/이메일/) as HTMLInputElement).value).toBe(email);
+  expect((screen.getByLabelText(/비밀번호/) as HTMLInputElement).value).toBe(password);
+});
 it('주문 안내와 명세 원문이 이벤트·쿠폰 사용을 금지하지 않고 선택한 조건을 전송한다', () => {
   const run = vi.fn();
   render(<OperationForm operation={operations.find(op => op.id === 'post_api_orders')!}
