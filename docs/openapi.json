@@ -4801,7 +4801,7 @@
             "serviceCredential": []
           }
         ],
-        "description": "시도를 다 써 REVIEW_REQUIRED로 멈춘 DLT/REPLAY 작업을 같은 작업으로 PENDING·시도 수 0으로 되돌린다. 작업 version이 다르면 409 COMMON_VERSION_CONFLICT, REVIEW_REQUIRED가 아니면 409 QUARANTINE_DELIVERY_NOT_RESUMABLE이다. 이전 시도 수·요청자·사유를 재개 이력과 감사에 남기고 같은 키·본문 재요청은 작업의 현재 상태를 반환한다.",
+        "description": "시도를 다 써 REVIEW_REQUIRED로 멈춘 DLT/REPLAY 작업을 같은 작업으로 PENDING·시도 수 0으로 되돌린다. 작업 version이 다르면 409 COMMON_VERSION_CONFLICT, REVIEW_REQUIRED가 아니면 409 QUARANTINE_DELIVERY_NOT_RESUMABLE이다. 소진 REPLAY는 같은 원문의 다른 REPLAY가 PENDING/RUNNING/RETRY면 409 QUARANTINE_REPLAY_ACTIVE다. 이전 시도 수·요청자·사유를 재개 이력과 감사에 남기고 같은 키·본문 재요청은 작업의 현재 상태를 반환한다.",
         "parameters": [
           {
             "name": "deliveryId",

@@ -250,6 +250,54 @@ class QuarantineOperationIntegrationTest {
   }
 
   @Test
+  @DisplayName("같은 원문의 다른 REPLAY가 발행 중이면 소진 REPLAY 재개를 활성 REPLAY 충돌로 거절하고 이력·감사·멱등 기록을 남기지 않는다")
+  void rejectsResumeWhileAnotherReplayIsActive() {
+    UUID id = capture(0);
+    operations.replay(OPERATOR, id, "replay-key-0101", 0, "SCHEMA_FIXED");
+    UUID exhausted = replayIds(id).getFirst();
+    jdbc.update(
+        "UPDATE payment.inbox_quarantine_deliveries SET status = 'REVIEW_REQUIRED', attempts = 10,"
+            + " version = version + 1 WHERE id = ?",
+        exhausted);
+    operations.replay(OPERATOR, id, "replay-key-0102", 1, "SCHEMA_FIXED_AGAIN");
+    long exhaustedVersion =
+        operations.get(id).deliveries().stream()
+            .filter(d -> d.id().equals(exhausted))
+            .findFirst()
+            .orElseThrow()
+            .version();
+    long audits = count("audit_logs");
+    long records = count("idempotency_records");
+
+    assertRejected(
+        () ->
+            operations.resume(
+                OPERATOR, exhausted, "resume-key-0101", exhaustedVersion, "KAFKA_BACK"),
+        Reason.REPLAY_ACTIVE);
+
+    assertThat(count("inbox_quarantine_resumes")).isZero();
+    assertThat(count("audit_logs")).isEqualTo(audits);
+    assertThat(count("idempotency_records")).isEqualTo(records);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM payment.inbox_quarantine_deliveries WHERE id = ?",
+                String.class,
+                exhausted))
+        .isEqualTo("REVIEW_REQUIRED");
+
+    // 다른 REPLAY의 발행이 끝나면 같은 키로 다시 요청해 재개할 수 있다.
+    jdbc.update(
+        "UPDATE payment.inbox_quarantine_deliveries SET status = 'PUBLISHED'"
+            + " WHERE quarantine_id = ? AND kind = 'REPLAY' AND id <> ?",
+        id,
+        exhausted);
+    DeliveryView resumed =
+        operations.resume(OPERATOR, exhausted, "resume-key-0101", exhaustedVersion, "KAFKA_BACK");
+    assertThat(resumed.status()).isEqualTo("PENDING");
+    assertThat(count("inbox_quarantine_resumes")).isEqualTo(1);
+  }
+
+  @Test
   @DisplayName("서비스 메서드의 재처리는 멱등·감사 기록 없이 동작하고, 거절은 없는 원문·버전 불일치·진행 중 재처리로 구분한다")
   void serviceMethodsRejectWithReason() {
     UUID id = capture(0);
@@ -295,6 +343,14 @@ class QuarantineOperationIntegrationTest {
         "SELECT count(*) FROM payment.inbox_quarantine_deliveries"
             + " WHERE quarantine_id = ? AND kind = 'REPLAY'",
         Long.class,
+        id);
+  }
+
+  private List<UUID> replayIds(UUID id) {
+    return jdbc.queryForList(
+        "SELECT id FROM payment.inbox_quarantine_deliveries"
+            + " WHERE quarantine_id = ? AND kind = 'REPLAY' ORDER BY created_at, id",
+        UUID.class,
         id);
   }
 
