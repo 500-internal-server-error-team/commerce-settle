@@ -8,6 +8,7 @@ import { responseContext } from '../features/requests/responseContext';
 import { useEventGauge } from '../features/requests/useEventGauge';
 import { ResultView } from '../features/results/ResultView';
 import { Experiments, type DemoInfo } from '../features/experiments/Experiments';
+import { Select, ArrowIcon } from '../shared/ui/Select';
 
 type Role = 'BUYER' | 'SELLER' | 'OPERATOR';
 interface Session { token: string; accountId: string; name: string; epoch: number }
@@ -92,11 +93,16 @@ export function App() {
     setContext(old => ({ ...old, [role]: { ...old[role], ...next } })); setNotice('선택한 응답의 ID·버전을 입력에 연결했습니다. 실행 전 값을 확인하세요.');
   }
   return <div className={`shell ${panel ? 'with-panel' : ''}`}>
-    <header className="topbar"><a className="brand" href="#" onClick={e => { e.preventDefault(); navigate('buy'); }}><span className="brand-mark">c.</span><span>commerce<span className="brand-light">settle</span></span></a>
+    <header className="topbar"><a className="brand" href="#" onClick={e => { e.preventDefault(); navigate('buy'); }}>
+      <svg className="brand-mark" width="30" height="32" viewBox="0 0 30 32" aria-hidden="true" focusable="false">
+        <rect width="30" height="32" rx="7" fill="currentColor" />
+        <path d="M17 11c-1-1-2-1.5-3.5-1.5a6.5 6.5 0 0 0 0 13c1.5 0 2.5-.5 3.5-1.5" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" />
+        <circle cx="22" cy="21" r="1.5" fill="white" />
+      </svg><span>commerce<span className="brand-light">settle</span></span></a>
       <div className="role-tabs" aria-label="사용자 역할">{(['BUYER', 'SELLER', 'OPERATOR'] as Role[]).map(r => <button key={r} className={role === r ? 'active' : ''} aria-pressed={role === r} onClick={() => switchRole(r)}>{roleLabels[r]}</button>)}</div>
       <div className="top-actions"><span className="account-name">{role === 'OPERATOR' ? '로컬 제어' : session?.name ?? '로그인 전'}</span>
         {session && <button className="text-button" onClick={() => clearActor(role)}>로컬 세션 지우기</button>}
-        <button className="secondary" onClick={() => setPanel(panel === 'experiments' ? null : 'experiments')}>실험·모니터링 ↗</button></div></header>
+        <button className="secondary" onClick={() => setPanel(panel === 'experiments' ? null : 'experiments')}>실험·모니터링 <ArrowIcon /></button></div></header>
     <aside className="sidebar"><div className="sidebar-heading">시연 흐름 <span>{scenarios.length}</span></div>
       <input className="search" aria-label="흐름 검색" placeholder="흐름 검색…" value={search} onChange={e => setSearch(e.target.value)} />
       <nav>{groups.map(([id, title, number]) => <div key={id} className="nav-group"><button className={group === id ? 'nav-item active' : 'nav-item'} onClick={() => navigate(id)}><span>{number}</span>{title}<small>{scenarios.filter(s => s.group === id).length}</small></button>
@@ -112,18 +118,18 @@ export function App() {
       <details className="prerequisites"><summary>시연 준비 조건과 정책</summary><p>{scenario?.note}</p>{requirements(caseId).map(note => <p key={note}>{note}</p>)}
         {group === 'monthly' && <p>전월 구매확정·미환불 거래의 외부 결제액으로 상위 100위와 동점자를 선정합니다. 매월 1일 00:00 마감·00:10 자동 발급. 수동 발급·업무 시간 이동 기능은 없습니다.</p>}</details>
       <section className="work-card"><div className="card-heading"><div><span className="overline">실제 작업</span><h2>{operation?.title ?? '작업 선택'}</h2></div><span className="badge neutral">{operation?.actor}</span></div>
-        <label className="operation-select">할 작업<select value={operationId} onChange={e => setOperation(e.target.value)}>{visibleActions.map(op => <option key={op.id} value={op.id}>{op.method} · {op.title}</option>)}</select></label>
+        <label className="operation-select">할 작업<Select value={operationId} onChange={e => setOperation(e.target.value)}>{visibleActions.map(op => <option key={op.id} value={op.id}>{op.method} · {op.title}</option>)}</Select></label>
         <div className="quick-actions">{visibleActions.filter(op => op.method === 'GET').slice(0, 5).map(op => <button key={op.id} className={op.id === operationId ? 'chip selected' : 'chip'} onClick={() => setOperation(op.id)}>{op.title}</button>)}</div>
-        {operation && <OperationForm key={`${role}:${operation.id}:${session?.epoch ?? 0}`} operation={operation} context={context[role] ?? EMPTY_CONTEXT} pending={pending} allowed={allowed} run={run} />}
+        {operation && <OperationForm key={`${role}:${operation.id}:${session?.epoch ?? 0}`} operation={operation} context={context[role] ?? EMPTY_CONTEXT} pending={pending} allowed={allowed} run={run} role={role} token={session?.token} />}
         <button className="text-button login-link" onClick={() => { setGroup('account'); setCase('account.login'); setOperation(role === 'SELLER' ? 'post_api_seller_sessions' : 'post_api_buyer_sessions'); }}>역할별 로그인·가입 화면 열기</button>
       </section>
       <section className="work-card result-section"><div className="card-heading"><div><span className="overline">서버에서 확인한 결과</span><h2>{current?.operation ?? '아직 실행한 작업이 없습니다'}</h2></div>{current && <span className={`badge ${current.status < 300 ? 'success' : 'failure'}`}>HTTP {current.status}</span>}</div>
         {operation?.path.endsWith('/gauge') && current?.path === operation.path && <p className="caption">선택한 이벤트를 1초마다 조회합니다. 백그라운드에서는 중단합니다.</p>}
         {gauge.error && <p role="alert" className="notice error">게이지를 다시 확인하지 못했습니다. 아래는 마지막 관측값이며 현재 판매 가능 여부는 주문 요청에서 다시 검증합니다.</p>}
         {current ? <><p className="caption">{kst(current.at)} KST · {current.elapsedMs}ms · {current.actor} · {current.status === 202 ? '접수 응답 · 최종 완료 아님' : '해당 요청의 응답'}</p>
-          <ResultView data={current.response as Json} select={selectRow} /></> : <div className="empty"><span className="empty-icon">↗</span><strong>실제 응답이 여기에 표시됩니다</strong><p>역할로 로그인한 뒤 조회하거나 작업을 실행하세요.<br />예시 금액이나 가짜 완료 결과는 넣지 않습니다.</p></div>}</section>
+          <ResultView data={current.response as Json} select={selectRow} /></> : <div className="empty"><span className="empty-icon"><ArrowIcon /></span><strong>실제 응답이 여기에 표시됩니다</strong><p>역할로 로그인한 뒤 조회하거나 작업을 실행하세요.<br />예시 금액이나 가짜 완료 결과는 넣지 않습니다.</p></div>}</section>
     </main>
-    {panel && <aside className="inspector"><div className="inspector-tabs"><button className={panel === 'requests' ? 'active' : ''} onClick={() => setPanel('requests')}>요청·응답</button><button className={panel === 'experiments' ? 'active' : ''} onClick={() => setPanel('experiments')}>실험·관측</button><button aria-label="패널 닫기" onClick={() => setPanel(null)}>×</button></div>
+    {panel && <aside className="inspector"><div className="inspector-tabs"><button className={panel === 'requests' ? 'active' : ''} onClick={() => setPanel('requests')}>요청·응답</button><button className={panel === 'experiments' ? 'active' : ''} onClick={() => setPanel('experiments')}>실험·관측</button><button aria-label="패널 닫기" onClick={() => setPanel(null)}><svg className="icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg></button></div>
       {panel === 'experiments' ? <Experiments info={info.data} /> : <><div className="journal-heading"><h2>실행 기록</h2><span>{history.length}건 · {roleLabels[role]}</span></div>
         <p className="caption inspector-caption">현재 역할의 관측 기록입니다. 내부 이벤트 발행·소비 완료를 추정하지 않습니다.</p>
         <div className="journal">{history.map(e => <button key={e.id} className={`journal-item ${current?.id === e.id ? 'selected' : ''}`} onClick={() => setSelected(e.id)}><span className={e.status < 300 ? 'http-ok' : 'http-error'}>{e.status}</span><span><strong>{e.operation}</strong><small>{kst(e.at)} · {e.elapsedMs}ms</small></span></button>)}</div>

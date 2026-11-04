@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { parseResponse } from '../../shared/api/client';
+import { ArrowIcon } from '../../shared/ui/Select';
 
 export interface DemoInfo {
   gateway: string; operatorServices: string[]; timeTravel: boolean;
@@ -28,7 +29,7 @@ export function Experiments({ info }: { info?: DemoInfo }) {
   return <div className="experiment-content">
     <div className="section-heading"><span>실험 제어</span><span className="badge neutral">로컬 전용</span></div>
     <section><h3>모니터링</h3><div className="monitor-links">{info?.links.map(link =>
-      <a key={link.title} href={link.url} target="_blank" rel="noreferrer">{link.title}<span>↗</span></a>)}</div>
+      <a key={link.title} href={link.url} target="_blank" rel="noreferrer">{link.title}<ArrowIcon /></a>)}</div>
       <p className="caption">접속 주소는 실행 설정 기준입니다. 별도 프로필 도구는 기동이 필요합니다. 지표는 실제 시각 기준으로 조회하세요.</p></section>
     <section><h3>업무 시간</h3><p>배송 예정·환불 마감·정산 준비 시각은 실제 응답에서 확인합니다.</p>
       <button disabled title="여러 서비스와 DB 실행 시각을 분리하는 백엔드 기능이 필요합니다.">다음 업무 시각으로 이동</button>
