@@ -15,7 +15,10 @@ async function control<T>(path: string, method = 'GET', body?: unknown): Promise
   const result = parseResponse(await response.text());
   if (!response.ok) {
     const error = result && typeof result === 'object' && !Array.isArray(result) ? result : {};
-    throw new Error(String(error.detail ?? error.code ?? '제어 요청을 처리하지 못했습니다.'));
+    const fields: Record<string, string> = { rate: '초당 주입 건수', seconds: '주입 시간', body: '요청 본문', id: '실행 ID' };
+    const reasons = Array.isArray(error.errors) ? error.errors.flatMap(e => e && typeof e === 'object' && !Array.isArray(e)
+      ? [`${fields[String(e.field)] ?? String(e.field)}: ${String(e.reason)}`] : []).join(' · ') : '';
+    throw new Error([String(error.detail ?? error.code ?? '제어 요청을 처리하지 못했습니다.'), reasons].filter(Boolean).join(' '));
   }
   return result as T;
 }
@@ -37,9 +40,12 @@ export function Experiments({ info }: { info?: DemoInfo }) {
       <p className="caption">아직 지원하지 않습니다. 브라우저 시각 변경이나 DB 수정으로 대신하지 않습니다.</p></section>
     <section><h3>결제 부하 실행</h3><p className="caption">Kafka 메시지 수신 → 결제 서비스 → 모의 금융 서버의 처리량을 확인합니다. 주문 접수·선착순 이벤트·전체 정산의 처리량은 포함하지 않습니다.</p>
       <p className="project-label">대상 <code>{info?.loadProject || '미설정'}</code></p>
-      <div className="fields"><label>초당 주입 건수<input type="number" min="1" max="100" value={rate} onChange={e => setRate(Number(e.target.value))} /></label>
-        <label>주입 시간 (초)<input type="number" min="1" max="30" value={seconds} onChange={e => setSeconds(Number(e.target.value))} /></label></div>
-      <button className="primary" disabled={!info?.loadEnabled || start.isPending} onClick={() => start.mutate()}>{start.isPending ? '실행 접수 중…' : '부하 테스트 시작'}</button>
+      <form aria-label="결제 부하 실행" onSubmit={e => { e.preventDefault(); start.mutate(); }}>
+        <div className="fields"><label>초당 주입 건수<input type="number" required min="1" max="100" step="1" value={rate} onChange={e => setRate(Number(e.target.value))} /></label>
+          <label>주입 시간 (초)<input type="number" required min="1" max="30" step="1" value={seconds} onChange={e => setSeconds(Number(e.target.value))} /></label></div>
+        <p className="caption">초당 1~100건, 1~30초 동안 실행할 수 있습니다.</p>
+        <button type="submit" className="primary" disabled={!info?.loadEnabled || start.isPending}>{start.isPending ? '실행 접수 중…' : '부하 테스트 시작'}</button>
+      </form>
       {!info?.loadEnabled && <p className="caption">전용 부하 환경을 준비하고 서버 설정에서 활성화해야 합니다. 기존 사용자 데모를 대상으로 실행하지 않습니다.</p>}
       {(start.error || stop.error || runs.error) && <p role="alert" className="error">{(start.error ?? stop.error ?? runs.error)?.message}</p>}
       {runs.data?.map(run => <article className="run" key={run.id}><div><strong>{loadStates[run.state] ?? run.state}</strong><small>{new Date(run.startedAt).toLocaleString('ko-KR')}</small></div>

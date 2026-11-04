@@ -42,7 +42,11 @@ class LoadController {
     this.mapper = mapper;
   }
 
-  public record Start(@Min(1) @Max(100) int rate, @Min(1) @Max(30) int seconds) {}
+  public record Start(
+      @Min(value = 1, message = "1 이상이어야 합니다.") @Max(value = 100, message = "100 이하여야 합니다.")
+          int rate,
+      @Min(value = 1, message = "1 이상이어야 합니다.") @Max(value = 30, message = "30 이하여야 합니다.")
+          int seconds) {}
 
   public record View(
       UUID id,

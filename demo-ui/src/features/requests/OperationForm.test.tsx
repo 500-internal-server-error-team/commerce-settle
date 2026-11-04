@@ -6,6 +6,28 @@ import { OperationForm } from './OperationForm';
 import { mergeResponseContext, responseContext } from './responseContext';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+it.each(['post_api_buyers_me_addresses', 'put_api_buyers_me_addresses_addressId'])('%s는 상세주소가 비어도 브라우저 검증을 통과하고 빈 문자열을 전송한다', id => {
+  const run = vi.fn();
+  render(<OperationForm operation={operations.find(op => op.id === id)!}
+    context={{ addressId: 'address-1', addressIdVersionFor: 'address-1', addressIdVersion: 1,
+      recipient: '수령인', phone: '01000000000', postalCode: '12345', addressLine1: '기본 주소', addressLine2: '' }}
+    pending={false} allowed run={run} />);
+  const form = screen.getByRole('form', { name: 'API 요청' }) as HTMLFormElement;
+  expect(form.checkValidity()).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: '요청 실행' }));
+  expect(run.mock.calls[0][0].body.addressLine2).toBe('');
+  fireEvent.change(screen.getByLabelText(/기본 주소.*addressLine1/), { target: { value: '' } });
+  expect(form.checkValidity()).toBe(false);
+});
+it('필수 열거형 입력은 필수 표시와 빈 선택 차단을 유지한다', () => {
+  render(<OperationForm operation={operations.find(op => op.id === 'put_api_sellers_me_products_productId')!}
+    context={{}} role="SELLER" pending={false} allowed run={() => {}} />);
+  const select = screen.getByRole('combobox', { name: /^상태/ }) as HTMLSelectElement;
+  expect(select.labels?.[0].textContent).toContain('*');
+  expect(select.required).toBe(true);
+  fireEvent.change(select, { target: { value: '' } });
+  expect(select.validity.valueMissing).toBe(true);
+});
 it('상품·이벤트 결과를 차례로 연결해도 상품 편집 값을 행사 값으로 채우지 않는다', () => {
   const product = responseContext({ id: 'product-P', name: '상품', unitPrice: 10000, status: 'ON_SALE', version: 7 }, '/api/sellers/me/products');
   const event = responseContext({ id: 'event-E', productId: 'product-P', name: '행사', status: 'DRAFT', version: 3 }, '/api/sellers/me/events');

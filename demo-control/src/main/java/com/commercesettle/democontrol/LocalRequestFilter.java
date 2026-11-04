@@ -1,5 +1,6 @@
 package com.commercesettle.democontrol;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,6 +15,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Component
 class LocalRequestFilter extends OncePerRequestFilter {
   private static final Set<String> HOSTS = Set.of("localhost", "127.0.0.1", "[::1]", "::1");
+  private final ObjectMapper mapper;
+
+  LocalRequestFilter(ObjectMapper mapper) {
+    this.mapper = mapper;
+  }
 
   @Override
   protected void doFilterInternal(
@@ -46,10 +52,14 @@ class LocalRequestFilter extends OncePerRequestFilter {
     if (!valid) {
       response.setStatus(403);
       response.setContentType("application/problem+json");
-      response
-          .getWriter()
-          .write(
-              "{\"status\":403,\"code\":\"DEMO_ORIGIN_REJECTED\",\"detail\":\"로컬 UI 출처만 허용합니다.\"}");
+      response.setCharacterEncoding(java.nio.charset.StandardCharsets.UTF_8.name());
+      mapper.writeValue(
+          response.getWriter(),
+          DemoExceptionHandler.problem(
+              org.springframework.http.HttpStatus.FORBIDDEN,
+              "DEMO_ORIGIN_REJECTED",
+              "로컬 UI 출처만 허용합니다.",
+              request));
       return;
     }
     chain.doFilter(request, response);
