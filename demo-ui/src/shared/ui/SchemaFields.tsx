@@ -74,7 +74,7 @@ export function Field({ name, schema: input, value, change, required = false, as
   return <div className="field"><label htmlFor={`field-${name}`}>
     {labels[name.split('.').at(-1)!] ?? name}{required && !nullable ? ' *' : ''}
     <span className="field-name">{name}</span></label>
-    {nullable && <label className="null-choice"><input type="checkbox" checked={value === null}
+    {nullable && <label className="null-choice"><input type="checkbox" aria-label={`${labels[name] ?? name} 사용 안 함`} checked={value === null}
       onChange={e => change(e.target.checked ? null : defaults(schema))} />사용 안 함</label>}
     {value !== null && (schema.enum ? <Select id={`field-${name}`} aria-describedby={`hint-${name}`} value={String(value)} required={required} onChange={e => change(e.target.value)}>
       <option value="">{required ? '값을 선택하세요' : '선택 안 함'}</option>
