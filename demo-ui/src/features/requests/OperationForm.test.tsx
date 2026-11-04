@@ -3,8 +3,31 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, expect, it, vi } from 'vitest';
 import { operations } from '../../shared/api/contract';
 import { OperationForm } from './OperationForm';
+import { mergeResponseContext, responseContext } from './responseContext';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+it('상품·이벤트 결과를 차례로 연결해도 상품 편집 값을 행사 값으로 채우지 않는다', () => {
+  const product = responseContext({ id: 'product-P', name: '상품', unitPrice: 10000, status: 'ON_SALE', version: 7 }, '/api/sellers/me/products');
+  const event = responseContext({ id: 'event-E', productId: 'product-P', name: '행사', status: 'DRAFT', version: 3 }, '/api/sellers/me/events');
+  render(<OperationForm operation={operations.find(op => op.id === 'put_api_sellers_me_products_productId')!}
+    context={mergeResponseContext(product, event)} role="SELLER" pending={false} allowed run={() => {}} />);
+  expect((screen.getByLabelText(/^이름/) as HTMLInputElement).value).toBe('');
+  expect((screen.getByLabelText(/판매 가격/) as HTMLInputElement).value).toBe('');
+  expect((screen.getByLabelText(/확인한 버전/) as HTMLInputElement).value).toBe('7');
+});
+it('상품 수정 목록에서 고른 같은 상품의 편집 값과 버전을 함께 채운다', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ upstreamStatus: 200,
+    data: { items: [{ id: 'product-P', name: '상품', unitPrice: 10000, status: 'ON_SALE', version: 7 }], totalPages: 1 } }))));
+  const run = vi.fn();
+  render(<OperationForm operation={operations.find(op => op.id === 'put_api_sellers_me_products_productId')!}
+    context={{}} role="SELLER" pending={false} allowed run={run} />);
+  fireEvent.click(screen.getByRole('button', { name: '상품 목록 불러오기' }));
+  await screen.findByRole('option', { name: /product-P/ });
+  fireEvent.change(screen.getByRole('combobox', { name: '상품 선택' }), { target: { value: 'product-P' } });
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  expect(run.mock.calls[0][0]).toMatchObject({ pathParameters: { productId: 'product-P' },
+    body: { name: '상품', unitPrice: 10000, status: 'ON_SALE', expectedVersion: 7 } });
+});
 it('결과에서 연결한 주문 ID를 결제 조회 조건에 재사용한다', () => {
   const run = vi.fn();
   render(<OperationForm operation={operations.find(op => op.id === 'get_api_payments')!}
