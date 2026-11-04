@@ -8,6 +8,7 @@ import { mergeResponseContext, responseContext } from '../features/requests/resp
 import { useEventGauge } from '../features/requests/useEventGauge';
 import { ResultView } from '../features/results/ResultView';
 import { Experiments, type DemoInfo } from '../features/experiments/Experiments';
+import { DataFlow } from '../features/flow/DataFlow';
 import { Select, ArrowIcon } from '../shared/ui/Select';
 import { actorLabel } from '../shared/ui/labels';
 
@@ -85,7 +86,7 @@ export function App() {
       if (op.idempotent && op.method !== 'GET') setRecoveries(old => ({ ...old,
         [actor]: { ...old[actor], [op.id]: { operation: op, values: dispatched, accountId: before?.accountId } } }));
     }
-    const controller = new AbortController(); abort.current = controller; setPending(true); setNotice('');
+    const controller = new AbortController(); abort.current = controller; setPending(true); setSelected(undefined); setNotice('');
     activeMutation.current = op.method !== 'GET'
       ? { controller, actor, saved: { operation: op, values: dispatched, accountId: before?.accountId } } : null;
     try {
@@ -235,6 +236,7 @@ export function App() {
           recoveryValues={recoveries[role]?.[operation.id]?.values} />}
         {role !== 'OPERATOR' && <button className="text-button login-link" onClick={() => navigate('account', 'account.login')}>로그인·가입 화면 열기</button>}
       </section>
+      {operation && <DataFlow key={`${role}:${session?.epoch ?? 0}`} operation={operation} record={pending ? undefined : current} pending={pending} info={info.data} />}
       <section className="work-card result-section"><div className="card-heading"><div><span className="overline">서버에서 확인한 결과</span><h2>{current?.operation ?? '아직 실행한 작업이 없습니다'}</h2></div>{current && <span className={`badge ${current.status < 300 ? 'success' : 'failure'}`}>HTTP {current.status}</span>}</div>
         {operation?.path.endsWith('/gauge') && current?.path === operation.path && <p className="caption">정상 조회 후 1초마다 갱신합니다. 입력 오류가 있으면 값을 고친 뒤 다시 실행하세요. 백그라운드에서는 중단합니다.</p>}
         {gauge.error && <p role="alert" className="notice error">게이지를 다시 확인하지 못했습니다. 아래는 마지막 관측값이며 현재 판매 가능 여부는 주문 요청에서 다시 검증합니다.</p>}
