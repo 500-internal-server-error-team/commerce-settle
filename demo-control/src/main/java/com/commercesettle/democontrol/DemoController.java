@@ -54,8 +54,8 @@ public class DemoController {
     this.mapper = mapper;
     this.operations = new HashMap<>();
     try (var input = new ClassPathResource("contract/openapi.json").getInputStream()) {
-      mapper
-          .readTree(input)
+      JsonNode contract = mapper.readTree(input);
+      contract
           .required("paths")
           .properties()
           .forEach(
@@ -71,7 +71,15 @@ public class DemoController {
                               Set<String> query = new HashSet<>();
                               node.path("parameters")
                                   .forEach(
-                                      p -> {
+                                      parameter -> {
+                                        JsonNode p =
+                                            parameter.has("$ref")
+                                                ? contract.at(
+                                                    parameter
+                                                        .required("$ref")
+                                                        .asText()
+                                                        .substring(1))
+                                                : parameter;
                                         if (p.path("in").asText().equals("query"))
                                           query.add(p.path("name").asText());
                                       });

@@ -22,7 +22,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
 import org.springframework.web.server.ResponseStatusException;
 
-class DemoControllerTest {
+class DemoControllerIntegrationTest {
   private final ObjectMapper mapper = new ObjectMapper();
 
   @ParameterizedTest
