@@ -229,6 +229,42 @@ class RestartRegressionTest(unittest.TestCase):
 
 
 class StopInjectionTest(unittest.TestCase):
+    def test_failure_before_injection_leaves_an_empty_reconcilable_ledger(self):
+        for failure in ("snapshot", "producer"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                args = argparse.Namespace(stages="1:1", rate=1, seconds=1, run="failed", mix="card", offset=0,
+                                          interval=.01, drain=.01, kill_after=0, scenario=None, stop_file=None)
+                with patch.object(load, "WORK", root), patch.object(load, "STACK_RUNS", root / "runs"):
+                    with patch.object(load, "snapshot", side_effect=SystemExit("snapshot unavailable")), \
+                            patch.object(load.subprocess, "Popen", side_effect=OSError("producer unavailable")) as producer, \
+                            self.assertRaises((SystemExit, OSError)):
+                        (load.cmd_ramp if failure == "snapshot" else load.cmd_inject)(args)
+                    self.assertEqual(producer.call_count, 0 if failure == "snapshot" else 1)
+                    def psql(database, sql):
+                        return [("0", "0", "0")] if "SELECT (SELECT count(*) FROM payment.inbox" in sql else []
+                    with patch.object(load, "psql", side_effect=psql), contextlib.redirect_stdout(io.StringIO()):
+                        load.cmd_reconcile(argparse.Namespace(runs=None, output="reconcile.json"))
+                    report = json.loads((root / "reconcile.json").read_text())
+                    self.assertEqual(report["requests"], 0)
+                    self.assertEqual(report["problems"], {})
+
+    def test_registration_preserves_existing_ledger_and_rejects_unwritable_ledger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / "existing"
+            run.mkdir()
+            ledger = run / "requests.csv"
+            ledger.write_text("original,card,10,0,0,now\n")
+            with patch.object(load, "WORK", root), patch.object(load, "STACK_RUNS", root / "runs"):
+                load.remember_run("existing")
+                self.assertEqual(ledger.read_text(), "original,card,10,0,0,now\n")
+                blocked = root / "blocked/requests.csv"
+                blocked.mkdir(parents=True)
+                with self.assertRaises(IsADirectoryError):
+                    load.remember_run("blocked")
+                self.assertEqual((root / "runs").read_text(), "existing\n")
+
     def test_snapshot_failure_stops_the_producer_and_flushes_the_ledger(self):
         import threading
         with tempfile.TemporaryDirectory() as directory:

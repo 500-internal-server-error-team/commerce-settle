@@ -6,6 +6,20 @@ import { OperationForm } from './OperationForm';
 import { mergeResponseContext, responseContext } from './responseContext';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+it('주문 안내와 명세 원문이 이벤트·쿠폰 사용을 금지하지 않고 선택한 조건을 전송한다', () => {
+  const run = vi.fn();
+  render(<OperationForm operation={operations.find(op => op.id === 'post_api_orders')!}
+    context={{ productId: 'product-1', quantity: 1, eventId: 'event-1', buyerCouponId: 'coupon-1',
+      expectedProductVersion: 3, expectedEventVersion: 2, expectedTotalAmount: 8000 }}
+    pending={false} allowed run={run} />);
+  expect(screen.queryByText(/일반 구매만 지원|이벤트와 쿠폰은 사용 안 함/)).toBeNull();
+  expect(screen.queryByText(/eventId·buyerCouponId·expectedEventVersion에 null만 허용/)).toBeNull();
+  expect(screen.getByText(/일반·이벤트 구매와 쿠폰 사용을 지원합니다/)).toBeTruthy();
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  expect(run.mock.calls[0][0].body).toMatchObject({ eventId: 'event-1', buyerCouponId: 'coupon-1',
+    quantity: 1, expectedEventVersion: 2, expectedTotalAmount: 8000 });
+});
+
 it.each(['post_api_buyers_me_addresses', 'put_api_buyers_me_addresses_addressId'])('%s는 상세주소가 비어도 브라우저 검증을 통과하고 빈 문자열을 전송한다', id => {
   const run = vi.fn();
   render(<OperationForm operation={operations.find(op => op.id === id)!}

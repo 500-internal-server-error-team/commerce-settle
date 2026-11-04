@@ -149,7 +149,7 @@ public class DemoController {
     }
     try {
       URI base = URI.create(target);
-      if (!Set.of("http", "https").contains(base.getScheme())
+      if (!("http".equals(base.getScheme()) || "https".equals(base.getScheme()))
           || base.getHost() == null
           || base.getUserInfo() != null
           || base.getRawQuery() != null

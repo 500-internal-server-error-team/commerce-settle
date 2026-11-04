@@ -127,7 +127,7 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
         ? '조회할 ID와 조회 조건을 입력하세요. 목록이 제공되는 항목은 아래에서 선택할 수 있습니다.'
       : '목록이 있는 ID는 아래에서 선택하고, 나머지는 생성·조회 응답에서 확인하세요. 이름·가격·일정은 직접 정합니다.'}</p>
       {operation.path === '/api/orders' && operation.method === 'POST' && <p>상품 선택 → 수량·할인·결제수단 입력 → 배송지 선택 → 견적 조회 → 주문 실행</p>}
-      {operation.path === '/api/orders' && operation.method === 'POST' && <p>현재 주문 API는 일반 구매만 지원합니다. 이벤트와 쿠폰은 사용 안 함으로 두세요. 해당 조건의 금액은 견적 조회에서 확인할 수 있습니다.</p>}
+      {operation.path === '/api/orders' && operation.method === 'POST' && <p>일반·이벤트 구매와 쿠폰 사용을 지원합니다. 선택한 조건으로 견적을 조회한 뒤 주문하세요.</p>}
       {['/api/orders', '/api/order-quotes'].includes(operation.path) && operation.method === 'POST' && <p>견적에서 쿠폰을 적용할 때는 마일리지를 0으로 두고 허용된 카드·간편결제를 선택하세요. 주문 접수 시 서버가 금액과 조건을 다시 확인합니다.</p>}
       {operation.schema && resolve(operation.schema).description && <details><summary>API 입력 제약 원문</summary><p>{resolve(operation.schema).description}</p></details>}
     </div>
