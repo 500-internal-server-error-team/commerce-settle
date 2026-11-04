@@ -98,6 +98,8 @@ public class JdbcQuarantineStore implements QuarantineStore {
             .addValue("operator", operator)
             .addValue("reason", reasonCode)
             .addValue("delivery", UUID.randomUUID());
+    // 잠금 대기 중 커밋된 재개도 보도록 활성 REPLAY 검사는 잠금 획득 뒤의 SQL에서 수행한다.
+    jdbc.queryForList("SELECT id FROM payment.inbox_quarantines WHERE id=:id FOR UPDATE", params);
     var topics =
         jdbc.query(
             """

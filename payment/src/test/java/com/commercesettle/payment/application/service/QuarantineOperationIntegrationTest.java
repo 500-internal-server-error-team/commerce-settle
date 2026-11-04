@@ -2,6 +2,7 @@ package com.commercesettle.payment.application.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 import com.commercesettle.payment.application.port.OperatorRequestStore;
 import com.commercesettle.payment.application.port.QuarantineStore;
@@ -19,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -37,8 +39,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -350,6 +355,125 @@ class QuarantineOperationIntegrationTest {
         .allSatisfy(
             view ->
                 assertThat(view.deliveries()).allSatisfy(d -> assertThat(d.resumes()).isEmpty()));
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  @DisplayName("재처리와 재개가 원문 잠금을 기다리면 먼저 커밋된 활성 REPLAY를 확인하고 중복 기록 없이 거절한다")
+  void rejectsReplayAndResumeAfterWaitingForParentLock(boolean resumeFirst) throws Exception {
+    UUID id = capture(0);
+    operations.replay(OPERATOR, id, "initial-replay-key", 0, "SCHEMA_FIXED");
+    UUID exhausted = replayIds(id).getFirst();
+    jdbc.update(
+        "UPDATE payment.inbox_quarantine_deliveries SET status = 'REVIEW_REQUIRED', attempts = 10,"
+            + " version = version + 1 WHERE id = ?",
+        exhausted);
+    Runnable resume =
+        () -> operations.resume(OPERATOR, exhausted, "concurrent-resume-key", 1, "KAFKA_BACK");
+    Runnable replay =
+        () -> operations.replay(OPERATOR, id, "concurrent-replay-key", 1, "SCHEMA_FIXED_AGAIN");
+    CountDownLatch held = new CountDownLatch(1);
+    CountDownLatch commit = new CountDownLatch(1);
+    AtomicInteger waitingPid = new AtomicInteger();
+    ExecutorService callers = Executors.newFixedThreadPool(2);
+
+    try {
+      Future<?> holder =
+          callers.submit(
+              () ->
+                  new TransactionTemplate(manager)
+                      .executeWithoutResult(
+                          status -> {
+                            (resumeFirst ? resume : replay).run();
+                            held.countDown();
+                            try {
+                              if (!commit.await(5, TimeUnit.SECONDS)) {
+                                throw new IllegalStateException("Commit gate timed out");
+                              }
+                            } catch (InterruptedException e) {
+                              Thread.currentThread().interrupt();
+                              throw new IllegalStateException(e);
+                            }
+                          }));
+      assertThat(held.await(5, TimeUnit.SECONDS)).isTrue();
+      Future<?> contender =
+          callers.submit(
+              () ->
+                  assertRejected(
+                      () ->
+                          new TransactionTemplate(manager)
+                              .executeWithoutResult(
+                                  status -> {
+                                    waitingPid.set(
+                                        jdbc.queryForObject(
+                                            "SELECT pg_backend_pid()", Integer.class));
+                                    (resumeFirst ? replay : resume).run();
+                                  }),
+                      Reason.REPLAY_ACTIVE));
+      await()
+          .pollDelay(Duration.ZERO)
+          .pollInterval(Duration.ofMillis(10))
+          .atMost(Duration.ofMillis(800))
+          .until(
+              () ->
+                  jdbc.queryForObject(
+                          "SELECT count(*) FROM pg_stat_activity"
+                              + " WHERE pid = ? AND wait_event_type = 'Lock'",
+                          Integer.class,
+                          waitingPid.get())
+                      == 1);
+      commit.countDown();
+      holder.get(5, TimeUnit.SECONDS);
+      contender.get(5, TimeUnit.SECONDS);
+    } finally {
+      commit.countDown();
+      callers.shutdownNow();
+      assertThat(callers.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+    }
+
+    assertThat(replays(id)).isEqualTo(resumeFirst ? 1 : 2);
+    assertThat(count("inbox_quarantine_resumes")).isEqualTo(resumeFirst ? 1 : 0);
+    assertThat(count("audit_logs")).isEqualTo(2);
+    assertThat(count("idempotency_records")).isEqualTo(2);
+    assertThat(
+            operations.get(id).deliveries().stream()
+                .filter(d -> d.kind().equals("REPLAY") && d.status().equals("PENDING")))
+        .hasSize(1);
+  }
+
+  @Test
+  @DisplayName("원문 잠금 대기 상한을 넘으면 변경·감사·멱등 기록 없이 롤백하고 같은 키로 다시 요청할 수 있다")
+  void rollsBackReplayWhenParentLockTimesOut() throws Exception {
+    UUID id = capture(0);
+    try (Connection lock = jdbc.getDataSource().getConnection()) {
+      lock.setAutoCommit(false);
+      try (var statement =
+          lock.prepareStatement("SELECT id FROM payment.inbox_quarantines WHERE id=? FOR UPDATE")) {
+        statement.setObject(1, id);
+        statement.executeQuery().close();
+      }
+
+      long started = System.nanoTime();
+      assertThatThrownBy(
+              () -> operations.replay(OPERATOR, id, "locked-replay-key", 0, "SCHEMA_FIXED"))
+          .isInstanceOf(DataAccessException.class)
+          .rootCause()
+          .isInstanceOfSatisfying(
+              SQLException.class, e -> assertThat(e.getSQLState()).isEqualTo("55P03"));
+      assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(3));
+      assertThat(operations.get(id).version()).isZero();
+      assertThat(replays(id)).isZero();
+      assertThat(count("inbox_quarantine_resumes")).isZero();
+      assertThat(count("audit_logs")).isZero();
+      assertThat(count("idempotency_records")).isZero();
+      lock.rollback();
+    }
+
+    assertThat(operations.replay(OPERATOR, id, "locked-replay-key", 0, "SCHEMA_FIXED").version())
+        .isEqualTo(1);
+    assertThat(replays(id)).isEqualTo(1);
+    assertThat(count("audit_logs")).isEqualTo(1);
+    assertThat(count("idempotency_records")).isEqualTo(1);
   }
 
   @Test
