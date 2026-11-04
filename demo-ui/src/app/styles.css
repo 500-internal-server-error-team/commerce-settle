@@ -33,7 +33,7 @@ button:disabled {
   cursor:not-allowed;
   opacity:.55
 }
-button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible {
+button:focus-visible,a:focus-visible,input[type=checkbox]:focus-visible,summary:focus-visible {
   outline:2px solid var(--accent);
   outline-offset:3px
 }
@@ -51,7 +51,7 @@ button:hover:not(:disabled) {
 a {
   color:inherit
 }
-input,select {
+input,select,textarea {
   width:100%;
   border:1px solid #c9cfd6;
   border-radius:5px;
@@ -60,8 +60,32 @@ input,select {
   background:#fff;
   color:var(--ink)
 }
-select {
-  padding-right:28px
+input:not([type=checkbox]):focus,select:focus,textarea:focus {
+  outline:none;
+  border-color:var(--accent);
+  box-shadow:inset 0 0 0 1px var(--accent)
+}
+.select-control {
+  display:block;
+  position:relative;
+  min-width:0
+}
+.select-control select {
+  appearance:none;
+  -webkit-appearance:none;
+  padding-inline:12px 40px
+}
+.select-chevron {
+  position:absolute;
+  inset-inline-end:12px;
+  top:50%;
+  transform:translateY(-50%);
+  pointer-events:none;
+  color:var(--muted)
+}
+.icon {
+  display:block;
+  flex-shrink:0
 }
 h1,h2,h3,p {
   margin:0
@@ -109,6 +133,10 @@ small,.caption {
   background:#414853
 }
 .secondary {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
   font-size:12px;
   font-weight:500
 }
@@ -177,14 +205,9 @@ small,.caption {
   margin-left:3px
 }
 .brand-mark {
-  display:grid;
-  place-items:center;
-  width:30px;
-  height:32px;
-  border-radius:7px;
-  background:var(--ink);
-  color:white;
-  font-size:24px
+  display:block;
+  flex-shrink:0;
+  color:var(--ink)
 }
 .role-tabs {
   display:flex;
@@ -415,8 +438,10 @@ main {
   font-size:12px;
   color:var(--muted)
 }
-.operation-select select {
+.operation-select .select-control {
   margin-top:7px;
+}
+.operation-select select {
   font-size:12px
 }
 .quick-actions {
@@ -499,6 +524,53 @@ main {
 .field small {
   font-size:12px
 }
+.field-hint {
+  display:block;
+  margin-top:7px;
+  line-height:1.7
+}
+.input-guide {
+  border-inline-start:3px solid var(--line);
+  padding:2px 0 2px 12px;
+  margin:0 0 20px;
+  font-size:12px;
+  color:var(--muted)
+}
+.input-guide strong {
+  color:var(--ink)
+}
+.input-guide p {
+  margin-top:5px
+}
+.reference-picker .select-control {
+  margin:5px 0
+}
+.reference-picker small {
+  display:block
+}
+.reference-pages {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px
+}
+.array-options {
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px
+}
+.array-options label {
+  display:flex;
+  align-items:center;
+  gap:5px;
+  font-size:12px
+}
+.array-options input {
+  width:16px;
+  height:16px;
+  min-height:0;
+  margin:0
+}
 .null-choice {
   display:flex;
   gap:6px;
@@ -576,6 +648,10 @@ main {
   border-radius:50%;
   margin:0 auto 15px;
   font-size:20px
+}
+.empty-icon .icon {
+  width:20px;
+  height:20px
 }
 .metrics {
   display:grid;
