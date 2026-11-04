@@ -1,6 +1,16 @@
 import { expect, it } from 'vitest';
 import { mergeResponseContext, responseContext } from './responseContext';
 
+it('이벤트의 편집 값으로 상품의 이름·가격·판매 상태를 이어 쓰지 않는다', () => {
+  const product = responseContext({ id: 'product-P', name: '상품', unitPrice: 10000,
+    status: 'ON_SALE', version: 7 }, '/api/sellers/me/products');
+  const event = responseContext({ id: 'event-E', productId: 'product-P', name: '행사',
+    status: 'DRAFT', version: 3 }, '/api/sellers/me/events');
+  const context = mergeResponseContext(product, event);
+  expect(context).toMatchObject({ productId: 'product-P', productIdVersion: 7, productIdVersionFor: 'product-P', eventId: 'event-E' });
+  for (const key of ['name', 'status', 'unitPrice']) expect(context).not.toHaveProperty(key);
+});
+
 it('다른 상품 결과를 연결하면 이전 상품의 이벤트를 지운다', () => {
   const previous = { productId: 'product-A', eventId: 'event-A', eventIdVersion: 3,
     eventIdVersionFor: 'event-A', expectedEventVersion: 3, expectedTotalAmount: 10000 };

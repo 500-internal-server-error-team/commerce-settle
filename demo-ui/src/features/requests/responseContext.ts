@@ -6,10 +6,14 @@ export function responseContext(row: Record<string, Json>, sourcePath: string,
   const data = row.order && typeof row.order === 'object' ? row.order as Record<string, Json> : row;
   const quote = sourcePath === '/api/order-quotes' && requestBody && typeof requestBody === 'object' && !Array.isArray(requestBody)
     ? Object.fromEntries(Object.entries(requestBody).filter(([key]) => ['productId', 'quantity', 'eventId', 'buyerCouponId', 'mileageAmount', 'externalMethod'].includes(key))) : {};
+  const purchase = sourcePath === '/api/order-quotes' || /\/orders(\/|$)/.test(sourcePath);
   const next: Record<string, Json> = { ...quote, ...parentParameters, ...Object.fromEntries(Object.entries(data).filter(([key, value]) =>
-    !/password|token|address/i.test(key)
-    // A coupon's product is an applicability constraint, not a new product selection.
-    && !(key === 'productId' && /\/(coupons|coupon-templates)(\/|$)/.test(sourcePath))
+    !/password|token|address|credential|secret/i.test(key)
+    // Shared context carries identities and explicit transaction inputs, not another resource's editable fields.
+    && (key.endsWith('Id') || ['targetMonth', 'batchDate'].includes(key)
+      || purchase && ['quantity', 'mileageAmount', 'externalMethod'].includes(key))
+    // A coupon's product/seller constrain applicability, not the user's current selection.
+    && !(['productId', 'sellerId'].includes(key) && /\/(coupons|coupon-templates)(\/|$)/.test(sourcePath))
     && (typeof value === 'string' || typeof value === 'number' || value === null && key.endsWith('Id')))) };
   let idKey: string | undefined;
   if (data.id) {
@@ -34,9 +38,9 @@ export function responseContext(row: Record<string, Json>, sourcePath: string,
   }
   if (data.version !== undefined && idKey === 'productId') next.expectedProductVersion = data.version;
   if (data.version !== undefined && idKey === 'eventId') next.expectedEventVersion = data.version;
-  if (data.productVersion !== undefined) next.expectedProductVersion = data.productVersion;
-  if (data.eventVersion !== undefined) next.expectedEventVersion = data.eventVersion;
-  if (data.totalAmount !== undefined) next.expectedTotalAmount = data.totalAmount;
+  if (purchase && data.productVersion !== undefined) next.expectedProductVersion = data.productVersion;
+  if (purchase && data.eventVersion !== undefined) next.expectedEventVersion = data.eventVersion;
+  if (purchase && data.totalAmount !== undefined) next.expectedTotalAmount = data.totalAmount;
   return next;
 }
 
