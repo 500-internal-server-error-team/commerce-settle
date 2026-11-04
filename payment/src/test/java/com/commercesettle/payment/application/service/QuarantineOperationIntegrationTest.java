@@ -14,7 +14,10 @@ import com.commercesettle.payment.domain.exception.QuarantineOperationRejectedEx
 import com.commercesettle.payment.domain.exception.QuarantineOperationRejectedException.Reason;
 import com.commercesettle.payment.infrastructure.persistence.JdbcOperatorRequestStore;
 import com.commercesettle.payment.infrastructure.persistence.inbox.JdbcQuarantineStore;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -28,6 +31,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -38,6 +42,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DelegatingDataSource;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
@@ -57,6 +62,9 @@ class QuarantineOperationIntegrationTest {
   private static final Instant NOW = Instant.parse("2026-11-03T00:00:00Z");
   private static final String OPERATOR = "operator:ops-1";
   private static final byte[] BODY = "{\"broken\":".getBytes(StandardCharsets.UTF_8);
+
+  /** 테스트 DataSource가 준비한 SQL 문장 수. 목록 조회가 원문 수만큼 SQL을 늘리지 않는지 본다. */
+  private static final AtomicInteger STATEMENTS = new AtomicInteger();
 
   @Container
   static final PostgreSQLContainer<?> POSTGRES =
@@ -298,6 +306,53 @@ class QuarantineOperationIntegrationTest {
   }
 
   @Test
+  @DisplayName("목록 조회는 원문 수와 관계없이 같은 수의 SQL로 원문별 작업·재개 이력을 묶는다")
+  void listsPageWithConstantQueries() {
+    UUID first = capture(0);
+    UUID exhausted = operations.get(first).deliveries().getFirst().id();
+    jdbc.update(
+        "UPDATE payment.inbox_quarantine_deliveries SET status = 'REVIEW_REQUIRED', attempts = 10,"
+            + " version = version + 1 WHERE id = ?",
+        exhausted);
+    operations.resume(OPERATOR, exhausted, "resume-key-0201", 1, "KAFKA_BACK");
+    operations.replay(OPERATOR, first, "replay-key-0201", 0, "SCHEMA_FIXED");
+    int single = statementsFor(() -> operations.list(null, 0, 20));
+
+    for (int offset = 1; offset <= 5; offset++) {
+      UUID id = capture(offset);
+      operations.replay(OPERATOR, id, "replay-key-020" + (offset + 1), 0, "SCHEMA_FIXED");
+    }
+    List<QuarantineView> page = new ArrayList<>();
+    int many = statementsFor(() -> page.addAll(operations.list(null, 0, 20).items()));
+
+    assertThat(many).isEqualTo(single).isLessThanOrEqualTo(4);
+    assertThat(page).hasSize(6);
+    assertThat(page)
+        .allSatisfy(
+            view -> {
+              assertThat(view.deliveries())
+                  .extracting(DeliveryView::kind)
+                  .containsExactlyInAnyOrder("DLT", "REPLAY");
+              assertThat(view.deliveries())
+                  .allSatisfy(d -> assertThat(d.quarantineId()).isEqualTo(view.id()));
+            });
+    QuarantineView withResume =
+        page.stream().filter(view -> view.id().equals(first)).findFirst().orElseThrow();
+    assertThat(
+            withResume.deliveries().stream()
+                .filter(d -> d.id().equals(exhausted))
+                .findFirst()
+                .orElseThrow()
+                .resumes())
+        .singleElement()
+        .satisfies(r -> assertThat(r.previousAttempts()).isEqualTo(10));
+    assertThat(page.stream().filter(view -> !view.id().equals(first)))
+        .allSatisfy(
+            view ->
+                assertThat(view.deliveries()).allSatisfy(d -> assertThat(d.resumes()).isEmpty()));
+  }
+
+  @Test
   @DisplayName("서비스 메서드의 재처리는 멱등·감사 기록 없이 동작하고, 거절은 없는 원문·버전 불일치·진행 중 재처리로 구분한다")
   void serviceMethodsRejectWithReason() {
     UUID id = capture(0);
@@ -354,6 +409,12 @@ class QuarantineOperationIntegrationTest {
         id);
   }
 
+  private static int statementsFor(Runnable call) {
+    int before = STATEMENTS.get();
+    call.run();
+    return STATEMENTS.get() - before;
+  }
+
   private long count(String table) {
     return jdbc.queryForObject("SELECT count(*) FROM payment." + table, Long.class);
   }
@@ -367,10 +428,32 @@ class QuarantineOperationIntegrationTest {
 
   @EnableTransactionManagement
   static class Config {
+    /** 준비한 SQL 문장 수를 세도록 연결을 감싼다. */
     @Bean
     DataSource dataSource() {
-      return new DriverManagerDataSource(
-          POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+      return new DelegatingDataSource(
+          new DriverManagerDataSource(
+              POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {
+        @Override
+        public Connection getConnection() throws SQLException {
+          Connection connection = super.getConnection();
+          return (Connection)
+              Proxy.newProxyInstance(
+                  Connection.class.getClassLoader(),
+                  new Class<?>[] {Connection.class},
+                  (proxy, method, args) -> {
+                    if (method.getName().startsWith("prepare")
+                        || method.getName().equals("createStatement")) {
+                      STATEMENTS.incrementAndGet();
+                    }
+                    try {
+                      return method.invoke(connection, args);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                      throw e.getCause();
+                    }
+                  });
+        }
+      };
     }
 
     @Bean

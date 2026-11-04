@@ -5,8 +5,11 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Types;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -267,19 +270,17 @@ public class JdbcQuarantineStore implements QuarantineStore {
     return key == null ? null : new String(key, StandardCharsets.UTF_8);
   }
 
+  /** 페이지의 원문·작업·재개 이력을 각각 한 번에 읽는다. 원문 수와 관계없이 SQL은 원문 1회, 작업 1회, 재개 이력 1회다. */
   @Override
   public List<QuarantineView> findPage(String deliveryStatus, int page, int size) {
-    var ids =
-        jdbc.query(
-            "SELECT q.id FROM payment.inbox_quarantines q"
-                + STATUS_FILTER
-                + " ORDER BY q.created_at DESC, q.id DESC LIMIT :size OFFSET :offset",
-            new MapSqlParameterSource()
-                .addValue("status", deliveryStatus, Types.VARCHAR)
-                .addValue("size", size)
-                .addValue("offset", (long) page * size),
-            (rs, row) -> rs.getObject(1, UUID.class));
-    return ids.stream().map(id -> find(id).orElseThrow()).toList();
+    return quarantines(
+        " FROM payment.inbox_quarantines q"
+            + STATUS_FILTER
+            + " ORDER BY q.created_at DESC, q.id DESC LIMIT :size OFFSET :offset",
+        new MapSqlParameterSource()
+            .addValue("status", deliveryStatus, Types.VARCHAR)
+            .addValue("size", size)
+            .addValue("offset", (long) page * size));
   }
 
   @Override
@@ -294,17 +295,42 @@ public class JdbcQuarantineStore implements QuarantineStore {
 
   @Override
   public Optional<QuarantineView> find(UUID quarantineId) {
-    var rows =
+    return quarantines(
+            " FROM payment.inbox_quarantines q WHERE q.id=:id",
+            new MapSqlParameterSource("id", quarantineId))
+        .stream()
+        .findFirst();
+  }
+
+  @Override
+  public Optional<DeliveryView> findDelivery(UUID deliveryId) {
+    return deliveries("d.id IN (:ids)", List.of(deliveryId)).stream().findFirst();
+  }
+
+  /** 원문·키 bytes는 읽지 않고 크기와 SHA-256만 계산한다. 원문 순서는 {@code fromClause}의 정렬을 따른다. */
+  private List<QuarantineView> quarantines(String fromClause, MapSqlParameterSource params) {
+    record Row(
+        UUID id,
+        String consumer,
+        String sourceTopic,
+        int sourcePartition,
+        long sourceOffset,
+        String errorCode,
+        Integer bodySize,
+        String bodySha256,
+        long version,
+        Instant createdAt) {}
+    List<Row> rows =
         jdbc.query(
             """
-            SELECT id,consumer,source_topic,source_partition,source_offset,error_code,
-              octet_length(raw_body) AS body_size,encode(sha256(raw_body),'hex') AS body_sha256,
-              version,created_at
-            FROM payment.inbox_quarantines WHERE id=:id
-            """,
-            new MapSqlParameterSource("id", quarantineId),
+            SELECT q.id,q.consumer,q.source_topic,q.source_partition,q.source_offset,q.error_code,
+              octet_length(q.raw_body) AS body_size,encode(sha256(q.raw_body),'hex') AS body_sha256,
+              q.version,q.created_at
+            """
+                + fromClause,
+            params,
             (rs, row) ->
-                new QuarantineView(
+                new Row(
                     rs.getObject("id", UUID.class),
                     rs.getString("consumer"),
                     rs.getString("source_topic"),
@@ -314,63 +340,117 @@ public class JdbcQuarantineStore implements QuarantineStore {
                     (Integer) rs.getObject("body_size"),
                     rs.getString("body_sha256"),
                     rs.getLong("version"),
-                    rs.getTimestamp("created_at").toInstant(),
-                    deliveries("d.quarantine_id=:id", quarantineId)));
-    return rows.stream().findFirst();
+                    rs.getTimestamp("created_at").toInstant()));
+    if (rows.isEmpty()) {
+      return List.of();
+    }
+    Map<UUID, List<DeliveryView>> byQuarantine = new HashMap<>();
+    for (DeliveryView delivery :
+        deliveries("d.quarantine_id IN (:ids)", rows.stream().map(Row::id).toList())) {
+      byQuarantine.computeIfAbsent(delivery.quarantineId(), id -> new ArrayList<>()).add(delivery);
+    }
+    return rows.stream()
+        .map(
+            r ->
+                new QuarantineView(
+                    r.id(),
+                    r.consumer(),
+                    r.sourceTopic(),
+                    r.sourcePartition(),
+                    r.sourceOffset(),
+                    r.errorCode(),
+                    r.bodySize(),
+                    r.bodySha256(),
+                    r.version(),
+                    r.createdAt(),
+                    byQuarantine.getOrDefault(r.id(), List.of())))
+        .toList();
   }
 
-  @Override
-  public Optional<DeliveryView> findDelivery(UUID deliveryId) {
-    return deliveries("d.id=:id", deliveryId).stream().findFirst();
-  }
-
-  /** 원문·키 bytes는 읽지 않는다. 재개 이력은 작업마다 createdAt, id 순서로 붙인다. */
-  private List<DeliveryView> deliveries(String where, UUID id) {
-    return jdbc.query(
+  /** 작업과 재개 이력을 각각 한 번에 읽는다. 작업과 이력은 각각 createdAt, id 순서다. */
+  private List<DeliveryView> deliveries(String where, List<UUID> ids) {
+    record Row(
+        UUID id,
+        UUID quarantineId,
+        String kind,
+        String topic,
+        String status,
+        int attempts,
+        Instant nextRunAt,
+        Instant leaseUntil,
+        String operatorId,
+        String reasonCode,
+        long version,
+        Instant createdAt,
+        Instant updatedAt) {}
+    List<Row> rows =
+        jdbc.query(
+            """
+            SELECT d.id,d.quarantine_id,d.kind,d.topic,d.status,d.attempts,d.next_run_at,
+              d.lease_until,d.operator_id,d.reason_code,d.version,d.created_at,d.updated_at
+            FROM payment.inbox_quarantine_deliveries d WHERE
+            """
+                + where
+                + " ORDER BY d.created_at, d.id",
+            new MapSqlParameterSource("ids", ids),
+            (rs, row) -> {
+              var leaseUntil = rs.getTimestamp("lease_until");
+              return new Row(
+                  rs.getObject("id", UUID.class),
+                  rs.getObject("quarantine_id", UUID.class),
+                  rs.getString("kind"),
+                  rs.getString("topic"),
+                  rs.getString("status"),
+                  rs.getInt("attempts"),
+                  rs.getTimestamp("next_run_at").toInstant(),
+                  leaseUntil == null ? null : leaseUntil.toInstant(),
+                  rs.getString("operator_id"),
+                  rs.getString("reason_code"),
+                  rs.getLong("version"),
+                  rs.getTimestamp("created_at").toInstant(),
+                  rs.getTimestamp("updated_at").toInstant());
+            });
+    if (rows.isEmpty()) {
+      return List.of();
+    }
+    Map<UUID, List<ResumeView>> byDelivery = new HashMap<>();
+    jdbc.query(
         """
-        SELECT d.id,d.quarantine_id,d.kind,d.topic,d.status,d.attempts,d.next_run_at,d.lease_until,
-          d.operator_id,d.reason_code,d.version,d.created_at,d.updated_at
-        FROM payment.inbox_quarantine_deliveries d WHERE
-        """
-            + where
-            + " ORDER BY d.created_at, d.id",
-        new MapSqlParameterSource("id", id),
-        (rs, row) -> {
-          UUID delivery = rs.getObject("id", UUID.class);
-          var leaseUntil = rs.getTimestamp("lease_until");
-          return new DeliveryView(
-              delivery,
-              rs.getObject("quarantine_id", UUID.class),
-              rs.getString("kind"),
-              rs.getString("topic"),
-              rs.getString("status"),
-              rs.getInt("attempts"),
-              rs.getTimestamp("next_run_at").toInstant(),
-              leaseUntil == null ? null : leaseUntil.toInstant(),
-              rs.getString("operator_id"),
-              rs.getString("reason_code"),
-              rs.getLong("version"),
-              rs.getTimestamp("created_at").toInstant(),
-              rs.getTimestamp("updated_at").toInstant(),
-              resumes(delivery));
-        });
-  }
-
-  private List<ResumeView> resumes(UUID delivery) {
-    return jdbc.query(
-        """
-        SELECT id,expected_version,previous_attempts,operator_id,reason_code,created_at
-        FROM payment.inbox_quarantine_resumes WHERE delivery_id=:id ORDER BY created_at, id
+        SELECT id,delivery_id,expected_version,previous_attempts,operator_id,reason_code,created_at
+        FROM payment.inbox_quarantine_resumes WHERE delivery_id IN (:ids) ORDER BY created_at, id
         """,
-        new MapSqlParameterSource("id", delivery),
-        (rs, row) ->
-            new ResumeView(
-                rs.getObject("id", UUID.class),
-                rs.getLong("expected_version"),
-                rs.getInt("previous_attempts"),
-                rs.getString("operator_id"),
-                rs.getString("reason_code"),
-                rs.getTimestamp("created_at").toInstant()));
+        new MapSqlParameterSource("ids", rows.stream().map(Row::id).toList()),
+        rs -> {
+          byDelivery
+              .computeIfAbsent(rs.getObject("delivery_id", UUID.class), id -> new ArrayList<>())
+              .add(
+                  new ResumeView(
+                      rs.getObject("id", UUID.class),
+                      rs.getLong("expected_version"),
+                      rs.getInt("previous_attempts"),
+                      rs.getString("operator_id"),
+                      rs.getString("reason_code"),
+                      rs.getTimestamp("created_at").toInstant()));
+        });
+    return rows.stream()
+        .map(
+            r ->
+                new DeliveryView(
+                    r.id(),
+                    r.quarantineId(),
+                    r.kind(),
+                    r.topic(),
+                    r.status(),
+                    r.attempts(),
+                    r.nextRunAt(),
+                    r.leaseUntil(),
+                    r.operatorId(),
+                    r.reasonCode(),
+                    r.version(),
+                    r.createdAt(),
+                    r.updatedAt(),
+                    byDelivery.getOrDefault(r.id(), List.of())))
+        .toList();
   }
 
   private static MapSqlParameterSource params(Instant now) {
