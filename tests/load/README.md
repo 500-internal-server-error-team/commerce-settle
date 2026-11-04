@@ -33,6 +33,8 @@ python3 tests/load/payment_load.py reconcile          # 원장 ↔ Payment ↔ f
 
 도구의 대조·재처리 회귀 검사는 `python3 -B -m unittest discover -s tests/load -p 'test_payment_load.py'`로 실행하며 CI에도 포함합니다. 메모리 SQLite의 대조 쿼리와 재처리 API 대역을 사용하므로 실제 PostgreSQL·PG의 부하·복구 시험을 대신하지 않습니다.
 
+부하/복구 후 Settlement의 영속 대조와 원천별 HTTP 검사는 [정산 대조 실행](../../docs/development.md#정산-대조-실행과-재개)의 `scripts/reconcile.py`로 연결합니다. 기존 `payment_load.py reconcile`은 시험 주입 원장과 실제 처리 결과의 누락·중복 검사를 계속 맡습니다. 새 읽기 계약의 검사가 주입 원장 검사를 대체하지 않습니다.
+
 ### 대조 항목
 
 `reconcile`은 현재 스택에서 넣은 요청 원장을 기준으로 다음을 확인하고, 하나라도 어긋나면 실패로 끝납니다.

@@ -71,10 +71,115 @@ class MockPayoutIntegrationTest {
   private static final long OPENING_BALANCE = 1_000_000;
   private static final String SELLER_ACCOUNT = "seller-account-1";
 
+  @Autowired java.time.Clock clock;
   @Autowired MockMvc mvc;
   @Autowired JdbcTemplate jdbc;
   @Autowired MockAccountRepository accounts;
   @Autowired MockScenarioRepository scenarios;
+
+  @Test
+  @DisplayName("대조 조회는 마감·기준선을 유지하고 실제 차감 기록과 소유 권한을 확인한다")
+  void readsCashEvidenceAtFixedBoundary() throws Exception {
+    mvc.perform(
+            get("/mock/payout-reconciliation")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + SETTLEMENT)
+                .param("cutoffAt", Instant.now().plusSeconds(60).toString()))
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("RECONCILIATION_CUTOFF_NOT_READY"));
+    MockAccount account = account(OPENING_BALANCE);
+    String scenario = scenario(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
+    UUID key = UUID.randomUUID();
+    payout(key, account.getAccountRef(), 30000, scenario).andExpect(status().isAccepted());
+    Instant cutoff = clock.instant().plusSeconds(10);
+    mvc.perform(
+            get("/mock/payout-reconciliation")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + SETTLEMENT)
+                .param("cutoffAt", cutoff.toString()))
+        .andExpect(status().isOk())
+        .andExpect(
+            jsonPath("$.items[*].businessKey").value(org.hamcrest.Matchers.hasItem(key.toString())))
+        .andExpect(
+            jsonPath("$.items[?(@.businessKey == '" + key + "')].debitCount")
+                .value(org.hamcrest.Matchers.hasItem(1)))
+        .andExpect(
+            jsonPath("$.items[?(@.businessKey == '" + key + "')].debitAmount")
+                .value(org.hamcrest.Matchers.hasItem(-30000)));
+    mvc.perform(
+            get("/mock/payout-reconciliation")
+                .header(
+                    HttpHeaders.AUTHORIZATION,
+                    "Bearer test-payment-credential-0123456789abcdef0123456")
+                .param("cutoffAt", cutoff.toString()))
+        .andExpect(status().isForbidden());
+    mvc.perform(
+            get("/mock/reconciliation-integrity")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + SETTLEMENT))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.checks.fundingBalance").value(0));
+    jdbc.update(
+        "UPDATE finance_mock.mock_accounts SET balance=balance-1 WHERE id=?", account.getId());
+    mvc.perform(
+            get("/mock/reconciliation-integrity")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + SETTLEMENT))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.checks.fundingBalance").value(1));
+    jdbc.update(
+        "UPDATE finance_mock.mock_accounts SET balance=balance+1 WHERE id=?", account.getId());
+  }
+
+  @Test
+  @DisplayName("잔액 합계가 맞아도 잘못된 현금 종류의 부모 참조를 탐지한다")
+  void detectsWrongCashKindWhenFundingBalanceMatches() throws Exception {
+    var account = account(OPENING_BALANCE);
+    UUID key = UUID.randomUUID();
+    payout(
+            key,
+            account.getAccountRef(),
+            30000,
+            scenario(BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO))
+        .andExpect(status().isAccepted());
+    UUID transaction =
+        jdbc.queryForObject(
+            "SELECT id FROM finance_mock.mock_transactions WHERE business_key=?", UUID.class, key);
+    long errors = 0;
+    long adjustment = 0;
+    var fixtures = new java.util.ArrayList<UUID>();
+    try {
+      for (String kind : List.of("PG_RECEIPT", "REFUND_DEBIT")) {
+        long amount = "PG_RECEIPT".equals(kind) ? 1 : -1;
+        UUID fixture = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO finance_mock.mock_cash_entries(id,account_id,kind,transaction_id,amount,created_at) VALUES(?,?,?,?,?,?)",
+            fixture,
+            account.getId(),
+            kind,
+            transaction,
+            amount,
+            clock.instant().atOffset(java.time.ZoneOffset.UTC));
+        fixtures.add(fixture);
+        jdbc.update(
+            "UPDATE finance_mock.mock_accounts SET balance=balance+? WHERE id=?",
+            amount,
+            account.getId());
+        adjustment += amount;
+        mvc.perform(
+                get("/mock/reconciliation-integrity")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + SETTLEMENT))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.checks.fundingBalance").value(0))
+            .andExpect(jsonPath("$.checks.successfulCash").value(0))
+            .andExpect(jsonPath("$.checks.cashReference").value(++errors));
+      }
+    } finally {
+      // 정상 지급 원장은 보존하고 이 시험이 추가한 잘못된 fixture만 제거한다.
+      for (UUID fixture : fixtures)
+        jdbc.update("DELETE FROM finance_mock.mock_cash_entries WHERE id=?", fixture);
+      jdbc.update(
+          "UPDATE finance_mock.mock_accounts SET balance=balance-? WHERE id=?",
+          adjustment,
+          account.getId());
+    }
+  }
 
   @Test
   @DisplayName("성공한 지급은 재원 잔액에서 한 번 차감하고 현금 기록과 소비된 선점을 남긴다")
@@ -369,7 +474,7 @@ class MockPayoutIntegrationTest {
             "funding-" + UUID.randomUUID(),
             AccountPurpose.PAYOUT,
             openingBalance,
-            Instant.now()));
+            clock.instant()));
   }
 
   private String scenario(BigDecimal rejection, BigDecimal loss, BigDecimal lookupFailure) {
@@ -392,7 +497,7 @@ class MockPayoutIntegrationTest {
             lookupFailure,
             new MockScenario.Delay(0, 0),
             1L,
-            Instant.now()));
+            clock.instant()));
     return version;
   }
 
@@ -434,5 +539,14 @@ class MockPayoutIntegrationTest {
         "SELECT count(*) FROM finance_mock.mock_transactions WHERE business_key = ?",
         Long.class,
         key);
+  }
+
+  @org.springframework.boot.test.context.TestConfiguration
+  static class ReconciliationClock {
+    @org.springframework.context.annotation.Bean
+    @org.springframework.context.annotation.Primary
+    java.time.Clock fixedClock() {
+      return java.time.Clock.fixed(Instant.parse("2026-11-01T00:00:00Z"), java.time.ZoneOffset.UTC);
+    }
   }
 }

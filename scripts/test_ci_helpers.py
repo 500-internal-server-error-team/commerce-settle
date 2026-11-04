@@ -164,7 +164,7 @@ class CiGateTest(unittest.TestCase):
         tests = self.workflow.split("\n  tests:\n", 1)[1].split("\n  observability:\n", 1)[0]
         self.assertEqual(set(re.findall(r":([a-z-]+):test\b", tests)),
                          {"commerce", "payment", "settlement", "finance-mock", "gateway", "internal-auth"})
-        self.assertIn("scenario: [smoke, redis, retention, admission, financial-flow]", self.workflow)
+        self.assertIn("scenario: [smoke, redis, retention, admission, financial-flow, reconciliation]", self.workflow)
         self.assertRegex(self.workflow, r"if: matrix.scenario == 'financial-flow'\n"
                          r"\s+run: python3 -B scripts/smoke_financial_flow.py")
         self.assertRegex(self.workflow, r"Verify source-backed notification retention\n"

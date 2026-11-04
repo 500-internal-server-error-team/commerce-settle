@@ -155,3 +155,29 @@ groups:
         annotations:
           summary: 업무 Inbox 재판정 실행의 임대·시도·처리기를 확인하세요.
           runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#업무-inbox-관측과-재판정
+
+  - name: settlement-reconciliation
+    interval: 15s
+    rules:
+      - alert: SettlementReconciliationDefect
+        expr: (commerce_settle_reconciliation_defects > 0) and on(job, instance) (time() - commerce_settle_reconciliation_observed_timestamp_seconds < 45)
+        labels:
+          severity: critical
+        annotations:
+          summary: 정산 대조에서 검증된 금액·참조 결함을 확인하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#정산-대조-실행과-재개
+      - alert: SettlementReconciliationUnavailable
+        expr: (commerce_settle_reconciliation_unverified > 0) and on(job, instance) (time() - commerce_settle_reconciliation_observed_timestamp_seconds < 45)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 원천 조회 실패로 중단된 대조 회차를 재개하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#정산-대조-실행과-재개
+      - alert: SettlementReconciliationDelayed
+        expr: (commerce_settle_reconciliation_wait_age_seconds > 900) and on(job, instance) (time() - commerce_settle_reconciliation_observed_timestamp_seconds < 45)
+        labels:
+          severity: critical
+        annotations:
+          summary: 전달·반영·격리·미확정 대기는 금액 결함과 구분해 복구하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#정산-대조-실행과-재개

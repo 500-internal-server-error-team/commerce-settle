@@ -112,6 +112,21 @@ class MockPaymentIntegrationTest {
   }
 
   @Test
+  @DisplayName("정상 PG 입금과 입금후 환불의 현금 참조는 소유 HTTP 대조와 일치한다")
+  void reconcilesNormalReceiptAndRefundCash() throws Exception {
+    var provider = PaymentProvider.PG_A;
+    UUID original = approve(provider, scenario(provider, 0, 0, 0, 0, 0, 0, 0, 0));
+    payments.receiveDue();
+    assertThat(cash()).containsExactly(AMOUNT);
+    json(refund(provider, original, UUID.randomUUID(), AMOUNT), 202);
+    assertThat(cash()).containsExactlyInAnyOrder(AMOUNT, -AMOUNT);
+    var result = json(get("/mock/reconciliation-integrity", SETTLEMENT), 200);
+    assertThat(result.path("checks").path("cashReference").asLong()).isZero();
+    assertThat(result.path("checks").path("successfulCash").asLong()).isZero();
+    assertThat(result.path("checks").path("fundingBalance").asLong()).isZero();
+  }
+
+  @Test
   @DisplayName("PG의 승인·조회·환불은 Payment 자격만 허용하며 거절 요청은 금융 상태를 바꾸지 않는다")
   void rejectsOtherCallersWithoutFinancialEffects() throws Exception {
     var provider = PaymentProvider.EASY_PAY;

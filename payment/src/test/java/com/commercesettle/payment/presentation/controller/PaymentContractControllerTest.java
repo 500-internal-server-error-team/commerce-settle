@@ -59,6 +59,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
       MileageController.class,
       PaymentController.class,
       SettlementContractController.class,
+      PaymentIntegrityController.class,
       PaymentJobController.class
     },
     properties = {
@@ -66,6 +67,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
       "app.internal-auth.senders.gateway.current=" + PaymentContractControllerTest.GATEWAY,
       "app.internal-auth.senders[service\\:settlement].current="
           + PaymentContractControllerTest.SETTLEMENT,
+      "app.internal-auth.senders[service\\:settlement].previous="
+          + PaymentContractControllerTest.SETTLEMENT_PREVIOUS,
       "app.internal-auth.senders[operator\\:ops-1].current="
           + PaymentContractControllerTest.OPERATOR
     })
@@ -73,6 +76,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 class PaymentContractControllerTest {
   static final String GATEWAY = "gateway-credential-0123456789abcdef0123456789";
   static final String SETTLEMENT = "settlement-credential-0123456789abcdef012345";
+  static final String SETTLEMENT_PREVIOUS = "settlement-previous-credential-0123456789abcdef012345";
   static final String OPERATOR = "operator-credential-0123456789abcdef01234567";
   private static final UUID BUYER = UUID.fromString("00000000-0000-0000-0000-00000000000b");
   private static final UUID PAYMENT = UUID.fromString("00000000-0000-0000-0000-0000000000a1");
@@ -86,6 +90,38 @@ class PaymentContractControllerTest {
   @MockitoBean PaymentAttemptQueryService attempts;
   @MockitoBean ReconciliationQueryService reconciliation;
   @MockitoBean PaymentJobOperationService jobs;
+  @MockitoBean com.commercesettle.payment.application.service.PaymentIntegrityService integrity;
+
+  @Test
+  @DisplayName("대조 마지막 페이지의 null cursor와 준비 전 마감 409를 HTTP 계약으로 보존한다")
+  void preservesIntegrityPageAndCutoffConflict() throws Exception {
+    var page = new java.util.LinkedHashMap<String, Object>();
+    page.put("items", List.of());
+    page.put("page", 0);
+    page.put("size", 100);
+    page.put("totalElements", 0L);
+    page.put("totalPages", 0L);
+    page.put("cutoffAt", AT.atOffset(java.time.ZoneOffset.ofHours(9)));
+    page.put("snapshotAt", AT.plusSeconds(600).atOffset(java.time.ZoneOffset.ofHours(9)));
+    page.put("nextCursor", null);
+    page.put("direction", "PAYMENT");
+    given(integrity.read(any(), any(), any(), anyInt(), any())).willReturn(page);
+    var request =
+        get("/internal/payment-reconciliation-checks")
+            .header(HttpHeaders.AUTHORIZATION, "Bearer " + SETTLEMENT_PREVIOUS)
+            .param("cutoffAt", CUTOFF);
+    mvc.perform(request)
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.nextCursor").value(nullValue()))
+        .andExpect(
+            org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                .string(org.hamcrest.Matchers.containsString("\"nextCursor\":null")));
+    given(integrity.read(any(), any(), any(), anyInt(), any()))
+        .willThrow(new ReconciliationCutoffNotReadyException());
+    mvc.perform(request)
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.code").value("RECONCILIATION_CUTOFF_NOT_READY"));
+  }
 
   @Test
   @DisplayName("구매자는 Gateway를 거쳐 본인 마일리지 잔액·원장과 승인 시도를 조회한다")

@@ -211,7 +211,7 @@ docker compose -f compose.yml -f compose.financial-flow.yml up -d --wait commerc
 4. Settlement 중단 중 예약 대기, 환불 확정 거절 뒤 실제 예약 해제, 응답 유실·조회 불가 중 UNKNOWN·예약 유지, 외부 성공 직후 Payment 강제 종료·재기동과 만료 임대 인계, 늦은 응답의 토큰 차단을 확인합니다.
 5. 호출 전 중단(REQUESTED지만 외부 거래 없음)과 PROCESSING은 격리 DB fixture로 주입합니다. 실제 HTTP 조회에서 각각 거래 부재 뒤 같은 키 재전송·처리 중 예약 유지를 확인하며, Finance Mock이 자연스럽게 PROCESSING을 반환한 시험으로 표시하지 않습니다. 마지막에는 Inbox·Outbox와 지갑·재고·외부 거래 중복을 대조합니다.
 
-CI는 같은 `financial-flow` 시나리오를 25분 상한으로 실행하며 다른 통합 시나리오는 기존 15분 상한을 유지합니다. 이 시험의 계정·시나리오·시각·임대 변경과 무작위 루프백 포트는 새 시험 프로젝트에만 적용하며 기존 DB·사용자 데모에는 적용하지 않습니다. 지급 배정 뒤 예약 거절(`PAYOUT_RESERVED`)은 구매확정(도착+168시간)과 지급 선점이 먼저 필요하므로 Settlement `RefundPayoutExclusionIntegrationTest`와 Payment `RefundSagaIntegrationTest`로 별도 검증합니다. 실제 금융기관과 카카오 알림은 이 smoke의 검증 범위가 아닙니다.
+CI는 `financial-flow`와 `reconciliation` 시나리오를 각각 25분 상한으로 실행하며 다른 통합 시나리오는 기존 15분 상한을 유지합니다. 이 시험의 계정·시나리오·시각·임대 변경과 무작위 루프백 포트는 새 시험 프로젝트에만 적용하며 기존 DB·사용자 데모에는 적용하지 않습니다. 지급 배정 뒤 예약 거절(`PAYOUT_RESERVED`)은 구매확정(도착+168시간)과 지급 선점이 먼저 필요하므로 Settlement `RefundPayoutExclusionIntegrationTest`와 Payment `RefundSagaIntegrationTest`로 별도 검증합니다. 실제 금융기관과 카카오 알림은 이 smoke의 검증 범위가 아닙니다.
 
 ## 모의 거래 알림
 
@@ -377,6 +377,26 @@ curl http://localhost:18083/mock/accounts/ACCOUNT_ID \
 
 준비 API는 기존 DDL을 사용합니다. 공유 DB·볼륨을 초기화하지 않습니다.
 
+## 정산 대조 실행과 재개
+
+새 빈 DB에 [현재 DDL](migrations.md)을 적용하고 `python3 scripts/init_env.py`로 추가된 `PAYMENT_SETTLEMENT_CREDENTIAL`을 준비합니다. 기존 DB·사용자 데모를 초기화하지 않습니다. Settlement의 `SETTLEMENT_RECONCILIATION_ENABLED=true`와 Payment API의 같은 수신 자격, Payment API→Finance Mock의 기존 `FINANCE_MOCK_PAYMENT_CREDENTIAL`이 필요합니다. 기본 Compose는 이 자격을 전달하며 일일 대조 활성화는 별도 opt-in입니다. 운영자는 인스턴스의 `app.internal-auth.senders`에 `operator:<식별자>`를 설정합니다. Gateway·구매자·판매자에게 공개하지 않습니다.
+
+`POST /internal/settlement-reconciliations`에 `{"cutoffAt":"2026-11-03T10:00:00+09:00"}`를 보내면 202와 회차 ID를 받습니다. 같은 마감 재요청은 같은 회차를 반환합니다. 202는 대조 완료가 아닙니다. `GET /internal/settlement-reconciliations/{runId}`, `/results?page=0&size=100`, `/history`로 고정 대상·진행·원인·최근 실행 이력을 확인합니다. 요청 마감은 안전 여유 10분 이전이어야 합니다.
+
+부하·장애 복구 후의 전체 대조는 기존 [부하 검사](../tests/load/README.md)의 검증 범위를 유지하면서 다음 도구로 서비스별 읽기 계약을 연결합니다. URL과 환경 변수는 검증 전용 스택의 값을 사용합니다. `SETTLEMENT_OPERATOR_CREDENTIAL`, `PAYMENT_SETTLEMENT_CREDENTIAL`, `FINANCE_MOCK_SETTLEMENT_CREDENTIAL`은 기존 비밀 설정에서 환경으로 전달하고 명령 인자·기록에 넣지 않습니다.
+
+```bash
+python3 scripts/reconcile.py --cutoff-at 2026-11-03T10:00:00+09:00 \
+  --settlement-url http://localhost:18084 --payment-url http://localhost:18082 \
+  --finance-url http://localhost:18085
+```
+
+중단·대기 회차는 `--cutoff-at` 대신 `--run-id`로 같은 회차를 확인합니다. 원천 문제를 해결한 뒤 같은 마감 POST로 재개를 앞당길 수 있습니다. 진행 중·격리·조회 불가가 있거나 검사 차이가 있으면 도구는 성공 종료하지 않습니다. 회차·페이지·원문 증빙을 보존한 채 원인을 수정하며 새 금융 거래·금액 보정·예약 해제·offset 강제 이동으로 통과시키지 않습니다. 최종 완료 회차는 재계산하지 않으며, 이후 거래·변경의 검사는 새 마감으로 실행합니다.
+
+`commerce_settle_reconciliation_defects`는 검증된 결함, `..._unverified`는 읽기 실패 뒤 전체 재검증을 마치지 못한 회차, `..._wait_age_seconds`는 발행·전달·반영·격리·진행 중의 최장 나이입니다. 자동 재시도의 `RUNNING` 중에도 조회 불가 계측을 유지합니다. 기존 Prometheus·Alertmanager 경로에서 결함은 CRITICAL, 조회 불가는 5분 지속 시 WARNING, 15분 대기는 CRITICAL로 알립니다. 원천 조회 실패를 금액 불일치나 0으로 해석하지 않습니다.
+
+`python3 -B scripts/test_reconciliation.py`는 별도 Compose 프로젝트의 빈 DB·HTTP·Kafka에서 PG 승인과 발행을 실행하고, 실제 10분 안전 여유를 기다려 전달 대기·원천 조회 장애·같은 회차의 재기동을 검사합니다. 시험 자원은 종료 시 제거하며 사용자 데모는 사용하지 않습니다. 입력은 계약 `OrderPaymentRequested`부터 시작하므로 주문 API·환불·지급 전체 왕복을 검증한 결과로 해석하지 않습니다. CI의 `reconciliation` 시나리오도 같은 스크립트를 사용합니다.
+
 ## 개발·검증
 
 ```bash
@@ -525,9 +545,10 @@ Gateway 자체 오류는 `application/problem+json`과 실제 추적의 `traceId
 | 발신자 → 대상 | 받는 쪽 변수 | 보내는 쪽 |
 | --- | --- | --- |
 | `gateway` → 커머스·Payment·Settlement | `<대상>_GATEWAY_CREDENTIAL`(`_PREVIOUS`) | Gateway가 대상별 값을 붙임 |
-| `service:settlement` → Finance Mock | `FINANCE_MOCK_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 지급 Worker |
+| `service:settlement` → Finance Mock | `FINANCE_MOCK_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 지급 Worker와 대조 읽기 |
+| `service:settlement` → Payment API | `PAYMENT_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | 고정 금융 이벤트·Payment 소유 정합성 대조 읽기 |
 | `service:settlement` → 커머스 | `COMMERCE_SETTLEMENT_CREDENTIAL`(`_PREVIOUS`) | Settlement 일배치의 상품 지급 컨텍스트 조회 |
-| `service:payment` → Finance Mock | `FINANCE_MOCK_PAYMENT_CREDENTIAL`(`_PREVIOUS`) | PG 승인·환불·조회 HTTP 클라이언트. Compose는 Payment Worker에만 현재 값을 전달 |
+| `service:payment` → Finance Mock | `FINANCE_MOCK_PAYMENT_CREDENTIAL`(`_PREVIOUS`) | PG 승인·환불·조회 HTTP 클라이언트와 대조 읽기 API. Compose는 Payment Worker와 Payment API에 현재 값을 전달 |
 
 자격을 교체할 때는 받는 쪽 `_PREVIOUS`에 이전 값을 보존하고 새 현재 값을 설정한 뒤 받는 앱과 보내는 앱을 재기동합니다. 전환 후 `_PREVIOUS`를 비우고 받는 앱을 다시 기동합니다.
 

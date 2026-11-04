@@ -118,6 +118,136 @@ class PaymentReadAndOperationIntegrationTest {
     return new JdbcTemplate(dataSource);
   }
 
+  @Test
+  @DisplayName("예약액 합계가 맞아도 없는 결제의 마일리지 예약 참조를 탐지한다")
+  void detectsOrphanMileageReservationWithMatchingReservedBalance() {
+    fundWallet(5000);
+    UUID wallet = jdbc().queryForObject("SELECT id FROM payment.mileage_wallets", UUID.class);
+    jdbc()
+        .update(
+            "INSERT INTO payment.mileage_entries(id,wallet_id,kind,business_ref,amount,balance_after,created_at) VALUES(?,?,'SEED',?,5000,5000,?)",
+            UUID.randomUUID(),
+            wallet,
+            wallet,
+            NOW.atOffset(ZoneOffset.UTC));
+    jdbc()
+        .update(
+            "INSERT INTO payment.mileage_reservations(id,wallet_id,payment_id,cycle_id,amount,status,created_at,updated_at,version) VALUES(?,?,?,?,1000,'RESERVED',?,?,0)",
+            UUID.randomUUID(),
+            wallet,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            NOW.atOffset(ZoneOffset.UTC),
+            NOW.atOffset(ZoneOffset.UTC));
+    jdbc().update("UPDATE payment.mileage_wallets SET reserved_amount=1000 WHERE id=?", wallet);
+    var reader =
+        new com.commercesettle.payment.infrastructure.persistence.JdbcPaymentIntegrityReader(
+            jdbc());
+    assertThat(reader.checks())
+        .containsEntry("mileageBalance", 0L)
+        .containsEntry("mileageReservations", 0L)
+        .containsEntry("mileageReferences", 1L);
+  }
+
+  @Test
+  @DisplayName("잔액 합계가 맞아도 환불 없는 마일리지 복원의 참조를 탐지한다")
+  void detectsOrphanMileageRestoreWithMatchingBalance() {
+    fundWallet(5000);
+    UUID wallet = jdbc().queryForObject("SELECT id FROM payment.mileage_wallets", UUID.class);
+    jdbc()
+        .update(
+            "INSERT INTO payment.mileage_entries(id,wallet_id,kind,business_ref,amount,balance_after,created_at) VALUES(?,?,'SEED',?,5000,5000,?)",
+            UUID.randomUUID(),
+            wallet,
+            wallet,
+            NOW.atOffset(ZoneOffset.UTC));
+    request(10000, 1000, "CREDIT_CARD");
+    assertThat(worker.runOnce()).isTrue();
+    UUID payment = paymentId();
+    var reader =
+        new com.commercesettle.payment.infrastructure.persistence.JdbcPaymentIntegrityReader(
+            jdbc());
+    assertThat(reader.checks())
+        .containsEntry("mileageReferences", 0L)
+        .containsEntry("mileageBalance", 0L);
+    UUID refund = UUID.randomUUID();
+    jdbc()
+        .update(
+            "INSERT INTO payment.mileage_entries(id,wallet_id,payment_id,refund_id,kind,business_ref,amount,balance_after,created_at) VALUES(?,?,?,?,'RESTORE',?,1000,5000,?)",
+            UUID.randomUUID(),
+            wallet,
+            payment,
+            refund,
+            payment,
+            NOW.atOffset(ZoneOffset.UTC));
+    jdbc().update("UPDATE payment.mileage_wallets SET balance=balance+1000 WHERE id=?", wallet);
+    assertThat(reader.checks())
+        .containsEntry("mileageBalance", 0L)
+        .containsEntry("confirmedMileage", 0L)
+        .containsEntry("refundAmounts", 0L)
+        .containsEntry("mileageReferences", 1L);
+    // 같은 결제·금액·복원 사실을 가진 유효한 부모가 있으면 참조는 일치한다.
+    jdbc()
+        .update(
+            "INSERT INTO payment.refunds(id,payment_id,order_refund_request_id,external_amount,mileage_amount,status,business_key,external_status,external_ref,mileage_restored_at,created_at,updated_at,version) VALUES(?,?,?,9000,1000,'INTERNAL_PENDING',?,'SUCCEEDED',?,?,?,?,0)",
+            refund,
+            payment,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            NOW.atOffset(ZoneOffset.UTC),
+            NOW.atOffset(ZoneOffset.UTC),
+            NOW.atOffset(ZoneOffset.UTC));
+    assertThat(reader.checks())
+        .containsEntry("mileageReferences", 0L)
+        .containsEntry("mileageBalance", 0L)
+        .containsEntry("refundAmounts", 0L);
+  }
+
+  @Test
+  @DisplayName("원천별 잔액·금액·참조 SQL은 자기 PostgreSQL에서 실행된다")
+  void readsOwnerIntegrityFromOwnDatabase() {
+    var reader =
+        new com.commercesettle.payment.infrastructure.persistence.JdbcPaymentIntegrityReader(
+            jdbc());
+    assertThat(reader.checks().values()).allMatch(value -> value == 0L);
+    assertThat(reader.page(CUTOFF, reader.now(), null, 101)).isEmpty();
+    assertThat(reader.byKeys(List.of(UUID.randomUUID()), CUTOFF, reader.now())).isEmpty();
+    assertThat(reader.count(CUTOFF, reader.now())).isZero();
+  }
+
+  @Test
+  @DisplayName("원문 나노초는 원장과 같은 마이크로초로 읽고 DB 반올림으로 거짓 차이를 만들지 않는다")
+  void normalizesSourceTimestampWithoutChangingImmutableBytes() {
+    Instant original = CUTOFF.minusSeconds(1).plusNanos(123456789);
+    UUID id = confirmedEvent(original);
+    UUID atBoundary = confirmedEvent(CUTOFF.plusNanos(789));
+    confirmedEvent(CUTOFF.plusNanos(1000));
+    var page = reconciliation.read(CUTOFF, null, 100);
+    assertThat(page.items()).hasSize(2);
+    assertThat(
+            page.items().stream()
+                .filter(e -> e.eventId().equals(id))
+                .findFirst()
+                .orElseThrow()
+                .occurredAt())
+        .isEqualTo(original.truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+    assertThat(
+            page.items().stream()
+                .filter(e -> e.eventId().equals(atBoundary))
+                .findFirst()
+                .orElseThrow()
+                .occurredAt())
+        .isEqualTo(CUTOFF);
+    assertThat(
+            jdbc()
+                .queryForObject(
+                    "SELECT payload->>'occurredAt' FROM payment.outbox WHERE id=?",
+                    String.class,
+                    id))
+        .isEqualTo(original.toString());
+  }
+
   @AfterEach
   void deleteRows() {
     gateway.reset();
@@ -128,6 +258,7 @@ class PaymentReadAndOperationIntegrationTest {
             "mileage_entries",
             "mileage_reservations",
             "mileage_wallets",
+            "refunds",
             "payment_attempts",
             "payment_jobs",
             "payments",
@@ -223,6 +354,10 @@ class PaymentReadAndOperationIntegrationTest {
               assertThat(event.externalAmount()).isEqualTo(9_000);
               assertThat(event.feeAmount()).isEqualTo(1_500);
             });
+
+    // 첫 페이지 재개도 같은 기준선으로 읽으며 이후 이벤트를 끼워 넣지 않는다.
+    var replay = reconciliation.read(CUTOFF, first.snapshotAt(), null, 2);
+    assertThat(replay.items()).isEqualTo(first.items());
 
     // 기준선 시각 뒤에 저장된 이벤트는 마감 이하여도 다음 페이지에 끼어들지 않는다.
     confirmedEvent(CUTOFF.minusSeconds(10));
