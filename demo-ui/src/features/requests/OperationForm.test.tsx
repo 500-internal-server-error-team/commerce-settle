@@ -5,6 +5,60 @@ import { operations } from '../../shared/api/contract';
 import { OperationForm } from './OperationForm';
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+it('결과에서 연결한 주문 ID를 결제 조회 조건에 재사용한다', () => {
+  const run = vi.fn();
+  render(<OperationForm operation={operations.find(op => op.id === 'get_api_payments')!}
+    context={{ orderId: 'order-1', status: 'UNRELATED' }} pending={false} allowed run={run} />);
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  expect(run.mock.calls[0][0]).toMatchObject({ query: { orderId: 'order-1' }, body: null });
+  expect(run.mock.calls[0][0].query.status).not.toBe('UNRELATED');
+});
+it.each(['product', 'event'])('직접 %s ID를 바꾸면 관련 버전과 이전 견적을 함께 지운다', field => {
+  const run = vi.fn();
+  render(<OperationForm operation={operations.find(op => op.id === 'post_api_orders')!}
+    context={{ productId: 'product-A', expectedProductVersion: 7, eventId: 'event-A', expectedEventVersion: 3,
+      expectedTotalAmount: 10000 }} pending={false} allowed run={run} />);
+  fireEvent.change(screen.getByLabelText(field === 'product' ? /상품 ID.*productId/ : /이벤트 ID.*eventId/),
+    { target: { value: `${field}-B` } });
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  expect(run.mock.calls[0][0].body).toMatchObject(field === 'product'
+    ? { productId: 'product-B', expectedProductVersion: '', eventId: null, expectedEventVersion: null, expectedTotalAmount: '' }
+    : { productId: 'product-A', expectedProductVersion: 7, eventId: 'event-B', expectedEventVersion: '', expectedTotalAmount: '' });
+});
+it.each([null, 'product-B'])('쿠폰 적용 상품 %s가 선택한 상품·버전을 덮어쓰지 않는다', async productId => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ upstreamStatus: 200,
+    data: { items: [{ id: 'coupon-1', productId, version: 99 }], totalPages: 1 } }))));
+  const run = vi.fn();
+  render(<OperationForm operation={operations.find(op => op.id === 'post_api_orders')!}
+    context={{ productId: 'product-A', expectedProductVersion: 7, expectedTotalAmount: 10000 }} pending={false} allowed run={run} />);
+  fireEvent.click(screen.getByRole('checkbox', { name: '사용할 쿠폰 ID 사용 안 함' }));
+  fireEvent.click(screen.getByRole('button', { name: '쿠폰 목록 불러오기' }));
+  await screen.findByRole('option', { name: /coupon-1/ });
+  fireEvent.change(screen.getByRole('combobox', { name: '쿠폰 선택' }), { target: { value: 'coupon-1' } });
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  expect(run.mock.calls[0][0].body).toMatchObject({ productId: 'product-A', buyerCouponId: 'coupon-1',
+    expectedProductVersion: 7, expectedTotalAmount: '' });
+});
+it('결제 조회의 주문 선택을 query에 연결하고 GET 본문을 만들지 않는다', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ upstreamStatus: 200,
+    data: { items: [{ id: 'order-1', version: 3 }], totalPages: 1 } }))));
+  const run = vi.fn();
+  render(<OperationForm operation={operations.find(op => op.id === 'get_api_payments')!}
+    context={{}} pending={false} allowed run={run} />);
+  fireEvent.click(screen.getByRole('button', { name: '주문 목록 불러오기' }));
+  await screen.findByRole('option', { name: /order-1/ });
+  fireEvent.change(screen.getByRole('combobox', { name: '주문 선택' }), { target: { value: 'order-1' } });
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  expect(run.mock.calls[0][0]).toMatchObject({ query: { orderId: 'order-1' }, body: null });
+});
+it('필수 값이 null이어도 입력을 숨기지 않아 다시 채울 수 있다', () => {
+  const run = vi.fn();
+  render(<OperationForm operation={operations.find(op => op.id === 'post_api_order_quotes')!}
+    context={{ productId: null }} pending={false} allowed run={run} />);
+  fireEvent.change(screen.getByLabelText(/상품 ID.*productId/), { target: { value: 'product-A' } });
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  expect(run.mock.calls[0][0].body.productId).toBe('product-A');
+});
 it('다른 상품의 버전을 이벤트 수정의 버전으로 사용하지 않는다', () => {
   const operation = operations.find(op => op.path === '/api/sellers/me/events/{eventId}' && op.method === 'PUT')!;
   render(<OperationForm operation={operation} context={{ productIdVersion: 7, eventId: 'event-1', eventIdVersion: 3, eventIdVersionFor: 'event-1' }}

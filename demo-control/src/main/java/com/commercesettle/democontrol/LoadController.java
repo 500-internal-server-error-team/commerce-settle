@@ -18,6 +18,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -34,6 +35,7 @@ class LoadController {
   private final ObjectMapper mapper;
   private final Map<UUID, Run> runs = new LinkedHashMap<>();
   private final ExecutorService executor = Executors.newSingleThreadExecutor();
+  private boolean closing;
 
   LoadController(DemoSettings settings, ObjectMapper mapper) {
     this.settings = settings;
@@ -54,7 +56,7 @@ class LoadController {
     final UUID id = UUID.randomUUID();
     final Instant startedAt = Instant.now();
     final Path directory;
-    volatile String state = "RUNNING";
+    final AtomicReference<String> state = new AtomicReference<>("RUNNING");
     volatile Process process;
     volatile Integer exitCode;
     volatile JsonNode summary;
@@ -70,7 +72,7 @@ class LoadController {
     }
 
     synchronized View view() {
-      return new View(id, state, startedAt, exitCode, output.toString(), summary);
+      return new View(id, state.get(), startedAt, exitCode, output.toString(), summary);
     }
   }
 
@@ -85,6 +87,8 @@ class LoadController {
   @PostMapping("/demo/load-runs")
   @ResponseStatus(HttpStatus.ACCEPTED)
   synchronized View start(@Valid @RequestBody Start start) {
+    if (closing)
+      throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "제어 서버를 종료하고 있습니다.");
     if (!settings.loadEnabled())
       throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "부하 실행이 활성화되지 않았습니다.");
     if (!settings.loadProject().matches("commerce-settle-ui-load(?:-[a-z0-9-]{1,32})?")) {
@@ -92,7 +96,7 @@ class LoadController {
           HttpStatus.SERVICE_UNAVAILABLE, "전용 commerce-settle-ui-load 프로젝트만 허용합니다.");
     }
     if (runs.values().stream()
-        .anyMatch(r -> r.state.equals("RUNNING") || r.state.equals("STOP_REQUESTED"))) {
+        .anyMatch(r -> r.state.get().equals("RUNNING") || r.state.get().equals("STOP_REQUESTED"))) {
       throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 실행 중인 부하가 있습니다.");
     }
     Path root = settings.repositoryRoot().toAbsolutePath().normalize();
@@ -115,11 +119,11 @@ class LoadController {
   synchronized View stop(@PathVariable UUID id) {
     Run run = runs.get(id);
     if (run == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "실행 기록이 없습니다.");
-    if (run.state.equals("RUNNING") || run.state.equals("STOP_REQUESTED")) {
+    if (run.state.get().equals("RUNNING") || run.state.get().equals("STOP_REQUESTED")) {
       try {
         Files.createDirectories(run.directory);
         Files.writeString(run.directory.resolve("stop"), "stop additional injection\n");
-        run.state = "STOP_REQUESTED";
+        run.state.compareAndSet("RUNNING", "STOP_REQUESTED");
       } catch (IOException e) {
         throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "중지 요청을 저장하지 못했습니다.");
       }
@@ -173,17 +177,17 @@ class LoadController {
       Path summary = run.directory.resolve("summary.json");
       if (Files.isRegularFile(summary) && Files.size(summary) <= 1_048_576)
         run.summary = mapper.readTree(summary.toFile());
-      run.state =
+      run.state.set(
           Integer.valueOf(0).equals(run.exitCode)
               ? Files.exists(run.directory.resolve("stop")) ? "STOPPED" : "COMPLETED"
-              : "FAILED";
+              : "FAILED");
     } catch (IOException e) {
       run.append("실행 도구·전용 스택·출력 경로를 확인하세요.");
-      run.state = "FAILED";
+      run.state.set("FAILED");
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       if (run.process != null) terminate(run.process);
-      run.state = "INTERRUPTED";
+      run.state.set("INTERRUPTED");
     }
   }
 
@@ -203,8 +207,9 @@ class LoadController {
   @PreDestroy
   void close() {
     synchronized (this) {
+      closing = true;
       runs.values().stream()
-          .filter(r -> r.state.equals("RUNNING"))
+          .filter(r -> r.state.get().equals("RUNNING"))
           .map(r -> r.id)
           .toList()
           .forEach(this::stop);

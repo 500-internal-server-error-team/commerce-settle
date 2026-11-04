@@ -11,12 +11,19 @@ import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Flow;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpStatus;
@@ -32,6 +39,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class DemoController {
   private static final Set<String> METHODS = Set.of("get", "post", "put", "delete");
   private static final Pattern PARAMETER = Pattern.compile("\\{([^}]+)}");
+  private static final Duration RESPONSE_TIMEOUT = Duration.ofSeconds(10);
   private final Map<String, Operation> operations;
   private final DemoSettings settings;
   private final ObjectMapper mapper;
@@ -145,7 +153,7 @@ public class DemoController {
       String query = query(operation.query(), command.query());
       HttpRequest.Builder request =
           HttpRequest.newBuilder(URI.create(target.replaceAll("/$", "") + path + query))
-              .timeout(Duration.ofSeconds(10))
+              .timeout(RESPONSE_TIMEOUT)
               .header("Content-Type", "application/json");
       if (authorization != null && !authorization.isBlank())
         request.header("Authorization", authorization);
@@ -163,14 +171,27 @@ public class DemoController {
           body.isEmpty()
               ? HttpRequest.BodyPublishers.noBody()
               : HttpRequest.BodyPublishers.ofString(body));
-      var response = client.send(request.build(), HttpResponse.BodyHandlers.ofInputStream());
-      try (var stream = response.body()) {
-        byte[] bytes = stream.readNBytes(2_097_153);
-        if (bytes.length > 2_097_152)
-          throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "응답 크기가 상한을 초과했습니다.");
+      var subscriber = new BoundedBodySubscriber();
+      var pending = client.sendAsync(request.build(), ignored -> subscriber);
+      try {
+        var response = pending.get(RESPONSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        byte[] bytes = response.body();
         return new Result(
             response.statusCode(),
             bytes.length == 0 ? NullNode.getInstance() : mapper.readTree(bytes));
+      } catch (TimeoutException e) {
+        throw new ResponseStatusException(
+            HttpStatus.GATEWAY_TIMEOUT, "응답 확인 시간을 초과했습니다. 원래 거래를 재조회하세요.");
+      } catch (ExecutionException e) {
+        if (e.getCause() instanceof ResponseStatusException rejection) throw rejection;
+        if (e.getCause() instanceof java.net.http.HttpTimeoutException)
+          throw new ResponseStatusException(
+              HttpStatus.GATEWAY_TIMEOUT, "응답 확인 시간을 초과했습니다. 원래 거래를 재조회하세요.");
+        throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "응답을 확인하지 못했습니다. 원래 거래를 재조회하세요.");
+      } finally {
+        // The JDK request timer can finish at headers. Cancel the full body subscription too.
+        subscriber.cancel();
+        pending.cancel(true);
       }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
@@ -178,6 +199,55 @@ public class DemoController {
           HttpStatus.SERVICE_UNAVAILABLE, "응답 확인이 중단됐습니다. 원거래를 재조회하세요.");
     } catch (IOException | IllegalArgumentException e) {
       throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "응답을 확인하지 못했습니다. 원거래를 재조회하세요.");
+    }
+  }
+
+  private static final class BoundedBodySubscriber implements HttpResponse.BodySubscriber<byte[]> {
+    private final HttpResponse.BodySubscriber<byte[]> delegate =
+        HttpResponse.BodySubscribers.ofByteArray();
+    private Flow.Subscription subscription;
+    private long received;
+    private boolean cancelled;
+
+    @Override
+    public CompletionStage<byte[]> getBody() {
+      return delegate.getBody();
+    }
+
+    @Override
+    public synchronized void onSubscribe(Flow.Subscription next) {
+      if (cancelled) next.cancel();
+      else {
+        subscription = next;
+        delegate.onSubscribe(next);
+      }
+    }
+
+    @Override
+    public synchronized void onNext(List<ByteBuffer> buffers) {
+      if (cancelled) return;
+      for (ByteBuffer buffer : buffers) received += buffer.remaining();
+      if (received > 2_097_152) {
+        cancel();
+        delegate.onError(
+            new ResponseStatusException(
+                HttpStatus.BAD_GATEWAY, "응답 크기가 상한을 초과했습니다. 원래 거래를 재조회하세요."));
+      } else delegate.onNext(buffers);
+    }
+
+    @Override
+    public synchronized void onError(Throwable error) {
+      delegate.onError(error);
+    }
+
+    @Override
+    public synchronized void onComplete() {
+      delegate.onComplete();
+    }
+
+    synchronized void cancel() {
+      cancelled = true;
+      if (subscription != null) subscription.cancel();
     }
   }
 

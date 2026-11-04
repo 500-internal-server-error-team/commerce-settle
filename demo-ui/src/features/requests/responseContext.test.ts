@@ -1,6 +1,37 @@
 import { expect, it } from 'vitest';
 import { mergeResponseContext, responseContext } from './responseContext';
 
+it('다른 상품 결과를 연결하면 이전 상품의 이벤트를 지운다', () => {
+  const previous = { productId: 'product-A', eventId: 'event-A', eventIdVersion: 3,
+    eventIdVersionFor: 'event-A', expectedEventVersion: 3, expectedTotalAmount: 10000 };
+  const next = responseContext({ id: 'product-B', version: 7 }, '/api/products');
+  expect(mergeResponseContext(previous, next)).toMatchObject({ productId: 'product-B', eventId: null, expectedProductVersion: 7 });
+  for (const key of ['eventIdVersion', 'eventIdVersionFor', 'expectedEventVersion', 'expectedTotalAmount'])
+    expect(mergeResponseContext(previous, next)).not.toHaveProperty(key);
+});
+it('견적이 새 상품과 이벤트를 함께 제공하면 해당 연결과 금액을 유지한다', () => {
+  const next = responseContext({ totalAmount: 9000, productVersion: 7, eventVersion: 4 }, '/api/order-quotes', {},
+    { productId: 'product-B', eventId: 'event-B', quantity: 1 });
+  expect(mergeResponseContext({ productId: 'product-A', eventId: 'event-A', expectedEventVersion: 3 }, next))
+    .toMatchObject({ productId: 'product-B', eventId: 'event-B', expectedProductVersion: 7, expectedEventVersion: 4, expectedTotalAmount: 9000 });
+});
+
+it.each([
+  ['/api/buyers/me/coupons', null],
+  ['/api/buyers/me/coupons', 'product-B'],
+  ['/api/sellers/me/coupon-templates', null],
+  ['/api/sellers/me/coupon-templates/{templateId}', 'product-B'],
+])('쿠폰의 적용 상품은 선택한 구매 상품을 바꾸지 않는다 (%s, %s)', (path, productId) => {
+  const before = { productId: 'product-A', expectedProductVersion: 7, expectedTotalAmount: 10000 };
+  const next = responseContext({ id: 'coupon-1', productId, version: 2 }, path);
+  const merged = mergeResponseContext(before, next);
+  expect(merged).toMatchObject({ productId: 'product-A', expectedProductVersion: 7 });
+  if (path.includes('/coupons')) {
+    expect(merged.buyerCouponId).toBe('coupon-1');
+    expect(merged).not.toHaveProperty('expectedTotalAmount');
+  }
+});
+
 it('주문 입력으로 이동한 후에도 상품 조회 응답의 ID를 상품으로 연결한다', () => {
   const context = responseContext({ id: 'product-1', version: 7 }, '/api/products');
   expect(context.productId).toBe('product-1');

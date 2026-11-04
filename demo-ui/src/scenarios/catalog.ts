@@ -44,9 +44,9 @@ export function actions(group: string) {
   return operations.filter(op => endpoints[group]?.includes(op.path));
 }
 export function requirements(id: string): string[] {
-  const notes = ['화면 연결은 실행 검증 완료를 뜻하지 않습니다. 입력과 서버 응답으로 결과를 확인합니다.'];
+  const notes = ['각 흐름의 결과는 실제 입력과 서버 응답으로 확인하세요. 화면에 표시된 단계는 설계된 흐름입니다.'];
   if (/normal|eligible|holiday|timeout|closed|restore/.test(id)) notes.push('기한·마감에 도달한 실제 데이터가 필요합니다. 업무 시간 이동 API는 아직 없습니다.');
-  if (/waiting|unknown|failed|declined|cancelwait|unavailable/.test(id)) notes.push('해당 대기·거절·장애 상태를 실제 백엔드에서 준비해야 합니다. 화면에서 성공·실패를 만들지 않습니다.');
+  if (/waiting|unknown|failed|declined|cancelwait|unavailable/.test(id)) notes.push('대기·거절·장애 흐름을 시연하려면 해당 상태의 데이터를 백엔드에 준비해야 합니다.');
   if (/password/.test(id)) notes.push('복구 토큰은 기존 서버의 전달 경로에서 확인합니다. 요청 응답에 토큰이 제공되지는 않습니다.');
   return notes;
 }

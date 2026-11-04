@@ -23,7 +23,7 @@ function setup() {
   return fetch;
 }
 async function login() {
-  fireEvent.click(screen.getByRole('button', { name: '역할별 로그인·가입 화면 열기' }));
+  fireEvent.click(screen.getByRole('button', { name: '로그인·가입 화면 열기' }));
   fireEvent.change(screen.getByLabelText(/이메일/), { target: { value: 'buyer@example.test' } });
   fireEvent.change(screen.getByLabelText(/비밀번호/), { target: { value: 'demo-test-password' } });
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
@@ -36,7 +36,7 @@ it('본문 없는 서버 로그아웃 후 세션·기록·해당 계정의 조�
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
   await screen.findByText('격리된 조회 상품');
   expect(client.getQueryCache().findAll({ queryKey: ['actor', 'BUYER'] }).length).toBeGreaterThan(0);
-  fireEvent.click(screen.getByRole('button', { name: '역할별 로그인·가입 화면 열기' }));
+  fireEvent.click(screen.getByRole('button', { name: '로그인·가입 화면 열기' }));
   fireEvent.change(screen.getByLabelText('할 작업'), { target: { value: 'delete_api_sessions_current' } });
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
   await screen.findByText('로그인 전');

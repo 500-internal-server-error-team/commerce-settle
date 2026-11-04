@@ -7,7 +7,10 @@ export function responseContext(row: Record<string, Json>, sourcePath: string,
   const quote = sourcePath === '/api/order-quotes' && requestBody && typeof requestBody === 'object' && !Array.isArray(requestBody)
     ? Object.fromEntries(Object.entries(requestBody).filter(([key]) => ['productId', 'quantity', 'eventId', 'buyerCouponId', 'mileageAmount', 'externalMethod'].includes(key))) : {};
   const next: Record<string, Json> = { ...quote, ...parentParameters, ...Object.fromEntries(Object.entries(data).filter(([key, value]) =>
-    !/password|token|address/i.test(key) && (typeof value === 'string' || typeof value === 'number' || value === null && key.endsWith('Id')))) };
+    !/password|token|address/i.test(key)
+    // A coupon's product is an applicability constraint, not a new product selection.
+    && !(key === 'productId' && /\/(coupons|coupon-templates)(\/|$)/.test(sourcePath))
+    && (typeof value === 'string' || typeof value === 'number' || value === null && key.endsWith('Id')))) };
   let idKey: string | undefined;
   if (data.id) {
     const resources = [
@@ -39,6 +42,10 @@ export function responseContext(row: Record<string, Json>, sourcePath: string,
 
 export function mergeResponseContext(previous: Record<string, Json>, next: Record<string, Json>): Record<string, Json> {
   const merged = { ...previous, ...next };
+  if (Object.hasOwn(next, 'productId') && next.productId !== previous.productId && !Object.hasOwn(next, 'eventId')) {
+    if (previous.eventId !== undefined) merged.eventId = null;
+    delete merged.eventIdVersion; delete merged.eventIdVersionFor; delete merged.expectedEventVersion;
+  }
   for (const key of Object.keys(next).filter(key => key.endsWith('Id'))) {
     if (next[key] === previous[key]) continue;
     if (next[`${key}VersionFor`] !== next[key]) {
@@ -48,5 +55,7 @@ export function mergeResponseContext(previous: Record<string, Json>, next: Recor
     if (expected && !Object.hasOwn(next, expected)) delete merged[expected];
     if ((key === 'productId' || key === 'eventId') && !Object.hasOwn(next, 'expectedTotalAmount')) delete merged.expectedTotalAmount;
   }
+  if (['productId', 'eventId', 'buyerCouponId', 'quantity', 'mileageAmount', 'externalMethod'].some(key =>
+    Object.hasOwn(next, key) && next[key] !== previous[key]) && !Object.hasOwn(next, 'expectedTotalAmount')) delete merged.expectedTotalAmount;
   return merged;
 }
