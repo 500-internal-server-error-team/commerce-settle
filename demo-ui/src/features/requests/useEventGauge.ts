@@ -4,7 +4,8 @@ import { redact, type Operation } from '../../shared/api/contract';
 
 export function useEventGauge(operation: Operation | undefined, record: Execution | undefined,
   actorKey: (string | number)[], token?: string): { current?: Execution; error: boolean } {
-  const enabled = !!operation?.path.endsWith('/gauge') && record?.path === operation.path;
+  const enabled = !!operation?.path.endsWith('/gauge') && !!record
+    && record.path === operation.path && record.status >= 200 && record.status < 300;
   const query = useQuery({
     queryKey: ['actor', ...actorKey, 'live-gauge', record?.id],
     enabled,
