@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { execute } from '../../shared/api/client';
 import { operations, type Json, type Operation } from '../../shared/api/contract';
 import { Select } from '../../shared/ui/Select';
+import { codeLabel } from '../../shared/ui/labels';
 
 export function referenceSource(name: string, operation: Operation, role: string): { title: string; operation: Operation } | undefined {
   const seller = role === 'SELLER';
@@ -10,7 +11,7 @@ export function referenceSource(name: string, operation: Operation, role: string
     eventId: ['이벤트', seller ? '/api/sellers/me/events' : '/api/events'],
     addressId: ['배송지', '/api/buyers/me/addresses'], buyerCouponId: ['쿠폰', '/api/buyers/me/coupons'],
     orderId: ['주문', seller ? '/api/sellers/me/orders' : '/api/orders'],
-    paymentId: ['결제', '/api/payments'], templateId: ['쿠폰 정책', '/api/sellers/me/coupon-templates'],
+    paymentId: ['결제', '/api/payments'], templateId: ['쿠폰 캠페인', '/api/sellers/me/coupon-templates'],
     requestId: ['반품 요청', '/api/sellers/me/refund-requests'],
     payoutId: ['지급', '/api/sellers/me/payouts'], runId: ['월간 회차', '/internal/coupon-issue-runs'],
     notificationId: ['알림', '/api/notifications'],
@@ -56,7 +57,8 @@ export function ReferencePicker({ source, token, choose }: {
         query: { page: String(nextPage), size: '20' }, idempotencyKey: '' }, token, controller.signal);
       if (controller.signal.aborted) return;
       if (result.status >= 300) throw new Error(result.status === 401 || result.status === 403
-        ? '이 역할로 먼저 로그인하세요.' : `목록 조회 실패 (HTTP ${result.status}) · 서버 연결과 실행 기록을 확인하세요.`);
+        ? source.operation.actor === 'OPERATOR' ? '제어 서버의 해당 서비스 운영자 자격 설정을 확인하세요.' : '이 역할로 먼저 로그인하세요.'
+        : `목록을 조회하지 못했습니다 (HTTP ${result.status}). 서버 연결과 실행 기록을 확인하세요.`);
       const data = result.data;
       const object = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
       const items = Array.isArray(data) ? data : object.items;
@@ -77,9 +79,9 @@ export function ReferencePicker({ source, token, choose }: {
       const row = rows.find(row => row.id === event.target.value); if (row) choose(row, source.operation);
     }}><option value="">{rows.length ? '실제 내역을 선택하세요' : '조회된 내역이 없습니다'}</option>
       {rows.map(row => <option key={String(row.id)} value={String(row.id)}>
-        {String(row.name ?? row.targetMonth ?? row.orderNumber ?? row.recipient ?? row.status ?? source.title)} · {String(row.id)}
+        {String(row.name ?? row.productName ?? row.targetMonth ?? row.orderNumber ?? row.recipient ?? codeLabel(String(row.status ?? source.title)))} · {String(row.id)}
       </option>)}</Select>
-      {!rows.length && <small>현재 계정·조회 조건에 데이터가 없습니다. 해당 항목을 먼저 등록하거나 생성하세요.</small>}
+      {!rows.length && <small>현재 계정·조건에 맞는 내역이 없습니다. 조회 조건과 시연 준비 조건을 확인하세요.</small>}
       {pages > 1 && <div className="reference-pages"><button type="button" className="text-button" disabled={loading || page === 0} onClick={() => load(page - 1)}>이전</button>
         <small>{page + 1} / {pages} 페이지</small><button type="button" className="text-button" disabled={loading || page + 1 >= pages} onClick={() => load(page + 1)}>다음</button></div>}
     </>}

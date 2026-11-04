@@ -28,8 +28,9 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
     setBody(values);
     setPath(Object.fromEntries(operation.parameters.filter(p => p.in === 'path').map(p => [p.name, String(context[p.name] ?? '')])));
     setQuery(Object.fromEntries(operation.parameters.filter(p => p.in === 'query').map(p => [p.name,
-      String(p.name === 'expectedVersion' && resourceId && context[`${resourceId}VersionFor`] === context[resourceId]
-        ? context[`${resourceId}Version`] ?? '' : p.schema.default ?? '')])));
+      String(p.name === 'expectedVersion'
+        ? resourceId && context[`${resourceId}VersionFor`] === context[resourceId] ? context[`${resourceId}Version`] ?? '' : ''
+        : p.name.endsWith('Id') ? context[p.name] ?? p.schema.default ?? '' : p.schema.default ?? '')])));
     setKey(crypto.randomUUID());
   }, [operation.id, context]);
   const object = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
@@ -39,7 +40,14 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
     const values = next && typeof next === 'object' && !Array.isArray(next) ? next : null;
     if (values && 'expectedTotalAmount' in object
       && quoteFields.some(key => JSON.stringify(object[key]) !== JSON.stringify(values[key]))) {
-      next = { ...values, expectedTotalAmount: '' }; setLookup('구매 조건이 바뀌었습니다. 견적을 다시 조회하세요.');
+      values.expectedTotalAmount = ''; setLookup('구매 조건이 바뀌었습니다. 견적을 다시 조회하세요.');
+    }
+    if (values && values.productId !== object.productId) {
+      if ('expectedProductVersion' in values) values.expectedProductVersion = '';
+      if ('eventId' in values) values.eventId = null;
+      if ('expectedEventVersion' in values) values.expectedEventVersion = null;
+    } else if (values && values.eventId !== object.eventId && 'expectedEventVersion' in values) {
+      values.expectedEventVersion = values.eventId === null ? null : '';
     }
     setBody(next);
   }
@@ -49,6 +57,7 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
       const values = responseContext(row, sourceOperation.path);
       const id = row.id; if (typeof id !== 'string') return;
       const pathField = operation.parameters.some(p => p.in === 'path' && p.name === name);
+      const queryField = operation.parameters.some(p => p.in === 'query' && p.name === name);
       const sameVersion = pathField && !operation.path.endsWith('/inventory-adjustments') ? row.version : undefined;
       if (pathField) {
         setPath(old => ({ ...old, [name]: id }));
@@ -61,15 +70,25 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
         if (operation.schema) setBody(next);
         if (operation.parameters.some(p => p.in === 'query' && p.name === 'expectedVersion')) setQuery(old => ({ ...old, expectedVersion: String(sameVersion ?? '') }));
       }
+      else if (queryField) setQuery(old => ({ ...old, [name]: id }));
       else {
         const next = { ...object, [name]: id };
-        for (const key of ['productId', 'expectedProductVersion', 'expectedEventVersion']) {
-          if (key in object && values[key] !== undefined) next[key] = values[key];
+        if (name === 'productId' || name === 'eventId') {
+          for (const key of ['productId', 'expectedProductVersion', 'expectedEventVersion']) {
+            if (key in object && values[key] !== undefined) next[key] = values[key];
+          }
+          if (next.productId !== object.productId) {
+            if ('expectedProductVersion' in next && values.expectedProductVersion === undefined) next.expectedProductVersion = '';
+            if (name === 'productId') {
+              if ('eventId' in next) next.eventId = null;
+              if ('expectedEventVersion' in next) next.expectedEventVersion = null;
+            }
+          }
         }
         if ('expectedTotalAmount' in next) next.expectedTotalAmount = '';
         setBody(next);
       }
-      setLookup('실제 응답의 ID를 연결했습니다. 변경 작업은 대상 최신 값을 확인하고, 주문은 견적을 조회하세요.');
+      setLookup('선택한 항목을 입력에 연결했습니다. 변경 작업은 최신 버전을, 주문은 견적을 확인하세요.');
     }} />;
   }
   const detailPath = operation.path.endsWith('/inventory-adjustments') ? operation.path.replace(/inventory-adjustments$/, 'inventory')
@@ -100,9 +119,17 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
   }
   return <form aria-label="API 요청" onSubmit={event => { event.preventDefault(); run({ body, pathParameters, query, idempotencyKey: key }); }}>
     <div className="endpoint"><span className={`method ${operation.method.toLowerCase()}`}>{operation.method}</span><code>{operation.path}</code></div>
-    <div className="input-guide"><strong>입력값은 어디서 찾나요?</strong><p>이름·가격·일정은 직접 정하고, ID는 각 입력 아래의 실제 목록에서 선택하세요. 조회된 내역이 없으면 해당 역할에서 먼저 등록해야 합니다.</p>
+    <div className="input-guide"><strong>입력값 안내</strong><p>{operation.path.endsWith('-sessions')
+      ? '가입할 때 정한 이메일과 비밀번호를 입력하세요. 계정이 없으면 위의 할 작업에서 해당 역할의 가입을 선택하세요.'
+      : operation.path === '/api/buyers' || operation.path === '/api/sellers'
+        ? '가입에 사용할 테스트용 이메일·비밀번호·표시 이름을 정하세요. 판매자는 지급용 시험계정도 미리 준비해야 합니다.'
+      : operation.method === 'GET'
+        ? '조회할 ID와 조회 조건을 입력하세요. 목록이 제공되는 항목은 아래에서 선택할 수 있습니다.'
+      : '목록이 있는 ID는 아래에서 선택하고, 나머지는 생성·조회 응답에서 확인하세요. 이름·가격·일정은 직접 정합니다.'}</p>
       {operation.path === '/api/orders' && operation.method === 'POST' && <p>상품 선택 → 수량·할인·결제수단 입력 → 배송지 선택 → 견적 조회 → 주문 실행</p>}
-      {operation.schema && resolve(operation.schema).description && <p>{resolve(operation.schema).description}</p>}
+      {operation.path === '/api/orders' && operation.method === 'POST' && <p>현재 주문 API는 일반 구매만 지원합니다. 이벤트와 쿠폰은 사용 안 함으로 두세요. 해당 조건의 금액은 견적 조회에서 확인할 수 있습니다.</p>}
+      {['/api/orders', '/api/order-quotes'].includes(operation.path) && operation.method === 'POST' && <p>견적에서 쿠폰을 적용할 때는 마일리지를 0으로 두고 허용된 카드·간편결제를 선택하세요. 주문 접수 시 서버가 금액과 조건을 다시 확인합니다.</p>}
+      {operation.schema && resolve(operation.schema).description && <details><summary>API 입력 제약 원문</summary><p>{resolve(operation.schema).description}</p></details>}
     </div>
     <div className="fields">{operation.parameters.filter(p => p.in === 'path' || p.in === 'query').map(p =>
       <Field key={p.name} name={p.name} schema={p.schema} required={p.required}
@@ -120,10 +147,10 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
     {lookup && <p role="status" className="caption">{lookup}</p>}
     {operation.idempotent && <details className="idempotency"><summary>같은 작업의 재요청 키 · 멱등키</summary>
       <input aria-label="멱등키" value={key} onChange={e => setKey(e.target.value)} minLength={8} maxLength={128} required />
-      <p className="caption">응답이 불명확하면 같은 입력·키로 재조회 또는 재요청합니다. 본문을 바꾸려면 기존 결과를 먼저 확인하세요.</p>
+      <p className="caption">응답이 불명확하면 먼저 원래 거래를 조회하세요. 같은 작업을 재요청할 때는 입력과 키를 유지합니다. 입력을 바꾸려면 기존 결과부터 확인하세요.</p>
       <button type="button" className="text-button" onClick={() => setKey(crypto.randomUUID())}>새 작업 키 만들기</button></details>}
     <div className="form-footer"><span className="caption">* 필수 입력 · 서버가 가격·권한·상태를 최종 판단합니다.</span>
       <button className="primary" disabled={!allowed || pending}>{pending ? '응답 확인 중…' : '요청 실행'}</button></div>
-    {!allowed && <p className="caption">이 작업의 역할로 로그인하거나 운영자 서버 자격을 설정해야 합니다.</p>}
+    {!allowed && <p className="caption">{operation.actor === 'OPERATOR' ? '제어 서버에 해당 서비스의 운영자 자격을 설정해야 실행할 수 있습니다.' : '이 작업에 필요한 역할로 전환하고 로그인하세요.'}</p>}
   </form>;
 }

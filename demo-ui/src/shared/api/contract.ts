@@ -24,11 +24,18 @@ export function resolve(schema: Schema): Schema {
   if (schema.$ref) return resolve(spec.components.schemas[schema.$ref.split('/').at(-1)!]);
   return schema;
 }
+const operationTitles: Record<string, string> = {
+  get_api_accounts_me: '내 계정 조회', get_api_sellers_me: '내 판매자 정보 조회',
+  post_api_password_reset_requests: '비밀번호 복구 요청',
+  post_api_order_quotes: '주문 견적 조회', post_api_orders: '주문·결제 접수',
+  post_api_sellers_me_events: '선착순 이벤트 등록',
+};
 export const operations: Operation[] = Object.entries(spec.paths).flatMap(([path, methods]) =>
   Object.entries(methods).filter(([method, op]) => ['get', 'post', 'put', 'delete'].includes(method)
     && op.operationId && (path.startsWith('/api/') || op['x-actor'] === 'OPERATOR')).map(([method, op]) => {
       const parameters = (op.parameters ?? []).map(p => p.$ref ? spec.components.parameters[p.$ref.split('/').at(-1)!] : p);
-      return { id: op.operationId, path: path as ApiPath, method: method.toUpperCase(), title: op.summary ?? path,
+      return { id: op.operationId, path: path as ApiPath, method: method.toUpperCase(),
+        title: operationTitles[op.operationId] ?? (op.summary ?? path).replace(/\bbuyer\b/g, '구매자').replace(/\bseller\b/g, '판매자').replace(/템플릿/g, '캠페인').replace(/상품 논리삭제/g, '상품 삭제').replace(/^본인 /, '내 '),
         actor: op['x-actor'], owner: op['x-owner-service'], parameters,
         schema: op.requestBody?.content?.['application/json']?.schema,
         idempotent: parameters.some(p => p.in === 'header' && p.name === 'Idempotency-Key') };
