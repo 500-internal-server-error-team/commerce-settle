@@ -397,6 +397,14 @@ class RefundCompletionIntegrationTest {
   }
 
   private void assertInbox(EventEnvelope<?> event, String status) {
+    if ("REVIEW_REQUIRED".equals(status)) {
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT last_error_code FROM settlement.inbox WHERE event_id=?",
+                  String.class,
+                  event.eventId()))
+          .isNotBlank();
+    }
     assertThat(
             jdbc.queryForObject(
                 "SELECT status FROM settlement.inbox WHERE event_id = ?",

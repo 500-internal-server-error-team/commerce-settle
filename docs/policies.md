@@ -270,6 +270,27 @@ Payment·Settlement의 외부 승인·환불·지급 작업에 적용합니다. 
 
 신규 주문·새 결제 회차의 접수 제한값·재개 조건·503 응답은 [신규 접수 제한과 재개](#신규-접수-제한과-재개)를 따릅니다. 기존 동일 키 재요청·취소·환불·지급·원업무 복구는 이 제한의 대상이 아닙니다. 전달 기록·금융 멱등 기록의 [보존과 삭제](policies.md#보존과-삭제)를 금융 원장의 삭제 기한으로 사용하지 않습니다.
 
+### 업무 Inbox 재판정
+
+Settlement의 `REVIEW_REQUIRED`는 아래 사유를 `last_error_code`에 저장합니다. 사유 미기록·알 수 없는 코드는 `UNRECORDED`로 분류하며 증빙 없이 보완하거나 정상 처리하지 않습니다. 같은 eventId의 다른 원문은 기존 `inbox_conflicts`에 보존하며 이 기능으로 덮어쓰지 않습니다.
+
+| 분류 | 사유 | 재판정 |
+| --- | --- | --- |
+| 계약 위반(CONTRACT) | AMOUNT_CONTRACT_MISMATCH, PURCHASE_TIME_CONTRACT_MISMATCH | 거절 |
+| 원천 충돌(SOURCE_CONFLICT) | PAYMENT_ALREADY_RECORDED_WITH_DIFFERENT_VALUES, PURCHASE_DOES_NOT_MATCH_PAYMENT, PURCHASE_ALREADY_RECORDED_WITH_DIFFERENT_VALUES, REFUND_ALREADY_RESERVED_WITH_DIFFERENT_VALUES, REFUND_ALREADY_REQUESTED_WITH_DIFFERENT_VALUES, REFUND_AMOUNT_MISMATCH | 거절 |
+| 종결 충돌(TERMINAL_CONFLICT) | REFUND_RESERVATION_RELEASED, REFUND_RELEASE_NOT_ALLOWED, REFUND_ALREADY_REVERSED | 거절 |
+| 순서 의존(ORDER_DEPENDENT) | PAYMENT_NOT_ARRIVED, REFUND_REQUEST_UNDER_REVIEW, REFUND_NOT_RESERVED, REFUND_RESERVATION_NOT_FOUND, PURCHASE_DURING_REFUND | 아래 선행 근거가 있을 때 기존 판정기를 다시 호출 |
+
+운영자는 조건·예상 건수와 조회한 대상 ID/expectedVersion을 함께 제출합니다. 생성 시 현재 조건의 **전체 대상이 제출한 1~100건과 정확히 같아야** 하며 변경·추가·누락·중복·겹치는 미완료 실행은 거절합니다. 한 건을 고르려면 inboxId 조건을 사용합니다. 조건과 실제 대상·버전을 실행에 저장한 뒤에는 새 대상을 추가하지 않습니다. 원문 bytes·eventId·업무 키·원 confirmedAt은 바꾸지 않습니다.
+
+Worker는 현재 Inbox의 상태·버전·사유를 다시 확인합니다. PAYMENT_NOT_ARRIVED는 결제 항목 존재, REFUND_REQUEST_UNDER_REVIEW는 먼저 수신한 같은 환불 원요청의 APPLIED, REFUND_NOT_RESERVED는 같은 환불의 ACTIVE/CONSUMED 예약, REFUND_RESERVATION_NOT_FOUND는 결제 항목·환불·예약 ID가 맞는 ACTIVE/RELEASED 환불 예약, PURCHASE_DURING_REFUND는 항목이 REFUND_RESERVED/REFUNDED를 벗어났을 때만 다시 판정합니다. 근거가 없으면 원 Inbox를 그대로 두고 PREREQUISITE_MISSING, 고정 버전이 바뀌면 VERSION_CHANGED를 남깁니다. 선행 근거의 존재가 금융 성공을 보장하지는 않으며 기존 처리기의 금액·주문·종결 검증 결과를 그대로 따릅니다.
+
+대상별 임대는 30초이며 하나씩 처리합니다. 앱 재기동 뒤 만료 임대만 회수하고 이전 시도는 LEASE_EXPIRED로 남깁니다. 최대 10회 임대 뒤에는 ATTEMPTS_EXHAUSTED로 종결합니다. 적용은 실행→대상→Inbox 잠금 순서로 수행하며 업무 변경·대상 결과·시도 종료·감사는 같은 DB 트랜잭션입니다. 원문을 읽을 수 없거나 적용에 실패하면 업무 변경을 롤백하고 PROCESSING_FAILED를 별도 기록합니다. 기술 실패 로그는 원문·예외 메시지를 제외한 errorType·stage(CLAIM/APPLY/FAILURE_RECORD)와 확보된 runId/targetId/inboxId로 연결합니다. 일시적 저장소 장애는 WARN, 그 밖의 예상 밖 장애는 ERROR로 기록합니다. API와 Worker의 잠금 대기는 1초·SQL은 5초 상한이며 초과 시 원거래 성공·실패를 확정하지 않습니다.
+
+중단은 RUNNING→PAUSED, 재개는 PAUSED→RUNNING, 취소는 RUNNING/PAUSED→CANCELLED입니다. 중단·취소는 아직 적용하지 않은 임대를 무효화하며 이미 적용한 결과는 되돌리지 않습니다. 진행 중인 적용 트랜잭션이 먼저 잠금을 얻었으면 그 커밋 이후에 전환하므로 응답 이후 늦은 Worker가 추가 반영하지 못합니다. 재개는 원래 대상 중 미처리 건만 이어갑니다. 모든 운영 변경은 OPERATOR·Idempotency-Key·실행 expectedVersion(생성은 대상별 expectedVersion)·사유 코드와 추가 전용 감사를 사용합니다.
+
+APPLIED·WAITING·REVIEW_REQUIRED는 기존 업무 판정의 실제 결과이며 실행 COMPLETED는 고정 대상의 시도를 마쳤다는 뜻입니다. 근거 부재·버전 변경·처리 실패도 대상 결과에 포함하므로 완료 건수만으로 금융 복구 성공을 판단하지 않습니다. Payment/Commerce 업무 Inbox, 격리 원문 replay, 금융 종결·보정은 포함하지 않습니다. 사유·이벤트별 건수·최장 나이는 `settlement_inbox_review_records`·`settlement_inbox_review_oldest_age_seconds`로 관측합니다. `settlement_inbox_observed_timestamp_seconds`가 45초 이내인 최신 복제 표본만 사용하며, RUNNING 실행의 최근 진행 후 5분/15분 정체를 WARNING/CRITICAL로 경보합니다. PAUSED는 운영자 중단이므로 정체에서 제외합니다.
+
 ## 인증·공통 API 기준
 
 API 경로·HTTP 메서드·이름·버전과 명세 작성은 [API 경로와 명세 규칙](../CONTRIBUTING.md#api-경로와-명세)을 따릅니다. 아래는 인증과 업무 요청에 적용하는 정책입니다.

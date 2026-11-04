@@ -11,6 +11,7 @@ import com.commercesettle.settlement.application.event.RefundReservationResultPa
 import com.commercesettle.settlement.application.port.InboxStore;
 import com.commercesettle.settlement.application.port.InboxStore.Source;
 import com.commercesettle.settlement.application.port.SettlementEventOutbox;
+import com.commercesettle.settlement.domain.model.InboxReviewReason;
 import com.commercesettle.settlement.domain.model.SettlementEntry;
 import com.commercesettle.settlement.domain.repository.RefundReservationRepository;
 import com.commercesettle.settlement.domain.repository.RefundReservationRepository.ItemState;
@@ -176,18 +177,24 @@ public class RefundEventService {
     if (inboxId.isEmpty()) {
       return;
     }
+    processFinancialCompleted(inboxId.get(), event);
+  }
+
+  @Transactional
+  public void processFinancialCompleted(
+      UUID inboxId, EventEnvelope<RefundFinancialCompletedPayload> event) {
     Instant now = clock.instant();
     RefundFinancialCompletedPayload completed = event.payload();
     Optional<ItemState> item = reservations.findItem(completed.paymentId());
     Optional<Reservation> reservation =
         item.flatMap(found -> reservations.find(found.id(), completed.refundId()));
     if (reservation.isEmpty()) {
-      review(inboxId.get(), event, "REFUND_NOT_RESERVED", now);
+      review(inboxId, event, "REFUND_NOT_RESERVED", now);
       return;
     }
     if (completed.externalAmount() != item.get().externalAmount()
         || completed.mileageAmount() != item.get().mileageAmount()) {
-      review(inboxId.get(), event, "REFUND_AMOUNT_MISMATCH", now);
+      review(inboxId, event, "REFUND_AMOUNT_MISMATCH", now);
       return;
     }
     switch (reservation.get().status()) {
@@ -207,7 +214,7 @@ public class RefundEventService {
             reservations
                 .consume(reservation.get().id(), now)
                 .orElseThrow(() -> new IllegalStateException("Refund reservation changed"));
-        inbox.markApplied(inboxId.get(), reservation.get().id(), now);
+        inbox.markApplied(inboxId, reservation.get().id(), now);
         publish(
             "RefundLedgerReversed",
             completed.paymentId(),
@@ -217,8 +224,8 @@ public class RefundEventService {
             now);
       }
       // 같은 환불을 이미 상쇄했다. 원래 결과는 Outbox가 전달한다.
-      case "CONSUMED" -> inbox.markApplied(inboxId.get(), reservation.get().id(), now);
-      default -> review(inboxId.get(), event, "REFUND_RESERVATION_RELEASED", now);
+      case "CONSUMED" -> inbox.markApplied(inboxId, reservation.get().id(), now);
+      default -> review(inboxId, event, "REFUND_RESERVATION_RELEASED", now);
     }
   }
 
@@ -233,6 +240,12 @@ public class RefundEventService {
     if (inboxId.isEmpty()) {
       return;
     }
+    processReleaseRequested(inboxId.get(), event);
+  }
+
+  @Transactional
+  public void processReleaseRequested(
+      UUID inboxId, EventEnvelope<RefundReleaseRequestedPayload> event) {
     Instant now = clock.instant();
     RefundReleaseRequestedPayload release = event.payload();
     Optional<UUID> itemId = reservations.findItem(release.paymentId()).map(ItemState::id);
@@ -243,17 +256,17 @@ public class RefundEventService {
             .filter(found -> found.refundId().equals(release.refundId()))
             .filter(found -> itemId.filter(found.itemId()::equals).isPresent());
     if (reservation.isEmpty()) {
-      review(inboxId.get(), event, "REFUND_RESERVATION_NOT_FOUND", now);
+      review(inboxId, event, "REFUND_RESERVATION_NOT_FOUND", now);
       return;
     }
     switch (reservation.get().status()) {
       case "ACTIVE" -> {
         Optional<Long> version = reservations.release(reservation.get(), now);
         if (version.isEmpty()) {
-          review(inboxId.get(), event, "REFUND_RELEASE_NOT_ALLOWED", now);
+          review(inboxId, event, "REFUND_RELEASE_NOT_ALLOWED", now);
           return;
         }
-        inbox.markApplied(inboxId.get(), reservation.get().id(), now);
+        inbox.markApplied(inboxId, reservation.get().id(), now);
         publish(
             "RefundReservationReleased",
             release.paymentId(),
@@ -263,9 +276,46 @@ public class RefundEventService {
             now);
       }
       // 같은 예약을 이미 풀었다. 원래 결과는 Outbox가 전달한다.
-      case "RELEASED" -> inbox.markApplied(inboxId.get(), reservation.get().id(), now);
-      default -> review(inboxId.get(), event, "REFUND_ALREADY_REVERSED", now);
+      case "RELEASED" -> inbox.markApplied(inboxId, reservation.get().id(), now);
+      default -> review(inboxId, event, "REFUND_ALREADY_REVERSED", now);
     }
+  }
+
+  boolean prerequisiteAvailable(InboxStore.Pending pending, String reason) {
+    return switch (pending) {
+      case InboxStore.Pending.RefundReservation p -> {
+        var request = p.event().payload();
+        if ("REFUND_REQUEST_UNDER_REVIEW".equals(reason)) {
+          yield inbox
+              .findEarlierRefundRequest(request.refundId(), p.inboxId())
+              .filter(r -> "APPLIED".equals(r.status()))
+              .isPresent();
+        }
+        yield "PAYMENT_NOT_ARRIVED".equals(reason)
+            && reservations.findItem(request.paymentId()).isPresent();
+      }
+      case InboxStore.Pending.RefundCompleted p -> {
+        var request = p.event().payload();
+        yield "REFUND_NOT_RESERVED".equals(reason)
+            && reservations
+                .findItem(request.paymentId())
+                .flatMap(item -> reservations.find(item.id(), request.refundId()))
+                .filter(r -> "ACTIVE".equals(r.status()) || "CONSUMED".equals(r.status()))
+                .isPresent();
+      }
+      case InboxStore.Pending.RefundRelease p -> {
+        var request = p.event().payload();
+        var item = reservations.findItem(request.paymentId());
+        yield "REFUND_RESERVATION_NOT_FOUND".equals(reason)
+            && reservations
+                .findById(request.reservationId())
+                .filter(r -> "REFUND".equals(r.kind()) && r.refundId().equals(request.refundId()))
+                .filter(r -> item.filter(i -> i.id().equals(r.itemId())).isPresent())
+                .filter(r -> "ACTIVE".equals(r.status()) || "RELEASED".equals(r.status()))
+                .isPresent();
+      }
+      default -> false;
+    };
   }
 
   /** 예약할 수 없는 사유. 지급 예약 후·지급 후 환불과 부분 환불은 지원하지 않는다. */
@@ -313,7 +363,7 @@ public class RefundEventService {
   }
 
   private void review(UUID inboxId, EventEnvelope<?> event, String reason, Instant now) {
-    inbox.markReviewRequired(inboxId, now);
+    inbox.markReviewRequired(inboxId, InboxReviewReason.valueOf(reason), now);
     logReview(event, reason);
   }
 

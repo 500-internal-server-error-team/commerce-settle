@@ -2,7 +2,10 @@ package com.commercesettle.settlement.application.port;
 
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
+import com.commercesettle.settlement.application.event.RefundFinancialCompletedPayload;
+import com.commercesettle.settlement.application.event.RefundReleaseRequestedPayload;
 import com.commercesettle.settlement.application.event.RefundReservationRequestedPayload;
+import com.commercesettle.settlement.domain.model.InboxReviewReason;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -21,11 +24,16 @@ public interface InboxStore {
    * 처리 시각이 된 WAITING 하나를 잠그고 원문에서 다시 읽는다. 다른 처리기가 잠근 행은 건너뛴다. WAITING은 선행 결제를 기다리는 구매확정과 환불 예약 요청만
    * 생긴다.
    */
-  Optional<Waiting> claimNextWaiting();
+  Optional<Pending> claimNextWaiting();
+
+  /** 대상 행을 잠그고 원문에서 판정 입력을 읽는다. HTTP 응답에는 사용하지 않는다. */
+  Optional<Review> lockReview(UUID inboxId);
+
+  void reopenReview(UUID inboxId, Instant now);
 
   void markApplied(UUID inboxId, UUID resultRef, Instant now);
 
-  void markReviewRequired(UUID inboxId, Instant now);
+  void markReviewRequired(UUID inboxId, InboxReviewReason reason, Instant now);
 
   /**
    * 선행 결제가 아직 없어 시도 횟수를 늘리고 {@code baseDelay}부터 두 배씩, 최대 60초 뒤 다시 판정한다. 이번이 {@code maxAttempts}번째면
@@ -53,13 +61,21 @@ public interface InboxStore {
   record EarlierRefundRequest(String status, UUID paymentId, long netAmount, UUID resultRef) {}
 
   /** 이벤트 종류별로 원문을 다시 읽은 대기 건. */
-  sealed interface Waiting {
+  record Review(Pending event, long version, String status, String reasonCode) {}
+
+  sealed interface Pending {
     UUID inboxId();
 
     record Purchase(UUID inboxId, EventEnvelope<PurchaseConfirmedPayload> event)
-        implements Waiting {}
+        implements Pending {}
 
     record RefundReservation(UUID inboxId, EventEnvelope<RefundReservationRequestedPayload> event)
-        implements Waiting {}
+        implements Pending {}
+
+    record RefundCompleted(UUID inboxId, EventEnvelope<RefundFinancialCompletedPayload> event)
+        implements Pending {}
+
+    record RefundRelease(UUID inboxId, EventEnvelope<RefundReleaseRequestedPayload> event)
+        implements Pending {}
   }
 }

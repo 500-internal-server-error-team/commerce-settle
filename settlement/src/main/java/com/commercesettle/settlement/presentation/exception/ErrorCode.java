@@ -15,6 +15,10 @@ enum ErrorCode {
   COMMON_VERSION_CONFLICT(HttpStatus.CONFLICT, "다른 변경이 먼저 반영됐습니다. 최신 상태를 조회한 뒤 다시 요청해 주세요."),
   COMMON_IDEMPOTENCY_CONFLICT(
       HttpStatus.CONFLICT, "같은 멱등키의 다른 요청이 있거나 처리 중입니다. 같은 본문이면 잠시 후 다시 요청해 주세요."),
+  SETTLEMENT_INBOX_TARGETS_CHANGED(HttpStatus.CONFLICT, "조건·대상 수·버전이 달라졌습니다. 목록을 다시 확인해 주세요."),
+  SETTLEMENT_INBOX_NOT_REJUDGEABLE(HttpStatus.CONFLICT, "근거를 확인할 수 있는 순서 의존 사유만 재판정할 수 있습니다."),
+  SETTLEMENT_INBOX_REJUDGEMENT_ACTIVE(HttpStatus.CONFLICT, "같은 대상을 소유한 미완료 재판정 실행이 있습니다."),
+  SETTLEMENT_INBOX_RUN_STATE_CONFLICT(HttpStatus.CONFLICT, "현재 실행 상태에서는 요청한 전환을 할 수 없습니다."),
   PAYOUT_JOB_LEASE_ACTIVE(HttpStatus.CONFLICT, "지급 작업이 실행 중입니다. 실행이 끝난 뒤 다시 요청해 주세요."),
   PAYOUT_JOB_NOT_REPLAYABLE(HttpStatus.CONFLICT, "현재 지급 작업 상태에서는 재처리할 수 없습니다."),
   SETTLEMENT_BATCH_NOT_DUE(HttpStatus.CONFLICT, "배치 마감이 아직 지나지 않았습니다."),

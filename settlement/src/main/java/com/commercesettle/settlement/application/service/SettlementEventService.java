@@ -5,6 +5,7 @@ import com.commercesettle.settlement.application.event.PaymentConfirmedPayload;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
 import com.commercesettle.settlement.application.port.InboxStore;
 import com.commercesettle.settlement.application.port.InboxStore.Source;
+import com.commercesettle.settlement.domain.model.InboxReviewReason;
 import com.commercesettle.settlement.domain.model.SettlementAmounts;
 import com.commercesettle.settlement.domain.model.SettlementEntry;
 import com.commercesettle.settlement.domain.model.SettlementItem;
@@ -122,17 +123,60 @@ public class SettlementEventService {
   /** WAITING 구매확정이나 환불 예약 요청 하나를 다시 판정한다. 대기 중인 건이 없으면 false. */
   @Transactional
   public boolean processNextWaiting() {
-    Optional<InboxStore.Waiting> waiting = inbox.claimNextWaiting();
+    Optional<InboxStore.Pending> waiting = inbox.claimNextWaiting();
     if (waiting.isEmpty()) {
       return false;
     }
-    switch (waiting.get()) {
-      case InboxStore.Waiting.Purchase purchase ->
-          applyPurchase(purchase.inboxId(), purchase.event());
-      case InboxStore.Waiting.RefundReservation refund ->
-          refunds.processWaitingReservation(refund.inboxId(), refund.event());
-    }
+    process(waiting.get());
     return true;
+  }
+
+  /** 고정한 버전·사유만 재판정한다. 선행 근거가 없으면 원래 상태를 유지한다. */
+  @Transactional
+  public String rejudge(UUID inboxId, long expectedVersion, String expectedReason) {
+    var found = inbox.lockReview(inboxId);
+    if (found.isEmpty()
+        || found.get().version() != expectedVersion
+        || !"REVIEW_REQUIRED".equals(found.get().status())) return "VERSION_CHANGED";
+    var row = found.get();
+    if (!java.util.Objects.equals(expectedReason, row.reasonCode())
+        || InboxReviewReason.categoryOf(row.reasonCode())
+            != InboxReviewReason.Category.ORDER_DEPENDENT) return "NOT_REJUDGEABLE";
+    boolean ready;
+    if (row.event() instanceof InboxStore.Pending.Purchase p) {
+      ready =
+          items
+              .findByPaymentId(p.event().payload().paymentId())
+              .filter(
+                  item ->
+                      "PAYMENT_NOT_ARRIVED".equals(expectedReason)
+                          || ("PURCHASE_DURING_REFUND".equals(expectedReason)
+                              && item.getStatus()
+                                  != com.commercesettle.settlement.domain.model.SettlementItemStatus
+                                      .REFUND_RESERVED
+                              && item.getStatus()
+                                  != com.commercesettle.settlement.domain.model.SettlementItemStatus
+                                      .REFUNDED))
+              .isPresent();
+    } else {
+      ready = refunds.prerequisiteAvailable(row.event(), expectedReason);
+    }
+    if (!ready) return "PREREQUISITE_MISSING";
+    inbox.reopenReview(inboxId, clock.instant());
+    process(row.event());
+    return inbox.lockReview(inboxId).orElseThrow().status();
+  }
+
+  private void process(InboxStore.Pending pending) {
+    switch (pending) {
+      case InboxStore.Pending.Purchase p -> applyPurchase(p.inboxId(), p.event());
+      case InboxStore.Pending.RefundReservation p ->
+          refunds.processWaitingReservation(p.inboxId(), p.event());
+      case InboxStore.Pending.RefundCompleted p ->
+          refunds.processFinancialCompleted(p.inboxId(), p.event());
+      case InboxStore.Pending.RefundRelease p ->
+          refunds.processReleaseRequested(p.inboxId(), p.event());
+    }
   }
 
   private void applyPurchase(UUID inboxId, EventEnvelope<PurchaseConfirmedPayload> event) {
@@ -198,7 +242,7 @@ public class SettlementEventService {
   }
 
   private void review(UUID inboxId, EventEnvelope<?> event, String reason, Instant now) {
-    inbox.markReviewRequired(inboxId, now);
+    inbox.markReviewRequired(inboxId, InboxReviewReason.valueOf(reason), now);
     logReview(event, reason);
   }
 

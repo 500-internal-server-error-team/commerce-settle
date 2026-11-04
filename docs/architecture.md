@@ -108,6 +108,7 @@ Compose DNS로 서비스를 찾으며 별도 서비스 레지스트리는 두지
 | 외부 승인·환불·미확정 조회 | `payment-worker` | 영속 금융 작업을 임대해 실행·조회·복구. `payment-api`에서는 Worker를 활성화하지 않음 | [금융 Worker](policies.md#금융-worker-임대와-결과-반영) |
 | 정산 대상·금액 확정 | `settlement` | 정산 배치가 항목·합계·지급 작업을 저장 | [정산 정책](policies.md#정산재처리), [배치 실행·복구](development.md#정산-일배치-실행과-복구) |
 | 지급 실행·보류 재개·미확정 조회 | `settlement` | 저장된 지급 작업을 Worker가 임대·실행 | [지급 복구](policies.md#정산재처리) |
+| 업무 Inbox 고정 대상 재판정 | `settlement` | 앱 내부 스케줄러가 영속 실행의 대상을 하나씩 임대해 기존 판정기로 처리. 중단·재개와 재기동 시 같은 대상을 유지 | [재판정·복구](policies.md#업무-inbox-재판정) |
 | PG 입금 반영 | `finance-mock` | 매분 도래한 미처리 입금을 원승인당 한 번 반영 | [PG 회수](policies.md#선지급-재원과-pg-회수) |
 | Outbox 발행·선행 상태 대기 재처리 | 각 생산·소비 앱 | Commerce Relay는 커밋 후·슬롯 반환·시작 시 깨우고 신호 누락·재시도·만료 임대는 기본 1초 복구 조회로 처리. 소비자는 영속 대기한 원업무를 재판정 | [Kafka 전달·용량 기준](architecture.md#kafka) |
 | 신규 접수 제한·재개 판정 | `commerce` | 15초마다 묶어서 관측하고 기존 작업의 처리·복구는 계속 허용 | [접수 제한](policies.md#신규-접수-제한과-재개) |

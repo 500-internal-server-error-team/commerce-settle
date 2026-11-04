@@ -2,8 +2,11 @@ package com.commercesettle.settlement.infrastructure.persistence;
 
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
+import com.commercesettle.settlement.application.event.RefundFinancialCompletedPayload;
+import com.commercesettle.settlement.application.event.RefundReleaseRequestedPayload;
 import com.commercesettle.settlement.application.event.RefundReservationRequestedPayload;
 import com.commercesettle.settlement.application.port.InboxStore;
+import com.commercesettle.settlement.domain.model.InboxReviewReason;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -105,7 +108,7 @@ class JdbcInboxStore implements InboxStore {
   }
 
   @Override
-  public Optional<Waiting> claimNextWaiting() {
+  public Optional<Pending> claimNextWaiting() {
     applyTransactionLimits();
     List<Stored> rows =
         jdbc.query(
@@ -125,37 +128,77 @@ class JdbcInboxStore implements InboxStore {
     if (rows.isEmpty()) {
       return Optional.empty();
     }
-    Stored row = rows.get(0);
+    return Optional.of(decode(rows.getFirst()));
+  }
+
+  private Pending decode(Stored row) {
     try {
-      return Optional.of(
-          switch (row.eventType()) {
-            case "PurchaseConfirmed" ->
-                new Waiting.Purchase(
-                    row.id(),
-                    mapper.<EventEnvelope<PurchaseConfirmedPayload>>readValue(
-                        row.body(), new TypeReference<>() {}));
-            case "RefundReservationRequested" ->
-                new Waiting.RefundReservation(
-                    row.id(),
-                    mapper.<EventEnvelope<RefundReservationRequestedPayload>>readValue(
-                        row.body(), new TypeReference<>() {}));
-            default ->
-                throw new IllegalStateException("Unexpected waiting inbox type: " + row.id());
-          });
-    } catch (IOException exception) {
-      // 수신 때 엄격하게 해석한 원문이므로 읽기 실패는 데이터 손상이다. 원문을 예외에 싣지 않는다.
-      throw new IllegalStateException("Stored inbox body cannot be read: " + row.id());
+      return switch (row.eventType()) {
+        case "PurchaseConfirmed" ->
+            new Pending.Purchase(
+                row.id(),
+                mapper.<EventEnvelope<PurchaseConfirmedPayload>>readValue(
+                    row.body(), new TypeReference<>() {}));
+        case "RefundReservationRequested" ->
+            new Pending.RefundReservation(
+                row.id(),
+                mapper.<EventEnvelope<RefundReservationRequestedPayload>>readValue(
+                    row.body(), new TypeReference<>() {}));
+        case "RefundFinancialCompleted" ->
+            new Pending.RefundCompleted(
+                row.id(),
+                mapper.<EventEnvelope<RefundFinancialCompletedPayload>>readValue(
+                    row.body(), new TypeReference<>() {}));
+        case "RefundReleaseRequested" ->
+            new Pending.RefundRelease(
+                row.id(),
+                mapper.<EventEnvelope<RefundReleaseRequestedPayload>>readValue(
+                    row.body(), new TypeReference<>() {}));
+        default -> throw new IllegalStateException("Unsupported inbox event type");
+      };
+    } catch (IOException | IllegalArgumentException exception) {
+      throw new IllegalStateException("Stored inbox body cannot be read");
     }
   }
 
   @Override
-  public void markApplied(UUID inboxId, UUID resultRef, Instant now) {
-    finish(inboxId, "APPLIED", resultRef, now);
+  public Optional<Review> lockReview(UUID inboxId) {
+    applyTransactionLimits();
+    return jdbc
+        .query(
+            "SELECT id,event_type,raw_body,version,status,last_error_code FROM settlement.inbox WHERE id=:id AND consumer=:consumer FOR UPDATE",
+            new MapSqlParameterSource("id", inboxId).addValue("consumer", consumer),
+            (rs, n) ->
+                new Review(
+                    decode(
+                        new Stored(
+                            rs.getObject("id", UUID.class),
+                            rs.getString("event_type"),
+                            rs.getBytes("raw_body"))),
+                    rs.getLong("version"),
+                    rs.getString("status"),
+                    rs.getString("last_error_code")))
+        .stream()
+        .findFirst();
   }
 
   @Override
-  public void markReviewRequired(UUID inboxId, Instant now) {
-    finish(inboxId, "REVIEW_REQUIRED", null, now);
+  public void reopenReview(UUID inboxId, Instant now) {
+    requireOne(
+        jdbc.update(
+            "UPDATE settlement.inbox SET status='RECEIVED',attempts=0,next_run_at=NULL,updated_at=:now,version=version+1 WHERE id=:id AND status='REVIEW_REQUIRED'",
+            new MapSqlParameterSource("id", inboxId).addValue("now", now.atOffset(ZoneOffset.UTC))),
+        inboxId);
+  }
+
+  @Override
+  public void markApplied(UUID inboxId, UUID resultRef, Instant now) {
+    finish(inboxId, "APPLIED", resultRef, null, now);
+  }
+
+  @Override
+  public void markReviewRequired(UUID inboxId, InboxReviewReason reason, Instant now) {
+    finish(inboxId, "REVIEW_REQUIRED", null, java.util.Objects.requireNonNull(reason).name(), now);
   }
 
   @Override
@@ -234,17 +277,19 @@ class JdbcInboxStore implements InboxStore {
         .findFirst();
   }
 
-  private void finish(UUID inboxId, String status, UUID resultRef, Instant now) {
+  private void finish(UUID inboxId, String status, UUID resultRef, String reason, Instant now) {
     int updated =
         jdbc.update(
             """
             UPDATE settlement.inbox
             SET status = :status, result_ref = :resultRef, next_run_at = NULL,
+                last_error_code = coalesce(:reason,last_error_code),
                 updated_at = :now, version = version + 1
             WHERE id = :inboxId AND status IN ('RECEIVED', 'WAITING')
             """,
             new MapSqlParameterSource("inboxId", inboxId)
                 .addValue("status", status)
+                .addValue("reason", reason, Types.VARCHAR)
                 .addValue("resultRef", resultRef, Types.OTHER)
                 .addValue("now", now.atOffset(ZoneOffset.UTC)));
     requireOne(updated, inboxId);

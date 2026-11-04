@@ -137,6 +137,21 @@ Payment 격리 원문 API(`/internal/payment-quarantines/**`·`/internal/payment
 - `publicationState=PENDING`은 미발행 또는 ack 뒤 위치 저장 전 중단을 포함합니다. `topic`은 고정된 원천 토픽이며 `partition/offset/publishedAt`은 함께 null입니다. `PUBLISHED`이면 세 필드가 모두 있고 위치는 ack 결과입니다. null을 0으로 바꾸거나 미발행 이벤트를 페이지에서 제외하지 않습니다.
 - Settlement는 `eventId`로 자기 Inbox를 먼저 확인합니다. 이미 APPLIED인 이벤트는 재발행 위치가 더 뒤로 옮겨져도 원장을 대조합니다. 수신 기록이 없는 위치 미확정 건은 발행 대기로 남깁니다. 자기 Consumer 그룹의 커밋 offset·Inbox·격리 기록에 따른 나머지 판정은 [정산 대조](policies.md#정산-대조)을 따릅니다.
 
+### Settlement 업무 Inbox 운영
+
+OPERATOR 자격으로 사유·이벤트 종류별 요약을 보고, 확인 대상 목록의 ID·버전·원문 크기·SHA-256을 대조한 뒤 고정 대상 재판정 실행을 만듭니다. 원문은 반환하지 않습니다. 내부 운영 API이므로 Gateway에 공개하지 않습니다.
+
+| 경로 | 사용 흐름 |
+| --- | --- |
+| `GET /internal/settlement-inbox-summary` | 사유·이벤트별 건수와 현재 확인 상태의 최장 대기 나이(초) |
+| `GET /internal/settlement-inboxes`, `GET /internal/settlement-inboxes/{inboxId}` | 확인 대상 조건 조회·단건. 목록의 receivedBefore는 오프셋 포함 시각이며 생성 때 같은 조건을 제출 |
+| `GET/POST /internal/settlement-inbox-rejudgements` | 실행 목록·생성. 조건·예상 수와 대상 ID/expectedVersion을 대조해 최대 100건 고정 |
+| `GET /internal/settlement-inbox-rejudgements/{runId}` | 조건·상태·실행 버전·진행 수 |
+| `GET /internal/settlement-inbox-rejudgements/{runId}/targets`, `.../attempts`, `.../audits` | 대상별 판정 결과, 임대·중단·재기동 복구와 운영자·처리기의 사유/감사 이력 |
+| `POST /internal/settlement-inbox-rejudgements/{runId}/pauses`, `.../resumes`, `.../cancellations` | 실행 expectedVersion과 운영 사유 코드로 중단·재개·취소 |
+
+202는 실행 접수이며 금융 성공을 뜻하지 않습니다. 생성 응답의 Location으로 실행을 조회하고 대상 결과를 확인합니다. 같은 운영자·작업의 동일 Idempotency-Key/본문은 기존 실행을 반환하며 감사·실행을 다시 만들지 않습니다. 같은 키의 다른 본문, 버전 변경·대상 수 불일치·겹치는 실행은 409입니다. 재판정 가능한 사유와 선행 근거·중단 경계는 [업무 정책](policies.md#업무-inbox-재판정), 정확한 입력·결과·오류 코드는 [OpenAPI](openapi.json), 실행 예시는 [개발 환경](development.md#업무-inbox-관측과-재판정)을 따릅니다.
+
 ### 격리 원문 운영
 
 Settlement 격리 원문 API는 `operator:<식별자>` 자격만 받고 Gateway에 공개하지 않습니다. 조회는 원문·키 bytes 대신 수신 위치, 오류 코드, 원문 크기와 SHA-256만 반환합니다. 원문 확인은 DB 권한 경로로 합니다. 재처리는 원문 `version`, 재개는 발행 작업 `version`을 `expectedVersion`으로 받고, `reasonCode`는 `^[A-Z][A-Z0-9_]{0,79}$`입니다. 재처리는 원래 topic·key·bytes 그대로 REPLAY 작업을 만들고, 재개는 시도를 다 쓴 같은 작업을 시도 수 0으로 되돌립니다. 202는 발행 접수일 뿐이며 Kafka 발행 완료(`PUBLISHED`)와 업무 반영은 따로 확인합니다. 같은 `Idempotency-Key`·본문 재요청은 처음 결과의 현재 상태를 돌려주고, 요청자·사유는 작업·재개 이력과 `audit_logs`에 남습니다(correlation은 격리 ID). Payment도 같은 요청·응답 모양을 씁니다([Payment 격리 원문 운영](#payment-격리-원문-운영)).

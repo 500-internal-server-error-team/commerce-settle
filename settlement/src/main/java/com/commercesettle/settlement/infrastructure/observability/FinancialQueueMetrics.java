@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.infrastructure.observability;
 
+import com.commercesettle.settlement.domain.model.InboxReviewReason;
 import io.prometheus.metrics.model.registry.MultiCollector;
 import io.prometheus.metrics.model.registry.PrometheusRegistry;
 import io.prometheus.metrics.model.snapshots.GaugeSnapshot;
@@ -24,14 +25,31 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
   private static final String PREFIX = "commerce_settle_";
   private static final List<String> NAMES =
       List.of(
-          PREFIX + "financial_queue_records", PREFIX + "financial_queue_due_delay_seconds",
+          PREFIX + "financial_queue_records",
+          PREFIX + "financial_queue_due_delay_seconds",
           PREFIX + "admission_observed_timestamp_seconds",
-              PREFIX + "financial_queue_review_required_records",
+          PREFIX + "financial_queue_review_required_records",
           PREFIX + "financial_operation_age_seconds",
-              PREFIX + "financial_operation_observed_timestamp_seconds");
+          PREFIX + "financial_operation_observed_timestamp_seconds",
+          "settlement_inbox_review_records",
+          "settlement_inbox_review_oldest_age_seconds",
+          "settlement_inbox_observed_timestamp_seconds",
+          "settlement_inbox_rejudgement_stalled_seconds");
   private static final List<String> QUEUES =
       List.of("settlement.outbox", "settlement.inbox", "settlement.payout_jobs");
   private static final List<String> OPERATIONS = List.of("settlement.unknown", "settlement.payout");
+  private static final List<String> EVENT_TYPES =
+      List.of(
+          "PaymentConfirmed",
+          "PurchaseConfirmed",
+          "RefundReservationRequested",
+          "RefundFinancialCompleted",
+          "RefundReleaseRequested");
+  private static final List<String> REASONS =
+      java.util.stream.Stream.concat(
+              java.util.Arrays.stream(InboxReviewReason.values()).map(Enum::name),
+              java.util.stream.Stream.of("UNRECORDED"))
+          .toList();
   private static final String SQL =
       """
       SELECT 'settlement.outbox' AS name, 'queue' AS kind, count(*) AS records,
@@ -48,7 +66,7 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
        WHEN status = 'WAITING' AND next_run_at <= statement_timestamp() THEN next_run_at END))),0)::double precision,
        count(*) FILTER (WHERE status = 'REVIEW_REQUIRED'),
        extract(epoch FROM statement_timestamp())::double precision
-       FROM settlement.inbox WHERE consumer = 'settlement.v1' AND status <> 'APPLIED'
+       FROM settlement.inbox WHERE consumer = ? AND status <> 'APPLIED'
       UNION ALL
       SELECT 'settlement.payout_jobs' AS name, 'queue' AS kind, count(*) AS records,
        coalesce(extract(epoch FROM (statement_timestamp() - min(CASE
@@ -65,7 +83,25 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
       SELECT 'settlement.payout', 'operation', count(*),
        coalesce(extract(epoch FROM (statement_timestamp() - min(cutoff_at))),0)::double precision,
        0, extract(epoch FROM statement_timestamp())::double precision FROM settlement.settlement_batches WHERE status IN ('RESERVED','PROCESSING','REVIEW_REQUIRED')
-      """;
+      UNION ALL
+      SELECT 'review:' || CASE WHEN last_error_code IN (%s) THEN last_error_code ELSE 'UNRECORDED' END
+        || ':' || event_type, 'inbox_review', count(*),
+        greatest(0,extract(epoch FROM(statement_timestamp()-min(updated_at))))::double precision,
+        0,extract(epoch FROM statement_timestamp())::double precision
+      FROM settlement.inbox WHERE consumer=? AND status='REVIEW_REQUIRED'
+        AND event_type IN ('PaymentConfirmed','PurchaseConfirmed','RefundReservationRequested','RefundFinancialCompleted','RefundReleaseRequested')
+      GROUP BY 1
+      UNION ALL
+      SELECT 'rejudgement','inbox_run',count(*),
+        greatest(0,coalesce(extract(epoch FROM(statement_timestamp()-min(updated_at))),0))::double precision,
+        0,extract(epoch FROM statement_timestamp())::double precision
+      FROM settlement.inbox_rejudgement_runs WHERE consumer=? AND status='RUNNING'
+      """
+          .formatted(
+              REASONS.stream()
+                  .map(reason -> "'" + reason + "'")
+                  .collect(java.util.stream.Collectors.joining(",")));
+  private final String consumer;
   private final JdbcTemplate jdbc;
   private final PrometheusRegistry registry;
   private final AtomicReference<Map<String, Values>> snapshot = new AtomicReference<>(Map.of());
@@ -74,6 +110,12 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
           Thread.ofPlatform().name("settlement-financial-observer-", 0).daemon(true).factory());
 
   public FinancialQueueMetrics(DataSource dataSource, PrometheusRegistry registry) {
+    this(dataSource, registry, "settlement.v1");
+  }
+
+  public FinancialQueueMetrics(
+      DataSource dataSource, PrometheusRegistry registry, String consumer) {
+    this.consumer = consumer;
     jdbc = new JdbcTemplate(dataSource);
     jdbc.setQueryTimeout(2);
     this.registry = registry;
@@ -87,7 +129,7 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
   public void refresh() {
     try {
       Map<String, Values> current = new HashMap<>();
-      for (var row : jdbc.queryForList(SQL)) {
+      for (var row : jdbc.queryForList(SQL, consumer, consumer, consumer)) {
         current.put(
             (String) row.get("name"),
             new Values(
@@ -130,13 +172,30 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
       operations.add(point(value.age(), "operation", operation));
       operationTimes.add(point(value.observed(), "operation", operation));
     }
+    var reviewCounts = new ArrayList<GaugeDataPointSnapshot>();
+    var reviewAges = new ArrayList<GaugeDataPointSnapshot>();
+    for (String reason : REASONS)
+      for (String eventType : EVENT_TYPES) {
+        var value =
+            current.getOrDefault("review:" + reason + ":" + eventType, new Values(0, 0, 0, 0));
+        var labels = Labels.of("consumer", consumer, "reason", reason, "event_type", eventType);
+        reviewCounts.add(new GaugeDataPointSnapshot(value.records(), labels, null));
+        reviewAges.add(new GaugeDataPointSnapshot(value.age(), labels, null));
+      }
+    var run = current.getOrDefault("rejudgement", new Values(0, 0, 0, 0));
+    var freshness = List.of(point(run.observed(), "consumer", consumer));
+    var stall = List.of(point(run.age(), "consumer", consumer));
     return MetricSnapshots.of(
         metric(0, records),
         metric(1, ages),
         metric(2, observed),
         metric(3, review),
         metric(4, operations),
-        metric(5, operationTimes));
+        metric(5, operationTimes),
+        metric(6, reviewCounts),
+        metric(7, reviewAges),
+        metric(8, freshness),
+        metric(9, stall));
   }
 
   private static GaugeDataPointSnapshot point(double value, String label, String resource) {
