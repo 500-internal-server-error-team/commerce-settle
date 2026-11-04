@@ -379,15 +379,40 @@ main {
   padding-bottom:20px;
   gap:16px
 }
-.steps>div {
+.steps>button {
   border-top:2px solid #d1d6dd;
   padding-top:12px;
   display:flex;
   flex-direction:column;
-  gap:5px
+  gap:5px;
+  background:transparent;
+  text-align:left;
+  border-inline:0;
+  border-bottom:0;
+  border-radius:0;
+  padding-inline:0;
+  padding-bottom:8px;
+  min-width:0;
+  overflow-wrap:anywhere
 }
-.steps>div:first-child {
+.steps>button[aria-current=step] {
   border-color:var(--accent)
+}
+.step-help {
+  margin-bottom:18px
+}
+.learning-start {
+  padding:18px 20px;
+  border:1px solid var(--line);
+  border-radius:6px;
+  background:var(--surface);
+  margin-bottom:18px
+}
+.learning-start h2 {
+  margin-bottom:8px
+}
+.learning-start p {
+  font-size:13px
 }
 .steps span {
   font:12px ui-monospace,monospace;

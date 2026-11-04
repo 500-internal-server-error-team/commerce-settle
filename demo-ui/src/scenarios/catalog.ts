@@ -40,8 +40,107 @@ const endpoints: Record<string, string[]> = {
   monthly: ['/internal/coupon-issue-runs', '/internal/coupon-issue-runs/{runId}',
     '/internal/coupon-issue-runs/{runId}/targets', '/internal/coupon-issue-runs/{runId}/replacements', '/api/buyers/me/coupons'],
 };
-export function actions(group: string) {
-  return operations.filter(op => endpoints[group]?.includes(op.path));
+const taskIds = {
+  products: 'get_api_products', product: 'get_api_products_productId', quote: 'post_api_order_quotes',
+  order: 'post_api_orders', orders: 'get_api_orders', orderDetail: 'get_api_orders_orderId',
+  payment: 'get_api_payments_paymentId', attempts: 'get_api_payments_paymentId_attempts',
+  retry: 'post_api_orders_orderId_payment_retries', cancel: 'post_api_orders_orderId_cancellation',
+  buyer: 'post_api_buyers', seller: 'post_api_sellers', login: 'post_api_buyer_sessions',
+  account: 'get_api_accounts_me', resetRequest: 'post_api_password_reset_requests', reset: 'post_api_password_resets',
+  addresses: 'get_api_buyers_me_addresses', address: 'post_api_buyers_me_addresses', editAddress: 'put_api_buyers_me_addresses_addressId',
+  profile: 'get_api_sellers_me', editProfile: 'put_api_sellers_me',
+  sellerProducts: 'get_api_sellers_me_products', addProduct: 'post_api_sellers_me_products',
+  sellerProduct: 'get_api_sellers_me_products_productId', editProduct: 'put_api_sellers_me_products_productId',
+  removeProduct: 'delete_api_sellers_me_products_productId', inventory: 'get_api_sellers_me_products_productId_inventory',
+  adjustInventory: 'post_api_sellers_me_products_productId_inventory_adjustments',
+  sales: 'get_api_sellers_me_orders', sale: 'get_api_sellers_me_orders_orderId',
+  items: 'get_api_sellers_me_settlement_items', batches: 'get_api_sellers_me_settlement_batches',
+  payouts: 'get_api_sellers_me_payouts', payout: 'get_api_sellers_me_payouts_payoutId',
+  payoutJobs: 'get_internal_payout_jobs',
+  returnRequest: 'post_api_orders_orderId_refund_requests', returnDetail: 'get_api_refund_requests_requestId',
+  returns: 'get_api_sellers_me_refund_requests', decision: 'post_api_sellers_me_refund_requests_requestId_decision',
+  receipt: 'post_api_sellers_me_refund_requests_requestId_receipt', withdraw: 'post_api_refund_requests_requestId_withdrawal',
+  refund: 'get_api_refunds_refundId', closeRefund: 'post_internal_refund_requests_requestId_closure',
+  closureConfirmation: 'post_api_refund_requests_requestId_closure_confirmations',
+  coupons: 'get_api_buyers_me_coupons', campaigns: 'get_api_sellers_me_coupon_templates',
+  campaign: 'get_api_sellers_me_coupon_templates_templateId', issue: 'post_api_sellers_me_coupon_templates_templateId_issues',
+  closeCampaign: 'post_api_sellers_me_coupon_templates_templateId_closure',
+  mileage: 'get_api_buyers_me_mileage', mileageEntries: 'get_api_buyers_me_mileage_entries',
+  addEvent: 'post_api_sellers_me_events', publishEvent: 'post_api_sellers_me_events_eventId_publication',
+  sellerEvent: 'get_api_sellers_me_events_eventId', closeEvent: 'post_api_sellers_me_events_eventId_closure',
+  events: 'get_api_events', gauge: 'get_api_events_eventId_gauge',
+  notifications: 'get_api_notifications', notification: 'get_api_notifications_notificationId',
+} as const;
+
+// Each conceptual screen opens an existing operation; observing a state never fabricates it.
+const flowTasks: Record<string, (keyof typeof taskIds)[]> = {
+  'account.buyer': ['buyer', 'login', 'address', 'products'],
+  'account.seller': ['seller', 'editProfile', 'sellerProducts', 'addProduct'],
+  'account.login': ['login', 'login', 'account', 'login'],
+  'account.password': ['resetRequest', 'resetRequest', 'reset', 'login'],
+  'account.reauth': ['orderDetail', 'login', 'orderDetail', 'orderDetail'],
+  'account.address': ['addresses', 'editAddress', 'addresses', 'order'],
+  'account.profile': ['profile', 'editProfile', 'profile', 'payout'],
+  'account.denied': ['account', 'login', 'orders', 'account'],
+  'buy.normal': ['products', 'order', 'orderDetail', 'orderDetail'],
+  'buy.waiting': ['orderDetail', 'payment', 'orderDetail', 'orders'],
+  'buy.declined': ['payment', 'retry', 'payment', 'orderDetail'],
+  'buy.changed': ['product', 'product', 'quote', 'order'],
+  'buy.stock': ['products', 'product', 'products', 'order'],
+  'buy.methods': ['order', 'quote', 'order', 'payment'],
+  'sell.normal': ['sellerProducts', 'sales', 'items', 'payout'],
+  'sell.product': ['sellerProducts', 'editProduct', 'adjustInventory', 'sellerProduct'],
+  'sell.remove': ['sellerProduct', 'removeProduct', 'sellerProduct', 'sellerProducts'],
+  'sell.eligible': ['sales', 'items', 'items', 'batches'],
+  'sell.pending': ['batches', 'payout', 'payout', 'payouts'],
+  'sell.holiday': ['batches', 'payout', 'payout', 'payout'],
+  'sell.failed': ['payout', 'payout', 'payoutJobs', 'payouts'],
+  'refund.unpaid': ['orderDetail', 'cancel', 'payment', 'orderDetail'],
+  'refund.cancelwait': ['orderDetail', 'orderDetail', 'payment', 'orderDetail'],
+  'refund.timeout': ['orderDetail', 'orderDetail', 'payment', 'orderDetail'],
+  'refund.preship': ['orderDetail', 'returnRequest', 'refund', 'orderDetail'],
+  'refund.return': ['returnRequest', 'returns', 'refund', 'refund'],
+  'refund.withdraw': ['returnDetail', 'withdraw', 'returnDetail', 'orderDetail'],
+  'refund.rejected': ['returns', 'decision', 'returnDetail', 'orderDetail'],
+  'refund.unknown': ['returnDetail', 'refund', 'refund', 'refund'],
+  'refund.failed': ['refund', 'refund', 'closureConfirmation', 'closeRefund'],
+  'refund.receipt': ['returns', 'receipt', 'inventory', 'inventory'],
+  'refund.closed': ['orderDetail', 'orderDetail', 'orders', 'returnDetail'],
+  'benefit.coupons': ['coupons', 'coupons', 'order', 'orders'],
+  'benefit.campaign': ['campaigns', 'issue', 'coupons', 'closeCampaign'],
+  'benefit.budget': ['campaign', 'campaign', 'coupons', 'coupons'],
+  'benefit.mixed': ['mileage', 'order', 'payment', 'refund'],
+  'benefit.allmileage': ['mileage', 'order', 'payment', 'refund'],
+  'benefit.insufficient': ['order', 'mileage', 'mileage', 'quote'],
+  'benefit.invalid': ['coupons', 'quote', 'quote', 'order'],
+  'benefit.restore': ['orders', 'refund', 'coupons', 'coupons'],
+  'benefit.eventowner': ['addEvent', 'publishEvent', 'sellerEvent', 'closeEvent'],
+  'benefit.eventbuyer': ['events', 'order', 'payment', 'gauge'],
+  'benefit.eventclosed': ['gauge', 'gauge', 'orders', 'events'],
+  'history.buyer': ['orders', 'orderDetail', 'attempts', 'orderDetail'],
+  'history.seller': ['sales', 'batches', 'payouts', 'sales'],
+  'history.notifications': ['notifications', 'notification', 'orders', 'orderDetail'],
+  'history.mileage': ['mileage', 'mileageEntries', 'payment', 'orders'],
+  'history.empty': ['orders', 'sales', 'items', 'coupons'],
+  'history.unavailable': ['orderDetail', 'orderDetail', 'orderDetail', 'orderDetail'],
+};
+
+export function workflow(scenario: Scenario, role: string) {
+  return scenario.screens.map((screen, index) => {
+    let task = flowTasks[scenario.id]?.[index];
+    if (role === 'SELLER' && screen[0] === '양쪽') {
+      if (task === 'orders') task = 'sales';
+      if (task === 'orderDetail') task = 'sale';
+    }
+    const id = task === 'login' && role === 'SELLER' ? 'post_api_seller_sessions' : task && taskIds[task];
+    return { screen, operation: operations.find(op => op.id === id) };
+  });
+}
+export function startingStep(id: string) {
+  return id === 'buy.waiting' || id === 'refund.unknown' ? 1 : id === 'buy.changed' ? 2 : 0;
+}
+export function actions(group: string, related: string[] = []) {
+  return operations.filter(op => endpoints[group]?.includes(op.path) || related.includes(op.id));
 }
 export function requirements(id: string): string[] {
   const notes = ['각 흐름의 결과는 실제 입력과 서버 응답으로 확인하세요. 화면에 표시된 단계는 설계된 흐름입니다.'];
