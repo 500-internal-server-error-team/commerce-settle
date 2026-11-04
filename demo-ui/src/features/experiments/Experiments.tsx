@@ -25,7 +25,8 @@ async function control<T>(path: string, method = 'GET', body?: unknown): Promise
 export function Experiments({ info }: { info?: DemoInfo }) {
   const [rate, setRate] = useState(10); const [seconds, setSeconds] = useState(10);
   const client = useQueryClient();
-  const runs = useQuery({ queryKey: ['load-runs'], queryFn: () => control<LoadRun[]>('load-runs'), refetchInterval: 2000, retry: false });
+  const runs = useQuery({ queryKey: ['load-runs'], enabled: !!info?.loadEnabled,
+    queryFn: () => control<LoadRun[]>('load-runs'), refetchInterval: 2000, retry: false });
   const start = useMutation({ mutationFn: () => control<LoadRun>('load-runs', 'POST', { rate, seconds }),
     onSuccess: () => client.invalidateQueries({ queryKey: ['load-runs'] }) });
   const stop = useMutation({ mutationFn: (id: string) => control<LoadRun>(`load-runs/${id}/stop`, 'POST', {}),
@@ -47,10 +48,12 @@ export function Experiments({ info }: { info?: DemoInfo }) {
         <button type="submit" className="primary" disabled={!info?.loadEnabled || start.isPending}>{start.isPending ? '실행 접수 중…' : '부하 테스트 시작'}</button>
       </form>
       {!info?.loadEnabled && <p className="caption">전용 부하 환경을 준비하고 서버 설정에서 활성화해야 합니다. 기존 사용자 데모를 대상으로 실행하지 않습니다.</p>}
+      {info?.loadEnabled && <>
       {(start.error || stop.error || runs.error) && <p role="alert" className="error">{(start.error ?? stop.error ?? runs.error)?.message}</p>}
       {runs.data?.map(run => <article className="run" key={run.id}><div><strong>{loadStates[run.state] ?? run.state}</strong><small>{new Date(run.startedAt).toLocaleString('ko-KR')}</small></div>
         <code>{run.id}</code>{run.state === 'RUNNING' && <button onClick={() => stop.mutate(run.id)} disabled={stop.isPending}>추가 주입 중지</button>}
         <details><summary>실행 출력·결과</summary><p className="caption">상태 코드: {run.state} · 종료 코드: {run.exitCode ?? '미확정'}</p><pre>{run.summary ? JSON.stringify(run.summary, null, 2) : run.output || '결과 대기 중'}</pre></details></article>)}
+      </>}
       <p className="caption">중지는 추가 주입을 멈춥니다. 이미 접수한 금융 작업은 취소하지 않습니다. 실행 종료 뒤에도 거래별 최종 상태와 금액을 대조해야 합니다.</p>
     </section>
   </div>;

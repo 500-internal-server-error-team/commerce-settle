@@ -236,7 +236,7 @@ export function App() {
         {role !== 'OPERATOR' && <button className="text-button login-link" onClick={() => navigate('account', 'account.login')}>로그인·가입 화면 열기</button>}
       </section>
       <section className="work-card result-section"><div className="card-heading"><div><span className="overline">서버에서 확인한 결과</span><h2>{current?.operation ?? '아직 실행한 작업이 없습니다'}</h2></div>{current && <span className={`badge ${current.status < 300 ? 'success' : 'failure'}`}>HTTP {current.status}</span>}</div>
-        {operation?.path.endsWith('/gauge') && current?.path === operation.path && <p className="caption">선택한 이벤트를 1초마다 조회합니다. 백그라운드에서는 중단합니다.</p>}
+        {operation?.path.endsWith('/gauge') && current?.path === operation.path && <p className="caption">정상 조회 후 1초마다 갱신합니다. 입력 오류가 있으면 값을 고친 뒤 다시 실행하세요. 백그라운드에서는 중단합니다.</p>}
         {gauge.error && <p role="alert" className="notice error">게이지를 다시 확인하지 못했습니다. 아래는 마지막 관측값이며 현재 판매 가능 여부는 주문 요청에서 다시 검증합니다.</p>}
         {current ? <><p className="caption">{kst(current.at)} KST · <span title="요청 시작부터 프록시·서버 왕복과 응답 본문 수신·해석까지의 브라우저 관측 시간입니다. 서버 내부 처리시간이나 비동기 거래의 최종 완료시간이 아닙니다.">응답 확인 {current.elapsedMs}ms</span> · {roleLabels[current.actor as Role] ?? current.actor} · {current.status === 202 ? '접수 응답 · 최종 완료 아님' : '해당 요청의 응답'}</p>
           <ResultView data={current.response as Json} select={selectRow} />
