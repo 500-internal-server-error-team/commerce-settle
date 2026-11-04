@@ -646,15 +646,7 @@
         ],
         "parameters": [
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -720,15 +712,7 @@
         ],
         "parameters": [
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -801,23 +785,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -882,15 +853,7 @@
             }
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -963,15 +926,7 @@
             }
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           },
           {
             "name": "expectedVersion",
@@ -1026,23 +981,10 @@
         "security": [],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -1094,13 +1036,7 @@
         "security": [],
         "parameters": [
           {
-            "name": "productId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/ProductId"
           }
         ],
         "responses": {
@@ -1156,15 +1092,7 @@
         ],
         "parameters": [
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -1237,23 +1165,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -1309,24 +1224,10 @@
         ],
         "parameters": [
           {
-            "name": "productId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/ProductId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -1390,24 +1291,10 @@
         ],
         "parameters": [
           {
-            "name": "productId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/ProductId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           },
           {
             "name": "expectedVersion",
@@ -1464,13 +1351,7 @@
         ],
         "parameters": [
           {
-            "name": "productId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/ProductId"
           }
         ],
         "responses": {
@@ -1526,13 +1407,7 @@
         ],
         "parameters": [
           {
-            "name": "productId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/ProductId"
           }
         ],
         "responses": {
@@ -1588,24 +1463,10 @@
         ],
         "parameters": [
           {
-            "name": "productId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/ProductId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -1671,15 +1532,7 @@
         ],
         "parameters": [
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -1768,23 +1621,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -1840,24 +1680,10 @@
         ],
         "parameters": [
           {
-            "name": "templateId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/TemplateId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -1923,23 +1749,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -1994,15 +1807,7 @@
         ],
         "parameters": [
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -2082,23 +1887,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -2154,24 +1946,10 @@
         ],
         "parameters": [
           {
-            "name": "eventId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/EventId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -2234,13 +2012,7 @@
         ],
         "parameters": [
           {
-            "name": "eventId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/EventId"
           }
         ],
         "responses": {
@@ -2296,24 +2068,10 @@
         ],
         "parameters": [
           {
-            "name": "eventId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/EventId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -2378,24 +2136,10 @@
         ],
         "parameters": [
           {
-            "name": "eventId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/EventId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -2457,23 +2201,10 @@
         "security": [],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -2525,13 +2256,7 @@
         "security": [],
         "parameters": [
           {
-            "name": "eventId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/EventId"
           }
         ],
         "responses": {
@@ -2583,13 +2308,7 @@
         "security": [],
         "parameters": [
           {
-            "name": "eventId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/EventId"
           }
         ],
         "responses": {
@@ -2717,15 +2436,7 @@
         ],
         "parameters": [
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -2858,23 +2569,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -2930,13 +2628,7 @@
         ],
         "parameters": [
           {
-            "name": "orderId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/OrderId"
           }
         ],
         "responses": {
@@ -2992,24 +2684,10 @@
         ],
         "parameters": [
           {
-            "name": "orderId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/OrderId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -3101,24 +2779,10 @@
         ],
         "parameters": [
           {
-            "name": "orderId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/OrderId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -3193,24 +2857,10 @@
         ],
         "parameters": [
           {
-            "name": "orderId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/OrderId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -3290,13 +2940,7 @@
         ],
         "parameters": [
           {
-            "name": "requestId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/RequestId"
           }
         ],
         "responses": {
@@ -3352,24 +2996,10 @@
         ],
         "parameters": [
           {
-            "name": "requestId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/RequestId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -3435,23 +3065,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -3507,13 +3124,7 @@
         ],
         "parameters": [
           {
-            "name": "orderId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/OrderId"
           }
         ],
         "responses": {
@@ -3569,24 +3180,10 @@
         ],
         "parameters": [
           {
-            "name": "orderId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/OrderId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -3652,23 +3249,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -3724,24 +3308,10 @@
         ],
         "parameters": [
           {
-            "name": "requestId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/RequestId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -3816,24 +3386,10 @@
         ],
         "parameters": [
           {
-            "name": "requestId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/RequestId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -3899,23 +3455,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           },
           {
             "name": "orderId",
@@ -3980,13 +3523,7 @@
         ],
         "parameters": [
           {
-            "name": "paymentId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/PaymentId"
           }
         ],
         "responses": {
@@ -4042,32 +3579,13 @@
         ],
         "parameters": [
           {
-            "name": "paymentId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/PaymentId"
           },
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -4122,13 +3640,7 @@
         ],
         "parameters": [
           {
-            "name": "refundId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/RefundId"
           }
         ],
         "responses": {
@@ -4236,23 +3748,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -4308,23 +3807,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -4380,23 +3866,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -4452,23 +3925,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -4586,13 +4046,7 @@
         ],
         "parameters": [
           {
-            "name": "orderId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/OrderId"
           }
         ],
         "responses": {
@@ -4648,13 +4102,7 @@
         ],
         "parameters": [
           {
-            "name": "productId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/ProductId"
           }
         ],
         "responses": {
@@ -4710,13 +4158,7 @@
         ],
         "parameters": [
           {
-            "name": "paymentId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/PaymentId"
           }
         ],
         "responses": {
@@ -4772,24 +4214,10 @@
         ],
         "parameters": [
           {
-            "name": "requestId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/RequestId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -4855,23 +4283,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -4936,15 +4351,7 @@
             }
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -5019,23 +4426,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -5100,15 +4494,7 @@
             }
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -5183,15 +4569,7 @@
         ],
         "parameters": [
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -5266,29 +4644,10 @@
         ],
         "parameters": [
           {
-            "name": "providerId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "PG_A",
-                "PG_B",
-                "PG_C",
-                "EASY_PAY"
-              ]
-            }
+            "$ref": "#/components/parameters/ProviderId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -5366,18 +4725,7 @@
         ],
         "parameters": [
           {
-            "name": "providerId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "PG_A",
-                "PG_B",
-                "PG_C",
-                "EASY_PAY"
-              ]
-            }
+            "$ref": "#/components/parameters/ProviderId"
           },
           {
             "name": "businessKey",
@@ -5479,18 +4827,7 @@
         ],
         "parameters": [
           {
-            "name": "providerId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "PG_A",
-                "PG_B",
-                "PG_C",
-                "EASY_PAY"
-              ]
-            }
+            "$ref": "#/components/parameters/ProviderId"
           },
           {
             "name": "externalId",
@@ -5502,15 +4839,7 @@
             }
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -5588,15 +4917,7 @@
         ],
         "parameters": [
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -5778,15 +5099,7 @@
         ],
         "parameters": [
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -5923,15 +5236,7 @@
         ],
         "parameters": [
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -6006,13 +5311,7 @@
         ],
         "parameters": [
           {
-            "name": "templateId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/TemplateId"
           }
         ],
         "responses": {
@@ -6068,23 +5367,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -6202,23 +5488,10 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           },
           {
             "name": "status",
@@ -6290,13 +5563,7 @@
         ],
         "parameters": [
           {
-            "name": "deliveryId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/DeliveryId"
           }
         ],
         "responses": {
@@ -6352,32 +5619,13 @@
         ],
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           },
           {
-            "name": "deliveryId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/DeliveryId"
           }
         ],
         "responses": {
@@ -6433,24 +5681,10 @@
         ],
         "parameters": [
           {
-            "name": "deliveryId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/DeliveryId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -6525,13 +5759,7 @@
         ],
         "parameters": [
           {
-            "name": "deliveryId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/DeliveryId"
           }
         ],
         "responses": {
@@ -6587,24 +5815,10 @@
         ],
         "parameters": [
           {
-            "name": "templateId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/TemplateId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -6778,23 +5992,10 @@
         "description": "Commerce의 검증한 운영자별 서비스 자격만 허용하며 Gateway에 공개하지 않는다. 생성 시각 DESC,id DESC로 조회한다. targetMonth는 월 첫날만 허용하며 각 회차와 발급 건수는 동일 조회 스냅샷에서 반환한다. 조회 결과는 교정 가능 여부의 예약이 아니며 교정 시 다시 검사한다.",
         "parameters": [
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           },
           {
             "name": "targetMonth",
@@ -7027,24 +6228,10 @@
         ],
         "parameters": [
           {
-            "name": "requestId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/RequestId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -7131,13 +6318,7 @@
         ],
         "parameters": [
           {
-            "name": "refundId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/RefundId"
           }
         ],
         "responses": {
@@ -7193,13 +6374,7 @@
         ],
         "parameters": [
           {
-            "name": "refundId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/RefundId"
           }
         ],
         "responses": {
@@ -7325,23 +6500,10 @@
             }
           },
           {
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 0,
-              "default": 0
-            }
+            "$ref": "#/components/parameters/Page"
           },
           {
-            "name": "size",
-            "in": "query",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100,
-              "default": 20
-            }
+            "$ref": "#/components/parameters/PageSize"
           }
         ],
         "responses": {
@@ -7468,15 +6630,7 @@
             }
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -7542,24 +6696,10 @@
         "description": "시도를 다 써 REVIEW_REQUIRED로 멈춘 DLT/REPLAY 작업을 같은 작업으로 PENDING·시도 수 0으로 되돌린다. 작업 version이 다르면 409 COMMON_VERSION_CONFLICT, REVIEW_REQUIRED가 아니면 409 QUARANTINE_DELIVERY_NOT_RESUMABLE이다. 이전 시도 수·요청자·사유를 재개 이력과 감사에 남기고 같은 키·본문 재요청은 작업의 현재 상태를 반환한다.",
         "parameters": [
           {
-            "name": "deliveryId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
+            "$ref": "#/components/parameters/DeliveryId"
           },
           {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 8,
-              "maxLength": 128
-            },
-            "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "responses": {
@@ -15648,6 +14788,124 @@
           }
         },
         "description": "일시적 저장/외부 장애"
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409.",
+        "in": "header",
+        "name": "Idempotency-Key",
+        "required": true,
+        "schema": {
+          "maxLength": 128,
+          "minLength": 8,
+          "type": "string"
+        }
+      },
+      "Page": {
+        "in": "query",
+        "name": "page",
+        "schema": {
+          "default": 0,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "PageSize": {
+        "in": "query",
+        "name": "size",
+        "schema": {
+          "default": 20,
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "ProductId": {
+        "in": "path",
+        "name": "productId",
+        "required": true,
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "TemplateId": {
+        "in": "path",
+        "name": "templateId",
+        "required": true,
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "EventId": {
+        "in": "path",
+        "name": "eventId",
+        "required": true,
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "OrderId": {
+        "in": "path",
+        "name": "orderId",
+        "required": true,
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "RequestId": {
+        "in": "path",
+        "name": "requestId",
+        "required": true,
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "PaymentId": {
+        "in": "path",
+        "name": "paymentId",
+        "required": true,
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "RefundId": {
+        "in": "path",
+        "name": "refundId",
+        "required": true,
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "ProviderId": {
+        "in": "path",
+        "name": "providerId",
+        "required": true,
+        "schema": {
+          "enum": [
+            "PG_A",
+            "PG_B",
+            "PG_C",
+            "EASY_PAY"
+          ],
+          "type": "string"
+        }
+      },
+      "DeliveryId": {
+        "in": "path",
+        "name": "deliveryId",
+        "required": true,
+        "schema": {
+          "format": "uuid",
+          "type": "string"
+        }
       }
     }
   },

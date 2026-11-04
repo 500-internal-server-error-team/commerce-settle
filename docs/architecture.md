@@ -22,13 +22,11 @@ PostgreSQL·Kafka·Redis와 관측 도구는 별도 인프라입니다. 관측 �
 
 Spring Boot 영역의 여섯 실행은 우리가 빌드하는 애플리케이션입니다. PostgreSQL·Kafka·Redis는 별도 인프라 컨테이너입니다. Gateway를 제외한 다섯 실행에 DB·Kafka 연결이 설정돼 있으며, Redis 연결 설정은 여섯 실행 모두에 전달됩니다.
 
-`payment-api`와 `payment-worker`는 같은 `payment` 모듈의 jar와 DB를 사용합니다. `PAYMENT_ROLE`은 메트릭 태그와 역할별 Bean 활성화에 사용합니다. 접수와 외부 호출을 실행 역할로 나누며 Worker와 `finance-mock`은 Gateway의 공개 라우팅 대상에서 제외합니다. 활성화 플래그는 각 앱 설정을 확인합니다.
+`payment-worker`와 `finance-mock`은 Gateway의 공개 라우팅 대상에서 제외합니다. 활성화 플래그는 각 앱 설정을 확인합니다.
 
 각 앱은 HTTP 요청 외에 배치·스케줄러·이벤트 소비·Worker로도 업무를 시작합니다. 아래 [정기 작업과 비동기 실행](#정기-작업과-비동기-실행)이 작업별 실행 책임을 연결합니다. Spring Batch는 해당 앱에 포함하는 라이브러리이며 별도 서버·DB·컨테이너를 뜻하지 않습니다.
 
 DB 접근은 Spring Data JPA를 사용합니다.
-
-PostgreSQL의 업무 DB는 `commerce`·`payment`·`settlement`·`finance_mock` 네 개이며 하나의 컨테이너 안에서 계정·스키마를 분리합니다. Payment API와 Worker는 같은 `payment` DB를 사용합니다. 물리 DB 네 대나 고가용성 구성을 뜻하지 않습니다.
 
 PostgreSQL·Kafka·Redis는 각각 `postgres-data`·`kafka-data`·`redis-data` 볼륨을 사용합니다. 모든 컨테이너는 같은 `backend` 네트워크에 연결되며, 이 네트워크를 외부 통신까지 차단하는 방화벽으로 간주하지 않습니다. 호스트에 게시한 포트와 접근 범위는 [네트워크와 관측](#네트워크와-관측)을 따릅니다.
 
@@ -86,11 +84,13 @@ Prometheus가 경보를 평가하고 Alertmanager가 묶음·중복 억제·복�
 | `settlement` | `settlement` | 원장·예약·정산·지급, `settlement` DB·계정 |
 | `finance-mock` | `finance-mock` | 외부 PG·간편결제·지급 API 모의 서버, `finance_mock` DB·계정 |
 
+Payment API와 Worker는 같은 jar를 사용하며 `PAYMENT_ROLE`로 역할별 Bean 활성화와 메트릭 태그를 구분합니다.
+
 Settlement의 정산·모의 지급은 주말·공휴일 구분 없이 매일 처리합니다. 앱 내부 스케줄러가 정산 Job을 실행하고 영속 지급 작업은 같은 Settlement의 Worker가 맡습니다. 일배치의 실행·재시작은 [실행·복구 안내](development.md#정산-일배치-실행과-복구)를 따릅니다. 스케줄러와 Spring Batch는 앱에 포함하며 별도 서버·컨테이너·공통 업무 DB를 만들지 않습니다.
 
 커머스의 모듈·실행·DB·계정·스키마 이름은 `commerce`, DB 비밀번호 변수는 `COMMERCE_DB_PASSWORD`입니다. 판매자의 `Seller`·`SELLER`·`sellerId`와 `/api/sellers`는 업무 명칭입니다. 주문·재고·쿠폰·이벤트 예약은 커머스에서, 마일리지와 결제 상태는 Payment에서 원자 저장합니다. [데이터 소유권](design.md#4-서비스-경계와-원천-데이터)을 따릅니다.
 
-PostgreSQL 컨테이너 1대에서 DB·계정·스키마를 분리합니다. 계정은 자기 DB에만 연결할 수 있고, 다른 서비스 DB에 대한 CONNECT 권한은 없습니다. 애플리케이션에는 자기 DB 자격만 주며, 스키마 생성·변경 절차는 [DB 정책](migrations.md)을 따릅니다. 개발용 공용 PostgreSQL 컨테이너는 독립 운영 DB의 장애 격리를 제공하지 않습니다.
+PostgreSQL 컨테이너 1대에서 표의 네 업무 DB·계정·스키마를 분리합니다. 계정은 자기 DB에만 연결할 수 있고, 다른 서비스 DB에 대한 CONNECT 권한은 없습니다. 애플리케이션에는 자기 DB 자격만 주며, 스키마 생성·변경 절차는 [DB 정책](migrations.md)을 따릅니다. 이 구성은 고가용성이나 독립 운영 DB의 장애 격리를 제공하지 않습니다.
 
 이는 물리 분산·샤딩이 아닌 논리적 소유권 분리입니다. [DB 변경·삭제·FK 정책](migrations.md)을 함께 확인합니다.
 
@@ -120,7 +120,7 @@ Compose DNS로 서비스를 찾으며 별도 서비스 레지스트리는 두지
 | Outbox 발행·선행 상태 대기 재처리 | 각 생산·소비 앱 | Commerce Relay는 커밋 후·슬롯 반환·시작 시 깨우고 신호 누락·재시도·만료 임대는 기본 1초 복구 조회로 처리. 소비자는 영속 대기한 원업무를 재판정 | [Kafka 전달·용량 기준](architecture.md#kafka) |
 | 신규 접수 제한·재개 판정 | `commerce` | 15초마다 묶어서 관측하고 기존 작업의 처리·복구는 계속 허용 | [접수 제한](policies.md#신규-접수-제한과-재개) |
 
-기본 실행 주기는 미결제 기한·이벤트 종료·쿠폰 만료 스케줄러 매분, 주소·알림 보존 작업 매일 한 번입니다. 실행 시각·묶음 크기·동시성은 서버 설정으로 명시하고 검증합니다. 사용 가능 여부는 요청 시에도 기한과 상태를 검사하므로 스케줄러 지연으로 만료 쿠폰·종료 이벤트를 허용하지 않습니다. 대량 작업은 제한된 묶음과 재시작 지점을 사용하고, 실제 소요 시간·실패 복구 비용에 따라 Spring Batch 적용을 추가 검토합니다.
+기본 실행 주기는 미결제 기한·이벤트 종료·쿠폰 만료 스케줄러 매분, 주소·알림 보존 작업 매일 한 번입니다. 실행 시각·묶음 크기·동시성은 서버 설정으로 명시하고 검증합니다. 사용 가능 여부는 요청 시에도 기한과 상태를 검사하므로 스케줄러 지연으로 만료 쿠폰·종료 이벤트를 허용하지 않습니다. 대량 작업은 제한된 묶음과 재시작 지점을 사용합니다.
 
 웰컴 쿠폰은 가입 트랜잭션, 판매자 쿠폰은 발급 요청에서 처리합니다. Redis 세션은 서버의 만료 검사와 TTL, Kafka 토픽은 보존 설정을 사용합니다. 마일리지 적립·만료와 판매자 구독 갱신은 이 실행 계약의 범위에서 제외합니다. Outbox·Inbox·금융 Job·원장의 자동 삭제는 [보존과 삭제](policies.md#보존과-삭제)에 따라 비활성입니다.
 

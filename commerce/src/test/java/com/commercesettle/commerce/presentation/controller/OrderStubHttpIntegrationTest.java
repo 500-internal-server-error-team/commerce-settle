@@ -453,12 +453,12 @@ class OrderStubHttpIntegrationTest {
     assertOperation(path, method, generatedApi.path("paths").path(path).path(method));
   }
 
-  private JsonNode resolveResponse(JsonNode api, JsonNode response) {
-    if (!response.has("$ref")) {
-      return response;
+  private JsonNode resolveComponent(JsonNode api, JsonNode value, String kind) {
+    if (!value.has("$ref")) {
+      return value;
     }
-    String ref = response.path("$ref").asText();
-    assertThat(ref).startsWith("#/components/responses/");
+    String ref = value.path("$ref").asText();
+    assertThat(ref).startsWith("#/components/" + kind + "/");
     JsonNode resolved = api.at(ref.substring(1));
     assertThat(resolved.isMissingNode()).as(ref).isFalse();
     return resolved;
@@ -474,10 +474,13 @@ class OrderStubHttpIntegrationTest {
     assertThat(actual.path("responses").properties().stream().map(Map.Entry::getKey).toList())
         .containsExactlyInAnyOrderElementsOf(codes);
     for (String code : codes) {
-      JsonNode response = resolveResponse(generatedApi, actual.path("responses").path(code));
+      JsonNode response =
+          resolveComponent(generatedApi, actual.path("responses").path(code), "responses");
       JsonNode contract =
-          resolveResponse(
-              canonicalApi, expected.path("responses").path(code.equals("default") ? "400" : code));
+          resolveComponent(
+              canonicalApi,
+              expected.path("responses").path(code.equals("default") ? "400" : code),
+              "responses");
       assertThat(response.path("content").properties().stream().map(Map.Entry::getKey).toList())
           .as(method + " " + path + " " + code)
           .containsExactlyInAnyOrderElementsOf(
@@ -539,10 +542,12 @@ class OrderStubHttpIntegrationTest {
     schema("Order");
     canonicalSchema("Order");
     JsonNode actual = generatedApi.path("paths").path(path).path(method);
-    for (JsonNode expected :
+    for (JsonNode reference :
         canonicalApi.path("paths").path(path).path(method).path("parameters")) {
+      JsonNode expected = resolveComponent(canonicalApi, reference, "parameters");
       JsonNode parameter =
           java.util.stream.StreamSupport.stream(actual.path("parameters").spliterator(), false)
+              .map(value -> resolveComponent(generatedApi, value, "parameters"))
               .filter(
                   value ->
                       value.path("name").equals(expected.path("name"))
@@ -659,7 +664,7 @@ class OrderStubHttpIntegrationTest {
                     .path("default");
       }
       assertThat(declared.isMissingNode()).as(method + " " + path + " " + code).isFalse();
-      declared = resolveResponse(api, declared);
+      declared = resolveComponent(api, declared, "responses");
       assertThat(declared.path("content").has(media)).as(media).isTrue();
       String ref = declared.path("content").path(media).path("schema").path("$ref").asText();
       assertThat(ref).startsWith("#/components/schemas/");
