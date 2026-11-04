@@ -15,6 +15,10 @@ function setup(items: unknown[] = [{ id: 'product-1', name: '격리된 조회 �
     const command = JSON.parse(String(init?.body));
     if (command.operationId === 'post_api_buyer_sessions') return response({ upstreamStatus: 200,
       data: { token: 'private-buyer', account: { id: 'buyer-1', actorKind: 'BUYER', displayName: '테스트 구매자' } } });
+    if (command.operationId === 'post_api_seller_sessions') return response({ upstreamStatus: 200,
+      data: { token: 'private-seller', account: { id: 'seller-1', actorKind: 'SELLER', displayName: '테스트 판매자' } } });
+    if (command.operationId === 'post_api_buyers' || command.operationId === 'post_api_sellers') return response({ upstreamStatus: 201,
+      data: { id: 'new-account', actorKind: command.operationId === 'post_api_sellers' ? 'SELLER' : 'BUYER' } });
     if (command.operationId === 'delete_api_sessions_current') return response({ upstreamStatus: 204, data: null });
     return response({ upstreamStatus: 200, data: { items } });
   });
@@ -58,6 +62,32 @@ it('역할을 전환하면 다른 역할의 계정·응답을 보여주지 않�
   fireEvent.click(screen.getByRole('button', { name: '구매자' }));
   expect(screen.getByText('테스트 구매자')).toBeTruthy();
 });
+
+it.each([['BUYER', '구매자', 'buyers', 'buyer'], ['SELLER', '판매자', 'sellers', 'seller']])(
+  '%s 연습 가입 후 같은 정보로 로그인하고 비밀번호를 메모리에서 비운다', async (_role, label, resource, session) => {
+    const fetch = setup();
+    fireEvent.click(screen.getByRole('button', { name: `${label} 가입부터 시작` }));
+    expect((screen.getByLabelText('할 작업') as HTMLSelectElement).value).toBe(`post_api_${resource}`);
+    fireEvent.click(screen.getByRole('button', { name: '연습용 가입값 채우기' }));
+    const email = (screen.getByLabelText(/이메일/) as HTMLInputElement).value;
+    const password = (screen.getByLabelText(/비밀번호/) as HTMLInputElement).value;
+    expect(fetch).toHaveBeenCalledTimes(1);
+    fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+    const loginButton = await screen.findByRole('button', { name: `가입한 ${label}로 로그인` });
+    expect(document.body.textContent).not.toContain(password);
+    fireEvent.click(loginButton);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect((screen.getByLabelText('할 작업') as HTMLSelectElement).value).toBe(`post_api_${session}_sessions`);
+    expect((screen.getByLabelText(/이메일/) as HTMLInputElement).value).toBe(email);
+    expect((screen.getByLabelText(/비밀번호/) as HTMLInputElement).value).toBe(password);
+    fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+    await screen.findByText(`테스트 ${label}`);
+    expect(screen.queryByRole('button', { name: `가입한 ${label}로 로그인` })).toBeNull();
+    expect(JSON.stringify(client.getQueryCache().getAll().map(query => query.state.data))).not.toContain(password);
+    expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
+    fireEvent.click(screen.getByRole('button', { name: '로컬 세션 지우기' }));
+    expect((screen.getByLabelText(/비밀번호/) as HTMLInputElement).value).toBe('');
+  });
 
 it('49개 상세 분기와 월간 화면을 모두 탐색하고 실제 작업 입력을 제공한다', () => {
   setup();

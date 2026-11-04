@@ -23,6 +23,7 @@ export function App() {
   const [operationId, setOperation] = useState('get_api_products');
   const [stepIndex, setStepIndex] = useState(0);
   const [sessions, setSessions] = useState<Partial<Record<Role, Session>>>({});
+  const [signupLogins, setSignupLogins] = useState<Partial<Record<Role, { email: string; password: string }>>>({});
   const sessionsRef = useRef(sessions); sessionsRef.current = sessions;
   const [context, setContext] = useState<Partial<Record<Role, Record<string, Json>>>>({});
   const [events, setEvents] = useState<Partial<Record<Role, Execution[]>>>({});
@@ -83,6 +84,13 @@ export function App() {
       setEvents(old => ({ ...old, [actor]: [event, ...(old[actor] ?? [])].slice(0, 60) })); setSelected(event.id);
       if (result.status >= 200 && result.status < 300 && result.data && typeof result.data === 'object') {
         const data = result.data as Record<string, Json>;
+        const signupRole = op.method === 'POST' && op.path === '/api/buyers' ? 'BUYER'
+          : op.method === 'POST' && op.path === '/api/sellers' ? 'SELLER' : undefined;
+        const submitted = values.body && typeof values.body === 'object' && !Array.isArray(values.body) ? values.body : undefined;
+        if (signupRole && data.actorKind === signupRole && typeof submitted?.email === 'string' && typeof submitted.password === 'string') {
+          setSignupLogins(old => ({ ...old, [signupRole]: { email: submitted.email as string, password: submitted.password as string } }));
+          setNotice('가입했습니다. 아래의 가입한 계정으로 로그인 버튼을 누르면 같은 입력정보가 연결됩니다.');
+        }
         if (op.path.endsWith('-sessions') && typeof data.token === 'string') {
           const account = data.account as Record<string, Json>;
           if (!account || account.actorKind !== actor) {
@@ -90,6 +98,7 @@ export function App() {
           }
           client.removeQueries({ queryKey: ['actor', actor] });
           setSessions(old => ({ ...old, [actor]: { token: data.token as string, accountId: String(account.id), name: String(account.displayName), epoch: Date.now() } }));
+          setSignupLogins(old => ({ ...old, [actor]: undefined }));
           setEvents(old => ({ ...old, [actor]: [] })); setContext(old => ({ ...old, [actor]: {} })); setNotice('로그인했습니다. 이 역할의 계정과 세션을 사용합니다.');
         }
       }
@@ -109,6 +118,7 @@ export function App() {
   function clearActor(actor: Role) {
     abort.current?.abort(); client.cancelQueries({ queryKey: ['actor', actor] }); client.removeQueries({ queryKey: ['actor', actor] });
     setSessions(old => ({ ...old, [actor]: undefined })); setEvents(old => ({ ...old, [actor]: [] })); setContext(old => ({ ...old, [actor]: {} }));
+    setSignupLogins(old => ({ ...old, [actor]: undefined }));
   }
   function selectRow(row: Record<string, Json>) {
     if (mutationPending) {
@@ -143,6 +153,10 @@ export function App() {
         <button className="secondary" onClick={() => setPanel(panel === 'requests' ? null : 'requests')}>요청·응답 {panel === 'requests' ? '접기' : '보기'}</button></div>
       {info.error && <div role="alert" className="notice error">{info.error.message} · 통합 실행 주소는 http://127.0.0.1:4174입니다. 개발 서버는 5173 포트를 사용합니다.</div>}
       {notice && <div role="status" className="notice">{notice}</div>}
+      {(['BUYER', 'SELLER'] as const).map(actor => signupLogins[actor] && <div className="notice" key={actor}>
+        <p>{roleLabels[actor]} 가입정보가 준비됐습니다. 현재 열린 화면에서만 로그인에 연결하고, 로그인에 성공하면 비웁니다.</p>
+        <button className="secondary" disabled={pending} onClick={() => navigate('account', 'account.login', actor)}>가입한 {roleLabels[actor]}로 로그인</button>
+      </div>)}
       {scenario && <><div className="steps" aria-label="흐름별 작업 선택">{steps.map(({ screen, operation: task }, index) => <button key={index}
         aria-current={stepIndex === index ? 'step' : undefined} disabled={!task}
         onClick={() => task && selectTask(task.id, index, screen[0] === '판매자' ? 'SELLER' : screen[0] === '구매자' ? 'BUYER' : role)}>
@@ -150,8 +164,10 @@ export function App() {
         <p className="caption step-help">단계를 누르면 해당 작업과 역할을 선택합니다. 선택 표시는 거래의 완료 상태가 아닙니다. 요청은 입력을 확인한 뒤 직접 실행하세요.</p></>}
       {caseId === 'buy.normal' && <section className="learning-start" aria-label="처음 구매하기 준비">
         <h2>처음에는 정상 주문 1건부터</h2>
-        <p>판매자 계정·판매 상품·재고를 준비하고, 구매자로 로그인해 배송지를 등록하세요. 수량 1개·쿠폰 없음·마일리지 0원으로 견적을 확인한 뒤 주문하면 흐름을 따라가기 쉽습니다.</p>
-        <div className="quick-actions"><button onClick={() => navigate('sell', 'sell.product', 'SELLER')}>판매자로 상품·재고 준비</button>
+        <p>계정이 없으면 아래 가입 버튼부터 시작하세요. 가입 폼의 연습용 가입값 채우기로 값을 만들고, 가입 뒤 같은 정보로 로그인할 수 있습니다. 판매자로 상품·재고를 준비한 뒤 구매자로 주문합니다.</p>
+        <div className="quick-actions"><button onClick={() => navigate('account', 'account.seller', 'SELLER')}>판매자 가입부터 시작</button>
+          <button onClick={() => navigate('account', 'account.buyer', 'BUYER')}>구매자 가입부터 시작</button>
+          <button onClick={() => navigate('sell', 'sell.product', 'SELLER')}>판매자로 상품·재고 준비</button>
           <button onClick={() => { navigate('account', 'account.login', 'BUYER'); }}>구매자 로그인</button>
           <button onClick={() => { navigate('account', 'account.address', 'BUYER'); selectTask('post_api_buyers_me_addresses', -1, 'BUYER'); }}>구매자 배송지 등록</button></div>
         <p className="caption">외부 결제에는 준비된 모의 금융 시험계정이 필요합니다. 주문 생성 응답은 결제 확정이 아니며, 이후 내 주문·내 결제를 조회합니다. 배송·구매확정·지급은 실제 기한과 백엔드 처리기가 준비되어야 합니다.</p>
@@ -161,7 +177,8 @@ export function App() {
       <section className="work-card"><div className="card-heading"><div><span className="overline">실제 작업</span><h2>{operation?.title ?? '작업 선택'}</h2></div><span className="badge neutral">{operation ? actorLabel(operation.actor) : ''}</span></div>
         <label className="operation-select">할 작업<Select value={operationId} onChange={e => selectTask(e.target.value)}>{visibleActions.map(op => <option key={op.id} value={op.id}>{op.method} · {op.title}</option>)}</Select></label>
         <div className="quick-actions">{visibleActions.filter(op => op.method === 'GET').slice(0, 5).map(op => <button key={op.id} className={op.id === operationId ? 'chip selected' : 'chip'} onClick={() => selectTask(op.id)}>{op.title}</button>)}</div>
-        {operation && <OperationForm key={`${role}:${operation.id}:${session?.epoch ?? 0}`} operation={operation} context={context[role] ?? EMPTY_CONTEXT} pending={pending} allowed={allowed} run={run} role={role} token={session?.token} />}
+        {operation && <OperationForm key={`${role}:${operation.id}:${session?.epoch ?? 0}`} operation={operation} context={context[role] ?? EMPTY_CONTEXT} pending={pending} allowed={allowed} run={run} role={role} token={session?.token}
+          loginValues={operation.path === (role === 'SELLER' ? '/api/seller-sessions' : '/api/buyer-sessions') ? signupLogins[role] : undefined} />}
         {role !== 'OPERATOR' && <button className="text-button login-link" onClick={() => navigate('account', 'account.login')}>로그인·가입 화면 열기</button>}
       </section>
       <section className="work-card result-section"><div className="card-heading"><div><span className="overline">서버에서 확인한 결과</span><h2>{current?.operation ?? '아직 실행한 작업이 없습니다'}</h2></div>{current && <span className={`badge ${current.status < 300 ? 'success' : 'failure'}`}>HTTP {current.status}</span>}</div>
