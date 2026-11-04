@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatusCode;
 
 /** 공통 오류 계약의 code 목록. 상수 이름이 응답 code 값이다. */
 enum ErrorCode {
+  RECONCILIATION_CUTOFF_NOT_READY(HttpStatus.CONFLICT, "아직 대조할 수 없는 마감 시각입니다."),
   COMMON_VALIDATION_FAILED(HttpStatus.BAD_REQUEST, "입력값을 확인해 주세요."),
   COMMON_AUTHENTICATION_REQUIRED(HttpStatus.UNAUTHORIZED, "인증이 필요합니다."),
   COMMON_ROLE_FORBIDDEN(HttpStatus.FORBIDDEN, "이 작업을 수행할 권한이 없습니다."),

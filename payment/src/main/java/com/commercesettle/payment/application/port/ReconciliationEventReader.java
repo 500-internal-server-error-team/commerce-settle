@@ -12,6 +12,8 @@ public interface ReconciliationEventReader {
   /** 기준선 시각으로 쓸 DB 현재 시각. Outbox 저장 시각과 같은 시계다. */
   Instant now();
 
+  void requireClosedCutoff(Instant cutoff);
+
   long count(Instant cutoffAt, Instant snapshotAt);
 
   /**

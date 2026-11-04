@@ -7727,7 +7727,7 @@
         "x-owner-service": "payment",
         "x-actor": "SERVICE:settlement",
         "x-implemented": true,
-        "description": "Settlement 전용 서비스 자격의 읽기 전용 조회. 사용자·Gateway·일반 운영자 자격은 거절하며 Gateway에 공개하지 않는다. occurredAt<=cutoffAt인 PaymentConfirmed·RefundFinancialCompleted를 원천 불변 이력에서 복원한다. 미발행·발행 위치 미확정도 PENDING/null 위치로 포함한다. 검증한 최대 업무 트랜잭션 시간보다 긴 안전 여유 이후에만 기준선을 고정하며 미래 마감·준비 전 기준선은 409 RECONCILIATION_CUTOFF_NOT_READY이다. 이력·안전 여유의 보장을 확인할 수 없으면 503이고 현재 상태로 대체하지 않는다. 최초 조회 이후 cursor에 결속한 snapshotAt·조회 경계·cutoffAt·size를 유지하며 잘못된 cursor/다른 조건 재사용은 400이다. 이 조회는 다른 서비스 DB 직접 접근이나 금융 실행 권한을 부여하지 않는다. Payment Outbox의 PaymentConfirmed와 RefundFinancialCompleted를 읽으며 환불 금액은 최초 PaymentConfirmed 원천에 고정한 금액과 대조한다. 최초 원천이 없거나 중복되거나 환불 E/M이 다르면 503으로 중단한다. 안전 여유는 app.payment-reconciliation.safety-margin(기본 10분)이고, 기준선 시각은 최초 조회의 DB 시각이다.",
+        "description": "Settlement 전용 서비스 자격의 읽기 전용 조회. 사용자·Gateway·일반 운영자 자격은 거절하며 Gateway에 공개하지 않는다. occurredAt<=cutoffAt인 PaymentConfirmed·RefundFinancialCompleted를 원천 불변 이력에서 복원한다. 미발행·발행 위치 미확정도 PENDING/null 위치로 포함한다. 검증한 최대 업무 트랜잭션 시간보다 긴 안전 여유 이후에만 기준선을 고정하며 미래 마감·준비 전 기준선은 409 RECONCILIATION_CUTOFF_NOT_READY이다. 이력·안전 여유의 보장을 확인할 수 없으면 503이고 현재 상태로 대체하지 않는다. 최초 조회 이후 cursor에 결속한 snapshotAt·조회 경계·cutoffAt·size를 유지하며 잘못된 cursor/다른 조건 재사용은 400이다. 이 조회는 다른 서비스 DB 직접 접근이나 금융 실행 권한을 부여하지 않는다. Payment Outbox의 PaymentConfirmed와 RefundFinancialCompleted를 읽으며 환불 금액은 최초 PaymentConfirmed 원천에 고정한 금액과 대조한다. 최초 원천이 없거나 중복되거나 환불 E/M이 다르면 503으로 중단한다. 안전 여유는 app.payment-reconciliation.safety-margin(기본 10분)이고, 기준선 시각은 최초 조회의 DB 시각이다. snapshotAt으로 원회차의 첫 페이지를 다시 읽을 수 있다. cutoff 이전부터 열려 있는 원천 트랜잭션이 있으면 503으로 중단한다.",
         "security": [
           {
             "serviceCredential": []
@@ -7765,6 +7765,16 @@
               "maximum": 100,
               "default": 100
             }
+          },
+          {
+            "name": "snapshotAt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "원회차의 snapshotAt. 첫 페이지와 같은 기준선을 다시 읽을 때도 유지한다."
           }
         ],
         "responses": {
@@ -8587,6 +8597,1079 @@
             }
           }
         }
+      }
+    },
+    "/internal/settlement-reconciliations": {
+      "post": {
+        "operationId": "post_internal_settlement_reconciliations",
+        "summary": "고정 마감 대조 회차 생성·재개",
+        "tags": [
+          "settlement"
+        ],
+        "x-owner-service": "settlement",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "202": {
+            "description": "고정 마감 대조 회차 생성·재개",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementReconciliationRun"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "원회차 진행 조회 경로",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "format": "uri-reference"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "미래 마감·안전 여유 이전 기준선: RECONCILIATION_CUTOFF_NOT_READY",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "원천 이력·스냅샷 준비·조회 경계 보장 불가; 판정을 미루며 현재 상태로 대체하지 않음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "cutoffAt"
+                ],
+                "properties": {
+                  "cutoffAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "description": "같은 cutoffAt은 같은 회차를 반환한다. 202는 접수이며 완료가 아니다. 원회차의 snapshot/cursor/불변 원천과 재개 이력을 유지하며 새 금융 거래나 보정을 실행하지 않는다. 서버 스케줄러 활성화가 필요하다."
+      }
+    },
+    "/internal/settlement-reconciliations/{runId}": {
+      "get": {
+        "operationId": "get_internal_settlement_reconciliations_runId",
+        "summary": "대조 회차 진행 조회",
+        "tags": [
+          "settlement"
+        ],
+        "x-owner-service": "settlement",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "대조 회차 진행 조회",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettlementReconciliationRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "미래 마감·안전 여유 이전 기준선: RECONCILIATION_CUTOFF_NOT_READY",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "원천 이력·스냅샷 준비·조회 경계 보장 불가; 판정을 미루며 현재 상태로 대체하지 않음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/settlement-reconciliations/{runId}/results": {
+      "get": {
+        "operationId": "get_internal_settlement_reconciliations_runId_results",
+        "summary": "원천별 결과·금액·참조 검사 조회",
+        "tags": [
+          "settlement"
+        ],
+        "x-owner-service": "settlement",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "원천별 결과·금액·참조 검사 조회",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationResultPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "미래 마감·안전 여유 이전 기준선: RECONCILIATION_CUTOFF_NOT_READY",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "원천 이력·스냅샷 준비·조회 경계 보장 불가; 판정을 미루며 현재 상태로 대체하지 않음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/settlement-reconciliations/{runId}/history": {
+      "get": {
+        "operationId": "get_internal_settlement_reconciliations_runId_history",
+        "summary": "최근 100건의 대조 실행·중단·재개·판정 이력",
+        "tags": [
+          "settlement"
+        ],
+        "x-owner-service": "settlement",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "최근 100건의 대조 실행·중단·재개·판정 이력",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "maxItems": 100,
+                  "items": {
+                    "$ref": "#/components/schemas/ReconciliationHistory"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "미래 마감·안전 여유 이전 기준선: RECONCILIATION_CUTOFF_NOT_READY",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "원천 이력·스냅샷 준비·조회 경계 보장 불가; 판정을 미루며 현재 상태로 대체하지 않음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mock/payout-reconciliation": {
+      "get": {
+        "operationId": "get_mock_payout_reconciliation",
+        "summary": "고정 시점의 지급·실제 차감 증빙 페이지",
+        "tags": [
+          "finance-mock"
+        ],
+        "x-owner-service": "finance-mock",
+        "x-actor": "SERVICE:settlement",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cutoffAt",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "정산 회차의 고정 마감 시각(KST 출력). 원천 occurredAt이 이 시각 이하인 금융 이벤트만 포함한다."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "description": "직전 응답의 불투명 nextCursor. 원천 조회 경계와 최초 조건에 결속한다."
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100
+            }
+          },
+          {
+            "name": "snapshotAt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "원회차의 snapshotAt. 첫 페이지와 같은 기준선을 다시 읽을 때도 유지한다."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "고정 시점의 지급·실제 차감 증빙 페이지",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayoutReconciliationPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "미래 마감·안전 여유 이전 기준선: RECONCILIATION_CUTOFF_NOT_READY",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "원천 이력·스냅샷 준비·조회 경계 보장 불가; 판정을 미루며 현재 상태로 대체하지 않음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "createdAt<=cutoffAt인 지급을 snapshotAt과 cursor로 고정한다. debitAmount/debitCount는 cutoffAt까지의 추가 전용 PAYOUT_DEBIT 기록에서 조회한다. 성공 이후 거래와 미확정을 구분한다. 계정·시나리오·금융 거래를 변경하지 않는다."
+      }
+    },
+    "/mock/reconciliation-integrity": {
+      "get": {
+        "operationId": "get_mock_reconciliation_integrity",
+        "summary": "현재 대역 계정·현금·예약 원장 정합성 조회",
+        "tags": [
+          "finance-mock"
+        ],
+        "x-owner-service": "finance-mock",
+        "x-actor": "SERVICE:settlement",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "현재 대역 계정·현금·예약 원장 정합성 조회",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceReconciliationIntegrity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "미래 마감·안전 여유 이전 기준선: RECONCILIATION_CUTOFF_NOT_READY",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "원천 이력·스냅샷 준비·조회 경계 보장 불가; 판정을 미루며 현재 상태로 대체하지 않음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "checkedAt의 동일 DB snapshot에서 기초 잔액+현금 기록=재원 잔액, 간편결제 지갑과 성공 승인/환불, 예약액·참조를 검사한다. 과거 cutoff의 계정 잔액으로 해석하지 않는다."
+      }
+    },
+    "/mock/payment-reconciliation": {
+      "get": {
+        "operationId": "get_mock_payment_reconciliation",
+        "summary": "Payment 전용 PG·간편결제 원거래 증빙 페이지",
+        "tags": [
+          "finance-mock"
+        ],
+        "x-owner-service": "finance-mock",
+        "x-actor": "SERVICE:payment",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cutoffAt",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "정산 회차의 고정 마감 시각(KST 출력). 원천 occurredAt이 이 시각 이하인 금융 이벤트만 포함한다."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "description": "직전 응답의 불투명 nextCursor. 원천 조회 경계와 최초 조건에 결속한다."
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100
+            }
+          },
+          {
+            "name": "snapshotAt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "원회차의 snapshotAt. 첫 페이지와 같은 기준선을 다시 읽을 때도 유지한다."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "고정 시점의 지급·실제 차감 증빙 페이지",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderReconciliationPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "미래 마감·안전 여유 이전 기준선: RECONCILIATION_CUTOFF_NOT_READY",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "원천 이력·스냅샷 준비·조회 경계 보장 불가; 판정을 미루며 현재 상태로 대체하지 않음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "Payment 전용 PG·간편결제 원거래 증빙 페이지"
+      }
+    },
+    "/mock/payment-reconciliation-queries": {
+      "post": {
+        "operationId": "post_mock_payment_reconciliation_queries",
+        "summary": "최대 100개 업무 키의 원거래 증빙 일괄 조회",
+        "tags": [
+          "finance-mock"
+        ],
+        "x-owner-service": "finance-mock",
+        "x-actor": "SERVICE:payment",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "고정 시점의 지급·실제 차감 증빙 페이지",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "maxItems": 200,
+                  "items": {
+                    "$ref": "#/components/schemas/ProviderReconciliationEvidence"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "미래 마감·안전 여유 이전 기준선: RECONCILIATION_CUTOFF_NOT_READY",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "원천 이력·스냅샷 준비·조회 경계 보장 불가; 판정을 미루며 현재 상태로 대체하지 않음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "최대 100개 업무 키의 원거래 증빙 일괄 조회",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "businessKeys",
+                  "snapshotAt"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "businessKeys": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  },
+                  "snapshotAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/payment-reconciliation-checks": {
+      "get": {
+        "operationId": "get_internal_payment_reconciliation_checks",
+        "summary": "Payment 소유 금액·마일리지와 PG 원거래 양방향 검사",
+        "tags": [
+          "payment"
+        ],
+        "x-owner-service": "payment",
+        "x-actor": "SERVICE:settlement",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cutoffAt",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "정산 회차의 고정 마감 시각(KST 출력). 원천 occurredAt이 이 시각 이하인 금융 이벤트만 포함한다."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "description": "직전 응답의 불투명 nextCursor. 원천 조회 경계와 최초 조건에 결속한다."
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 100
+            }
+          },
+          {
+            "name": "snapshotAt",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "원회차의 snapshotAt. 첫 페이지와 같은 기준선을 다시 읽을 때도 유지한다."
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "PAYMENT",
+                "PROVIDER"
+              ],
+              "default": "PAYMENT"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "고정 시점의 지급·실제 차감 증빙 페이지",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentIntegrityPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "미래 마감·안전 여유 이전 기준선: RECONCILIATION_CUTOFF_NOT_READY",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "원천 이력·스냅샷 준비·조회 경계 보장 불가; 판정을 미루며 현재 상태로 대체하지 않음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "description": "PAYMENT는 자기 승인·환불의 키를 최대 100개씩 대역에 묶어 조회하고, PROVIDER는 대역 원거래에서 고아 거래를 검사한다. 같은 cutoffAt·snapshotAt·방향·size와 cursor를 유지한다. 현재 잔액 검사는 checkedAt의 별도 currentChecks이며 과거 잔액으로 표현하지 않는다. 원천 장애는 503이고 금융 결과를 변경하지 않는다."
       }
     }
   },
@@ -17603,6 +18686,819 @@
           "size",
           "totalElements",
           "totalPages"
+        ]
+      },
+      "SettlementReconciliationRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cutoffAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "snapshotAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "PAYMENT",
+              "PAYOUT",
+              "CHECK"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "RUNNING",
+              "WAITING",
+              "REVIEW_REQUIRED",
+              "UNVERIFIED",
+              "COMPLETED"
+            ]
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expectedTotal": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "captured": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "attempts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "cutoffAt",
+          "snapshotAt",
+          "stage",
+          "status",
+          "cursor",
+          "expectedTotal",
+          "captured",
+          "attempts",
+          "lastError",
+          "createdAt",
+          "updatedAt",
+          "completedAt"
+        ]
+      },
+      "ReconciliationSourceEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "eventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "paymentId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "refundId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "businessKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "occurredAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "createdAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "publishedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "succeededAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "externalAmount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "mileageAmount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "platformCouponAmount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "settlementBaseAmount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "feeAmount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sellerNetAmount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "amount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "debitAmount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "debitCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "eventType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "publicationState": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "topic": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fundingAccountRef": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "partition": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        },
+        "required": [
+          "eventId",
+          "paymentId",
+          "refundId",
+          "businessKey",
+          "occurredAt",
+          "createdAt",
+          "publishedAt",
+          "succeededAt",
+          "externalAmount",
+          "mileageAmount",
+          "platformCouponAmount",
+          "settlementBaseAmount",
+          "feeAmount",
+          "sellerNetAmount",
+          "amount",
+          "debitAmount",
+          "debitCount",
+          "eventType",
+          "publicationState",
+          "topic",
+          "status",
+          "fundingAccountRef",
+          "partition",
+          "offset"
+        ]
+      },
+      "ReconciliationEventResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body": {
+            "$ref": "#/components/schemas/ReconciliationSourceEvidence"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "MATCH",
+              "DEFECT",
+              "WAIT_PUBLICATION",
+              "WAIT_DELIVERY",
+              "WAIT_APPLICATION",
+              "QUARANTINED",
+              "IN_PROGRESS"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "difference": {
+            "type": "integer",
+            "format": "int64",
+            "description": "원장 leg의 실제 금액−원금액 합계. SOURCE·ALLOCATION 양쪽을 포함하며, 상쇄되는 차이는 0이어도 DEFECT일 수 있다."
+          },
+          "evidence": {
+            "type": "object"
+          },
+          "firstSeenAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "checkedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "eventId",
+          "body",
+          "status",
+          "reason",
+          "difference",
+          "evidence",
+          "firstSeenAt",
+          "checkedAt"
+        ]
+      },
+      "ReconciliationLocalCheck": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "checkKey": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "MATCH",
+              "DEFECT",
+              "WAIT_PUBLICATION",
+              "WAIT_DELIVERY",
+              "WAIT_APPLICATION",
+              "QUARANTINED",
+              "IN_PROGRESS"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "difference": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "evidence": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "checkKey",
+          "status",
+          "reason",
+          "count",
+          "difference",
+          "evidence"
+        ]
+      },
+      "ReconciliationResultPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationEventResult"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "totalElements": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "totalPages": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationLocalCheck"
+            }
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "size",
+          "totalElements",
+          "totalPages",
+          "checks"
+        ]
+      },
+      "ReconciliationHistory": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "eventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "object"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "eventId",
+          "status",
+          "reason",
+          "evidence",
+          "createdAt"
+        ]
+      },
+      "PayoutReconciliationEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "businessKey": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PROCESSING",
+              "SUCCEEDED",
+              "DECLINED"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "succeededAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "debitAmount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "debitCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "fundingAccountRef": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "businessKey",
+          "amount",
+          "status",
+          "createdAt",
+          "succeededAt",
+          "debitAmount",
+          "debitCount",
+          "fundingAccountRef"
+        ]
+      },
+      "ProviderReconciliationEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "providerId": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "APPROVE",
+              "REFUND"
+            ]
+          },
+          "businessKey": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "originalId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "amount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PROCESSING",
+              "SUCCEEDED",
+              "DECLINED"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "succeededAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "providerId",
+          "operation",
+          "businessKey",
+          "originalId",
+          "amount",
+          "status",
+          "createdAt",
+          "succeededAt"
+        ]
+      },
+      "PayoutReconciliationPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/PayoutReconciliationEvidence"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "totalElements": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "totalPages": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cutoffAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "snapshotAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "size",
+          "totalElements",
+          "totalPages",
+          "cutoffAt",
+          "snapshotAt",
+          "nextCursor"
+        ]
+      },
+      "ProviderReconciliationPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/ProviderReconciliationEvidence"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "totalElements": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "totalPages": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cutoffAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "snapshotAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "size",
+          "totalElements",
+          "totalPages",
+          "cutoffAt",
+          "snapshotAt",
+          "nextCursor"
+        ]
+      },
+      "FinanceReconciliationIntegrity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "checks": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        },
+        "required": [
+          "checkedAt",
+          "checks"
+        ]
+      },
+      "PaymentIntegrityResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "MATCH",
+              "DEFECT",
+              "WAIT_PUBLICATION",
+              "WAIT_DELIVERY",
+              "WAIT_APPLICATION",
+              "QUARANTINED",
+              "IN_PROGRESS"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "difference": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "key",
+          "status",
+          "reason",
+          "difference"
+        ]
+      },
+      "PaymentIntegrityPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaymentIntegrityResult"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "totalElements": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "totalPages": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cutoffAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "snapshotAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "PAYMENT",
+              "PROVIDER"
+            ]
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "currentChecks": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "size",
+          "totalElements",
+          "totalPages",
+          "cutoffAt",
+          "snapshotAt",
+          "nextCursor",
+          "direction"
         ]
       }
     },

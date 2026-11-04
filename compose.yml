@@ -226,6 +226,8 @@ services:
     environment:
       <<: *app-env
       PAYMENT_ROLE: api
+      FINANCE_MOCK_PAYMENT_CREDENTIAL: ${FINANCE_MOCK_PAYMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
+      SPRING_APPLICATION_JSON: '{"app":{"internal-auth":{"senders":{"[service:settlement]":{"current":"${PAYMENT_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}","previous":"${PAYMENT_SETTLEMENT_CREDENTIAL_PREVIOUS:-}"}}}}}'
       DB_URL: jdbc:postgresql://postgres:5432/payment
       DB_USERNAME: payment
       DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
@@ -274,6 +276,8 @@ services:
         MODULE: settlement
     environment:
       <<: *app-env
+      SETTLEMENT_RECONCILIATION_ENABLED: ${SETTLEMENT_RECONCILIATION_ENABLED:-false}
+      PAYMENT_SETTLEMENT_CREDENTIAL: ${PAYMENT_SETTLEMENT_CREDENTIAL:-}
       SETTLEMENT_DAILY_BATCH_ENABLED: ${SETTLEMENT_DAILY_BATCH_ENABLED:-true}
       SETTLEMENT_PAYOUT_WORKER_ENABLED: ${SETTLEMENT_PAYOUT_WORKER_ENABLED:-true}
       DB_URL: jdbc:postgresql://postgres:5432/settlement

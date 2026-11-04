@@ -552,3 +552,36 @@ CREATE TABLE settlement.BATCH_JOB_EXECUTION_CONTEXT (
 CREATE SEQUENCE settlement.BATCH_STEP_EXECUTION_SEQ MAXVALUE 9223372036854775807 NO CYCLE;
 CREATE SEQUENCE settlement.BATCH_JOB_EXECUTION_SEQ MAXVALUE 9223372036854775807 NO CYCLE;
 CREATE SEQUENCE settlement.BATCH_JOB_SEQ MAXVALUE 9223372036854775807 NO CYCLE;
+
+-- 대조 전용 상태. 업무 원장·예약은 변경하지 않는다. 같은 cutoff는 한 회차이며 페이지와 결과를 함께 커밋한다.
+CREATE TABLE settlement.reconciliation_runs (
+ id uuid PRIMARY KEY, cutoff_at timestamptz NOT NULL UNIQUE, snapshot_at timestamptz,
+ stage varchar(16) NOT NULL DEFAULT 'PAYMENT' CHECK (stage IN ('PAYMENT','PAYOUT','CHECK')),
+ status varchar(24) NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','RUNNING','WAITING','UNVERIFIED','REVIEW_REQUIRED','COMPLETED')), cursor text, expected_total bigint, captured bigint NOT NULL DEFAULT 0,
+ lease_token uuid, lease_until timestamptz, CHECK((lease_token IS NULL)=(lease_until IS NULL)), next_run_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ requested_by varchar(100) NOT NULL, attempts integer NOT NULL DEFAULT 0,
+ last_error varchar(100), created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ updated_at timestamptz NOT NULL DEFAULT clock_timestamp(), completed_at timestamptz
+);
+CREATE INDEX reconciliation_due ON settlement.reconciliation_runs(next_run_at,created_at)
+ WHERE status <> 'COMPLETED';
+CREATE TABLE settlement.reconciliation_events (
+ run_id uuid NOT NULL, event_id uuid NOT NULL, source varchar(16) NOT NULL CHECK(source IN ('PAYMENT','PAYOUT')),
+ source_cursor text, body jsonb NOT NULL, status varchar(32) NOT NULL DEFAULT 'PENDING', reason varchar(100),
+ difference bigint NOT NULL DEFAULT 0, evidence jsonb NOT NULL DEFAULT '{}',
+ first_seen_at timestamptz NOT NULL DEFAULT clock_timestamp(), checked_at timestamptz,
+ PRIMARY KEY(run_id,event_id)
+);
+CREATE TABLE settlement.reconciliation_history (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, run_id uuid NOT NULL,
+ event_id uuid, status varchar(32) NOT NULL, reason varchar(100) NOT NULL,
+ evidence jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX reconciliation_history_run ON settlement.reconciliation_history(run_id,id);
+CREATE TABLE settlement.reconciliation_checks (
+ run_id uuid NOT NULL, check_key varchar(100) NOT NULL, status varchar(32) NOT NULL,
+ reason varchar(100) NOT NULL, count bigint NOT NULL, difference bigint NOT NULL,
+ evidence jsonb NOT NULL, PRIMARY KEY(run_id,check_key)
+);
+
+CREATE INDEX reconciliation_source_page ON settlement.reconciliation_events(run_id,source,source_cursor);

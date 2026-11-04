@@ -131,6 +131,7 @@ Payment 격리 원문 API(`/internal/payment-quarantines/**`·`/internal/payment
 
 `GET /internal/payment-reconciliation-events`는 Payment가 소유하며 Settlement 전용 서비스 자격만 허용합니다. 사용자·Gateway·일반 운영자 자격으로 호출하지 않고 Gateway에 공개하지 않습니다. 다른 서비스 DB 직접 조회를 대체하는 읽기 전용 계약이며 금융 실행 API가 아닙니다.
 
+- 같은 회차의 첫 페이지 재개는 선택 `snapshotAt`을 유지합니다. cursor와 snapshotAt이 충돌하면 400이며 마감 이전부터 열린 원천 트랜잭션이 있으면 503입니다.
 - 최초 요청은 `cutoffAt`(오프셋을 포함한 시각)과 `size`(1~100, 기본 100)를 받습니다. Payment는 검증한 최대 업무 트랜잭션 시간보다 긴 안전 여유가 지난 마감만 허용하며, 미래 마감·준비 전 기준선은 `409 RECONCILIATION_CUTOFF_NOT_READY`입니다. 원천 이력·안전 여유를 확인할 수 없으면 503으로 중단하며 현재 상태로 대체하지 않습니다.
 - `occurredAt≤cutoffAt`인 `PaymentConfirmed`·`RefundFinancialCompleted`를 **발행 여부와 무관하게** 제공합니다. E·M·P·B·F·N은 원거래에 고정한 금액이며 환불 이벤트도 양수 원금액을 반환합니다. 대조 측은 이벤트 종류에 따라 최초 반영·상쇄를 구분합니다. 이후 환불·정책 변경으로 과거 금액을 다시 계산하지 않습니다.
 - 내부 대조는 회차를 이어 읽는 이벤트 피드이므로 `createdAt DESC,eventId DESC`의 keyset cursor를 사용합니다. 응답은 공통 목록의 `items/page/size/totalElements/totalPages`와 `cutoffAt/snapshotAt/nextCursor`를 반환합니다. 최초 조회의 snapshotAt·원천 조회 경계·cutoffAt·size를 cursor에 묶고, 이후 요청에서는 같은 cutoffAt·size와 cursor를 사용합니다. 기준선 이벤트 집합·금융 값은 불변이며 발행 위치만 진행에 따라 달라질 수 있습니다. 잘못된 cursor·다른 조건의 재사용은 400입니다.
@@ -151,6 +152,22 @@ OPERATOR 자격으로 사유·이벤트 종류별 요약을 보고, 확인 대�
 | `POST /internal/settlement-inbox-rejudgements/{runId}/pauses`, `.../resumes`, `.../cancellations` | 실행 expectedVersion과 운영 사유 코드로 중단·재개·취소 |
 
 202는 실행 접수이며 금융 성공을 뜻하지 않습니다. 생성 응답의 Location으로 실행을 조회하고 대상 결과를 확인합니다. 같은 운영자·작업의 동일 Idempotency-Key/본문은 기존 실행을 반환하며 감사·실행을 다시 만들지 않습니다. 같은 키의 다른 본문, 버전 변경·대상 수 불일치·겹치는 실행은 409입니다. 재판정 가능한 사유와 선행 근거·중단 경계는 [업무 정책](policies.md#업무-inbox-재판정), 정확한 입력·결과·오류 코드는 [OpenAPI](openapi.json), 실행 예시는 [개발 환경](development.md#업무-inbox-관측과-재판정)을 따릅니다.
+
+### 대조 회차와 원천별 검사
+
+| 메서드 | 경로 | 권한·결과 |
+| --- | --- | --- |
+| POST | `/internal/settlement-reconciliations` | OPERATOR. 고정 `cutoffAt` 회차 생성·재개, 202와 기존/신규 회차 |
+| GET | `/internal/settlement-reconciliations/{runId}` | OPERATOR. 마감·snapshot·cursor·진행 단계·상태·시도 수·오류 |
+| GET | `/internal/settlement-reconciliations/{runId}/results` | OPERATOR. 원천별 결과 페이지와 로컬 검사·건수·차액·증빙 |
+| GET | `/internal/settlement-reconciliations/{runId}/history` | OPERATOR. 최근 100건의 페이지 커밋·판정 변화·중단·재개 이력 |
+| GET | `/internal/payment-reconciliation-checks` | SERVICE:settlement. Payment 소유 검사, `direction=PAYMENT`·`PROVIDER` 양방향 |
+| GET | `/mock/payout-reconciliation` | SERVICE:settlement. 고정 대상 지급·실제 차감 건수·금액·최초 성공 시각 |
+| GET | `/mock/reconciliation-integrity` | SERVICE:settlement. 현재 대역 계정·현금·예약의 불일치 건수와 확인 시각 |
+| GET | `/mock/payment-reconciliation` | SERVICE:payment. 원천 PG·간편결제 승인/환불 페이지 |
+| POST | `/mock/payment-reconciliation-queries` | SERVICE:payment. 같은 snapshot의 업무 키 최대 100개 읽기 전용 일괄 조회 |
+
+원천 페이지는 `cutoffAt`·`snapshotAt`·`cursor`·`size`(1~100)를 사용합니다. 첫 응답의 snapshot과 같은 조건을 유지하며 Payment 검사에는 방향도 결속합니다. 현재 계정 검사 `currentChecks`·`checkedAt`은 과거 마감 비교와 구분합니다. 조회 실패는 503 또는 회차 `UNVERIFIED`이며 빈 일치 응답으로 대체하지 않습니다. [판정 정책](policies.md#정산-대조)과 [실행·재개](development.md#정산-대조-실행과-재개)를 따르며 모든 API는 Gateway에서 차단합니다.
 
 ### 격리 원문 운영
 

@@ -66,6 +66,11 @@ spring:
       missing-topics-fatal: true
 
 settlement:
+  reconciliation:
+    enabled: ${SETTLEMENT_RECONCILIATION_ENABLED:false}
+    poll-ms: 1000
+    payment-url: ${PAYMENT_API_URL:http://payment-api:8080}
+    payment-credential: ${PAYMENT_SETTLEMENT_CREDENTIAL:}
   commerce:
     # 지급 생성 전 상품·판매자 지급 컨텍스트를 조회하는 커머스 내부 API.
     base-url: ${COMMERCE_URL:http://commerce:8080}

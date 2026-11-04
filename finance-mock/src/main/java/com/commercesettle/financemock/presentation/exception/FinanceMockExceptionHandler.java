@@ -51,6 +51,15 @@ public class FinanceMockExceptionHandler extends ResponseEntityExceptionHandler 
     this.tracer = tracer;
   }
 
+  @ExceptionHandler(
+      com.commercesettle.financemock.application.exception.ReconciliationCutoffNotReadyException
+          .class)
+  ResponseEntity<Object> cutoffNotReady(
+      com.commercesettle.financemock.application.exception.ReconciliationCutoffNotReadyException e,
+      WebRequest request) {
+    return respond(ErrorCode.RECONCILIATION_CUTOFF_NOT_READY, null, request);
+  }
+
   @ExceptionHandler(IdempotencyConflictException.class)
   ResponseEntity<Object> idempotencyConflict(IdempotencyConflictException e, WebRequest request) {
     return respond(ErrorCode.COMMON_IDEMPOTENCY_CONFLICT, null, request);

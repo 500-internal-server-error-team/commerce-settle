@@ -56,9 +56,24 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
     this.tracer = tracer;
   }
 
+  @ExceptionHandler(
+      com.commercesettle.settlement.application.exception.ReconciliationCutoffNotReadyException
+          .class)
+  ResponseEntity<Object> cutoffNotReady(
+      com.commercesettle.settlement.application.exception.ReconciliationCutoffNotReadyException e,
+      WebRequest request) {
+    return respond(ErrorCode.RECONCILIATION_CUTOFF_NOT_READY, request);
+  }
+
   @ExceptionHandler(IllegalArgumentException.class)
   ResponseEntity<Object> invalidArgument(IllegalArgumentException error, WebRequest request) {
     return respond(ErrorCode.COMMON_VALIDATION_FAILED, request);
+  }
+
+  @ExceptionHandler(org.springframework.dao.EmptyResultDataAccessException.class)
+  ResponseEntity<Object> reconciliationNotFound(
+      org.springframework.dao.EmptyResultDataAccessException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "대조 회차를 찾을 수 없습니다.", null, request);
   }
 
   @ExceptionHandler(PayoutNotFoundException.class)

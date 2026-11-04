@@ -88,6 +88,7 @@ public class SettlementContractController {
   @GetMapping("/internal/payment-reconciliation-events")
   public PaymentReconciliationEventPageResponse reconciliationEvents(
       @Parameter(description = "정산 회차의 고정 마감 시각") @RequestParam OffsetDateTime cutoffAt,
+      @RequestParam(required = false) OffsetDateTime snapshotAt,
       @Parameter(description = "직전 응답의 불투명 nextCursor")
           @RequestParam(required = false)
           @Size(min = 1, max = 2048, message = "1자 이상 2048자 이하여야 합니다.")
@@ -97,6 +98,8 @@ public class SettlementContractController {
           @Max(value = 100, message = "100 이하여야 합니다.")
           int size) {
     return PaymentReconciliationEventPageResponse.from(
-        reconciliation.read(cutoffAt.toInstant(), cursor, size));
+        snapshotAt == null
+            ? reconciliation.read(cutoffAt.toInstant(), cursor, size)
+            : reconciliation.read(cutoffAt.toInstant(), snapshotAt.toInstant(), cursor, size));
   }
 }

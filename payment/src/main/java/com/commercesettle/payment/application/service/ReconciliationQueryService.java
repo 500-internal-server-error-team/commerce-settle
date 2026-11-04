@@ -49,6 +49,14 @@ public class ReconciliationQueryService {
     if (size < 1 || size > 100) {
       throw new IllegalArgumentException("Invalid reconciliation page size");
     }
+    return read(cutoffAt, null, cursor, size);
+  }
+
+  @Transactional(readOnly = true)
+  public ReconciliationEventPageView read(
+      Instant cutoffAt, Instant snapshotAt, String cursor, int size) {
+    if (size < 1 || size > 100)
+      throw new IllegalArgumentException("Invalid reconciliation page size");
     Instant cutoff = cutoffAt.truncatedTo(ChronoUnit.MICROS);
     Instant now = reader.now().truncatedTo(ChronoUnit.MICROS);
     if (cutoff.plus(safetyMargin).isAfter(now)) {
@@ -56,9 +64,15 @@ public class ReconciliationQueryService {
     }
     Cursor at;
     if (cursor == null) {
-      at = new Cursor(now, cutoff, size, 0, null);
+      Instant snapshot = snapshotAt == null ? now : snapshotAt.truncatedTo(ChronoUnit.MICROS);
+      if (snapshot.isAfter(now) || snapshot.isBefore(cutoff.plus(safetyMargin)))
+        throw new InvalidReconciliationCursorException();
+      at = new Cursor(snapshot, cutoff, size, 0, null);
     } else {
       at = Cursor.decode(cursor);
+      if ((snapshotAt != null
+          && !at.snapshotAt().equals(snapshotAt.truncatedTo(ChronoUnit.MICROS))))
+        throw new InvalidReconciliationCursorException();
       if (!at.cutoffAt().equals(cutoff)
           || at.size() != size
           || at.snapshotAt().isAfter(now)
@@ -67,6 +81,7 @@ public class ReconciliationQueryService {
       }
     }
 
+    reader.requireClosedCutoff(cutoff);
     long total = reader.count(at.cutoffAt(), at.snapshotAt());
     List<ReconciliationEvent> rows =
         reader.read(at.cutoffAt(), at.snapshotAt(), at.after(), size + 1);

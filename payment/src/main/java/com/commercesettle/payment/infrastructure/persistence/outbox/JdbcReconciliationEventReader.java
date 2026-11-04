@@ -43,7 +43,9 @@ class JdbcReconciliationEventReader implements ReconciliationEventReader {
                     ELSE original.payload->'payload' END AS amounts
       ) money
       WHERE event.event_type IN (:types)
-        AND event.occurred_at <= :cutoff
+        AND event.occurred_at <= :cutoff + interval '1 microsecond'
+        AND (event.payload->>'occurredAt' IS NULL OR
+          CAST(regexp_replace(event.payload->>'occurredAt','([.][0-9]{6})[0-9]+','\\1') AS timestamptz) <= :cutoff)
         AND event.created_at <= :snapshot
       """;
 
@@ -61,16 +63,31 @@ class JdbcReconciliationEventReader implements ReconciliationEventReader {
   }
 
   @Override
+  public void requireClosedCutoff(Instant cutoff) {
+    Boolean active =
+        jdbc.getJdbcTemplate()
+            .queryForObject(
+                """
+      SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+        AND usename=current_user AND pid<>pg_backend_pid() AND xact_start<=? + interval '1 microsecond' AND state<>'idle')
+      """,
+                Boolean.class,
+                utc(cutoff));
+    if (!Boolean.FALSE.equals(active))
+      throw new TransientDataAccessResourceException("Source cutoff has open transactions");
+  }
+
+  @Override
   public long count(Instant cutoffAt, Instant snapshotAt) {
     return jdbc.queryForObject(
         """
         SELECT count(*) AS total, count(*) FILTER (
-          WHERE event.event_type = 'RefundFinancialCompleted' AND (
+          WHERE event.payload->>'occurredAt' IS NULL OR (event.event_type = 'RefundFinancialCompleted' AND (
             original.matches IS DISTINCT FROM 1
             OR event.payload->'payload'->'externalAmount'
                IS DISTINCT FROM money.amounts->'externalAmount'
             OR event.payload->'payload'->'mileageAmount'
-               IS DISTINCT FROM money.amounts->'mileageAmount')) AS invalid
+               IS DISTINCT FROM money.amounts->'mileageAmount'))) AS invalid
         """
             + BASELINE,
         params(cutoffAt, snapshotAt),
@@ -94,7 +111,7 @@ class JdbcReconciliationEventReader implements ReconciliationEventReader {
     try {
       return jdbc.query(
           """
-        SELECT event.id, event.event_type, event.occurred_at, event.created_at, event.topic, event.status,
+        SELECT event.id, event.event_type, event.occurred_at, event.payload->>'occurredAt' AS source_occurred, event.created_at, event.topic, event.status,
                event.published_partition, event.published_offset, event.published_at,
                event.payload->'payload'->>'paymentId' AS payment_id,
                event.payload->'payload'->>'refundId' AS refund_id,
@@ -132,7 +149,9 @@ class JdbcReconciliationEventReader implements ReconciliationEventReader {
     return new ReconciliationEvent(
         rs.getObject("id", UUID.class),
         rs.getString("event_type"),
-        instant(rs, "occurred_at"),
+        java.time.OffsetDateTime.parse(rs.getString("source_occurred"))
+            .toInstant()
+            .truncatedTo(java.time.temporal.ChronoUnit.MICROS),
         instant(rs, "created_at"),
         UUID.fromString(rs.getString("payment_id")),
         refund == null ? null : UUID.fromString(refund),
