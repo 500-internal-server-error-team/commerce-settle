@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { operations } from '../../shared/api/contract';
 import { OperationForm } from './OperationForm';
 import { mergeResponseContext, responseContext } from './responseContext';
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+beforeEach(() => vi.stubEnv('DEV', false));
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 it.each(['buyers', 'sellers'])('%s 연습값은 유효한 폼을 채우고 요청 대기 중에는 다시 바꾸지 않는다', resource => {
   const run = vi.fn(); const context = {};
   const operation = operations.find(op => op.id === `post_api_${resource}`)!;

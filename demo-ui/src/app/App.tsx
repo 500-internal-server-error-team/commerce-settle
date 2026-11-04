@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { actions, groups, requirements, scenarios, startingStep, workflow } from '../scenarios/catalog';
 import { operations, redact, type Json, type Operation } from '../shared/api/contract';
-import { execute, journal, type Execution, type RequestValues } from '../shared/api/client';
+import { execute, journal, RequestInputError, type Execution, type RequestValues } from '../shared/api/client';
 import { OperationForm } from '../features/requests/OperationForm';
 import { mergeResponseContext, responseContext } from '../features/requests/responseContext';
 import { useEventGauge } from '../features/requests/useEventGauge';
@@ -13,6 +13,7 @@ import { actorLabel } from '../shared/ui/labels';
 
 type Role = 'BUYER' | 'SELLER' | 'OPERATOR';
 interface Session { token: string; accountId: string; name: string; epoch: number }
+interface Recovery { operation: Operation; values: RequestValues; accountId?: string }
 const EMPTY_CONTEXT: Record<string, Json> = {};
 const roleLabels = { BUYER: '구매자', SELLER: '판매자', OPERATOR: '발표자' };
 const kst = (date: string) => new Date(date).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour12: false });
@@ -27,9 +28,11 @@ export function App() {
   const sessionsRef = useRef(sessions); sessionsRef.current = sessions;
   const [context, setContext] = useState<Partial<Record<Role, Record<string, Json>>>>({});
   const [events, setEvents] = useState<Partial<Record<Role, Execution[]>>>({});
+  const [recoveries, setRecoveries] = useState<Partial<Record<Role, Record<string, Recovery>>>>({});
   const [selected, setSelected] = useState<string>(); const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState(''); const [panel, setPanel] = useState<'requests' | 'experiments' | null>('requests');
   const abort = useRef<AbortController | null>(null); const client = useQueryClient();
+  const activeMutation = useRef<{ controller: AbortController; actor: Role; saved: Recovery } | null>(null);
   const info = useQuery({ queryKey: ['demo-info'], queryFn: async () => {
     const r = await fetch('/demo/info'); if (!r.ok) throw new Error('로컬 데모 제어 서버를 시작하세요.'); return r.json() as Promise<DemoInfo>;
   }, retry: false });
@@ -73,13 +76,26 @@ export function App() {
   async function run(values: RequestValues) {
     if (!operation || pending) return;
     const actor = role; const before = sessions[actor]; const op: Operation = operation;
+    const recovery = recoveries[actor]?.[op.id];
+    if (recovery && (recovery.accountId !== before?.accountId || JSON.stringify(recovery.values) !== JSON.stringify(values))) {
+      setNotice('미확정 원요청과 입력·키가 다릅니다. 원요청을 다시 채워 재조회·재요청하거나, 결과를 확인한 뒤 보존을 해제하세요.'); return;
+    }
+    const dispatched = structuredClone(values);
+    function preserveRequest() {
+      if (op.idempotent && op.method !== 'GET') setRecoveries(old => ({ ...old,
+        [actor]: { ...old[actor], [op.id]: { operation: op, values: dispatched, accountId: before?.accountId } } }));
+    }
     const controller = new AbortController(); abort.current = controller; setPending(true); setNotice('');
+    activeMutation.current = op.method !== 'GET'
+      ? { controller, actor, saved: { operation: op, values: dispatched, accountId: before?.accountId } } : null;
     try {
-      const call = () => execute(op, values, before?.token, controller.signal);
+      const call = () => execute(op, dispatched, before?.token, controller.signal);
       const result = op.method === 'GET' ? await client.fetchQuery({
         queryKey: ['actor', actor, before?.accountId ?? 'public', before?.epoch ?? 0, op.id, values], queryFn: call, staleTime: 0,
       }) : await call();
       if (controller.signal.aborted || sessionsRef.current[actor]?.epoch !== before?.epoch) return;
+      if (result.status >= 500) preserveRequest();
+      else if (result.status >= 200 && result.status < 300) releaseRecovery(actor, op.id);
       const event = journal(op, values, actor, result);
       setEvents(old => ({ ...old, [actor]: [event, ...(old[actor] ?? [])].slice(0, 60) })); setSelected(event.id);
       if (result.status >= 200 && result.status < 300 && result.data && typeof result.data === 'object') {
@@ -97,6 +113,8 @@ export function App() {
             setNotice('응답 계정 종류가 현재 역할과 다릅니다. 해당 역할에서 다시 로그인하세요.'); return;
           }
           client.removeQueries({ queryKey: ['actor', actor] });
+          setRecoveries(old => ({ ...old, [actor]: Object.fromEntries(Object.entries(old[actor] ?? {})
+            .filter(([, saved]) => saved.accountId === String(account.id))) }));
           setSessions(old => ({ ...old, [actor]: { token: data.token as string, accountId: String(account.id), name: String(account.displayName), epoch: Date.now() } }));
           setSignupLogins(old => ({ ...old, [actor]: undefined }));
           setEvents(old => ({ ...old, [actor]: [] })); setContext(old => ({ ...old, [actor]: {} })); setNotice('로그인했습니다. 이 역할의 계정과 세션을 사용합니다.');
@@ -112,13 +130,35 @@ export function App() {
       else if (result.status === 409) setNotice('상태·버전·조건 충돌입니다. 최신 결과를 조회하고 변경된 값을 확인하세요.');
       else if (result.status === 202) setNotice('요청이 접수됐습니다. 최종 완료는 해당 거래 조회로 확인하세요.');
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === 'AbortError')) setNotice('응답을 확인하지 못했습니다. 거래 실패로 단정하지 말고 원거래를 조회하세요.');
-    } finally { if (abort.current === controller) setPending(false); }
+      if (controller.signal.aborted || sessionsRef.current[actor]?.epoch !== before?.epoch) return;
+      if (error instanceof RequestInputError) setNotice(error.message);
+      else if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        preserveRequest(); setNotice('응답을 확인하지 못했습니다. 거래 실패로 단정하지 말고 원거래를 조회하세요.');
+      }
+    } finally {
+      if (activeMutation.current?.controller === controller) activeMutation.current = null;
+      if (abort.current === controller) setPending(false);
+    }
+  }
+  function stopWaiting() {
+    const active = activeMutation.current; if (!active) return;
+    if (active.saved.operation.idempotent) setRecoveries(old => ({ ...old,
+      [active.actor]: { ...old[active.actor], [active.saved.operation.id]: active.saved } }));
+    active.controller.abort(); activeMutation.current = null; setPending(false);
+    setNotice(active.saved.operation.idempotent
+      ? '응답 대기만 중단했습니다. 이미 접수된 거래가 취소된 것은 아닙니다. 원거래를 조회하고, 같은 작업은 보존한 입력과 키로 확인하세요.'
+      : '응답 대기만 중단했습니다. 이미 접수된 처리가 취소된 것은 아닙니다. 다시 실행하기 전에 해당 계정과 처리 상태를 조회하세요.');
+  }
+  function releaseRecovery(actor: Role, id: string) {
+    setRecoveries(old => {
+      const next = { ...old[actor] }; delete next[id]; return { ...old, [actor]: next };
+    });
   }
   function clearActor(actor: Role) {
     abort.current?.abort(); client.cancelQueries({ queryKey: ['actor', actor] }); client.removeQueries({ queryKey: ['actor', actor] });
     setSessions(old => ({ ...old, [actor]: undefined })); setEvents(old => ({ ...old, [actor]: [] })); setContext(old => ({ ...old, [actor]: {} }));
     setSignupLogins(old => ({ ...old, [actor]: undefined }));
+    setRecoveries(old => ({ ...old, [actor]: undefined }));
   }
   function selectRow(row: Record<string, Json>) {
     if (mutationPending) {
@@ -151,8 +191,21 @@ export function App() {
     <main id="main"><div className="breadcrumb">{roleLabels[role]} <span>/</span> {scenario?.groupTitle ?? '월간 혜택'}</div>
       <div className="page-heading"><div><h1>{group === 'monthly' ? '월 랭킹과 쿠폰 발급' : scenario?.label}</h1><p>{group === 'monthly' ? '마감 시점에 고정한 선정 순위와 실제 발급 결과를 확인합니다.' : '입력부터 결과까지, 실제 거래의 흐름을 확인하세요.'}</p></div>
         <button className="secondary" onClick={() => setPanel(panel === 'requests' ? null : 'requests')}>요청·응답 {panel === 'requests' ? '접기' : '보기'}</button></div>
-      {info.error && <div role="alert" className="notice error">{info.error.message} · 통합 실행 주소는 http://127.0.0.1:4174입니다. 개발 서버는 5173 포트를 사용합니다.</div>}
+      {info.error && <div role="alert" className="notice error">{import.meta.env.DEV
+        ? '운영·부하 제어 서버에 연결하지 못했습니다. 일반 API는 개발 프록시를 통해 계속 사용할 수 있습니다.'
+        : `${info.error.message} · 통합 실행 주소는 http://127.0.0.1:4174입니다.`}</div>}
       {notice && <div role="status" className="notice">{notice}</div>}
+      {mutationPending && <div className="notice"><p>응답이 계속 오지 않으면 대기를 중단하고 원거래를 조회할 수 있습니다. 거래 취소 기능은 아닙니다.</p>
+        <button className="secondary" onClick={stopWaiting}>{operation.idempotent ? '응답 대기 중단 · 원요청 보존' : '응답 대기 중단'}</button></div>}
+      {Object.values(recoveries[role] ?? {}).map(saved => <div className="notice" key={saved.operation.id} aria-label="미확정 요청 보존">
+        <p>{saved.operation.title}의 원래 입력과 키를 현재 계정 메모리에 보존했습니다. 조회 화면을 다녀와도 복구할 수 있습니다. 자동으로 재전송하지 않습니다.</p>
+        <div className="quick-actions"><button className="secondary" disabled={pending} onClick={() => {
+          if (selectTask(saved.operation.id)) setRecoveries(old => ({ ...old, [role]: { ...old[role],
+            [saved.operation.id]: { ...saved, values: structuredClone(saved.values) } } }));
+        }}>원요청 다시 채우기</button>
+          <button className="text-button" disabled={pending} onClick={() => releaseRecovery(role, saved.operation.id)}>결과 확인 완료 · 보존 해제</button></div>
+        <p className="caption">원거래 결과를 확인한 뒤에만 보존을 해제하세요. 로컬 세션을 지우거나 다른 계정으로 로그인하면 보존값도 지워집니다.</p>
+      </div>)}
       {(['BUYER', 'SELLER'] as const).map(actor => signupLogins[actor] && <div className="notice" key={actor}>
         <p>{roleLabels[actor]} 가입정보가 준비됐습니다. 현재 열린 화면에서만 로그인에 연결하고, 로그인에 성공하면 비웁니다.</p>
         <button className="secondary" disabled={pending} onClick={() => navigate('account', 'account.login', actor)}>가입한 {roleLabels[actor]}로 로그인</button>
@@ -178,13 +231,14 @@ export function App() {
         <label className="operation-select">할 작업<Select value={operationId} onChange={e => selectTask(e.target.value)}>{visibleActions.map(op => <option key={op.id} value={op.id}>{op.method} · {op.title}</option>)}</Select></label>
         <div className="quick-actions">{visibleActions.filter(op => op.method === 'GET').slice(0, 5).map(op => <button key={op.id} className={op.id === operationId ? 'chip selected' : 'chip'} onClick={() => selectTask(op.id)}>{op.title}</button>)}</div>
         {operation && <OperationForm key={`${role}:${operation.id}:${session?.epoch ?? 0}`} operation={operation} context={context[role] ?? EMPTY_CONTEXT} pending={pending} allowed={allowed} run={run} role={role} token={session?.token}
-          loginValues={operation.path === (role === 'SELLER' ? '/api/seller-sessions' : '/api/buyer-sessions') ? signupLogins[role] : undefined} />}
+          loginValues={operation.path === (role === 'SELLER' ? '/api/seller-sessions' : '/api/buyer-sessions') ? signupLogins[role] : undefined}
+          recoveryValues={recoveries[role]?.[operation.id]?.values} />}
         {role !== 'OPERATOR' && <button className="text-button login-link" onClick={() => navigate('account', 'account.login')}>로그인·가입 화면 열기</button>}
       </section>
       <section className="work-card result-section"><div className="card-heading"><div><span className="overline">서버에서 확인한 결과</span><h2>{current?.operation ?? '아직 실행한 작업이 없습니다'}</h2></div>{current && <span className={`badge ${current.status < 300 ? 'success' : 'failure'}`}>HTTP {current.status}</span>}</div>
         {operation?.path.endsWith('/gauge') && current?.path === operation.path && <p className="caption">선택한 이벤트를 1초마다 조회합니다. 백그라운드에서는 중단합니다.</p>}
         {gauge.error && <p role="alert" className="notice error">게이지를 다시 확인하지 못했습니다. 아래는 마지막 관측값이며 현재 판매 가능 여부는 주문 요청에서 다시 검증합니다.</p>}
-        {current ? <><p className="caption">{kst(current.at)} KST · {current.elapsedMs}ms · {roleLabels[current.actor as Role] ?? current.actor} · {current.status === 202 ? '접수 응답 · 최종 완료 아님' : '해당 요청의 응답'}</p>
+        {current ? <><p className="caption">{kst(current.at)} KST · <span title="요청 시작부터 프록시·서버 왕복과 응답 본문 수신·해석까지의 브라우저 관측 시간입니다. 서버 내부 처리시간이나 비동기 거래의 최종 완료시간이 아닙니다.">응답 확인 {current.elapsedMs}ms</span> · {roleLabels[current.actor as Role] ?? current.actor} · {current.status === 202 ? '접수 응답 · 최종 완료 아님' : '해당 요청의 응답'}</p>
           <ResultView data={current.response as Json} select={selectRow} />
           {current.status === 200 && current.path === '/api/products' && current.response && typeof current.response === 'object'
             && 'items' in current.response && Array.isArray(current.response.items) && current.response.items.length === 0 && <div className="learning-start">
