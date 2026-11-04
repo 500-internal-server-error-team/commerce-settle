@@ -4,7 +4,7 @@ import { actions, groups, requirements, scenarios } from '../scenarios/catalog';
 import { operations, redact, type Json, type Operation } from '../shared/api/contract';
 import { execute, journal, type Execution, type RequestValues } from '../shared/api/client';
 import { OperationForm } from '../features/requests/OperationForm';
-import { responseContext } from '../features/requests/responseContext';
+import { mergeResponseContext, responseContext } from '../features/requests/responseContext';
 import { useEventGauge } from '../features/requests/useEventGauge';
 import { ResultView } from '../features/results/ResultView';
 import { Experiments, type DemoInfo } from '../features/experiments/Experiments';
@@ -89,8 +89,12 @@ export function App() {
     setSessions(old => ({ ...old, [actor]: undefined })); setEvents(old => ({ ...old, [actor]: [] })); setContext(old => ({ ...old, [actor]: {} }));
   }
   function selectRow(row: Record<string, Json>) {
-    const next = responseContext(row, current?.path ?? '', (current?.request as RequestValues | undefined)?.pathParameters);
-    setContext(old => ({ ...old, [role]: { ...old[role], ...next } })); setNotice('선택한 응답의 ID·버전을 입력에 연결했습니다. 실행 전 값을 확인하세요.');
+    if (!current || current.status < 200 || current.status >= 300) {
+      setNotice('오류 응답은 입력에 연결하지 않습니다. 조회 조건을 확인하고 정상 응답에서 선택하세요.'); return;
+    }
+    const request = current?.request as RequestValues | undefined;
+    const next = responseContext(row, current?.path ?? '', request?.pathParameters, request?.body);
+    setContext(old => ({ ...old, [role]: mergeResponseContext(old[role] ?? {}, next) })); setNotice('선택한 응답의 ID·버전을 입력에 연결했습니다. 실행 전 값을 확인하세요.');
   }
   return <div className={`shell ${panel ? 'with-panel' : ''}`}>
     <header className="topbar"><a className="brand" href="#" onClick={e => { e.preventDefault(); navigate('buy'); }}>

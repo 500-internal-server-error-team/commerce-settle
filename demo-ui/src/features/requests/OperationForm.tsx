@@ -22,11 +22,14 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
     if (values && 'mileageAmount' in fields) values.mileageAmount = 0;
     if (values) for (const k of Object.keys(fields)) if (context[k] !== undefined) values[k] = context[k];
     const resourceId = operation.parameters.find(p => p.in === 'path')?.name;
-    if (values && 'expectedVersion' in fields) values.expectedVersion = resourceId ? context[`${resourceId}Version`] ?? '' : '';
+    if (values && 'expectedVersion' in fields) values.expectedVersion = operation.path.endsWith('/inventory-adjustments')
+      ? context.inventoryProductId === context.productId ? context.inventoryVersion ?? '' : ''
+      : resourceId && context[`${resourceId}VersionFor`] === context[resourceId] ? context[`${resourceId}Version`] ?? '' : '';
     setBody(values);
     setPath(Object.fromEntries(operation.parameters.filter(p => p.in === 'path').map(p => [p.name, String(context[p.name] ?? '')])));
     setQuery(Object.fromEntries(operation.parameters.filter(p => p.in === 'query').map(p => [p.name,
-      String(p.name === 'expectedVersion' && resourceId ? context[`${resourceId}Version`] ?? '' : p.schema.default ?? '')])));
+      String(p.name === 'expectedVersion' && resourceId && context[`${resourceId}VersionFor`] === context[resourceId]
+        ? context[`${resourceId}Version`] ?? '' : p.schema.default ?? '')])));
     setKey(crypto.randomUUID());
   }, [operation.id, context]);
   const object = body && typeof body === 'object' && !Array.isArray(body) ? body : {};

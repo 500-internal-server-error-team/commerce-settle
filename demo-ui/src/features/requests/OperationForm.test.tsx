@@ -7,9 +7,18 @@ import { OperationForm } from './OperationForm';
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 it('다른 상품의 버전을 이벤트 수정의 버전으로 사용하지 않는다', () => {
   const operation = operations.find(op => op.path === '/api/sellers/me/events/{eventId}' && op.method === 'PUT')!;
-  render(<OperationForm operation={operation} context={{ productIdVersion: 7, eventId: 'event-1', eventIdVersion: 3 }}
+  render(<OperationForm operation={operation} context={{ productIdVersion: 7, eventId: 'event-1', eventIdVersion: 3, eventIdVersionFor: 'event-1' }}
     pending={false} allowed run={() => {}} />);
   expect((screen.getByLabelText(/확인한 버전/) as HTMLInputElement).value).toBe('3');
+});
+it.each([
+  [{ productId: 'product-1', productIdVersion: 7, productIdVersionFor: 'product-1' }, ''],
+  [{ productId: 'product-1', inventoryProductId: 'product-1', inventoryVersion: 3 }, '3'],
+  [{ productId: 'product-1', inventoryProductId: 'product-2', inventoryVersion: 3 }, ''],
+])('재고 조정에는 같은 상품의 재고 버전만 사용한다 (%j)', (context, expected) => {
+  render(<OperationForm operation={operations.find(op => op.id === 'post_api_sellers_me_products_productId_inventory_adjustments')!}
+    context={context as Record<string, string | number>} role="SELLER" pending={false} allowed run={() => {}} />);
+  expect((screen.getByLabelText(/확인한 버전/) as HTMLInputElement).value).toBe(expected);
 });
 it('실제 상품 목록을 역할 자격으로 조회하고 선택한 ID·버전을 입력에 연결한다', async () => {
   const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ upstreamStatus: 200,
