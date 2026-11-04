@@ -37,6 +37,6 @@ GitHub 문서에서 SVG 미리보기를 사용합니다. SVG 자체가 편집 �
 - [OpenZipkin](https://github.com/openzipkin/openzipkin.github.io/blob/master/public/img/logo_svg/zipkin_symbol.svg) — 공식 Zipkin 심볼.
 - [Provectus Kafka UI v0.7.2](https://github.com/provectus/kafka-ui/blob/v0.7.2/documentation/images/kafka-ui-logo.png) — 프로젝트 로고, Apache-2.0 저장소.
 - [Slack 공식 로고](https://a.slack-edge.com/9cc0056/marketing/img/nav/logo.svg) — [공식 미디어 키트](https://slack.com/media-kit).
-- Alertmanager에는 Prometheus 프로젝트 로고를 사용합니다. 브라우저·모의 API·수집 후보는 일반 도형입니다.
+- Alertmanager에는 Prometheus 프로젝트 로고를 사용합니다. 브라우저·모의 API는 일반 도형입니다.
 
 글꼴은 Geist·Geist Mono이며 SVG 뷰어에서는 시스템 글꼴로 대체됩니다.

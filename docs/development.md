@@ -45,8 +45,6 @@ docker compose up -d --wait --wait-timeout 300
 
 기존 환경의 `COMPOSE_PROJECT_NAME`도 보존하므로, 기존 컨테이너·볼륨을 계속 사용하려면 그 값을 유지합니다. 신규 환경의 기본 프로젝트명은 `commerce-settle`입니다.
 
-커머스 앱·DB·계정·스키마는 `commerce`, DB 비밀번호 변수는 `COMMERCE_DB_PASSWORD`입니다. 명세 경로는 `/v3/api-docs/commerce`, 서비스 URL 재정의 변수는 `COMMERCE_URL`입니다. 판매자 업무 API는 `/api/sellers`를 사용합니다.
-
 기존 Docker의 `buildx/activity/...: permission denied` 오류가 발생하면 전역 파일의 소유권을 바꾸는 대신 작업용 설정 경로를 지정할 수 있습니다. 현재 셸에서만 적용되며 사용이 끝나면 `unset BUILDX_CONFIG`로 해제합니다.
 
 ```bash
@@ -241,8 +239,6 @@ Payment·Settlement notice를 받으려면 `APP_NOTIFICATIONS_CONSUMER_ENABLED=t
 
 수동 재실행과 주문·배치 보존 보류의 설정/해제는 인증된 [내부 운영 경계](../commerce/src/main/java/com/commercesettle/commerce/application/service/RetentionService.java)이며 공개 HTTP API는 없습니다. 대상별 트랜잭션에서 재검사하고 잠긴 주문·발송은 건너뜁니다. 주소 잠금 1초·SQL 5초·대상 트랜잭션 10초 상한을 적용합니다. 보류·실패·한도 초과 대상은 이력과 재조회 시각을 보존해 다음 실행에서 이어갑니다.
 
-잠김·실패 대상은 현재 실행에서 제외해 다른 대상이 진행하도록 하며 다음 실행에서 다시 조회합니다. 종결 확인이 필요한 재처리는 원천을 검증할 수 없으면 503으로 중단합니다.
-
 정산·지급 알림은 묶음 단위로 Settlement의 불변 종결 사실을 확인하고 HTTP 대기 중 DB 연결을 점유하지 않습니다. 조회·검증하지 못한 배치는 보존하되 검증된 다른 배치는 계속 처리합니다. 종결·보류·삭제 기준은 [보존 정책](policies.md#보존과-삭제), 원천 장애 중 재처리와 기존 멱등 결과의 처리는 [API 계약](api.md#오류와-완료-기준)을 따릅니다.
 
 `retention_checks`·`retention_history`에서 결과와 재조회 시각을 확인합니다. 주소는 되돌릴 수 없는 마스킹이며 삭제된 알림 본문도 복구하지 않습니다. `HELD`는 보호 조건 유지, `FAILED`는 해당 대상 롤백입니다. 로그에는 대상 ID·종류·예외 종류만 남기며 본문·주소·보류 사유는 출력하지 않습니다. 정책과 제외 범위는 [보존과 삭제](policies.md#보존과-삭제)를 따릅니다.
@@ -307,7 +303,7 @@ k6 run -e BASE_URL=http://TEST_SERVER:8080 -e RATE=100 -e DURATION_SECONDS=30 te
 
 Compose는 루프백에만 게시하므로 다른 장비에서 바로 접근할 수 없습니다. 원격 시험은 인증·네트워크 접근을 별도로 설계한 테스트 환경에서 진행합니다.
 
-`RATE`, `DURATION_SECONDS`, `PRE_ALLOCATED_VUS`, `MAX_VUS`는 양의 정수이며 VU 최대값은 사전 할당값 이상이어야 합니다. Compose에서는 `-e RATE=100 -e DURATION_SECONDS=30`처럼 `run` 옵션으로 덮어씁니다. checks·HTTP 실패·`dropped_iterations` 임계값을 확인합니다. 명세 조회 처리량은 결제 승인 완료 TPS가 아닙니다. 결제 확정 처리량·PG 장애·Worker 재시작 뒤 대조는 [결제 부하·장애·복구 시험](../tests/load/README.md)에서 별도 Compose 프로젝트로 실행합니다. 주문 API부터의 업무 시나리오·15분 지속 시험·성능 목표 달성은 후속 검증입니다.
+`RATE`, `DURATION_SECONDS`, `PRE_ALLOCATED_VUS`, `MAX_VUS`는 양의 정수이며 VU 최대값은 사전 할당값 이상이어야 합니다. Compose에서는 `-e RATE=100 -e DURATION_SECONDS=30`처럼 `run` 옵션으로 덮어씁니다. checks·HTTP 실패·`dropped_iterations` 임계값을 확인합니다. 명세 조회 처리량은 결제 승인 완료 TPS가 아닙니다. 결제 확정 처리량·PG 장애·Worker 재시작 뒤 대조는 [결제 부하·장애·복구 시험](../tests/load/README.md)에서 별도 Compose 프로젝트로 실행합니다. 이 도구는 주문 API부터의 업무 흐름·15분 지속 처리량 목표를 검증하지 않습니다.
 
 ### PG 승인·조회·전액 환불
 
@@ -352,7 +348,7 @@ curl -i http://localhost:18083/mock/providers/EASY_PAY/payments/APPROVAL_ID/refu
   -d '{"businessKey":"00000000-0000-4000-8000-000000000122","amount":30000}'
 ```
 
-`202` 본문의 SUCCEEDED/DECLINED를 확인합니다. 반환한 `Location`으로 원결과를 조회할 수 있습니다. 같은 provider·작업·businessKey·본문은 헤더를 바꿔도 같은 결과이고 다른 본문은 409입니다. 504·503·거래 부재 404를 금융 실패나 예약 해제 근거로 바꾸지 않습니다. 지급 대역의 경로·키·계정 계약은 유지합니다.
+`202` 본문의 SUCCEEDED/DECLINED를 확인합니다. 반환한 `Location`으로 원결과를 조회할 수 있습니다. 같은 provider·작업·businessKey·본문은 헤더를 바꿔도 같은 결과이고 다른 본문은 409입니다. 504·503·거래 부재 404를 금융 실패나 예약 해제 근거로 바꾸지 않습니다.
 
 입금 작업은 매분 최대 100개 도래 원승인을 처리합니다. `PG_CALENDAR_VERSION`(기본 `weekdays-v1`)과 `PG_CALENDAR_HOLIDAYS`(쉼표로 구분한 ISO 날짜, 기본 공휴일 없음)를 승인 당시 사본·예정일로 저장합니다. `PG_RECEIPTS_ENABLED=false`는 수동 시험용으로 자동 입금을 끄며, 기본값은 true입니다. 입금 전 확정 환불은 예정 입금을 0으로 종결하고, 입금 후에는 같은 재원에서 원외부 결제액만 차감합니다.
 
@@ -576,7 +572,7 @@ Redis 비밀번호를 바꿀 때도 앱과 Redis를 함께 재생성해야 합�
 
 현재 개발 환경의 스키마 적용은 [DB 정책](migrations.md)을 따릅니다. 초기 SQL 수정·이미지 재빌드만으로 기존 DB는 바뀌지 않으며, 새 빈 개발 DB에서 검증합니다. 관측 프로필을 켠 적이 있으면 종료 시에도 `--profile observability`를 지정합니다.
 
-버전 호환성은 [Spring Boot 요구사항](https://docs.spring.io/spring-boot/3.5/system-requirements.html), [Spring Cloud 호환표](https://cloud.spring.io/), Kafka 구성은 [공식 Docker 안내](https://kafka.apache.org/42/getting-started/docker/)를 참고합니다. 외부 배포 시 지원 기간·보안 업데이트·인증·장애 내성을 검토합니다.
+버전 호환성은 [Spring Boot 요구사항](https://docs.spring.io/spring-boot/3.5/system-requirements.html), [Spring Cloud 호환표](https://cloud.spring.io/), Kafka 구성은 [공식 Docker 안내](https://kafka.apache.org/42/getting-started/docker/)를 참고합니다.
 
 ## 본인 카카오톡 시연
 
@@ -616,4 +612,4 @@ docker compose -f compose.yml -f compose.kakao-self.yml --profile observability 
 
 `./gradlew :commerce:test`는 PostgreSQL과 loopback HTTP 대역을, `python3 -B scripts/test_kakao_login.py`는 비밀 파일·계정·동의 경계를 검사합니다. 실제 카카오 수신과 구분합니다.
 
-본인 수신 시연은 Payment·Settlement의 실제 notice 생산부가 연결된 후보에서 수행합니다. 주문·결제·발송 API의 실제 상태 전이, 알림 이력과 본인 채팅의 수신 내용을 함께 대조합니다. 금융 이벤트를 주입한 시험은 자동 검증으로 따로 표시하며 실제 금융 E2E 성공으로 보고하지 않습니다. API 성공·카카오 수신과 읽음·단말 팝업 확인도 구분합니다.
+본인 수신 시연에서는 실제 주문·결제·발송 API의 상태 전이, Payment·Settlement의 알림 생산, 발송 이력과 본인 채팅의 수신 내용을 함께 대조합니다. 금융 이벤트를 주입한 시험은 자동 검증으로 따로 표시하며 실제 금융 E2E 성공으로 보고하지 않습니다. API 성공·카카오 수신과 읽음·단말 팝업 확인도 구분합니다.
