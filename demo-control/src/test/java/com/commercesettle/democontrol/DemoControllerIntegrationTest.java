@@ -26,6 +26,26 @@ class DemoControllerIntegrationTest {
   private final ObjectMapper mapper = new ObjectMapper();
 
   @ParameterizedTest
+  @ValueSource(
+      strings = {"/relative", "//127.0.0.1", "ftp://127.0.0.1:1", "http://127.0.0.1:1/base"})
+  @DisplayName("잘못된 목적지 설정은 전달 전에 서비스 설정 오류로 거절한다")
+  void rejectsInvalidDestinationBeforeForwarding(String target) throws Exception {
+    var controller =
+        new DemoController(
+            new DemoSettings(Path.of("."), target, Map.of(), Map.of(), Map.of(), false, "unused"),
+            mapper);
+
+    assertThatThrownBy(
+            () ->
+                controller.execute(
+                    new DemoController.Command("get_api_products", Map.of(), Map.of(), null, null),
+                    null))
+        .isInstanceOfSatisfying(
+            ResponseStatusException.class,
+            error -> assertThat(error.getStatusCode().value()).isEqualTo(503));
+  }
+
+  @ParameterizedTest
   @ValueSource(booleans = {false, true})
   @DisplayName("헤더 뒤 본문이 멈추거나 조금씩 와도 전체 응답 시간 상한을 지킨다")
   void boundsTheWholeResponseAndRecoversAfterTimeout(boolean trickle) throws Exception {

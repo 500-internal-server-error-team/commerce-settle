@@ -12307,7 +12307,7 @@
           "externalMethod",
           "methodAccountRef"
         ],
-        "description": "현재 일반 주문 구현은 eventId·buyerCouponId·expectedEventVersion에 null만 허용한다. 11개 키는 모두 필수다. E>0일 때 externalMethod/methodAccountRef 필수; E=0일 때 두 값은null. 이벤트 수량은1. providerId는 서버가 호환 가능한 대역 중 선택. 쿠폰 사용 시 mileageAmount=0이고 승인한 카드/간편결제만 허용한다. 서버는 종류·부담자·상품·시각·예산 예약·금액을 검증한다.",
+        "description": "일반·이벤트 구매와 쿠폰 사용을 지원한다. 11개 키는 모두 필수다. 일반 구매는 eventId·expectedEventVersion을 null로 보내고, 이벤트 구매는 두 값을 함께 보낸다. E>0일 때 externalMethod/methodAccountRef 필수; E=0일 때 두 값은null. 이벤트 수량은1. providerId는 서버가 호환 가능한 대역 중 선택. 쿠폰 사용 시 mileageAmount=0이고 승인한 카드/간편결제만 허용한다. 서버는 종류·부담자·상품·시각·예산 예약·금액을 검증한다.",
         "allOf": [
           {
             "if": {

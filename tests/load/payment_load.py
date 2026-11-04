@@ -494,7 +494,11 @@ STACK_RUNS = WORK / "stack-runs.txt"
 
 def remember_run(run):
     """현재 스택에서 실행한 주입 기록. 대조는 기본으로 이 스택의 원장만 읽는다."""
-    WORK.mkdir(parents=True, exist_ok=True)
+    directory = WORK / run
+    directory.mkdir(parents=True, exist_ok=True)
+    # 최초 관측·producer 시작이 실패해도 등록된 실행은 빈 원장으로 대조할 수 있어야 한다.
+    with (directory / "requests.csv").open("a", encoding="utf-8"):
+        pass
     runs = STACK_RUNS.read_text(encoding="utf-8").split() if STACK_RUNS.exists() else []
     if run not in runs:
         with open(STACK_RUNS, "a", encoding="utf-8") as out:

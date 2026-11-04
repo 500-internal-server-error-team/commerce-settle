@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.net.URI;
+import java.util.Locale;
 import java.util.Set;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -26,17 +27,25 @@ class LocalRequestFilter extends OncePerRequestFilter {
       HttpServletRequest request, HttpServletResponse response, FilterChain chain)
       throws ServletException, IOException {
     String origin = request.getHeader("Origin");
+    String requestHost = request.getServerName();
     boolean valid =
-        HOSTS.contains(request.getServerName())
+        requestHost != null
+            && HOSTS.contains(requestHost.toLowerCase(Locale.ROOT))
             && !"cross-site".equals(request.getHeader("Sec-Fetch-Site"));
     if (origin != null) {
       try {
         URI uri = URI.create(origin);
+        String host = uri.getHost();
+        int port = uri.getPort() == -1 ? 80 : uri.getPort();
         valid &=
-            "http".equals(uri.getScheme())
-                && HOSTS.contains(uri.getHost())
-                && (uri.getPort() == request.getServerPort() || uri.getPort() == 5173)
-                && uri.getUserInfo() == null;
+            "http".equalsIgnoreCase(uri.getScheme())
+                && host != null
+                && HOSTS.contains(host.toLowerCase(Locale.ROOT))
+                && (port == request.getServerPort() || port == 5173)
+                && uri.getUserInfo() == null
+                && "".equals(uri.getRawPath())
+                && uri.getRawQuery() == null
+                && uri.getRawFragment() == null;
       } catch (IllegalArgumentException e) {
         valid = false;
       }
@@ -44,10 +53,7 @@ class LocalRequestFilter extends OncePerRequestFilter {
     if (request.getMethod().equals("POST")) {
       valid &=
           request.getContentType() != null
-              && request
-                  .getContentType()
-                  .toLowerCase(java.util.Locale.ROOT)
-                  .startsWith("application/json");
+              && request.getContentType().toLowerCase(Locale.ROOT).startsWith("application/json");
     }
     if (!valid) {
       response.setStatus(403);
