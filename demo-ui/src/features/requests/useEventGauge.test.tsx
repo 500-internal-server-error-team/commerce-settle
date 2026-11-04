@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { PropsWithChildren } from 'react';
 import { operations } from '../../shared/api/contract';
 import type { Execution } from '../../shared/api/client';
 import { useEventGauge } from './useEventGauge';
 
-afterEach(() => { cleanup(); focusManager.setFocused(undefined); vi.useRealTimers(); vi.unstubAllGlobals(); });
+beforeEach(() => vi.stubEnv('DEV', false));
+afterEach(() => { cleanup(); focusManager.setFocused(undefined); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 it('선택한 이벤트만 1초마다 갱신하고 화면 이탈·백그라운드에서는 주입을 멈춘다', async () => {
   vi.useFakeTimers(); focusManager.setFocused(true);
   const fetch = vi.fn(async () => new Response('{"upstreamStatus":200,"data":{"status":"OPEN","asOf":"2026-11-03T10:00:00Z"}}'));

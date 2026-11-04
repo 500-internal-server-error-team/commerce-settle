@@ -5,9 +5,9 @@ import { Field, Fields } from '../../shared/ui/SchemaFields';
 import { ReferencePicker, referenceSource } from './ReferencePicker';
 import { responseContext } from './responseContext';
 
-export function OperationForm({ operation, context, pending, allowed, run, role = 'BUYER', token, loginValues }:
+export function OperationForm({ operation, context, pending, allowed, run, role = 'BUYER', token, loginValues, recoveryValues }:
   { operation: Operation; context: Record<string, Json>; pending: boolean; allowed: boolean; run: (v: RequestValues) => void; role?: string; token?: string;
-    loginValues?: { email: string; password: string } }) {
+    loginValues?: { email: string; password: string }; recoveryValues?: RequestValues }) {
   const [body, setBody] = useState<Json>(operation.schema ? defaults(operation.schema) : null);
   const [pathParameters, setPath] = useState<Record<string, string>>({});
   const [query, setQuery] = useState<Record<string, string>>({});
@@ -40,6 +40,12 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
         : p.name.endsWith('Id') ? context[p.name] ?? p.schema.default ?? '' : p.schema.default ?? '')])));
     setKey(crypto.randomUUID());
   }, [operation.id, context, loginValues]);
+  useEffect(() => {
+    if (!recoveryValues) return;
+    lookupAbort.current?.abort(); setLookupBusy(false); setLookup('');
+    setBody(recoveryValues.body); setPath(recoveryValues.pathParameters); setQuery(recoveryValues.query);
+    setKey(recoveryValues.idempotencyKey);
+  }, [recoveryValues]);
   const signup = operation.method === 'POST' && (operation.path === '/api/buyers' || operation.path === '/api/sellers');
   function fillPracticeSignup() {
     if (pending) return;

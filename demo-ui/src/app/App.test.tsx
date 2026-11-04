@@ -1,14 +1,15 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from './App';
 import { operations } from '../shared/api/contract';
 import { scenarios, workflow } from '../scenarios/catalog';
 
 const response = (body: unknown) => new Response(JSON.stringify(body));
 let client: QueryClient;
-afterEach(() => { cleanup(); client?.clear(); vi.unstubAllGlobals(); });
+beforeEach(() => vi.stubEnv('DEV', false));
+afterEach(() => { cleanup(); client?.clear(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 function setup(items: unknown[] = [{ id: 'product-1', name: '격리된 조회 상품', version: 3 }]) {
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/demo/info') return response({ operatorServices: [], links: [], loadEnabled: false });
@@ -212,4 +213,116 @@ it('대기하지 않을 때는 실제 결과의 ID·버전을 다음 주문 입�
   fireEvent.click(within(screen.getByLabelText('흐름별 작업 선택')).getByRole('button', { name: /02.*주문서/ }));
   expect((screen.getByLabelText(/상품 ID.*productId/) as HTMLInputElement).value).toBe('product-1');
   expect((screen.getByLabelText(/확인한 상품 버전/) as HTMLInputElement).value).toBe('3');
+});
+
+const selectOperation = (id: string) => fireEvent.change(screen.getByLabelText('할 작업'), { target: { value: id } });
+async function recoverCase(kind: string, quantity: number, navigate = true) {
+  const fetch = setup(); await login();
+  fireEvent.click(screen.getByRole('button', { name: /01.*구매·결제/ })); selectOperation('post_api_orders');
+  fireEvent.change(screen.getByLabelText(/상품 ID.*productId/), { target: { value: `product-${quantity}` } });
+  fireEvent.change(screen.getByLabelText(/수량.*quantity/), { target: { value: String(quantity) } });
+  if (kind === 'transport') fetch.mockRejectedValueOnce(new TypeError('synthetic response loss'));
+  else if (kind === 'parse') fetch.mockResolvedValueOnce(new Response('{broken'));
+  else fetch.mockResolvedValueOnce(response({ upstreamStatus: kind === 'http' ? 504 : 202, data: { id: 'order-test', status: 'PAYMENT_PENDING' } }));
+  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'API 요청' })));
+  const original = JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body));
+  if (navigate) {
+    selectOperation('get_api_orders');
+    await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'API 요청' })));
+    selectOperation('post_api_orders');
+  }
+  expect((screen.getByLabelText('멱등키') as HTMLInputElement).value).toBe(original.idempotencyKey);
+  expect((screen.getByLabelText(/상품 ID.*productId/) as HTMLInputElement).value).toBe(`product-${quantity}`);
+  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'API 요청' })));
+  expect(JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body))).toEqual(original);
+}
+it('transport-recovery', () => recoverCase('transport',2));
+it('parse-recovery', () => recoverCase('parse',3));
+it('http-recovery', () => recoverCase('http',4));
+it('accepted-retry', () => recoverCase('accepted',5,false));
+
+async function loseOrder() {
+  const fetch=setup();await login();
+  fireEvent.click(screen.getByRole('button',{name:/01.*구매·결제/}));selectOperation('post_api_orders');
+  fireEvent.change(screen.getByLabelText(/상품 ID.*productId/),{target:{value:'original-product'}});
+  fetch.mockRejectedValueOnce(new TypeError('synthetic lost response'));
+  await act(async()=>fireEvent.submit(screen.getByRole('form',{name:'API 요청'})));
+  return {fetch,original:JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body))};
+}
+it('미확정 원요청의 입력·키를 바꿔 덮어쓰지 않고 복구·성공 뒤에도 같은 키를 유지한다',async()=>{
+  const {fetch,original}=await loseOrder();const count=fetch.mock.calls.length;
+  fireEvent.change(screen.getByLabelText(/수량.*quantity/),{target:{value:'9'}});
+  fireEvent.submit(screen.getByRole('form',{name:'API 요청'}));
+  expect(fetch).toHaveBeenCalledTimes(count);
+  expect(screen.getByText(/미확정 원요청과 입력·키가 다릅니다/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'원요청 다시 채우기'}));
+  fetch.mockResolvedValueOnce(response({upstreamStatus:202,data:{id:'resolved-order'}}));
+  await act(async()=>fireEvent.submit(screen.getByRole('form',{name:'API 요청'})));
+  expect(JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body))).toEqual(original);
+  expect(screen.queryByLabelText('미확정 요청 보존')).toBeNull();
+  await act(async()=>fireEvent.submit(screen.getByRole('form',{name:'API 요청'})));
+  expect(JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body))).toEqual(original);
+});
+it('역할을 전환하면 미확정 입력을 숨기고 로컬 세션을 지우면 함께 삭제한다',async()=>{
+  await loseOrder();expect(screen.getByLabelText('미확정 요청 보존')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'판매자'}));expect(screen.queryByLabelText('미확정 요청 보존')).toBeNull();
+  fireEvent.click(screen.getByRole('button',{name:'구매자'}));expect(screen.getByLabelText('미확정 요청 보존')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'로컬 세션 지우기'}));expect(screen.queryByLabelText('미확정 요청 보존')).toBeNull();
+  expect(localStorage.length).toBe(0);expect(sessionStorage.length).toBe(0);
+});
+it.each([true,false])('동일 계정 재인증에만 미확정 원요청을 유지한다: %s',async(same)=>{
+  const {fetch,original}=await loseOrder();
+  fireEvent.click(screen.getByRole('button',{name:'로그인·가입 화면 열기'}));
+  fireEvent.change(screen.getByLabelText(/이메일/),{target:{value:'buyer@example.test'}});
+  fireEvent.change(screen.getByLabelText(/비밀번호/),{target:{value:'demo-test-password'}});
+  fetch.mockResolvedValueOnce(response({upstreamStatus:200,data:{token:'new-token',account:{id:same?'buyer-1':'buyer-2',actorKind:'BUYER',displayName:'재인증 구매자'}}}));
+  await act(async()=>fireEvent.submit(screen.getByRole('form',{name:'API 요청'})));
+  expect(!!screen.queryByLabelText('미확정 요청 보존')).toBe(same);
+  fireEvent.click(screen.getByRole('button',{name:/01.*구매·결제/}));selectOperation('post_api_orders');
+  expect((screen.getByLabelText('멱등키') as HTMLInputElement).value===original.idempotencyKey).toBe(same);
+});
+it('원거래 결과를 확인한 사용자가 보존을 해제한 뒤 새 작업을 시작한다',async()=>{
+  const {fetch,original}=await loseOrder();
+  fireEvent.click(screen.getByRole('button',{name:'결과 확인 완료 · 보존 해제'}));
+  expect(screen.queryByLabelText('미확정 요청 보존')).toBeNull();
+  fireEvent.change(screen.getByLabelText(/수량.*quantity/),{target:{value:'7'}});
+  fireEvent.click(screen.getByRole('button',{name:'새 작업 키 만들기'}));
+  await act(async()=>fireEvent.submit(screen.getByRole('form',{name:'API 요청'})));
+  const sent=JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body));
+  expect(sent.body.quantity).toBe(7);expect(sent.idempotencyKey).not.toBe(original.idempotencyKey);
+});
+
+it.each(['headers','body','headers-error','body-error'])('응답 %s가 멈춰도 원요청을 보존한 뒤 대기를 중단하고 늦은 결과를 무시한다',async(stage)=>{
+  const fetch=setup();await login();
+  fireEvent.click(screen.getByRole('button',{name:/01.*구매·결제/}));selectOperation('post_api_orders');
+  fireEvent.change(screen.getByLabelText(/상품 ID.*productId/),{target:{value:'stalled-product'}});
+  let finish!:()=>void;let signal:AbortSignal|undefined;
+  fetch.mockImplementationOnce(async(_url:string,init?:RequestInit)=>{
+    signal=init?.signal??undefined;
+    if(stage.startsWith('headers'))return new Promise<Response>((resolve,reject)=>finish=()=>stage.endsWith('error')?reject(new TypeError('late transport failure')):resolve(response({upstreamStatus:202,data:{id:'late-order'}})));
+    return {status:200,text:()=>new Promise<string>((resolve,reject)=>finish=()=>stage.endsWith('error')?reject(new SyntaxError('late body failure')):resolve(JSON.stringify({upstreamStatus:202,data:{id:'late-order'}})))} as Response;
+  });
+  await act(async()=>fireEvent.submit(screen.getByRole('form',{name:'API 요청'})));
+  const original=JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body));
+  fireEvent.click(screen.getByRole('button',{name:'응답 대기 중단 · 원요청 보존'}));
+  expect(signal?.aborted).toBe(true);expect(screen.getByLabelText('미확정 요청 보존')).toBeTruthy();
+  selectOperation('get_api_orders');await act(async()=>fireEvent.submit(screen.getByRole('form',{name:'API 요청'})));
+  await act(async()=>finish());
+  expect(screen.queryByText('late-order')).toBeNull();expect(screen.getByLabelText('미확정 요청 보존')).toBeTruthy();
+  selectOperation('post_api_orders');
+  expect((screen.getByLabelText('멱등키') as HTMLInputElement).value).toBe(original.idempotencyKey);
+  await act(async()=>fireEvent.submit(screen.getByRole('form',{name:'API 요청'})));
+  expect(JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body))).toEqual(original);
+});
+
+it('중단한 이전 호출의 늦은 오류는 해제한 보존값이나 새 안내를 되살리지 않는다',async()=>{
+  const fetch=setup();await login();fireEvent.click(screen.getByRole('button',{name:/01.*구매·결제/}));selectOperation('post_api_orders');
+  let fail!:(error:Error)=>void;fetch.mockImplementationOnce(()=>new Promise<Response>((_resolve,reject)=>fail=reject));
+  fireEvent.submit(screen.getByRole('form',{name:'API 요청'}));
+  fireEvent.click(screen.getByRole('button',{name:'응답 대기 중단 · 원요청 보존'}));
+  fireEvent.click(screen.getByRole('button',{name:'결과 확인 완료 · 보존 해제'}));
+  selectOperation('get_api_orders');await act(async()=>fireEvent.submit(screen.getByRole('form',{name:'API 요청'})));
+  await act(async()=>fail(new TypeError('late cancelled error')));
+  expect(screen.queryByLabelText('미확정 요청 보존')).toBeNull();
+  expect(screen.queryByText(/응답을 확인하지 못했습니다/)).toBeNull();
 });
