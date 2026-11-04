@@ -12,10 +12,6 @@
 
 ![통합 인프라 구조도](diagrams/infrastructure.svg)
 
-Spring Boot 영역은 여섯 앱의 실행 범위입니다. Gateway는 커머스·결제 API·정산으로만 공개 요청을 전달합니다. 카카오 모의 발송은 커머스 내부 처리이며 금융 모의 서버와 함께 별도 상세도에서 설명합니다.
-
-PostgreSQL·Kafka·Redis와 관측 도구는 별도 인프라입니다. 관측 도구를 묶어 표시했으며 메트릭·추적 선은 데이터 흐름을 나타냅니다. 각 연결·저장·포트와 실제 구현 범위는 아래 상세 설명을 따릅니다.
-
 ### 애플리케이션과 인프라
 
 ![Spring Boot 애플리케이션과 데이터 인프라](diagrams/runtime.svg)
@@ -86,10 +82,6 @@ Prometheus가 경보를 평가하고 Alertmanager가 묶음·중복 억제·복�
 
 Payment API와 Worker는 같은 jar를 사용하며 `PAYMENT_ROLE`로 역할별 Bean 활성화와 메트릭 태그를 구분합니다.
 
-Settlement의 정산·모의 지급은 주말·공휴일 구분 없이 매일 처리합니다. 앱 내부 스케줄러가 정산 Job을 실행하고 영속 지급 작업은 같은 Settlement의 Worker가 맡습니다. 일배치의 실행·재시작은 [실행·복구 안내](development.md#정산-일배치-실행과-복구)를 따릅니다. 스케줄러와 Spring Batch는 앱에 포함하며 별도 서버·컨테이너·공통 업무 DB를 만들지 않습니다.
-
-커머스의 모듈·실행·DB·계정·스키마 이름은 `commerce`, DB 비밀번호 변수는 `COMMERCE_DB_PASSWORD`입니다. 판매자의 `Seller`·`SELLER`·`sellerId`와 `/api/sellers`는 업무 명칭입니다. 주문·재고·쿠폰·이벤트 예약은 커머스에서, 마일리지와 결제 상태는 Payment에서 원자 저장합니다. [데이터 소유권](design.md#4-서비스-경계와-원천-데이터)을 따릅니다.
-
 PostgreSQL 컨테이너 1대에서 표의 네 업무 DB·계정·스키마를 분리합니다. 계정은 자기 DB에만 연결할 수 있고, 다른 서비스 DB에 대한 CONNECT 권한은 없습니다. 애플리케이션에는 자기 DB 자격만 주며, 스키마 생성·변경 절차는 [DB 정책](migrations.md)을 따릅니다. 이 구성은 고가용성이나 독립 운영 DB의 장애 격리를 제공하지 않습니다.
 
 이는 물리 분산·샤딩이 아닌 논리적 소유권 분리입니다. [DB 변경·삭제·FK 정책](migrations.md)을 함께 확인합니다.
@@ -128,7 +120,7 @@ Compose DNS로 서비스를 찾으며 별도 서비스 레지스트리는 두지
 
 `commerce`의 `gradeCouponJob`은 **대상·등급 확정과 자동 검증 → 쿠폰 발급**의 두 Step으로 실행합니다. 업무 회차·대상은 [쿠폰 발급 테이블](data-model.md#coupon_issue_runs)에 보존하며 Batch 실행 이력과 구분합니다. 같은 `targetMonth`·`runId`로 재시작하고 확정한 대상을 재선정하지 않습니다.
 
-대상을 먼저 고정해 재시작 때 선정 결과가 달라지지 않게 하고 미발급 대상만 이어서 처리합니다. 선정·교정은 [월간 혜택 정책](policies.md#발급-대상주기예산), 활성화·기한 경과 처리는 [실행 안내](development.md#주문-업무-흐름)를 따릅니다.
+선정·교정은 [월간 혜택 정책](policies.md#발급-대상주기예산), 활성화·기한 경과 처리는 [실행 안내](development.md#주문-업무-흐름)를 따릅니다.
 
 ### 실행·장애·자원 경계
 
@@ -142,8 +134,6 @@ Compose DNS로 서비스를 찾으며 별도 서비스 레지스트리는 두지
 각 서비스가 자기 업무의 진행·완료·보상을 소유하며 [핵심 업무 흐름](design.md#6-핵심-업무-흐름)으로 연결합니다.
 
 업무 모듈의 루트 패키지는 `com.commercesettle.<commerce|payment|settlement|financemock>`입니다.
-
-`finance-mock`은 모듈·실행 이름입니다. Java 패키지는 `financemock`, DB·계정·스키마는 `finance_mock`, 비밀번호 변수는 `FINANCE_MOCK_DB_PASSWORD`로 표기합니다.
 
 | 패키지 | 책임·의존 방향 |
 | --- | --- |
@@ -275,10 +265,10 @@ KST 시각·`+09:00`이 있는 콘솔 로그를 `docker compose logs`로 확인�
 
 ## Redis·Zipkin·k6
 
-Redis는 내부 네트워크에서 앱별 ACL 사용자로 연결합니다. AOF는 Redis의 변경 내역을 디스크에 기록해 재시작 때 복원하는 영속화 방식이며, `redis-data` 볼륨에 보존합니다. 결제·정산의 기준 데이터를 Redis에 저장한다는 뜻은 아닙니다. 키 접두사 자체는 보안 격리가 아니며, 앱이 접근할 수 있는 키는 [위 ACL](#사용자-인증과-내부-신원-전달)이 제한합니다. 키는 `commerce-settle:<domain>:<purpose>:<id>`로 구분하고 TTL·무효화·장애 시 동작은 해당 도메인 담당자가 설계합니다. 금액·멱등성의 최종 정합성을 캐시만으로 보장하지 않습니다. 128MB·noeviction 설정은 메모리 초과 쓰기를 거절하므로 사용량을 관측해야 합니다.
+Redis는 내부 네트워크에서 앱별 ACL 사용자로 연결합니다. AOF는 `redis-data` 볼륨에 보존합니다. 결제·정산의 기준 데이터를 Redis에 저장한다는 뜻은 아닙니다. 키 접두사 자체는 보안 격리가 아니며, 앱이 접근할 수 있는 키는 [위 ACL](#사용자-인증과-내부-신원-전달)이 제한합니다. 키는 `commerce-settle:<domain>:<purpose>:<id>`로 구분하고 TTL·무효화·장애 시 동작은 해당 도메인 담당자가 설계합니다. 금액·멱등성의 최종 정합성을 캐시만으로 보장하지 않습니다. 128MB·noeviction 설정은 메모리 초과 쓰기를 거절하므로 사용량을 관측해야 합니다.
 
 로그인 세션은 Redis를 원본으로 사용하며 [세션 정책](policies.md#인증공통-api-기준)을 따릅니다. 고정 만료는 expiresAt과 TTL을 함께 검사하고 메모리 초과·인증 가드 누락·저장소 오류를 우회하지 않습니다. 세션 세대와 승인한 Redis 실행 식별자는 Gateway·커머스에 동일하게 배포할 인증 설정입니다. 세션 세대는 `AUTH_SESSION_EPOCH`, 실행 식별자는 `AUTH_REDIS_RUN_ID`로 Gateway·커머스에 적용합니다. 두 서비스는 연결한 Redis의 run_id가 승인값과 같을 때만 사용자 인증 게이트를 열고, 연 뒤 연결이 끊기거나 run_id가 다르면 재기동 전까지 닫습니다. Redis 재접속 뒤에는 AOF 복원만으로 인증을 재개하지 않고 [복구 절차](development.md#redis-세션-검증과-복구)를 거칩니다.
 
-Zipkin은 Micrometer·OpenTelemetry의 HTTP 추적을 수집합니다. 샘플링 기본값은 10%이며 환경 변수로 조정합니다. smoke는 sampled `traceparent`로 Gateway CLIENT→Commerce SERVER의 부모 관계를 확인합니다. Kafka 업무 이벤트의 추적 전파는 Producer·Consumer 구현 시 검증합니다. 개발용 메모리 저장소는 최대 10,000개 span을 보관하며 재시작하면 추적이 사라집니다.
+Zipkin은 Micrometer·OpenTelemetry의 HTTP 추적을 수집합니다. 샘플링 기본값은 10%이며 환경 변수로 조정합니다. smoke는 sampled `traceparent`로 Gateway CLIENT→Commerce SERVER의 부모 관계를 확인합니다. Kafka 추적의 전달·재시도 경계는 [Kafka 전달 기반](development.md#kafka-전달-기반)을 따릅니다. 개발용 메모리 저장소는 최대 10,000개 span을 보관하며 재시작하면 추적이 사라집니다.
 
 k6는 `tools` 프로필에서 명령으로 실행합니다. 기본 스크립트는 Gateway의 Commerce 명세 조회만 검증합니다. 결제 완료 TPS는 별도 업무 시나리오로 측정합니다. 부하 발생기를 서버와 같은 호스트에서 실행하면 자원을 공유하므로 측정 환경에 명시해야 합니다.

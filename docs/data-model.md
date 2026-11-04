@@ -1,6 +1,6 @@
 # 데이터 모델
 
-서비스별 PostgreSQL과 [Redis 인증 데이터](#redis-인증-데이터)의 설계입니다. PostgreSQL의 물리 FK는 만들지 않고 아래 관계를 애플리케이션에서 검증합니다. 공통 시간 컬럼은 [시간 정보와 감사 기록](architecture.md#시간-정보와-감사-기록)에 따라 채웁니다. 생성/수정 시각과 행위 감사 로그는 별개입니다. 식별자는 서버 생성 UUID, 금액·누적 수량은 bigint, PostgreSQL 시각은 `timestamptz`이며 조회 시간대는 KST입니다. 내부 저장은 같은 절대시각을 유지합니다. `?`는 nullable, 나머지 컬럼은 NOT NULL입니다. 숫자 버전은 0부터 시작하고 조건부 갱신마다 증가합니다.
+서비스별 PostgreSQL과 [Redis 인증 데이터](#redis-인증-데이터)의 설계입니다. PostgreSQL의 물리 FK는 만들지 않고 아래 관계를 애플리케이션에서 검증합니다. 공통 시간 컬럼은 [시간 정보와 감사 기록](architecture.md#시간-정보와-감사-기록)에 따라 채웁니다. 생성/수정 시각과 행위 감사 로그는 별개입니다. 식별자는 서버 생성 UUID, 금액·누적 수량은 bigint, PostgreSQL 시각은 `timestamptz`이며 조회 시간대는 KST입니다. 내부 저장은 같은 절대시각을 유지합니다. `?`는 nullable, 나머지 컬럼은 NOT NULL입니다. 비고의 `—`는 별도 설명이 없다는 뜻이며 공통 기준과 테이블 제약은 그대로 적용합니다. 숫자 버전은 0부터 시작하고 조건부 갱신마다 증가합니다.
 
 테이블·컬럼·제약·인덱스와 저장 상태를 정의합니다. 실제 DDL과 적용 방식은 [DB 정책](migrations.md), 실행·연결 조건은 [개발 환경](development.md)을 따릅니다. 설계의 존재만으로 구현 완료를 판단하지 않습니다.
 
@@ -16,16 +16,16 @@
 
 소유: `commerce`. 구매자 계정.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
-| `email_normalized` | `varchar(254)` | 업무 값 |
-| `password_hash` | `varchar(255)` | 업무 값 |
-| `display_name` | `varchar(80)` | 업무 값 |
-| `status` | `varchar(24)` | 업무 값 |
+| `email_normalized` | `varchar(254)` | — |
+| `password_hash` | `varchar(255)` | — |
+| `display_name` | `varchar(80)` | — |
+| `status` | `varchar(24)` | — |
 | `auth_version` | `bigint` | 인증 버전; 기본 0 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 | `deleted_at` | `timestamptz?` | 논리삭제 |
 
@@ -37,20 +37,20 @@
 
 소유: `commerce`. PostgreSQL의 일회용 비밀번호 복구 토큰. 로그인 세션은 Redis에 저장한다.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
-| `actor_kind` | `varchar(16)` | 업무 값 |
-| `actor_id` | `uuid` | 업무 값 |
-| `purpose` | `varchar(16)` | 업무 값 |
-| `token_hash` | `char(64)` | 업무 값 |
-| `expires_at` | `timestamptz` | 업무 값 |
-| `consumed_at` | `timestamptz?` | 업무 값 |
-| `revoked_at` | `timestamptz?` | 업무 값 |
+| `actor_kind` | `varchar(16)` | — |
+| `actor_id` | `uuid` | — |
+| `purpose` | `varchar(16)` | — |
+| `token_hash` | `char(64)` | — |
+| `expires_at` | `timestamptz` | — |
+| `consumed_at` | `timestamptz?` | — |
+| `revoked_at` | `timestamptz?` | — |
 | `delivery_ciphertext` | `bytea?` | 복구전달용암호문 |
-| `delivery_status` | `varchar(16)?` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `delivery_status` | `varchar(16)?` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(token_hash). actor_kind=BUYER/SELLER, purpose=PASSWORD_RESET. 목적·종류·10분 만료·소비/폐기를 DB에서 검사한다. 발급은 계정 잠금 아래 이전 복구 토큰을 폐기한다. 비밀번호 교체·토큰 소비·다른 복구 토큰 폐기·auth_version 증가는 같은 DB 트랜잭션이며 Redis 세션 폐기는 [정책의 차단·재조정](policies.md#폐기와-저장소-복구)을 따른다. 토큰 원문은 저장하지 않고, 토큰 ID에 묶은 AES-GCM 전달용 암호문을 delivery_status=PENDING으로 둔다. 실제 전달과 이후 상태는 알림 전달 구현 때 정한다.
@@ -61,17 +61,17 @@
 
 소유: `commerce`. 판매자 계정.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
-| `email_normalized` | `varchar(254)` | 업무 값 |
-| `password_hash` | `varchar(255)` | 업무 값 |
-| `display_name` | `varchar(80)` | 업무 값 |
-| `status` | `varchar(24)` | 업무 값 |
+| `email_normalized` | `varchar(254)` | — |
+| `password_hash` | `varchar(255)` | — |
+| `display_name` | `varchar(80)` | — |
+| `status` | `varchar(24)` | — |
 | `auth_version` | `bigint` | 인증 버전; 기본 0 |
-| `payout_account_ref` | `varchar(100)` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `payout_account_ref` | `varchar(100)` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 | `deleted_at` | `timestamptz?` | 논리삭제 |
 
@@ -83,16 +83,16 @@
 
 소유: `commerce`. 구매자 주소록.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `buyer_id` | `uuid` | →buyer_accounts.id |
-| `recipient_ciphertext` | `bytea` | 업무 값 |
-| `phone_ciphertext` | `bytea` | 업무 값 |
-| `address_ciphertext` | `bytea` | 업무 값 |
-| `is_default` | `boolean` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `recipient_ciphertext` | `bytea` | — |
+| `phone_ciphertext` | `bytea` | — |
+| `address_ciphertext` | `bytea` | — |
+| `is_default` | `boolean` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 | `deleted_at` | `timestamptz?` | 논리삭제 |
 
@@ -104,16 +104,16 @@
 
 소유: `commerce`. 재고.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `product_id` | `uuid` | →products.id |
-| `available_qty` | `bigint` | 업무 값 |
-| `reserved_qty` | `bigint` | 업무 값 |
-| `event_allocated_qty` | `bigint` | 업무 값 |
-| `sold_qty` | `bigint` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `available_qty` | `bigint` | — |
+| `reserved_qty` | `bigint` | — |
+| `event_allocated_qty` | `bigint` | — |
+| `sold_qty` | `bigint` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(product_id). 모든 수량>=0. 이벤트 공개·일반 주문·상품 변경·재고 조정은 이 행을 products보다 먼저 잠금([트랜잭션과 관계](#트랜잭션과-관계)). `sold_qty`는 환불·반품 복원을 뺀 순판매량이며 누적 판매량은 inventory_movements에서 계산. 수량별 증감은 [재고 예약과 복원](policies.md#재고-예약과-복원)을 따름.
@@ -124,15 +124,15 @@
 
 소유: `commerce`. 상품.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `seller_id` | `uuid` | →seller_accounts.id |
-| `name` | `varchar(120)` | 업무 값 |
-| `unit_price` | `bigint` | 업무 값 |
-| `status` | `varchar(24)` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `name` | `varchar(120)` | — |
+| `unit_price` | `bigint` | — |
+| `status` | `varchar(24)` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 | `deleted_at` | `timestamptz?` | 논리삭제 |
 
@@ -144,18 +144,18 @@
 
 소유: `commerce`. 재고 변경 이력.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `product_id` | `uuid` | →products.id |
-| `operation` | `varchar(32)` | 업무 값 |
-| `business_ref` | `uuid` | 업무 값 |
-| `available_delta` | `bigint` | 업무 값 |
-| `reserved_delta` | `bigint` | 업무 값 |
-| `allocated_delta` | `bigint` | 업무 값 |
-| `sold_delta` | `bigint` | 업무 값 |
-| `reason` | `varchar(200)` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
+| `operation` | `varchar(32)` | — |
+| `business_ref` | `uuid` | — |
+| `available_delta` | `bigint` | — |
+| `reserved_delta` | `bigint` | — |
+| `allocated_delta` | `bigint` | — |
+| `sold_delta` | `bigint` | — |
+| `reason` | `varchar(200)` | — |
+| `created_at` | `timestamptz` | — |
 
 **제약:** UNIQUE(product_id,operation,business_ref). 증감과 현재 재고를 같은 트랜잭션으로 기록. 재전달·재처리는 이 유일성으로 한 번만 반영.
 
@@ -210,23 +210,23 @@
 
 소유: `commerce`. 선착순 이벤트.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `seller_id` | `uuid` | →seller_accounts.id |
 | `product_id` | `uuid` | →products.id |
-| `name` | `varchar(80)` | 업무 값 |
-| `event_price` | `bigint` | 업무 값 |
-| `quota` | `bigint` | 업무 값 |
-| `sold_count` | `bigint` | 업무 값 |
-| `reserved_count` | `bigint` | 업무 값 |
-| `starts_at` | `timestamptz` | 업무 값 |
-| `ends_at` | `timestamptz` | 업무 값 |
-| `status` | `varchar(24)` | 업무 값 |
-| `published_at` | `timestamptz?` | 업무 값 |
-| `closed_at` | `timestamptz?` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `name` | `varchar(80)` | — |
+| `event_price` | `bigint` | — |
+| `quota` | `bigint` | — |
+| `sold_count` | `bigint` | — |
+| `reserved_count` | `bigint` | — |
+| `starts_at` | `timestamptz` | — |
+| `ends_at` | `timestamptz` | — |
+| `status` | `varchar(24)` | — |
+| `published_at` | `timestamptz?` | — |
+| `closed_at` | `timestamptz?` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** name 1..80자, quota>0, event_price 1..10000000, 0<=S+R<=Q, starts_at<ends_at. status=DRAFT/SCHEDULED/OPEN/SOLD_OUT/CLOSED. 공개 후 사본 불변, 상품별 공개 기간 중복 검사는 product_inventory 잠금 아래 수행. version·updated_at은 판매자 변경·공개·종료와 기간 종료·매진만 반영하고, S·R 변경과 시각에 따른 SCHEDULED→OPEN 전이로는 바꾸지 않아 시작 전에 조회한 주문의 expectedEventVersion이 시작·참여 경쟁으로 어긋나지 않음.
@@ -237,15 +237,15 @@
 
 소유: `commerce`. 이벤트 참여.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `event_id` | `uuid` | →sale_events.id |
-| `buyer_id` | `uuid` | 업무 값 |
+| `buyer_id` | `uuid` | — |
 | `order_id` | `uuid` | →orders.id |
-| `status` | `varchar(24)` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `status` | `varchar(24)` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(order_id). 부분 UNIQUE(event_id,buyer_id) WHERE status IN (RESERVED,CONFIRMED,REFUNDED). 실패/안전 취소=RELEASED만 재참여 가능.
@@ -256,7 +256,7 @@
 
 소유: `commerce`. 주문.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `buyer_id` | `uuid` | →buyer_accounts.id |
@@ -265,22 +265,22 @@
 | `event_id` | `uuid?` | →sale_events.id |
 | `buyer_coupon_id` | `uuid?` | →buyer_coupons.id |
 | `payment_id` | `uuid?` | 외부Payment참조 |
-| `product_name` | `varchar(120)` | 업무 값 |
-| `unit_price` | `bigint` | 업무 값 |
-| `quantity` | `integer` | 업무 값 |
-| `gross_amount` | `bigint` | 업무 값 |
+| `product_name` | `varchar(120)` | — |
+| `unit_price` | `bigint` | — |
+| `quantity` | `integer` | — |
+| `gross_amount` | `bigint` | — |
 | `coupon_amount` | `bigint` | S+P; 표시용 총할인액 |
 | `seller_coupon_amount` | `bigint` | S; 판매자 부담 할인 |
 | `platform_coupon_amount` | `bigint` | P; 플랫폼 부담 지원 |
 | `settlement_base_amount` | `bigint` | B=G−S; 수수료·정산 기준 |
-| `total_amount` | `bigint` | 업무 값 |
-| `mileage_amount` | `bigint` | 업무 값 |
-| `external_amount` | `bigint` | 업무 값 |
-| `payment_cycle_id` | `uuid` | 업무 값 |
-| `external_method` | `varchar(24)?` | 업무 값 |
-| `provider_id` | `varchar(16)?` | 업무 값 |
+| `total_amount` | `bigint` | — |
+| `mileage_amount` | `bigint` | — |
+| `external_amount` | `bigint` | — |
+| `payment_cycle_id` | `uuid` | — |
+| `external_method` | `varchar(24)?` | — |
+| `provider_id` | `varchar(16)?` | — |
 | `method_account_ref` | `varchar(100)?` | 시험용 |
-| `status` | `varchar(32)` | 업무 값 |
+| `status` | `varchar(32)` | — |
 | `fulfillment_status` | `varchar(24)` | UNSHIPPED/SHIPPED/DELIVERED/RETURN_RECEIVED |
 | `simulation_seed` | `bigint` | 주문별 배송 소요일을 정한 시험 seed |
 | `delivery_business_days` | `integer` | 생성 때 고정한 2 또는 3 |
@@ -289,14 +289,14 @@
 | `shipped_at` | `timestamptz?` | 최초 서버 발송 시각 |
 | `delivery_due_at` | `timestamptz?` | 발송 당시 계산한 모의 도착 시각 |
 | `delivered_at` | `timestamptz?` | 배송완료 반영 시 delivery_due_at을 복사 |
-| `payment_confirmed_at` | `timestamptz?` | 업무 값 |
-| `refund_deadline_at` | `timestamptz?` | 업무 값 |
-| `purchase_confirmed_at` | `timestamptz?` | 업무 값 |
+| `payment_confirmed_at` | `timestamptz?` | — |
+| `refund_deadline_at` | `timestamptz?` | — |
+| `purchase_confirmed_at` | `timestamptz?` | — |
 | `closed_at` | `timestamptz?` | 종결 상태 전이 때 고정. 주문 보존 기한의 시작 |
-| `payment_wait_until` | `timestamptz` | 업무 값 |
-| `policy_version` | `varchar(32)` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `payment_wait_until` | `timestamptz` | — |
+| `policy_version` | `varchar(32)` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** G=unit_price*quantity, D=S+P, B=G-S, T=B-P=E+M; 1<=T<=10000000, S/P>=0이고 최대 하나만 양수, 0<=D<G, 0<=M<=T, E>=0. buyer_coupon_id가 있으면 M=0. 쿠폰의 결제수단·소유권·예산 예약을 함께 검사. 일반 quantity 1..10; event_id가 있으면1. Payment 연결 ID는 알려진 경우 UNIQUE. 상태 전이는 아래 표.
@@ -309,23 +309,23 @@
 
 소유: `commerce`. 취소·반품 요청.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `order_id` | `uuid` | →orders.id |
-| `buyer_id` | `uuid` | 업무 값 |
-| `seller_id` | `uuid` | 업무 값 |
-| `kind` | `varchar(16)` | 업무 값 |
-| `status` | `varchar(32)` | 업무 값 |
-| `accepted_at` | `timestamptz` | 업무 값 |
-| `reason` | `varchar(200)` | 업무 값 |
+| `buyer_id` | `uuid` | — |
+| `seller_id` | `uuid` | — |
+| `kind` | `varchar(16)` | — |
+| `status` | `varchar(32)` | — |
+| `accepted_at` | `timestamptz` | — |
+| `reason` | `varchar(200)` | — |
 | `refund_id` | `uuid?` | 외부Payment참조 |
-| `decision_at` | `timestamptz?` | 업무 값 |
-| `received_at` | `timestamptz?` | 업무 값 |
-| `closed_reason` | `varchar(200)?` | 업무 값 |
-| `closure_evidence_ref` | `varchar(200)?` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `decision_at` | `timestamptz?` | — |
+| `received_at` | `timestamptz?` | — |
+| `closed_reason` | `varchar(200)?` | — |
+| `closure_evidence_ref` | `varchar(200)?` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** 부분 UNIQUE(order_id) WHERE status IN (PENDING_SELLER,APPROVED,REFUNDING,COMPLETED,FAILED_REVIEW). status=PENDING_SELLER/APPROVED/REFUNDING/COMPLETED/REJECTED/WITHDRAWN/FAILED_REVIEW/CLOSED. 재고 재입고는 received_at과 원복 유일성으로 보호.
@@ -347,18 +347,18 @@
 
 소유: `commerce`. 주문 재고 예약.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `order_id` | `uuid` | →orders.id |
 | `product_id` | `uuid` | →products.id |
 | `event_id` | `uuid?` | →sale_events.id |
-| `quantity` | `integer` | 업무 값 |
+| `quantity` | `integer` | — |
 | `cycle_id` | `uuid` | 현재 예약을 확보한 결제 회차; orders.payment_cycle_id와 일치 |
-| `status` | `varchar(24)` | 업무 값 |
+| `status` | `varchar(24)` | — |
 | `expires_at` | `timestamptz` | 주문의 payment_wait_until; 취소 요청 대상 조회에만 사용 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(order_id). quantity>0. status=RESERVED/CONSUMED/RELEASED/RESTORED. 기한만으로 RELEASED 전이 금지.
@@ -379,17 +379,17 @@
 
 소유: `commerce`. 주문 주소 사본.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `order_id` | `uuid` | →orders.id |
-| `recipient_ciphertext` | `bytea` | 업무 값 |
-| `phone_ciphertext` | `bytea` | 업무 값 |
-| `address_ciphertext` | `bytea` | 업무 값 |
-| `masked_at` | `timestamptz?` | 업무 값 |
-| `hold_reason` | `varchar(200)?` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `recipient_ciphertext` | `bytea` | — |
+| `phone_ciphertext` | `bytea` | — |
+| `address_ciphertext` | `bytea` | — |
+| `masked_at` | `timestamptz?` | — |
+| `hold_reason` | `varchar(200)?` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(order_id). 주소록 암호문을 복사하지 않고 새 주문 주소 ID·칸 이름에 묶은 AES-GCM 사본으로 다시 암호화한다. 주문 생성 후 사본은 불변이며 정한 마스킹/보존 보류만 허용한다.
@@ -404,7 +404,7 @@
 
 소유: `commerce`. 발급 당시 혜택 조건과 할인 비용 집계. WELCOME는 가입 시, GRADE는 월 배치가 서버 규칙으로 자동 생성합니다. 판매자 API는 SELLER 템플릿만 생성합니다.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `kind` | `varchar(16)` | WELCOME/GRADE/SELLER |
@@ -428,8 +428,8 @@
 | `valid_from` | `timestamptz` | 신규 발급 시작 |
 | `valid_until` | `timestamptz?` | SELLER의 종료 시각, GRADE의 월말 경계; WELCOME는 null |
 | `status` | `varchar(16)` | ACTIVE/CLOSED |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | 낙관적 버전 |
 
 **제약:** 할인액>0, 할인액<min_order_amount<=10000000. issued_count·committed_budget·consumed_budget는 비음수입니다. SELLER는 양수인 issuance_limit·total_budget와 valid_until이 필수이며 issued_count<=issuance_limit, committed_budget+consumed_budget<=total_budget를 보호합니다. WELCOME/GRADE는 두 상한이 null이고 비용 집계만 수행합니다. WELCOME/GRADE는 funder=PLATFORM이고 seller_id/product_id는 null; SELLER는 funder=SELLER이고 seller_id 필수입니다. grade와 target_month는 GRADE에만 필요하고 나머지 종류는 null입니다. WELCOME의 발급 기간은 종료 없이 유지하고 쿠폰 기한은 가입+14일로 정합니다. GRADE의 기간은 혜택 월입니다. 상품 소유·사용 수단·손익 하한·최소 정산액은 서버가 검증합니다. 발급 뒤 혜택 조건은 변경하지 않습니다.
@@ -440,7 +440,7 @@
 
 소유: `commerce`. 발급 당시 조건과 예산 약속을 보존한 쿠폰.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `template_id` | `uuid` | →coupon_templates.id |
@@ -458,8 +458,8 @@
 | `status` | `varchar(16)` | ISSUED/RESERVED/USED/EXPIRED |
 | `reserved_order_id` | `uuid?` | →orders.id |
 | `used_order_id` | `uuid?` | →orders.id |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | 낙관적 버전 |
 
 **제약:** UNIQUE(template_id,buyer_id). WELCOME는 buyer_id, GRADE는 (buyer_id,target_month)에 종류별 부분 UNIQUE. SELLER는 캠페인별 유일성만 적용하고 다른 캠페인의 쿠폰도 발급할 수 있습니다. 발급 수 증가·할인 약속액 반영·쿠폰 저장은 같은 트랜잭션입니다. 판매자 상한은 SELLER 발급에만 검사합니다. 원할인·부담자·기간·수단은 불변이며 상태와 시각을 함께 검사합니다. 재가입·캠페인 교체로 발급 이력을 지우지 않습니다.
@@ -470,7 +470,7 @@
 
 소유: `commerce`. 발급·예약·사용·복구·만료와 예산 이동 이력.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `buyer_coupon_id` | `uuid` | →buyer_coupons.id |
@@ -481,7 +481,7 @@
 | `to_status` | `varchar(16)` | 전이 결과 |
 | `committed_delta` | `bigint` | 약속액 증감 |
 | `consumed_delta` | `bigint` | 사용액 증감 |
-| `created_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
 
 **제약:** UNIQUE(buyer_coupon_id,operation,business_ref). RESERVE/RELEASE는 payment_cycle_id별, USE/RESTORE는 원결제별 한 번. 쿠폰 상태·할인 비용 집계·이력을 같은 트랜잭션으로 반영하고 미확정 결과로 약속액을 해제하지 않습니다.
 
@@ -491,7 +491,7 @@
 
 소유: `commerce`. 플랫폼 월간 우수고객의 대상 고정과 재시작 가능한 발급 회차. 판매자 자유 발급은 포함하지 않습니다.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; Job의 runId |
 | `target_month` | `date` | 혜택 월 첫날; 취소되지 않은 회차만 월별 UNIQUE |
@@ -504,8 +504,8 @@
 | `cancelled_at` | `timestamptz?` | 서버가 기록한 교정 시각 |
 | `cancelled_by` | `varchar(100)?` | 검증한 운영자 자격의 식별자; 이메일 금지 |
 | `cancellation_reason_code` | `varchar(80)?` | AGGREGATION_ERROR; 운영자 임의 대상·금액 지정 불가 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | 낙관적 버전 |
 
 **제약:** target_month·cutoff_at·policy_version·status는 NOT NULL. CHECK(replaces_run_id <> id). UNIQUE(target_month) WHERE status <> 'CANCELLED'; UNIQUE(replaces_run_id) WHERE replaces_run_id IS NOT NULL. target_month는 월 첫날이고 target_count>=0, cutoff_spend>0이다. 세 취소 필드는 CANCELLED일 때 모두 필수이며 다른 상태에서는 모두 null이다. 대체 회차는 같은 월·마감·정책 버전의 CANCELLED 부모 한 개를 참조하며, 부모·자식 연결과 취소를 같은 트랜잭션에 저장한다. 참조·상태는 앱에서 확인하며 물리 FK는 두지 않는다. 교정·만료 조건은 [월간 회차 정책](policies.md#월간-회차-검증과-오류-교정)을 따른다.
@@ -518,7 +518,7 @@
 
 소유: `commerce`. 같은 회차의 플랫폼 월간 우수고객과 처리 결과.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 발급 업무 키 |
 | `run_id` | `uuid` | →coupon_issue_runs.id |
@@ -528,8 +528,8 @@
 | `rank_no` | `integer` | E 합계 내림차순 RANK; 1~100, 동점은 같은 순위 |
 | `buyer_coupon_id` | `uuid?` | 처리된 원쿠폰 |
 | `status` | `varchar(24)` | PENDING/ISSUED/EXPIRED |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | 낙관적 버전 |
 
 **제약:** UNIQUE(run_id,buyer_id), UNIQUE(buyer_coupon_id) WHERE buyer_coupon_id IS NOT NULL. template_id는 해당 월·등급의 GRADE 캠페인이며 external_spend>0, 1<=rank_no<=100입니다. 동점자 때문에 행 수가 100을 넘을 수 있습니다. 월별 마감의 불변 확정·취소 이력으로 대상과 합계를 고정합니다. 쿠폰·발급 이력·대상 ISSUED 전이는 같은 DB 트랜잭션으로 반영합니다. 회차 행을 먼저 잠그고 ISSUING·원래 발급 기한을 확인하며 CANCELLED 부모의 대상은 처리하지 않습니다.
@@ -542,14 +542,14 @@
 
 소유: `payment`. 우리 마일리지 잔액.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
-| `buyer_id` | `uuid` | 업무 값 |
-| `balance` | `bigint` | 업무 값 |
-| `reserved_amount` | `bigint` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `buyer_id` | `uuid` | — |
+| `balance` | `bigint` | — |
+| `reserved_amount` | `bigint` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(buyer_id). CHECK(0<=reserved_amount AND reserved_amount<=balance). 갱신은 행 잠금/조건부 갱신.
@@ -560,16 +560,16 @@
 
 소유: `payment`. 마일리지 예약.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `wallet_id` | `uuid` | →mileage_wallets.id |
 | `payment_id` | `uuid` | →payments.id |
-| `cycle_id` | `uuid` | 업무 값 |
-| `amount` | `bigint` | 업무 값 |
-| `status` | `varchar(16)` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `cycle_id` | `uuid` | — |
+| `amount` | `bigint` | — |
+| `status` | `varchar(16)` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(payment_id), amount>0. status=RESERVED/CONSUMED/RELEASED. 재시도마다 새cycle_id, RESERVE/RELEASE business_ref는cycle_id; DEBIT/RESTORE business_ref는payment_id. 이력은mileage_entries로보존.
@@ -580,30 +580,30 @@
 
 소유: `payment`. 결제.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `order_id` | `uuid` | 외부커머스참조 |
-| `buyer_id` | `uuid` | 업무 값 |
-| `seller_id` | `uuid` | 업무 값 |
-| `order_version` | `bigint` | 업무 값 |
-| `product_id` | `uuid` | 업무 값 |
-| `current_cycle_id` | `uuid` | 업무 값 |
-| `gross_amount` | `bigint` | 업무 값 |
+| `buyer_id` | `uuid` | — |
+| `seller_id` | `uuid` | — |
+| `order_version` | `bigint` | — |
+| `product_id` | `uuid` | — |
+| `current_cycle_id` | `uuid` | — |
+| `gross_amount` | `bigint` | — |
 | `coupon_amount` | `bigint` | S+P; 표시용 총할인액 |
 | `seller_coupon_amount` | `bigint` | S; 판매자 부담 할인 |
 | `platform_coupon_amount` | `bigint` | P; 플랫폼 부담 지원 |
 | `settlement_base_amount` | `bigint` | B=G−S; 수수료·정산 기준 |
-| `total_amount` | `bigint` | 업무 값 |
-| `mileage_amount` | `bigint` | 업무 값 |
-| `external_amount` | `bigint` | 업무 값 |
-| `fee_amount` | `bigint` | 업무 값 |
-| `seller_net_amount` | `bigint` | 업무 값 |
-| `status` | `varchar(32)` | 업무 값 |
-| `confirmed_at` | `timestamptz?` | 업무 값 |
-| `policy_version` | `varchar(32)` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `total_amount` | `bigint` | — |
+| `mileage_amount` | `bigint` | — |
+| `external_amount` | `bigint` | — |
+| `fee_amount` | `bigint` | — |
+| `seller_net_amount` | `bigint` | — |
+| `status` | `varchar(32)` | — |
+| `confirmed_at` | `timestamptz?` | — |
+| `policy_version` | `varchar(32)` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(order_id). T=E+M=B-P, fee=floor(B*15/100), seller_net=B-fee; D=S+P, B=G-S, 모두 비음수,T>=1. 쿠폰 사용 시 M=0. 같은 주문 재시도는 같은 결제의 새 attempt.
@@ -614,17 +614,17 @@
 
 소유: `payment`. 마일리지 원장.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `wallet_id` | `uuid` | →mileage_wallets.id |
 | `payment_id` | `uuid?` | →payments.id |
 | `refund_id` | `uuid?` | →refunds.id |
-| `kind` | `varchar(16)` | 업무 값 |
-| `business_ref` | `uuid` | 업무 값 |
-| `amount` | `bigint` | 업무 값 |
-| `balance_after` | `bigint` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
+| `kind` | `varchar(16)` | — |
+| `business_ref` | `uuid` | — |
+| `amount` | `bigint` | — |
+| `balance_after` | `bigint` | — |
+| `created_at` | `timestamptz` | — |
 
 **제약:** UNIQUE(wallet_id,kind,business_ref). kind=SEED/RESERVE/RELEASE/DEBIT/RESTORE. amount>0. DEBIT/RESTORE는 원결제별 각각 한 번(부분 UNIQUE).
 
@@ -634,17 +634,17 @@
 
 소유: `payment`. 환불 복구 진행.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `refund_id` | `uuid` | →refunds.id |
-| `step` | `varchar(40)` | 업무 값 |
-| `reservation_ref` | `uuid?` | 업무 값 |
-| `ledger_reversed_at` | `timestamptz?` | 업무 값 |
-| `order_restored_at` | `timestamptz?` | 업무 값 |
-| `last_error_code` | `varchar(80)?` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `step` | `varchar(40)` | — |
+| `reservation_ref` | `uuid?` | — |
+| `ledger_reversed_at` | `timestamptz?` | — |
+| `order_restored_at` | `timestamptz?` | — |
+| `last_error_code` | `varchar(80)?` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(refund_id). 금융 성공/마일리지 복원/원장 상쇄/주문 복구를 별도 추적. 완료 ack 전 전체 완료 금지.
@@ -657,20 +657,20 @@
 
 소유: `payment`. 금융 환불.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `payment_id` | `uuid` | →payments.id |
 | `order_refund_request_id` | `uuid` | 외부커머스참조 |
-| `external_amount` | `bigint` | 업무 값 |
-| `mileage_amount` | `bigint` | 업무 값 |
-| `status` | `varchar(32)` | 업무 값 |
-| `business_key` | `uuid` | 업무 값 |
-| `external_status` | `varchar(24)` | 업무 값 |
-| `external_ref` | `uuid?` | 업무 값 |
-| `mileage_restored_at` | `timestamptz?` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `external_amount` | `bigint` | — |
+| `mileage_amount` | `bigint` | — |
+| `status` | `varchar(32)` | — |
+| `business_key` | `uuid` | — |
+| `external_status` | `varchar(24)` | — |
+| `external_ref` | `uuid?` | — |
+| `mileage_restored_at` | `timestamptz?` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(order_refund_request_id), UNIQUE(business_key). 부분 UNIQUE(payment_id) WHERE status IN (RESERVING,EXTERNAL_PENDING,RESTORING,INTERNAL_PENDING,COMPLETED,UNKNOWN,COMPENSATING). 원결제 E/M을 복사해 불변.
@@ -683,22 +683,22 @@
 
 소유: `payment`. 결제·환불 작업.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `payment_id` | `uuid` | →payments.id |
 | `refund_id` | `uuid?` | →refunds.id |
-| `operation` | `varchar(32)` | 업무 값 |
-| `business_key` | `uuid` | 업무 값 |
-| `status` | `varchar(24)` | 업무 값 |
-| `attempts` | `integer` | 업무 값 |
-| `next_run_at` | `timestamptz` | 업무 값 |
-| `lease_owner` | `varchar(100)?` | 업무 값 |
+| `operation` | `varchar(32)` | — |
+| `business_key` | `uuid` | — |
+| `status` | `varchar(24)` | — |
+| `attempts` | `integer` | — |
+| `next_run_at` | `timestamptz` | — |
+| `lease_owner` | `varchar(100)?` | — |
 | `lease_token` | `uuid?` | 금융 Job 임대마다 새 UUID; 오래된 결과 반영 차단 |
-| `lease_until` | `timestamptz?` | 업무 값 |
-| `last_error_code` | `varchar(80)?` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `lease_until` | `timestamptz?` | — |
+| `last_error_code` | `varchar(80)?` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(operation,business_key). 작업 저장 뒤 메시지 ack. status=PENDING/RUNNING/RETRY/REVIEW_REQUIRED/DONE.
@@ -711,23 +711,23 @@
 
 소유: `payment`. 외부 승인 시도.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `payment_id` | `uuid` | →payments.id |
-| `attempt_no` | `integer` | 업무 값 |
-| `cycle_id` | `uuid` | 업무 값 |
-| `provider_id` | `varchar(16)` | 업무 값 |
-| `method` | `varchar(24)` | 업무 값 |
-| `account_ref` | `varchar(100)` | 업무 값 |
+| `attempt_no` | `integer` | — |
+| `cycle_id` | `uuid` | — |
+| `provider_id` | `varchar(16)` | — |
+| `method` | `varchar(24)` | — |
+| `account_ref` | `varchar(100)` | — |
 | `funding_account_ref` | `varchar(100)` | 승인 시도 생성 때 서버 설정에서 고정한 PAYOUT 재원 계정 |
-| `business_key` | `uuid` | 업무 값 |
-| `external_ref` | `uuid?` | 업무 값 |
-| `amount` | `bigint` | 업무 값 |
-| `status` | `varchar(24)` | 업무 값 |
+| `business_key` | `uuid` | — |
+| `external_ref` | `uuid?` | — |
+| `amount` | `bigint` | — |
+| `status` | `varchar(24)` | — |
 | `scenario_version` | `varchar(32)` | 외부 승인 시도 생성 때 고정; 원키 재요청·원승인 환불에 유지 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(payment_id,attempt_no), UNIQUE(provider_id,business_key). 진행 중/성공 시도는 결제별1개(부분 UNIQUE). E>0인 경우만 생성. 상태=PENDING/PROCESSING/UNKNOWN/APPROVED/DECLINED/CANCELLED.
@@ -746,18 +746,18 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 
 소유: `settlement`. 정산 배치.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
-| `seller_id` | `uuid` | 업무 값 |
+| `seller_id` | `uuid` | — |
 | `batch_date` | `date` | Asia/Seoul 마감 날짜 |
-| `cutoff_at` | `timestamptz` | 업무 값 |
-| `policy_version` | `varchar(32)` | 업무 값 |
-| `status` | `varchar(24)` | 업무 값 |
-| `net_amount` | `bigint` | 업무 값 |
+| `cutoff_at` | `timestamptz` | — |
+| `policy_version` | `varchar(32)` | — |
+| `status` | `varchar(24)` | — |
+| `net_amount` | `bigint` | — |
 | `closed_at` | `timestamptz?` | 실제 COMPLETED 전이 시각. 그 상태에만 필수이며 이후 고정 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(seller_id,batch_date,policy_version); cutoff_at은 해당 batch_date의 10:00 Asia/Seoul. net_amount>=0, status=CREATED/RESERVED/PROCESSING/COMPLETED/REVIEW_REQUIRED.
@@ -768,24 +768,24 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 
 소유: `settlement`. 지급.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `batch_id` | `uuid` | →settlement_batches.id |
-| `seller_id` | `uuid` | 업무 값 |
-| `recipient_account_ref` | `varchar(100)` | 업무 값 |
-| `recipient_account_version` | `bigint` | 업무 값 |
-| `funding_account_ref` | `varchar(100)` | 업무 값 |
+| `seller_id` | `uuid` | — |
+| `recipient_account_ref` | `varchar(100)` | — |
+| `recipient_account_version` | `bigint` | — |
+| `funding_account_ref` | `varchar(100)` | — |
 | `scenario_version` | `varchar(32)` | 지급 생성 때 고정한 금융 실행 시나리오 버전 |
-| `succeeded_at` | `timestamptz?` | 업무 값 |
+| `succeeded_at` | `timestamptz?` | — |
 | `unknown_since` | `timestamptz?` | 최초 UNKNOWN 전이 시각. 같은 미확정의 반복 조회에도 유지하는 경보 원천 |
-| `amount` | `bigint` | 업무 값 |
-| `business_key` | `uuid` | 업무 값 |
-| `external_ref` | `uuid?` | 업무 값 |
-| `status` | `varchar(24)` | 업무 값 |
+| `amount` | `bigint` | — |
+| `business_key` | `uuid` | — |
+| `external_ref` | `uuid?` | — |
+| `status` | `varchar(24)` | — |
 | `hold_reason` | `varchar(32)?` | UNKNOWN/CONFIRMED_REJECTION |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(batch_id), UNIQUE(business_key), amount>0. 접수/외부 성공 구분. 수취/출금 계정 사본 불변. SUCCEEDED이면 succeeded_at 필수; 원대역의 최초 성공 시각을 복사해 재조회에도 유지.
@@ -796,28 +796,28 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 
 소유: `settlement`. 거래별 정산 항목.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
-| `payment_id` | `uuid` | 업무 값 |
-| `order_id` | `uuid` | 업무 값 |
-| `product_id` | `uuid` | 업무 값 |
-| `seller_id` | `uuid` | 업무 값 |
-| `eligible_received_at` | `timestamptz?` | 업무 값 |
+| `payment_id` | `uuid` | — |
+| `order_id` | `uuid` | — |
+| `product_id` | `uuid` | — |
+| `seller_id` | `uuid` | — |
+| `eligible_received_at` | `timestamptz?` | — |
 | `ready_at` | `timestamptz?` | 구매확정과 선행 원장이 모두 준비된 시각 |
 | `total_amount` | `bigint` | T; 구매자 부담액 |
 | `platform_coupon_amount` | `bigint` | P; 플랫폼 지원 원금 |
 | `settlement_base_amount` | `bigint` | B=T+P |
-| `external_amount` | `bigint` | 업무 값 |
-| `mileage_amount` | `bigint` | 업무 값 |
-| `fee_amount` | `bigint` | 업무 값 |
-| `net_amount` | `bigint` | 업무 값 |
-| `status` | `varchar(32)` | 업무 값 |
-| `purchase_confirmed_at` | `timestamptz?` | 업무 값 |
-| `order_version` | `bigint` | 업무 값 |
+| `external_amount` | `bigint` | — |
+| `mileage_amount` | `bigint` | — |
+| `fee_amount` | `bigint` | — |
+| `net_amount` | `bigint` | — |
+| `status` | `varchar(32)` | — |
+| `purchase_confirmed_at` | `timestamptz?` | — |
+| `order_version` | `bigint` | — |
 | `payout_id` | `uuid?` | →payouts.id |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** ready_at=max(purchase_confirmed_at,eligible_received_at). UNIQUE(payment_id). T=E+M, B=T+P=fee+net. fee=floor(B*15/100). 플랫폼 지원분을 포함한 선지급 재원은 항상 충분하게 준비. 상태 조건과 예약을 같은 트랜잭션으로 보호.
@@ -828,20 +828,20 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 
 소유: `settlement`. 정산 원장.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `item_id` | `uuid` | →settlement_items.id |
-| `payment_id` | `uuid` | 업무 값 |
-| `side` | `varchar(16)` | 업무 값 |
-| `leg` | `varchar(24)` | 업무 값 |
-| `amount` | `bigint` | 업무 값 |
-| `business_ref` | `uuid` | 업무 값 |
+| `payment_id` | `uuid` | — |
+| `side` | `varchar(16)` | — |
+| `leg` | `varchar(24)` | — |
+| `amount` | `bigint` | — |
+| `business_ref` | `uuid` | — |
 | `source_event_id` | `uuid` | 원장을 만든 원천 금융 이벤트 ID; 같은 이벤트의 각 leg가 공유 |
 | `source_occurred_at` | `timestamptz` | 원천 Envelope의 occurredAt; 늦은 반영·재전달에도 불변 |
 | `reversal_of` | `uuid?` | →settlement_entries.id |
-| `policy_version` | `varchar(32)` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
+| `policy_version` | `varchar(32)` | — |
+| `created_at` | `timestamptz` | — |
 
 **제약:** UNIQUE(payment_id,leg,business_ref), UNIQUE(reversal_of) WHERE NOT NULL. SOURCE:EXTERNAL/MILEAGE/PLATFORM_COUPON, ALLOCATION:SELLER/FEE. 각 측 합계=B=E+M+P; 환불은 원항목 반대 부호로 각 측을 0으로 상쇄. 두 측을 합쳐 매출을 두 배로 세지 않으며 판매자 잔액은 SELLER leg만 집계.
 
@@ -853,19 +853,19 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 
 소유: `settlement`. 지급 작업.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `payout_id` | `uuid` | →payouts.id |
-| `business_key` | `uuid` | 업무 값 |
-| `status` | `varchar(24)` | 업무 값 |
-| `attempts` | `integer` | 업무 값 |
-| `next_run_at` | `timestamptz` | 업무 값 |
-| `lease_owner` | `varchar(100)?` | 업무 값 |
+| `business_key` | `uuid` | — |
+| `status` | `varchar(24)` | — |
+| `attempts` | `integer` | — |
+| `next_run_at` | `timestamptz` | — |
+| `lease_owner` | `varchar(100)?` | — |
 | `lease_token` | `uuid?` | 지급 Job 임대마다 새 UUID; 오래된 결과 반영 차단 |
-| `lease_until` | `timestamptz?` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `lease_until` | `timestamptz?` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(payout_id), UNIQUE(business_key). 지급 항목 선점·금액·작업 생성 원자 저장. next_run_at은 Payout 응답의 nextAttemptAt 원천입니다. 임대가 만료된 RUNNING 작업은 시도가 상한 미만이면 lease_until을 nextAttemptAt으로 냅니다(다음 임대 때 회수돼 다시 실행). 상한에 닿았으면 회수 때 운영 확인으로 넘어가므로 null입니다. 주말·공휴일도 같은 실행·재시도 규칙을 적용하며 확정 거절은 REVIEW_REQUIRED입니다.
@@ -878,7 +878,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 소유: `settlement`. 운영 재처리 이력. 원업무 키·금액·계정 사본은 `payouts`에 그대로 두고 다시 연 실행자·사유·이전 상태만 남깁니다.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `job_id` | `uuid` | →payout_jobs.id |
@@ -887,7 +887,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 | `previous_attempts` | `integer` | 다시 열기 전 시도 수. 재처리는 시도 수를 0으로 되돌린다 |
 | `operator_id` | `varchar(100)` | 검증한 `operator:<식별자>` 발신자 |
 | `reason` | `varchar(200)` | 운영자가 입력한 재처리 사유 |
-| `created_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
 
 **제약:** UNIQUE(job_id,expected_version). 작업 행 잠금 아래 작업·배치 전이·멱등 기록·감사 행과 같은 트랜잭션에 저장합니다. Settlement 운영 감사(재처리·배치 생성)의 `audit_logs.correlation_id`는 정산 배치 ID라 한 배치의 생성과 재처리를 함께 조회합니다.
 
@@ -895,18 +895,18 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 소유: `settlement`. 환불·지급 예약.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `item_id` | `uuid` | →settlement_items.id |
-| `previous_item_status` | `varchar(32)` | 업무 값 |
-| `kind` | `varchar(16)` | 업무 값 |
-| `business_ref` | `uuid` | 업무 값 |
-| `amount` | `bigint` | 업무 값 |
-| `status` | `varchar(16)` | 업무 값 |
+| `previous_item_status` | `varchar(32)` | — |
+| `kind` | `varchar(16)` | — |
+| `business_ref` | `uuid` | — |
+| `amount` | `bigint` | — |
+| `status` | `varchar(16)` | — |
 | `payout_id` | `uuid?` | →payouts.id |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(item_id,kind,business_ref). 부분 UNIQUE(item_id) WHERE status=ACTIVE, kind=REFUND/PAYOUT. amount=원항목 net_amount.
@@ -923,17 +923,17 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 소유: `finance_mock`. 시험 금융 계정. 준비 API는 기존 테이블·유니크 키를 재사용하며 기초잔액·참조를 수정하지 않습니다.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
-| `provider_id` | `varchar(16)` | 업무 값 |
-| `account_ref` | `varchar(100)` | 업무 값 |
-| `purpose` | `varchar(16)` | 업무 값 |
+| `provider_id` | `varchar(16)` | — |
+| `account_ref` | `varchar(100)` | — |
+| `purpose` | `varchar(16)` | — |
 | `opening_balance` | `bigint` | 시험 계정 생성 때 받은 불변 기초잔액 |
-| `balance` | `bigint` | 업무 값 |
-| `reserved_amount` | `bigint` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `balance` | `bigint` | — |
+| `reserved_amount` | `bigint` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(provider_id,account_ref,purpose). CHECK(0<=reserved_amount AND reserved_amount<=balance). purpose=WALLET/PAYOUT. PAYOUT의 balance=opening_balance+해당 계정 cash_entries 합계이며 예약액은 소비 전까지 차감하지 않습니다.
@@ -944,15 +944,15 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 소유: `finance_mock`. 대역 자금 선점.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `account_id` | `uuid` | →mock_accounts.id |
 | `transaction_id` | `uuid` | →mock_transactions.id |
-| `amount` | `bigint` | 업무 값 |
-| `status` | `varchar(16)` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `amount` | `bigint` | — |
+| `status` | `varchar(16)` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(transaction_id), amount>0, status=RESERVED/CONSUMED/RELEASED. 계정 잔액 검사·선점과 거래 기록 원자 저장.
@@ -963,28 +963,28 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 소유: `finance_mock`. 모의 금융 거래.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
-| `provider_id` | `varchar(16)` | 업무 값 |
-| `operation` | `varchar(16)` | 업무 값 |
-| `business_key` | `uuid` | 업무 값 |
+| `provider_id` | `varchar(16)` | — |
+| `operation` | `varchar(16)` | — |
+| `business_key` | `uuid` | — |
 | `original_id` | `uuid?` | →mock_transactions.id |
 | `account_id` | `uuid?` | →mock_accounts.id |
-| `method` | `varchar(24)?` | 업무 값 |
+| `method` | `varchar(24)?` | — |
 | `funding_account_id` | `uuid?` | 외부 승인/지급의 PAYOUT 재원 계정 |
 | `pg_calendar_version` | `varchar(32)?` | 승인 당시 입금 달력 버전 |
 | `pg_calendar` | `jsonb?` | 시간대·공휴일 목록 사본 |
 | `pg_receipt_due_at` | `timestamptz?` | 승인 시각+대역별 영업일 |
 | `pg_received_at` | `timestamptz?` | 실제 입금/입금 전 환불 상쇄 처리 시각 |
 | `pg_received_amount` | `bigint?` | 입금 처리 전 NULL, 처리 뒤 E 또는 0 |
-| `amount` | `bigint` | 업무 값 |
-| `status` | `varchar(24)` | 업무 값 |
-| `succeeded_at` | `timestamptz?` | 업무 값 |
-| `scenario_version` | `varchar(32)` | 업무 값 |
-| `result_seed` | `bigint` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `amount` | `bigint` | — |
+| `status` | `varchar(24)` | — |
+| `succeeded_at` | `timestamptz?` | — |
+| `scenario_version` | `varchar(32)` | — |
+| `result_seed` | `bigint` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(provider_id,operation,business_key). 진행 중/성공 환불은 original_id별1개(부분 UNIQUE). amount>0. 카드 승인은 내부 잔액 차감 없이 결과만 모의. 최초 SUCCEEDED 시각 succeeded_at을 결과와 원자 저장하고 이후 불변.
@@ -999,14 +999,14 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 소유: `finance_mock`. PAYOUT의 PG 입금·환불·지급 차감을 보존하는 추가 전용 현금 기록. 선지급 재원은 항상 충분하며 이 기록으로 재원 부족 보류를 만들지 않습니다.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `account_id` | `uuid` | →mock_accounts.id; purpose=PAYOUT |
 | `kind` | `varchar(24)` | PG_RECEIPT/REFUND_DEBIT/PAYOUT_DEBIT |
 | `transaction_id` | `uuid` | →mock_transactions.id |
 | `amount` | `bigint` | 입금은 양수, 환불/지급 차감은 음수 |
-| `created_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
 
 **제약:** UNIQUE(kind,transaction_id). amount!=0, kind에 맞는 부호·거래 종류·계정을 검증합니다. 원래 거래 ID·금액을 한 번만 반영하고 행·계정 잔액을 같은 트랜잭션으로 갱신합니다. UPDATE/DELETE를 제공하지 않습니다. 지급 성공 차감은 대역 예약 소비와 원자 저장합니다.
 
@@ -1016,25 +1016,25 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 소유: `finance_mock`. 장애 시험 설정. 준비 API는 기존 테이블·유니크 키에 새 버전만 추가하며 기존 행을 수정하지 않습니다. 확률 입력은 `numeric(8,7)`의 소수점 7자리까지 허용합니다.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `settlement_delay_business_days` | `integer?` | PG/EASY_PAY의 입금 지연 0~365; PAYOUT은 NULL |
-| `provider_id` | `varchar(16)` | 업무 값 |
-| `scenario_version` | `varchar(32)` | 업무 값 |
-| `min_delay_ms` | `integer` | 업무 값 |
-| `max_delay_ms` | `integer` | 업무 값 |
-| `rejection_rate` | `numeric(8,7)` | 업무 값 |
-| `response_loss_rate` | `numeric(8,7)` | 업무 값 |
-| `lookup_failure_rate` | `numeric(8,7)` | 업무 값 |
+| `provider_id` | `varchar(16)` | — |
+| `scenario_version` | `varchar(32)` | — |
+| `min_delay_ms` | `integer` | — |
+| `max_delay_ms` | `integer` | — |
+| `rejection_rate` | `numeric(8,7)` | — |
+| `response_loss_rate` | `numeric(8,7)` | — |
+| `lookup_failure_rate` | `numeric(8,7)` | — |
 | `refund_min_delay_ms` | `integer?` | PG/EASY_PAY 환불 지연 최솟값; PAYOUT은 NULL |
 | `refund_max_delay_ms` | `integer?` | PG/EASY_PAY 환불 지연 최댓값; PAYOUT은 NULL |
 | `refund_rejection_rate` | `numeric(8,7)?` | 환불 확정 거절확률; PAYOUT은 NULL |
 | `refund_response_loss_rate` | `numeric(8,7)?` | 환불 결과 저장 후 응답 유실확률; PAYOUT은 NULL |
 | `lookup_min_delay_ms` | `integer` | GET 조회 지연 최솟값 |
 | `lookup_max_delay_ms` | `integer` | GET 조회 지연 최댓값 |
-| `seed` | `bigint` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
+| `seed` | `bigint` | — |
+| `created_at` | `timestamptz` | — |
 
 **제약:** UNIQUE(provider_id,scenario_version). 기존 min/max_delay_ms·rejection_rate·response_loss_rate는 APPROVE 또는 PAYOUT용입니다. PG/EASY_PAY는 환불 4필드가 필수이고 PAYOUT은 모두 NULL입니다. 각 작업별 0<=min<=max, 확률 0..1. GET은 명시한 조회 버전의 lookup 필드만 적용하고 설정 부재는 503입니다. 시나리오 행은 불변이며 조회 버전 교체로 저장 거래의 금융 결과를 바꾸지 않습니다.
 
@@ -1050,7 +1050,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 소유: `commerce`. 거래 알림과 발송 작업.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; deliveryId이자 모의 수신 멱등키 |
 | `kind` | `varchar(40)` | 정책의 거래 알림 종류 |
@@ -1087,7 +1087,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 소유: `commerce`. 원거래별 알림 항목.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK |
 | `delivery_id` | `uuid` | →notification_deliveries.id |
@@ -1109,7 +1109,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 소유: `commerce`. 발송·조회·운영 재처리 이력.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK |
 | `delivery_id` | `uuid` | →notification_deliveries.id |
@@ -1130,7 +1130,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 소유: `commerce`. 모의 수신 원결과.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK |
 | `delivery_id` | `uuid` | →notification_deliveries.id; 모의 수신 멱등키 |
@@ -1146,7 +1146,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 소유: `commerce`. 알림 소비자가 해석할 수 없는 원문의 보조 격리 기록입니다. 정상 Inbox는 eventId·집계·JSON envelope가 필수라서 해석 불가 bytes를 가짜 ID로 넣지 않습니다. 위 네 알림 테이블과 별도로 원문·출처를 먼저 커밋한 뒤 알림 그룹만 ACK합니다. DLT 발행 작업이나 정상 발송 항목으로 간주하지 않습니다.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK |
 | `consumer` | `varchar(100)` | commerce-notifications.v1 고정 |
@@ -1170,28 +1170,28 @@ Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보�
 
 소유: `각 서비스 DB`. 발행할 이벤트.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `sequence_no` | `bigint` | DB identity; 같은 집계 버전 안의 저장 순번 |
-| `event_type` | `varchar(80)` | 업무 값 |
-| `event_version` | `integer` | 업무 값 |
-| `aggregate_id` | `uuid` | 업무 값 |
-| `aggregate_version` | `bigint` | 업무 값 |
-| `topic` | `varchar(100)` | 업무 값 |
+| `event_type` | `varchar(80)` | — |
+| `event_version` | `integer` | — |
+| `aggregate_id` | `uuid` | — |
+| `aggregate_version` | `bigint` | — |
+| `topic` | `varchar(100)` | — |
 | `occurred_at` | `timestamptz` | 원천 occurredAt의 DB 정밀도 조회용 표현 |
-| `message_key` | `varchar(100)` | 업무 값 |
-| `payload` | `jsonb` | 업무 값 |
+| `message_key` | `varchar(100)` | — |
+| `payload` | `jsonb` | — |
 | `raw_body` | `bytea` | 최초 직렬화한 Envelope 전체의 불변 UTF-8 bytes |
-| `status` | `varchar(16)` | 업무 값 |
-| `attempts` | `integer` | 업무 값 |
-| `next_run_at` | `timestamptz` | 업무 값 |
-| `lease_until` | `timestamptz?` | 업무 값 |
+| `status` | `varchar(16)` | — |
+| `attempts` | `integer` | — |
+| `next_run_at` | `timestamptz` | — |
+| `lease_until` | `timestamptz?` | — |
 | `published_partition` | `integer?` | 발행 ack의 파티션; 위치 미확정이면 null |
 | `published_offset` | `bigint?` | 발행 ack의 offset; 위치 미확정이면 null |
 | `published_at` | `timestamptz?` | ack의 위치를 DB에 반영한 시각; 위치 미확정이면 null |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** id=eventId. `payload`는 Envelope 전체의 JSON이며 `raw_body`를 JSON으로 해석한 값과 같아야 합니다. 업무 상태와 함께 원자 저장합니다. `occurred_at`은 원래 occurredAt을 PostgreSQL `timestamptz` 정밀도로 변환한 조회용 값이며, 마이크로초보다 세밀한 원시 시각은 `raw_body`·`payload`에 그대로 보존합니다. 발행할 때 조회용 시각으로 Envelope를 다시 만들거나 bytes를 재직렬화하지 않습니다. published_partition·published_offset·published_at은 모두 null이거나 모두 값이 있어야 하며 파티션·offset은 0 이상입니다. 발행 완료 상태와 위치를 같은 DB 트랜잭션으로 저장합니다. 미발행·ack 후 저장 전 중단은 위치 미확정이며 대조에서 제외하지 않습니다. 재발행은 원래 id·본문을 유지합니다. 위치가 바뀌어도 소비자의 원래 eventId 처리 기록은 유효합니다. payload에 주소·비밀번호·인증 토큰·실결제 비밀값을 넣지 않습니다.
@@ -1206,27 +1206,27 @@ Commerce는 추가로 전체 행의 (aggregate_id,aggregate_version,sequence_no)
 
 소유: `각 서비스 DB`. 수신 이벤트.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
-| `consumer` | `varchar(100)` | 업무 값 |
-| `event_id` | `uuid` | 업무 값 |
-| `event_type` | `varchar(80)` | 업무 값 |
-| `event_version` | `integer` | 업무 값 |
-| `occurred_at` | `timestamptz` | 업무 값 |
-| `payload` | `jsonb` | 업무 값 |
+| `consumer` | `varchar(100)` | — |
+| `event_id` | `uuid` | — |
+| `event_type` | `varchar(80)` | — |
+| `event_version` | `integer` | — |
+| `occurred_at` | `timestamptz` | — |
+| `payload` | `jsonb` | — |
 | `raw_body` | `bytea` | 최초 수신 Envelope 전체의 불변 bytes |
 | `body_hash` | `char(64)` | raw_body의 SHA-256 |
 | `source_topic` | `varchar(100)` | 최초 수신 원본 토픽 |
 | `source_partition` | `integer` | 최초 수신 파티션; 0 이상 |
 | `source_offset` | `bigint` | 최초 수신 offset; 0 이상 |
-| `next_run_at` | `timestamptz?` | 업무 값 |
-| `aggregate_id` | `uuid` | 업무 값 |
-| `aggregate_version` | `bigint` | 업무 값 |
-| `status` | `varchar(24)` | 업무 값 |
-| `result_ref` | `uuid?` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `next_run_at` | `timestamptz?` | — |
+| `aggregate_id` | `uuid` | — |
+| `aggregate_version` | `bigint` | — |
+| `status` | `varchar(24)` | — |
+| `result_ref` | `uuid?` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(consumer,event_id). status=RECEIVED/WAITING/APPLIED/REVIEW_REQUIRED. WAITING은 원 event_type/version/occurred_at/payload와 다음 재판정 시각을 보존해 Kafka ack·재시작 뒤에도 로컬에서 재개. payload에 금융 계약 외의 주소/인증 비밀값 금지.
@@ -1249,7 +1249,7 @@ Commerce의 `result_ref`는 주문 ID입니다. 주문 연결·결과 반영과 
 
 소유: `commerce`·`payment`·`settlement`. 같은 consumer·eventId에 다른 bytes가 도착한 기록입니다. 원래 Inbox·처리 결과를 덮어쓰지 않습니다.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK |
 | `inbox_id` | `uuid` | 기존 Inbox의 애플리케이션 참조 |
@@ -1267,7 +1267,7 @@ Commerce의 `result_ref`는 주문 ID입니다. 주문 연결·결과 반영과 
 
 소유: `payment`·`settlement`(각 서비스 스키마, 같은 컬럼·제약). 유효한 Envelope로 해석할 수 없는 입력의 원문입니다. `app.kafka.quarantine.enabled`를 명시적으로 켠 경우에만 수신 경로에 연결합니다.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | 격리 ID; 업무 eventId를 대신하지 않음 |
 | `consumer`, `source_topic` | `varchar(100)`, `varchar(249)` | 최초 수신 그룹·토픽 |
@@ -1284,7 +1284,7 @@ Commerce의 `result_ref`는 주문 ID입니다. 주문 연결·결과 반영과 
 
 소유: `payment`·`settlement`. 격리 원문의 DLT 발행과 운영 재처리 작업입니다. 원문은 위 행을 참조하며 별도로 복제하지 않습니다.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id`, `quarantine_id` | `uuid`, `uuid` | 작업 ID·→inbox_quarantines.id |
 | `kind`, `topic` | `varchar(8)`, `varchar(249)` | DLT/REPLAY·고정 목적지 |
@@ -1301,7 +1301,7 @@ Commerce의 `result_ref`는 주문 ID입니다. 주문 연결·결과 반영과 
 
 소유: `payment`·`settlement`. 소진된 DLT/REPLAY 작업의 운영 재개 이력입니다.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id`, `delivery_id` | `uuid`, `uuid` | 재개 요청 ID·→inbox_quarantine_deliveries.id |
 | `expected_version`, `previous_attempts` | `bigint`, `integer` | 재개 전 버전·누적 시도 수 |
@@ -1313,21 +1313,21 @@ Commerce의 `result_ref`는 주문 ID입니다. 주문 연결·결과 반영과 
 
 소유: `각 서비스 DB`. 요청 멱등 기록.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
-| `actor_kind` | `varchar(24)` | 업무 값 |
-| `actor_id` | `varchar(100)` | 업무 값 |
-| `operation` | `varchar(100)` | 업무 값 |
-| `key_hash` | `char(64)` | 업무 값 |
-| `request_hash` | `char(64)` | 업무 값 |
-| `resource_id` | `uuid?` | 업무 값 |
-| `response_status` | `integer?` | 업무 값 |
-| `response_snapshot` | `jsonb?` | 업무 값 |
-| `status` | `varchar(16)` | 업무 값 |
-| `expires_at` | `timestamptz?` | 업무 값 |
-| `created_at` | `timestamptz` | NOT NULL |
-| `updated_at` | `timestamptz` | NOT NULL |
+| `actor_kind` | `varchar(24)` | — |
+| `actor_id` | `varchar(100)` | — |
+| `operation` | `varchar(100)` | — |
+| `key_hash` | `char(64)` | — |
+| `request_hash` | `char(64)` | — |
+| `resource_id` | `uuid?` | — |
+| `response_status` | `integer?` | — |
+| `response_snapshot` | `jsonb?` | — |
+| `status` | `varchar(16)` | — |
+| `expires_at` | `timestamptz?` | — |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
 **제약:** UNIQUE(actor_kind,actor_id,operation,key_hash). PENDING/COMPLETED; 본문 불일치409. 금융/주문 보존, 일반 관리24h. 민감 응답 원문은 보존하지 않음.
@@ -1344,7 +1344,7 @@ Finance Mock 준비 API는 `actor_kind=OPERATOR`, `operation=MOCK:ACCOUNT:CREATE
 
 소유: `각 서비스 DB`. 주요 변경의 실행 주체·행위 기록이며 금융 원장을 대신하지 않습니다. 커머스·Payment·Settlement·Finance Mock이 자기 DB에 각각 저장합니다.
 
-| 컬럼 | 타입 | 의미 |
+| 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
 | `actor_kind` | `varchar(16)` | BUYER/SELLER/SERVICE/OPERATOR/SYSTEM |

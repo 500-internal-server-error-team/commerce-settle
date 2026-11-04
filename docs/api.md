@@ -55,7 +55,7 @@ Commerce의 `/internal/coupon-issue-runs`에서 월간 회차 목록·단건을 
 5. 판매자 승인 전 반품은 구매자가 철회할 수 있습니다. 금융 실패 뒤 운영 종결은 외부확정거절·미복원·예약해제·고객확인 근거를 모두 확인한 경우만 허용하고, 미확정이면 거절합니다.
 6. 모의 배송완료 반영과 기한 후 자동 구매확정은 내부 스케줄 작업이며 구매자용 수동 조기확정 API는 없습니다. 정산·지급은 해당 이벤트와 예약 상태를 확인합니다.
 
-상품권 요청은 결제수단 enum 검증에서 `400 COMMON_VALIDATION_FAILED`로 거절합니다. 카드·간편결제·우리 마일리지의 기존 금액·원수단 환불 계약은 유지합니다.
+상품권 요청은 결제수단 enum 검증에서 `400 COMMON_VALIDATION_FAILED`로 거절합니다.
 
 ## 이벤트 연동
 
@@ -142,7 +142,7 @@ PG A/B/C의 카드와 EASY_PAY의 시험 지갑에 승인·전액 환불을 제�
 
 시험 준비 API는 검증한 `operator:<식별자>` 자격만 받습니다. POST는 운영자·작업·`Idempotency-Key`별로 원생성 결과와 `201`·같은 `Location`을 반환하고, 다른 본문 또는 이미 등록한 계정 참조·시나리오 버전은 `409`로 거절합니다. 계정 생성 재요청은 잔액 변경 뒤에도 최초 `balance=openingBalance`·예약액 0·버전 0을 반환하며, 현재 잔액·예약액·버전은 `GET /mock/accounts/{accountId}`로 확인합니다. 시나리오 `Location`은 식별 URI이며 별도 GET은 제공하지 않습니다. 입력 필드와 검증 범위는 [OpenAPI](openapi.json), 키 보존은 [시험 데이터 준비 정책](policies.md#시험-데이터-준비)을 따릅니다.
 
-금융 POST는 같은 대역·작업·업무 키·본문의 재요청에 원거래를 반환하고 다른 본문은 409입니다. 환불은 원승인의 금융 버전을 계승합니다. `MockScenarioCreate/MockScenario`는 승인/PAYOUT, 환불, 조회의 설정을 분리하며 PAYOUT의 환불 필드는 모두 null입니다. [상세 설정](design.md#pg-3종과-장애-시나리오)과 [조회 결과별 복구·Worker 인계](policies.md#공통-복구)를 따릅니다. 업무 경로·이벤트 이름·금액 정책은 유지합니다.
+`MockScenarioCreate/MockScenario`는 승인/PAYOUT, 환불, 조회의 설정을 분리하며 PAYOUT의 환불 필드는 모두 null입니다. [상세 설정](design.md#pg-3종과-장애-시나리오)과 [조회 결과별 복구·Worker 인계](policies.md#공통-복구)를 따릅니다.
 
 ## 거래 알림 사용 순서
 
