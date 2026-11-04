@@ -118,6 +118,7 @@ class InboxOperationIntegrationTest {
 
   @AfterEach
   void clear() {
+    jdbc.execute("DROP FUNCTION IF EXISTS settlement.clock_timestamp()");
     jdbc.execute("DROP TRIGGER IF EXISTS fail_rejudgement ON settlement.audit_logs");
     jdbc.execute("DROP FUNCTION IF EXISTS settlement.fail_rejudgement()");
     jdbc.execute("DROP TRIGGER IF EXISTS hold_rejudgement ON settlement.audit_logs");
@@ -524,6 +525,86 @@ class InboxOperationIntegrationTest {
     assertThat(ops.attempts(run, 0, 100).items())
         .extracting(InboxOperationStore.AttemptView::outcome)
         .containsExactly("LEASE_EXPIRED", "PREREQUISITE_MISSING");
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {1, 2})
+  @DisplayName("이전 스냅샷으로 실행 잠금을 얻어도 유효 임대와 뒤의 미처리 대상을 바꾸지 않는다")
+  void preservesValidLeaseAfterClaimSnapshotRace(int targetCount) throws Exception {
+    var ids = new java.util.ArrayList<UUID>();
+    for (int i = 0; i < targetCount; i++)
+      ids.add(review(purchase(), InboxReviewReason.PAYMENT_NOT_ARRIVED));
+    UUID run =
+        ops.create(
+                "operator:ops",
+                "snapshot-race",
+                new Filter("PAYMENT_NOT_ARRIVED", null, BEFORE, null),
+                targetCount,
+                ids.stream().map(id -> new ExpectedTarget(id, 1)).toList(),
+                "VERIFIED")
+            .id();
+    Claim expired = ops.claim(Duration.ofSeconds(30)).orElseThrow();
+    jdbc.update(
+        "UPDATE settlement.inbox_rejudgement_targets SET lease_until=clock_timestamp()-interval '1 second' WHERE id=?",
+        expired.targetId());
+    // Only the second connection resolves this wrapper. Production SQL stays unchanged, and the
+    // returned time is real. The gate pauses its first SELECT after its snapshot but before run
+    // lock.
+    jdbc.execute(
+        "CREATE FUNCTION settlement.clock_timestamp() RETURNS timestamptz VOLATILE LANGUAGE plpgsql AS $$ BEGIN WHILE NOT pg_try_advisory_xact_lock(2120212) LOOP PERFORM pg_sleep(0.01); END LOOP; RETURN pg_catalog.clock_timestamp(); END $$");
+    var written = new CompletableFuture<Claim>();
+    var commit = new CompletableFuture<Void>();
+    var backend = new AtomicLong();
+    try (var holder = dataSource.getConnection();
+        var pool = Executors.newFixedThreadPool(2)) {
+      holder.setAutoCommit(false);
+      holder.createStatement().execute("SELECT pg_advisory_xact_lock(2120212)");
+      try {
+        var first =
+            pool.submit(
+                () ->
+                    tx.execute(
+                        s -> {
+                          Claim c = ops.claim(Duration.ofSeconds(30)).orElseThrow();
+                          written.complete(c);
+                          commit.orTimeout(5, TimeUnit.SECONDS).join();
+                          return c;
+                        }));
+        Claim owner = written.get(5, TimeUnit.SECONDS);
+        var second =
+            pool.submit(
+                () ->
+                    tx.execute(
+                        s -> {
+                          jdbc.execute("SET LOCAL search_path=settlement,pg_catalog");
+                          backend.set(jdbc.queryForObject("SELECT pg_backend_pid()", Long.class));
+                          return ops.claim(Duration.ofSeconds(30));
+                        }));
+        await()
+            .pollInterval(Duration.ofMillis(10))
+            .atMost(Duration.ofSeconds(3))
+            .until(
+                () ->
+                    backend.get() != 0
+                        && jdbc.queryForObject(
+                                "SELECT count(*) FROM pg_stat_activity WHERE pid=? AND wait_event='PgSleep' AND query LIKE '%SELECT r.id FROM settlement.inbox_rejudgement_runs%'",
+                                Long.class, backend.get())
+                            == 1);
+        commit.complete(null);
+        assertThat(first.get(5, TimeUnit.SECONDS)).isEqualTo(owner);
+        var before = ops.targets(run, 0, 100).items();
+        holder.commit();
+        assertThat(second.get(5, TimeUnit.SECONDS)).isEmpty();
+        assertThat(ops.targets(run, 0, 100).items()).isEqualTo(before);
+        assertThat(ops.attempts(run, 0, 100).items())
+            .extracting(InboxOperationStore.AttemptView::outcome)
+            .containsExactly("LEASE_EXPIRED", "RUNNING");
+        assertThat(ops.process(owner)).isTrue();
+      } finally {
+        commit.complete(null);
+        holder.rollback();
+      }
+    }
   }
 
   @Test

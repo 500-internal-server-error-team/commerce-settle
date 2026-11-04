@@ -23,6 +23,8 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 @Transactional(propagation = Propagation.MANDATORY)
 class JdbcInboxOperationStore implements InboxOperationStore {
+  private static final String CLAIMABLE =
+      "(status='PENDING' OR (status='RUNNING' AND lease_until<=clock_timestamp()))";
   private static final String FILTER =
       """
       consumer=:consumer AND status='REVIEW_REQUIRED'
@@ -384,9 +386,13 @@ class JdbcInboxOperationStore implements InboxOperationStore {
     if (runs.isEmpty()) return Optional.empty();
     UUID runId = runs.getFirst();
     var p = new MapSqlParameterSource("run", runId);
+    // The run query is only a prefilter: its target snapshot can predate another claim's commit.
+    // Recheck the lease after the run lock, using this statement's fresh snapshot.
     var rows =
         jdbc.query(
-            "SELECT * FROM settlement.inbox_rejudgement_targets WHERE run_id=:run AND status IN ('PENDING','RUNNING') ORDER BY position LIMIT 1 FOR UPDATE",
+            "SELECT * FROM settlement.inbox_rejudgement_targets WHERE run_id=:run AND "
+                + CLAIMABLE
+                + " AND NOT EXISTS (SELECT 1 FROM settlement.inbox_rejudgement_targets active WHERE active.run_id=:run AND active.status='RUNNING' AND active.lease_until>clock_timestamp()) ORDER BY position LIMIT 1 FOR UPDATE",
             p,
             (rs, n) ->
                 new Claim(
@@ -399,24 +405,28 @@ class JdbcInboxOperationStore implements InboxOperationStore {
                     rs.getString("reason_code"),
                     rs.getInt("attempts"),
                     rs.getString("status")));
+    if (rows.isEmpty()) return Optional.empty();
     Claim claim = rows.getFirst();
     p.addValue("id", claim.targetId())
         .addValue("token", claim.token())
         .addValue("attemptId", claim.attemptId())
         .addValue("lease", lease.toMillis() / 1000.0);
-    jdbc.update(
-        "UPDATE settlement.inbox_rejudgement_attempts SET outcome='LEASE_EXPIRED',finished_at=clock_timestamp() WHERE target_id=:id AND outcome='RUNNING'",
-        p);
     if (claim.exhausted()) {
-      jdbc.update(
-          "UPDATE settlement.inbox_rejudgement_targets SET status='DONE',outcome='ATTEMPTS_EXHAUSTED',lease_token=NULL,lease_until=NULL WHERE id=:id",
-          p);
+      requireClaimableUpdate(
+          jdbc.update(
+              "UPDATE settlement.inbox_rejudgement_targets SET status='DONE',outcome='ATTEMPTS_EXHAUSTED',lease_token=NULL,lease_until=NULL WHERE id=:id AND "
+                  + CLAIMABLE,
+              p));
+      expireAttempt(p);
       completeRun(runId);
       return Optional.of(claim);
     }
-    jdbc.update(
-        "UPDATE settlement.inbox_rejudgement_targets SET status='RUNNING',attempts=attempts+1,outcome=NULL,lease_token=:token,lease_until=clock_timestamp()+make_interval(secs=>:lease) WHERE id=:id",
-        p);
+    requireClaimableUpdate(
+        jdbc.update(
+            "UPDATE settlement.inbox_rejudgement_targets SET status='RUNNING',attempts=attempts+1,outcome=NULL,lease_token=:token,lease_until=clock_timestamp()+make_interval(secs=>:lease) WHERE id=:id AND "
+                + CLAIMABLE,
+            p));
+    expireAttempt(p);
     jdbc.update(
         "INSERT INTO settlement.inbox_rejudgement_attempts(id,run_id,target_id,attempt,outcome) SELECT :attemptId,run_id,id,attempts,'RUNNING' FROM settlement.inbox_rejudgement_targets WHERE id=:id",
         p);
@@ -424,6 +434,16 @@ class JdbcInboxOperationStore implements InboxOperationStore {
         "UPDATE settlement.inbox_rejudgement_runs SET updated_at=clock_timestamp() WHERE id=:run",
         p);
     return Optional.of(claim);
+  }
+
+  private void expireAttempt(MapSqlParameterSource p) {
+    jdbc.update(
+        "UPDATE settlement.inbox_rejudgement_attempts SET outcome='LEASE_EXPIRED',finished_at=clock_timestamp() WHERE target_id=:id AND outcome='RUNNING'",
+        p);
+  }
+
+  private static void requireClaimableUpdate(int changed) {
+    if (changed != 1) throw new IllegalStateException("Rejudgement target is no longer claimable");
   }
 
   @Override
