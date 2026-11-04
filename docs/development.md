@@ -459,6 +459,32 @@ Settlement 원문 격리도 같은 테이블 구조와 `app.kafka.quarantine.ena
 
 Settlement 발행 Outbox는 Payment와 같은 Relay 규칙(커밋 후·결과 반영 후·시작 시 깨움, 1초 복구 조회, 미완료 발행 최대 8건, 임대 240초, 10회 소진 REVIEW_REQUIRED)을 따르며 `app.outbox.enabled`(`APP_OUTBOX_ENABLED`, 기본 false)로 켭니다. 환불 SAGA 응답과 판매자 알림 요청은 스위치와 관계없이 업무 트랜잭션에서 저장합니다. 일배치와 지급 결과 반영도 Outbox에 쓰므로 `settlement.outbox`가 없는 기존 개발 DB에서는 일배치가 실패합니다. 새 초기 SQL을 적용한 DB에서 실행합니다.
 
+### 업무 Inbox 관측과 재판정
+
+새 전용 DB에 현재 Settlement 초기 SQL을 적용한 환경에서 실행합니다. 기존 DB·볼륨에 초기 SQL을 재실행하거나 사용자 확인용 데모에 fixture를 적재하지 않습니다. Worker는 `settlement.inbox-rejudgement.enabled`(환경 변수 `SETTLEMENT_INBOX_REJUDGEMENT_ENABLED`, 기본 true)로 동작하며 1초마다 최대 32건, 한 실행에서 한 대상씩 30초 임대합니다. RUNNING 실행은 앱 재기동 뒤에도 같은 고정 대상을 이어갑니다.
+
+대상 서비스의 직접 주소와 기존 운영자 자격을 사용합니다. 자격은 환경 변수로 전달하고 명령 출력·PR에 붙이지 않습니다.
+
+```bash
+curl --fail-with-body -H "Authorization: Bearer $SETTLEMENT_OPERATOR_CREDENTIAL" "$SETTLEMENT_OPERATION_URL/internal/settlement-inbox-summary"
+curl --fail-with-body -G -H "Authorization: Bearer $SETTLEMENT_OPERATOR_CREDENTIAL" --data-urlencode 'reasonCode=PAYMENT_NOT_ARRIVED' --data-urlencode 'receivedBefore=2026-11-03T23:00:00+09:00' "$SETTLEMENT_OPERATION_URL/internal/settlement-inboxes"
+```
+
+목록의 조건·totalElements와 대상 ID/version을 대조해 POST `/internal/settlement-inbox-rejudgements`에 다음 형태로 제출합니다. ID·시각·수를 실제 조회값으로 바꾸고 `Idempotency-Key`를 붙입니다. 원문·eventId·금융 업무 키·confirmedAt은 입력하지 않습니다.
+
+```json
+{
+  "filter": {"reasonCode":"PAYMENT_NOT_ARRIVED","receivedBefore":"2026-11-03T23:00:00+09:00","inboxId":"00000000-0000-4000-8000-000000000001"},
+  "expectedCount":1,
+  "targets":[{"inboxId":"00000000-0000-4000-8000-000000000001","expectedVersion":10}],
+  "reasonCode":"PREDECESSOR_VERIFIED"
+}
+```
+
+응답 Location의 실행을 조회하고 `/targets`·`/attempts`에서 결과를, `/audits`에서 운영자·처리기의 행위·사유를 확인합니다. 중단·재개·취소에는 실행 조회값의 expectedVersion과 reasonCode를 제출합니다. 조건·대상 버전이 달라지면 다시 조회하며, 사유 미기록·계약·원천·종결 충돌을 정상으로 강제하지 않습니다. COMPLETED만 보지 말고 PREREQUISITE_MISSING·VERSION_CHANGED·PROCESSING_FAILED·ATTEMPTS_EXHAUSTED와 실제 Inbox/업무 결과를 함께 확인합니다. 격리 원문 재발행과 구분은 [업무 정책](policies.md#업무-inbox-재판정)을 따릅니다.
+
+사유·이벤트별 건수와 나이, 미완료 실행의 진행 정체는 `/actuator/prometheus`에서 관측합니다. 실행·대상·시도·감사 기록은 재기동 후에도 DB에 남으며 원문은 일반 로그나 알림으로 보내지 않습니다.
+
 ### DLT 관측과 조치
 
 격리 기능을 켠 Payment·Settlement는 15초마다 자기 DB를 전용 실행기에서 관측하고 `/actuator/prometheus`로 마지막 성공 표본을 노출합니다. SQL 제한 시간은 2초이며 scrape와 공통 예약 스레드에서 DB를 조회하지 않습니다. 원문·키·업무 ID는 지표 label에 넣지 않습니다.
@@ -469,7 +495,7 @@ Prometheus는 신규 격리·재시도 소진을 CRITICAL, 도래 후 5분/15분
 
 1. 신규 격리는 원본 위치·오류 코드를 확인하고 생산자/스키마 원인을 조사합니다. 원문을 Slack·일반 로그에 붙이지 않습니다.
 2. 발행 지연·REVIEW_REQUIRED는 Kafka 가용성, 발행 작업 상태·시도 수·임대를 확인합니다. DLT가 비어 있어도 DB 발행 대기를 확인합니다.
-3. 원인 수정 뒤 위의 `requestReplay` 또는 `resumeDelivery`로 재처리하며 발행 완료와 실제 Inbox·업무 결과를 따로 대조합니다. Payment는 [Payment 격리 원문 운영 API](api.md#payment-격리-원문-운영), Settlement는 [격리 원문 운영 API](api.md#격리-원문-운영)로 호출합니다. Inbox 업무 실패의 수동 재개는 별도 구현 대상입니다.
+3. 원인 수정 뒤 위의 `requestReplay` 또는 `resumeDelivery`로 재처리하며 발행 완료와 실제 Inbox·업무 결과를 따로 대조합니다. Payment는 [Payment 격리 원문 운영 API](api.md#payment-격리-원문-운영), Settlement는 [격리 원문 운영 API](api.md#격리-원문-운영)로 호출합니다. Settlement 업무 Inbox는 [위 재판정 API](#업무-inbox-관측과-재판정)로 처리하며, Payment·Commerce 업무 Inbox의 수동 재개는 별도 구현 대상입니다.
 
 기본 수신처는 Alertmanager 화면입니다. 팀 Incoming Webhook을 연결할 때만 비밀 URL을 저장소 밖 파일에 두고 다음 overlay를 사용합니다. 해당 Webhook의 채널이 수신처이며 실제 채널로 시험 메시지를 자동 발송하지 않습니다.
 

@@ -267,6 +267,63 @@ CREATE INDEX inbox_refund_request_lookup ON settlement.inbox
     (consumer, ((payload->'payload'->>'refundId')::uuid), created_at, id)
     WHERE event_type = 'RefundReservationRequested';
 
+-- 업무 Inbox의 제한된 재판정. 원문·금융 키는 inbox에만 보존한다.
+CREATE INDEX inbox_review_reason ON settlement.inbox(consumer,last_error_code,event_type,created_at,id)
+    WHERE status='REVIEW_REQUIRED';
+CREATE TABLE settlement.inbox_rejudgement_runs (
+    id uuid PRIMARY KEY,
+    consumer varchar(100) NOT NULL,
+    status varchar(16) NOT NULL CHECK(status IN ('RUNNING','PAUSED','COMPLETED','CANCELLED')),
+    version bigint NOT NULL DEFAULT 0 CHECK(version>=0),
+    filter_reason varchar(80) NOT NULL,
+    filter_event_type varchar(80),
+    received_before timestamptz NOT NULL,
+    filter_inbox_id uuid,
+    expected_count integer NOT NULL CHECK(expected_count BETWEEN 1 AND 100),
+    requested_by varchar(100) NOT NULL,
+    reason_code varchar(80) NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX inbox_rejudgement_run_due ON settlement.inbox_rejudgement_runs(consumer,status,created_at,id);
+CREATE TABLE settlement.inbox_rejudgement_targets (
+    id uuid PRIMARY KEY,
+    run_id uuid NOT NULL,
+    inbox_id uuid NOT NULL,
+    event_id uuid NOT NULL,
+    event_type varchar(80) NOT NULL,
+    reason_code varchar(80) NOT NULL,
+    expected_version bigint NOT NULL CHECK(expected_version>=0),
+    position integer NOT NULL CHECK(position>=0),
+    status varchar(16) NOT NULL CHECK(status IN ('PENDING','RUNNING','DONE','CANCELLED')),
+    outcome varchar(80),
+    attempts integer NOT NULL DEFAULT 0 CHECK(attempts>=0),
+    lease_token uuid,
+    lease_until timestamptz,
+    result_version bigint,
+    result_reason_code varchar(80),
+    UNIQUE(run_id,inbox_id),
+    UNIQUE(run_id,position),
+    CHECK((status='RUNNING')=(lease_token IS NOT NULL AND lease_until IS NOT NULL)),
+    CHECK(status='RUNNING' OR (lease_token IS NULL AND lease_until IS NULL))
+);
+-- 중단된 실행도 원래 대상을 소유한다. 취소/종결 전에는 겹치는 실행을 만들지 않는다.
+CREATE UNIQUE INDEX inbox_rejudgement_active ON settlement.inbox_rejudgement_targets(inbox_id)
+    WHERE status IN ('PENDING','RUNNING');
+CREATE INDEX inbox_rejudgement_target_due ON settlement.inbox_rejudgement_targets(run_id,position);
+CREATE TABLE settlement.inbox_rejudgement_attempts (
+    id uuid PRIMARY KEY,
+    run_id uuid NOT NULL,
+    target_id uuid NOT NULL,
+    attempt integer NOT NULL CHECK(attempt>0),
+    outcome varchar(80) NOT NULL,
+    started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    finished_at timestamptz,
+    UNIQUE(target_id,attempt),
+    CHECK((outcome='RUNNING')=(finished_at IS NULL))
+);
+CREATE INDEX inbox_rejudgement_attempt_history ON settlement.inbox_rejudgement_attempts(run_id,started_at,id);
+
 CREATE TABLE settlement.inbox_conflicts (
     id uuid PRIMARY KEY,
     inbox_id uuid NOT NULL,

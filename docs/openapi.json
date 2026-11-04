@@ -12,6 +12,1530 @@
     }
   ],
   "paths": {
+    "/internal/settlement-inbox-summary": {
+        "get": {
+            "operationId": "get_internal_settlement_inbox_summary",
+            "summary": "업무 Inbox 사유·이벤트별 요약",
+            "tags": [
+                "settlement"
+            ],
+            "x-owner-service": "settlement",
+            "x-actor": "OPERATOR",
+            "x-implemented": true,
+            "security": [
+                {
+                    "serviceCredential": []
+                }
+            ],
+            "description": "REVIEW_REQUIRED 건수와 현재 확인 상태 updatedAt 기준 최장 대기 나이(초). 사유 미기록은 UNRECORDED로 구분한다.",
+            "parameters": [],
+            "responses": {
+                "200": {
+                    "description": "조회 완료",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "array",
+                                "items": {
+                                    "$ref": "#/components/schemas/SettlementInboxSummary"
+                                }
+                            }
+                        }
+                    }
+                },
+                "400": {
+                    "description": "형식·값 오류",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "401": {
+                    "description": "인증 필요/만료",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "403": {
+                    "description": "역할·서비스 권한 없음",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "404": {
+                    "description": "없거나 타인 소유",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "409": {
+                    "description": "상태·버전·기한·잔액·멱등 충돌",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "429": {
+                    "description": "요청 제한",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "503": {
+                    "description": "일시적 저장/외부 장애",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "/internal/settlement-inboxes": {
+        "get": {
+            "operationId": "get_internal_settlement_inboxes",
+            "summary": "업무 Inbox 확인 대상 목록",
+            "tags": [
+                "settlement"
+            ],
+            "x-owner-service": "settlement",
+            "x-actor": "OPERATOR",
+            "x-implemented": true,
+            "security": [
+                {
+                    "serviceCredential": []
+                }
+            ],
+            "description": "조건에 맞는 REVIEW_REQUIRED를 receivedAt ASC,id ASC 순서로 조회한다. 원문·payload·메시지 키는 반환하지 않고 크기·SHA-256·버전을 제공한다. 사유 미기록 조회는 reasonCode=UNRECORDED다.",
+            "parameters": [
+                {
+                    "name": "reasonCode",
+                    "in": "query",
+                    "schema": {
+                        "type": "string",
+                        "pattern": "^[A-Z][A-Z0-9_]{0,79}$",
+                        "maxLength": 80
+                    }
+                },
+                {
+                    "name": "eventType",
+                    "in": "query",
+                    "schema": {
+                        "type": "string",
+                        "enum": [
+                            "PaymentConfirmed",
+                            "PurchaseConfirmed",
+                            "RefundReservationRequested",
+                            "RefundFinancialCompleted",
+                            "RefundReleaseRequested"
+                        ]
+                    }
+                },
+                {
+                    "name": "receivedBefore",
+                    "in": "query",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "format": "date-time"
+                    }
+                },
+                {
+                    "name": "inboxId",
+                    "in": "query",
+                    "schema": {
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                },
+                {
+                    "name": "page",
+                    "in": "query",
+                    "schema": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0
+                    }
+                },
+                {
+                    "name": "size",
+                    "in": "query",
+                    "schema": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20
+                    }
+                }
+            ],
+            "responses": {
+                "200": {
+                    "description": "조회 완료",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SettlementInboxPage"
+                            }
+                        }
+                    }
+                },
+                "400": {
+                    "description": "형식·값 오류",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "401": {
+                    "description": "인증 필요/만료",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "403": {
+                    "description": "역할·서비스 권한 없음",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "404": {
+                    "description": "없거나 타인 소유",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "409": {
+                    "description": "상태·버전·기한·잔액·멱등 충돌",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "429": {
+                    "description": "요청 제한",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "503": {
+                    "description": "일시적 저장/외부 장애",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "/internal/settlement-inboxes/{inboxId}": {
+        "get": {
+            "operationId": "get_internal_settlement_inboxes_inboxId",
+            "summary": "업무 Inbox 단건 요약",
+            "tags": [
+                "settlement"
+            ],
+            "x-owner-service": "settlement",
+            "x-actor": "OPERATOR",
+            "x-implemented": true,
+            "security": [
+                {
+                    "serviceCredential": []
+                }
+            ],
+            "description": "현재 상태와 원문 요약을 조회한다. 원문 bytes는 노출하지 않는다.",
+            "parameters": [
+                {
+                    "name": "inboxId",
+                    "in": "path",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                }
+            ],
+            "responses": {
+                "200": {
+                    "description": "조회 완료",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SettlementInbox"
+                            }
+                        }
+                    }
+                },
+                "400": {
+                    "description": "형식·값 오류",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "401": {
+                    "description": "인증 필요/만료",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "403": {
+                    "description": "역할·서비스 권한 없음",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "404": {
+                    "description": "없거나 타인 소유",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "409": {
+                    "description": "상태·버전·기한·잔액·멱등 충돌",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "429": {
+                    "description": "요청 제한",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "503": {
+                    "description": "일시적 저장/외부 장애",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "/internal/settlement-inbox-rejudgements": {
+        "get": {
+            "operationId": "get_internal_settlement_inbox_rejudgements",
+            "summary": "재판정 실행 목록",
+            "tags": [
+                "settlement"
+            ],
+            "x-owner-service": "settlement",
+            "x-actor": "OPERATOR",
+            "x-implemented": true,
+            "security": [
+                {
+                    "serviceCredential": []
+                }
+            ],
+            "description": "최근 생성 순서로 실행과 진행 건수를 조회한다.",
+            "parameters": [
+                {
+                    "name": "page",
+                    "in": "query",
+                    "schema": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0
+                    }
+                },
+                {
+                    "name": "size",
+                    "in": "query",
+                    "schema": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20
+                    }
+                }
+            ],
+            "responses": {
+                "200": {
+                    "description": "조회 완료",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/InboxRejudgementRunPage"
+                            }
+                        }
+                    }
+                },
+                "400": {
+                    "description": "형식·값 오류",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "401": {
+                    "description": "인증 필요/만료",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "403": {
+                    "description": "역할·서비스 권한 없음",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "404": {
+                    "description": "없거나 타인 소유",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "409": {
+                    "description": "상태·버전·기한·잔액·멱등 충돌",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "429": {
+                    "description": "요청 제한",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "503": {
+                    "description": "일시적 저장/외부 장애",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "post": {
+            "operationId": "post_internal_settlement_inbox_rejudgements",
+            "summary": "제한된 고정 대상 재판정 실행 생성",
+            "tags": [
+                "settlement"
+            ],
+            "x-owner-service": "settlement",
+            "x-actor": "OPERATOR",
+            "x-implemented": true,
+            "security": [
+                {
+                    "serviceCredential": []
+                }
+            ],
+            "description": "조건·expectedCount·대상 ID/expectedVersion을 트랜잭션에서 대조해 1~100건을 고정한다. 순서 의존 사유만 허용하며 나머지/미기록은 409 SETTLEMENT_INBOX_NOT_REJUDGEABLE, 조건/수/버전 변경은 409 SETTLEMENT_INBOX_TARGETS_CHANGED, 미완료 실행의 대상 중복은 409 SETTLEMENT_INBOX_REJUDGEMENT_ACTIVE다. 같은 운영자·작업·키·본문 재요청은 기존 실행을 반환하며 다른 본문은 409다. Worker가 선행 근거를 확인한 뒤 기존 업무 판정기를 호출한다. 원문·eventId·업무 키·confirmedAt은 변경하지 않는다. 앱 재기동 뒤에도 같은 대상의 만료 임대를 회수한다.",
+            "parameters": [
+                {
+                    "name": "Idempotency-Key",
+                    "in": "header",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "minLength": 8,
+                        "maxLength": 128
+                    },
+                    "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+                }
+            ],
+            "responses": {
+                "202": {
+                    "description": "실행 접수; 업무 반영 완료 아님",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/InboxRejudgementRun"
+                            }
+                        }
+                    },
+                    "headers": {
+                        "Location": {
+                            "description": "실행 조회 경로",
+                            "schema": {
+                                "type": "string",
+                                "format": "uri-reference"
+                            }
+                        }
+                    }
+                },
+                "400": {
+                    "description": "형식·값 오류",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "401": {
+                    "description": "인증 필요/만료",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "403": {
+                    "description": "역할·서비스 권한 없음",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "404": {
+                    "description": "없거나 타인 소유",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "409": {
+                    "description": "상태·버전·기한·잔액·멱등 충돌",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "429": {
+                    "description": "요청 제한",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "503": {
+                    "description": "일시적 저장/외부 장애",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                }
+            },
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/InboxRejudgementCreate"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "/internal/settlement-inbox-rejudgements/{runId}": {
+        "get": {
+            "operationId": "get_internal_settlement_inbox_rejudgements_runId",
+            "summary": "재판정 실행 조회",
+            "tags": [
+                "settlement"
+            ],
+            "x-owner-service": "settlement",
+            "x-actor": "OPERATOR",
+            "x-implemented": true,
+            "security": [
+                {
+                    "serviceCredential": []
+                }
+            ],
+            "description": "생성 조건·고정 대상 수·현재 상태·버전·진행 수를 조회한다.",
+            "parameters": [
+                {
+                    "name": "runId",
+                    "in": "path",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                }
+            ],
+            "responses": {
+                "200": {
+                    "description": "조회 완료",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/InboxRejudgementRun"
+                            }
+                        }
+                    }
+                },
+                "400": {
+                    "description": "형식·값 오류",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "401": {
+                    "description": "인증 필요/만료",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "403": {
+                    "description": "역할·서비스 권한 없음",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "404": {
+                    "description": "없거나 타인 소유",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "409": {
+                    "description": "상태·버전·기한·잔액·멱등 충돌",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "429": {
+                    "description": "요청 제한",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "503": {
+                    "description": "일시적 저장/외부 장애",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "/internal/settlement-inbox-rejudgements/{runId}/targets": {
+        "get": {
+            "operationId": "get_internal_settlement_inbox_rejudgements_runId_targets",
+            "summary": "고정 대상별 판정 결과",
+            "tags": [
+                "settlement"
+            ],
+            "x-owner-service": "settlement",
+            "x-actor": "OPERATOR",
+            "x-implemented": true,
+            "security": [
+                {
+                    "serviceCredential": []
+                }
+            ],
+            "description": "고정한 순서로 대상·버전·임대·결과를 조회한다. APPLIED·WAITING·REVIEW_REQUIRED는 기존 판정기 결과다. PREREQUISITE_MISSING·VERSION_CHANGED·NOT_REJUDGEABLE·PROCESSING_FAILED·ATTEMPTS_EXHAUSTED는 정상 반영 성공을 뜻하지 않는다.",
+            "parameters": [
+                {
+                    "name": "runId",
+                    "in": "path",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                },
+                {
+                    "name": "page",
+                    "in": "query",
+                    "schema": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0
+                    }
+                },
+                {
+                    "name": "size",
+                    "in": "query",
+                    "schema": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20
+                    }
+                }
+            ],
+            "responses": {
+                "200": {
+                    "description": "조회 완료",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/InboxRejudgementTargetPage"
+                            }
+                        }
+                    }
+                },
+                "400": {
+                    "description": "형식·값 오류",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "401": {
+                    "description": "인증 필요/만료",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "403": {
+                    "description": "역할·서비스 권한 없음",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "404": {
+                    "description": "없거나 타인 소유",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "409": {
+                    "description": "상태·버전·기한·잔액·멱등 충돌",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "429": {
+                    "description": "요청 제한",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "503": {
+                    "description": "일시적 저장/외부 장애",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "/internal/settlement-inbox-rejudgements/{runId}/attempts": {
+        "get": {
+            "operationId": "get_internal_settlement_inbox_rejudgements_runId_attempts",
+            "summary": "재판정 시도와 복구 이력",
+            "tags": [
+                "settlement"
+            ],
+            "x-owner-service": "settlement",
+            "x-actor": "OPERATOR",
+            "x-implemented": true,
+            "security": [
+                {
+                    "serviceCredential": []
+                }
+            ],
+            "description": "시도 순서로 RUNNING·최종 결과·LEASE_EXPIRED·PAUSED·CANCELLED 이력을 보존한다. 원문·예외 메시지를 저장하지 않는다.",
+            "parameters": [
+                {
+                    "name": "runId",
+                    "in": "path",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                },
+                {
+                    "name": "page",
+                    "in": "query",
+                    "schema": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0
+                    }
+                },
+                {
+                    "name": "size",
+                    "in": "query",
+                    "schema": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20
+                    }
+                }
+            ],
+            "responses": {
+                "200": {
+                    "description": "조회 완료",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/InboxRejudgementAttemptPage"
+                            }
+                        }
+                    }
+                },
+                "400": {
+                    "description": "형식·값 오류",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "401": {
+                    "description": "인증 필요/만료",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "403": {
+                    "description": "역할·서비스 권한 없음",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "404": {
+                    "description": "없거나 타인 소유",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "409": {
+                    "description": "상태·버전·기한·잔액·멱등 충돌",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "429": {
+                    "description": "요청 제한",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "503": {
+                    "description": "일시적 저장/외부 장애",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "/internal/settlement-inbox-rejudgements/{runId}/pauses": {
+        "post": {
+            "operationId": "post_internal_settlement_inbox_rejudgements_runId_pauses",
+            "summary": "재판정 실행 중단",
+            "tags": [
+                "settlement"
+            ],
+            "x-owner-service": "settlement",
+            "x-actor": "OPERATOR",
+            "x-implemented": true,
+            "security": [
+                {
+                    "serviceCredential": []
+                }
+            ],
+            "description": "RUNNING만 PAUSED로 바꾸고 아직 적용하지 않은 임대를 회수한다. 고정 대상은 유지하며 새 실행에 넘기지 않는다. 예상 버전 불일치는 409 COMMON_VERSION_CONFLICT, 상태 불일치는 409 SETTLEMENT_INBOX_RUN_STATE_CONFLICT다. 중복 키의 같은 본문은 기존 실행을 반환하며 감사는 한 번만 남긴다. 진행 중 DB 트랜잭션과의 잠금 대기는 1초, 초과 시 503으로 전체 롤백한다.",
+            "parameters": [
+                {
+                    "name": "runId",
+                    "in": "path",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                },
+                {
+                    "name": "Idempotency-Key",
+                    "in": "header",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "minLength": 8,
+                        "maxLength": 128
+                    },
+                    "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+                }
+            ],
+            "responses": {
+                "202": {
+                    "description": "실행 접수; 업무 반영 완료 아님",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/InboxRejudgementRun"
+                            }
+                        }
+                    }
+                },
+                "400": {
+                    "description": "형식·값 오류",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "401": {
+                    "description": "인증 필요/만료",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "403": {
+                    "description": "역할·서비스 권한 없음",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "404": {
+                    "description": "없거나 타인 소유",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "409": {
+                    "description": "상태·버전·기한·잔액·멱등 충돌",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "429": {
+                    "description": "요청 제한",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "503": {
+                    "description": "일시적 저장/외부 장애",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                }
+            },
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/InboxRejudgementTransition"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "/internal/settlement-inbox-rejudgements/{runId}/resumes": {
+        "post": {
+            "operationId": "post_internal_settlement_inbox_rejudgements_runId_resumes",
+            "summary": "원래 대상으로 재판정 실행 재개",
+            "tags": [
+                "settlement"
+            ],
+            "x-owner-service": "settlement",
+            "x-actor": "OPERATOR",
+            "x-implemented": true,
+            "security": [
+                {
+                    "serviceCredential": []
+                }
+            ],
+            "description": "PAUSED만 RUNNING으로 바꾸며 새 조건 조회나 대상 추가는 하지 않는다. 예상 버전 불일치는 409 COMMON_VERSION_CONFLICT, 상태 불일치는 409 SETTLEMENT_INBOX_RUN_STATE_CONFLICT다. 중복 키의 같은 본문은 기존 실행을 반환하며 감사는 한 번만 남긴다. 진행 중 DB 트랜잭션과의 잠금 대기는 1초, 초과 시 503으로 전체 롤백한다.",
+            "parameters": [
+                {
+                    "name": "runId",
+                    "in": "path",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                },
+                {
+                    "name": "Idempotency-Key",
+                    "in": "header",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "minLength": 8,
+                        "maxLength": 128
+                    },
+                    "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+                }
+            ],
+            "responses": {
+                "202": {
+                    "description": "실행 접수; 업무 반영 완료 아님",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/InboxRejudgementRun"
+                            }
+                        }
+                    }
+                },
+                "400": {
+                    "description": "형식·값 오류",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "401": {
+                    "description": "인증 필요/만료",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "403": {
+                    "description": "역할·서비스 권한 없음",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "404": {
+                    "description": "없거나 타인 소유",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "409": {
+                    "description": "상태·버전·기한·잔액·멱등 충돌",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "429": {
+                    "description": "요청 제한",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "503": {
+                    "description": "일시적 저장/외부 장애",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                }
+            },
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/InboxRejudgementTransition"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "/internal/settlement-inbox-rejudgements/{runId}/cancellations": {
+        "post": {
+            "operationId": "post_internal_settlement_inbox_rejudgements_runId_cancellations",
+            "summary": "재판정 실행 취소",
+            "tags": [
+                "settlement"
+            ],
+            "x-owner-service": "settlement",
+            "x-actor": "OPERATOR",
+            "x-implemented": true,
+            "security": [
+                {
+                    "serviceCredential": []
+                }
+            ],
+            "description": "RUNNING/PAUSED의 미처리 대상만 취소하고 이미 반영한 결과는 보존한다. 취소한 임대의 늦은 Worker는 변경하지 못한다. 예상 버전 불일치는 409 COMMON_VERSION_CONFLICT, 상태 불일치는 409 SETTLEMENT_INBOX_RUN_STATE_CONFLICT다. 중복 키의 같은 본문은 기존 실행을 반환하며 감사는 한 번만 남긴다. 진행 중 DB 트랜잭션과의 잠금 대기는 1초, 초과 시 503으로 전체 롤백한다.",
+            "parameters": [
+                {
+                    "name": "runId",
+                    "in": "path",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                },
+                {
+                    "name": "Idempotency-Key",
+                    "in": "header",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "minLength": 8,
+                        "maxLength": 128
+                    },
+                    "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409."
+                }
+            ],
+            "responses": {
+                "202": {
+                    "description": "실행 접수; 업무 반영 완료 아님",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/InboxRejudgementRun"
+                            }
+                        }
+                    }
+                },
+                "400": {
+                    "description": "형식·값 오류",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "401": {
+                    "description": "인증 필요/만료",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "403": {
+                    "description": "역할·서비스 권한 없음",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "404": {
+                    "description": "없거나 타인 소유",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "409": {
+                    "description": "상태·버전·기한·잔액·멱등 충돌",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "429": {
+                    "description": "요청 제한",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "503": {
+                    "description": "일시적 저장/외부 장애",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                }
+            },
+            "requestBody": {
+                "required": true,
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/InboxRejudgementTransition"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "/internal/settlement-inbox-rejudgements/{runId}/audits": {
+        "get": {
+            "operationId": "get_internal_settlement_inbox_rejudgements_runId_audits",
+            "summary": "재판정 운영자·처리기 감사 이력",
+            "tags": [
+                "settlement"
+            ],
+            "x-owner-service": "settlement",
+            "x-actor": "OPERATOR",
+            "x-implemented": true,
+            "security": [
+                {
+                    "serviceCredential": []
+                }
+            ],
+            "description": "생성·중단·재개·취소의 운영자/사유와 대상 완료의 SYSTEM 실행 이력을 occurredAt ASC,id ASC로 조회한다. 원문·멱등키·금융 민감값은 반환하지 않는다. 같은 키의 재요청은 감사를 중복 생성하지 않는다.",
+            "parameters": [
+                {
+                    "name": "runId",
+                    "in": "path",
+                    "required": true,
+                    "schema": {
+                        "type": "string",
+                        "format": "uuid"
+                    }
+                },
+                {
+                    "name": "page",
+                    "in": "query",
+                    "schema": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "default": 0
+                    }
+                },
+                {
+                    "name": "size",
+                    "in": "query",
+                    "schema": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20
+                    }
+                }
+            ],
+            "responses": {
+                "200": {
+                    "description": "조회 완료",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/InboxRejudgementAuditPage"
+                            }
+                        }
+                    }
+                },
+                "400": {
+                    "description": "형식·값 오류",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "401": {
+                    "description": "인증 필요/만료",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "403": {
+                    "description": "역할·서비스 권한 없음",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "404": {
+                    "description": "없거나 타인 소유",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "409": {
+                    "description": "상태·버전·기한·잔액·멱등 충돌",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "429": {
+                    "description": "요청 제한",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                },
+                "503": {
+                    "description": "일시적 저장/외부 장애",
+                    "content": {
+                        "application/problem+json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/Problem"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
     "/api/buyers": {
       "post": {
         "operationId": "post_api_buyers",
@@ -7082,6 +8606,742 @@
       }
     },
     "schemas": {
+      "InboxRejudgementFilter": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "reasonCode": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Z0-9_]{0,79}$",
+                  "maxLength": 80
+              },
+              "eventType": {
+                  "anyOf": [
+                      {
+                          "type": "string",
+                          "enum": [
+                              "PaymentConfirmed",
+                              "PurchaseConfirmed",
+                              "RefundReservationRequested",
+                              "RefundFinancialCompleted",
+                              "RefundReleaseRequested"
+                          ]
+                      },
+                      {
+                          "type": "null"
+                      }
+                  ]
+              },
+              "receivedBefore": {
+                  "type": "string",
+                  "format": "date-time"
+              },
+              "inboxId": {
+                  "anyOf": [
+                      {
+                          "type": "string",
+                          "format": "uuid"
+                      },
+                      {
+                          "type": "null"
+                      }
+                  ]
+              }
+          },
+          "required": [
+              "reasonCode",
+              "receivedBefore"
+          ]
+      },
+      "InboxRejudgementExpectedTarget": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "inboxId": {
+                  "type": "string",
+                  "format": "uuid"
+              },
+              "expectedVersion": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              }
+          },
+          "required": [
+              "inboxId",
+              "expectedVersion"
+          ]
+      },
+      "InboxRejudgementCreate": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "filter": {
+                  "$ref": "#/components/schemas/InboxRejudgementFilter"
+              },
+              "expectedCount": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+              },
+              "targets": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 100,
+                  "items": {
+                      "$ref": "#/components/schemas/InboxRejudgementExpectedTarget"
+                  }
+              },
+              "reasonCode": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Z0-9_]{0,79}$",
+                  "maxLength": 80
+              }
+          },
+          "required": [
+              "filter",
+              "expectedCount",
+              "targets",
+              "reasonCode"
+          ]
+      },
+      "InboxRejudgementTransition": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "expectedVersion": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "reasonCode": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Z0-9_]{0,79}$",
+                  "maxLength": 80
+              }
+          },
+          "required": [
+              "expectedVersion",
+              "reasonCode"
+          ]
+      },
+      "SettlementInbox": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "id": {
+                  "type": "string",
+                  "format": "uuid"
+              },
+              "eventId": {
+                  "type": "string",
+                  "format": "uuid"
+              },
+              "eventType": {
+                  "type": "string"
+              },
+              "reasonCode": {
+                  "anyOf": [
+                      {
+                          "type": "string",
+                          "pattern": "^[A-Z][A-Z0-9_]{0,79}$",
+                          "maxLength": 80
+                      },
+                      {
+                          "type": "null"
+                      }
+                  ]
+              },
+              "category": {
+                  "type": "string",
+                  "enum": [
+                      "CONTRACT",
+                      "SOURCE_CONFLICT",
+                      "TERMINAL_CONFLICT",
+                      "ORDER_DEPENDENT",
+                      "UNRECORDED"
+                  ]
+              },
+              "status": {
+                  "type": "string",
+                  "enum": [
+                      "RECEIVED",
+                      "WAITING",
+                      "APPLIED",
+                      "REVIEW_REQUIRED"
+                  ]
+              },
+              "version": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "bodySize": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "bodySha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+              },
+              "receivedAt": {
+                  "type": "string",
+                  "format": "date-time"
+              },
+              "updatedAt": {
+                  "type": "string",
+                  "format": "date-time"
+              }
+          },
+          "required": [
+              "id",
+              "eventId",
+              "eventType",
+              "reasonCode",
+              "category",
+              "status",
+              "version",
+              "bodySize",
+              "bodySha256",
+              "receivedAt",
+              "updatedAt"
+          ]
+      },
+      "SettlementInboxSummary": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "reasonCode": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Z0-9_]{0,79}$",
+                  "maxLength": 80
+              },
+              "category": {
+                  "type": "string",
+                  "enum": [
+                      "CONTRACT",
+                      "SOURCE_CONFLICT",
+                      "TERMINAL_CONFLICT",
+                      "ORDER_DEPENDENT",
+                      "UNRECORDED"
+                  ]
+              },
+              "eventType": {
+                  "type": "string"
+              },
+              "count": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "oldestAgeSeconds": {
+                  "type": "number",
+                  "minimum": 0
+              }
+          },
+          "required": [
+              "reasonCode",
+              "category",
+              "eventType",
+              "count",
+              "oldestAgeSeconds"
+          ]
+      },
+      "InboxRejudgementRun": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "id": {
+                  "type": "string",
+                  "format": "uuid"
+              },
+              "status": {
+                  "type": "string",
+                  "enum": [
+                      "RUNNING",
+                      "PAUSED",
+                      "COMPLETED",
+                      "CANCELLED"
+                  ]
+              },
+              "version": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "filter": {
+                  "$ref": "#/components/schemas/InboxRejudgementFilter"
+              },
+              "expectedCount": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+              },
+              "completedCount": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0,
+                  "description": "DONE 또는 CANCELLED로 종결된 대상 수이며 금융 반영 성공 건수가 아니다."
+              },
+              "requestedBy": {
+                  "type": "string"
+              },
+              "reasonCode": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Z0-9_]{0,79}$",
+                  "maxLength": 80
+              },
+              "createdAt": {
+                  "type": "string",
+                  "format": "date-time"
+              },
+              "updatedAt": {
+                  "type": "string",
+                  "format": "date-time"
+              }
+          },
+          "required": [
+              "id",
+              "status",
+              "version",
+              "filter",
+              "expectedCount",
+              "completedCount",
+              "requestedBy",
+              "reasonCode",
+              "createdAt",
+              "updatedAt"
+          ]
+      },
+      "InboxRejudgementTarget": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "id": {
+                  "type": "string",
+                  "format": "uuid"
+              },
+              "inboxId": {
+                  "type": "string",
+                  "format": "uuid"
+              },
+              "eventId": {
+                  "type": "string",
+                  "format": "uuid"
+              },
+              "eventType": {
+                  "type": "string"
+              },
+              "reasonCode": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Z0-9_]{0,79}$",
+                  "maxLength": 80
+              },
+              "expectedVersion": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "status": {
+                  "type": "string",
+                  "enum": [
+                      "PENDING",
+                      "RUNNING",
+                      "DONE",
+                      "CANCELLED"
+                  ]
+              },
+              "outcome": {
+                  "anyOf": [
+                      {
+                          "type": "string"
+                      },
+                      {
+                          "type": "null"
+                      }
+                  ]
+              },
+              "attempts": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "leaseUntil": {
+                  "anyOf": [
+                      {
+                          "type": "string",
+                          "format": "date-time"
+                      },
+                      {
+                          "type": "null"
+                      }
+                  ]
+              },
+              "resultVersion": {
+                  "anyOf": [
+                      {
+                          "type": "integer",
+                          "format": "int64",
+                          "minimum": 0
+                      },
+                      {
+                          "type": "null"
+                      }
+                  ]
+              },
+              "resultReasonCode": {
+                  "anyOf": [
+                      {
+                          "type": "string",
+                          "pattern": "^[A-Z][A-Z0-9_]{0,79}$",
+                          "maxLength": 80
+                      },
+                      {
+                          "type": "null"
+                      }
+                  ]
+              }
+          },
+          "required": [
+              "id",
+              "inboxId",
+              "eventId",
+              "eventType",
+              "reasonCode",
+              "expectedVersion",
+              "status",
+              "outcome",
+              "attempts",
+              "leaseUntil",
+              "resultVersion",
+              "resultReasonCode"
+          ]
+      },
+      "InboxRejudgementAttempt": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "id": {
+                  "type": "string",
+                  "format": "uuid"
+              },
+              "targetId": {
+                  "type": "string",
+                  "format": "uuid"
+              },
+              "attempt": {
+                  "type": "integer",
+                  "minimum": 1
+              },
+              "outcome": {
+                  "type": "string"
+              },
+              "startedAt": {
+                  "type": "string",
+                  "format": "date-time"
+              },
+              "finishedAt": {
+                  "anyOf": [
+                      {
+                          "type": "string",
+                          "format": "date-time"
+                      },
+                      {
+                          "type": "null"
+                      }
+                  ]
+              }
+          },
+          "required": [
+              "id",
+              "targetId",
+              "attempt",
+              "outcome",
+              "startedAt",
+              "finishedAt"
+          ]
+      },
+      "SettlementInboxPage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "items": {
+                  "type": "array",
+                  "items": {
+                      "$ref": "#/components/schemas/SettlementInbox"
+                  }
+              },
+              "page": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "size": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+              },
+              "totalElements": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "totalPages": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              }
+          },
+          "required": [
+              "items",
+              "page",
+              "size",
+              "totalElements",
+              "totalPages"
+          ]
+      },
+      "InboxRejudgementRunPage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "items": {
+                  "type": "array",
+                  "items": {
+                      "$ref": "#/components/schemas/InboxRejudgementRun"
+                  }
+              },
+              "page": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "size": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+              },
+              "totalElements": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "totalPages": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              }
+          },
+          "required": [
+              "items",
+              "page",
+              "size",
+              "totalElements",
+              "totalPages"
+          ]
+      },
+      "InboxRejudgementTargetPage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "items": {
+                  "type": "array",
+                  "items": {
+                      "$ref": "#/components/schemas/InboxRejudgementTarget"
+                  }
+              },
+              "page": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "size": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+              },
+              "totalElements": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "totalPages": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              }
+          },
+          "required": [
+              "items",
+              "page",
+              "size",
+              "totalElements",
+              "totalPages"
+          ]
+      },
+      "InboxRejudgementAttemptPage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "items": {
+                  "type": "array",
+                  "items": {
+                      "$ref": "#/components/schemas/InboxRejudgementAttempt"
+                  }
+              },
+              "page": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "size": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+              },
+              "totalElements": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "totalPages": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              }
+          },
+          "required": [
+              "items",
+              "page",
+              "size",
+              "totalElements",
+              "totalPages"
+          ]
+      },
+      "InboxRejudgementAudit": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "id": {
+                  "type": "string",
+                  "format": "uuid"
+              },
+              "actorKind": {
+                  "type": "string",
+                  "enum": [
+                      "OPERATOR",
+                      "SYSTEM"
+                  ]
+              },
+              "actorRef": {
+                  "type": "string",
+                  "maxLength": 100
+              },
+              "action": {
+                  "type": "string",
+                  "maxLength": 80
+              },
+              "aggregateType": {
+                  "type": "string",
+                  "enum": [
+                      "INBOX_REJUDGEMENT",
+                      "INBOX_REJUDGEMENT_TARGET"
+                  ]
+              },
+              "aggregateId": {
+                  "type": "string",
+                  "format": "uuid"
+              },
+              "beforeStatus": {
+                  "anyOf": [
+                      {
+                          "type": "string",
+                          "maxLength": 32
+                      },
+                      {
+                          "type": "null"
+                      }
+                  ]
+              },
+              "afterStatus": {
+                  "anyOf": [
+                      {
+                          "type": "string",
+                          "maxLength": 32
+                      },
+                      {
+                          "type": "null"
+                      }
+                  ]
+              },
+              "reasonCode": {
+                  "anyOf": [
+                      {
+                          "type": "string",
+                          "maxLength": 80
+                      },
+                      {
+                          "type": "null"
+                      }
+                  ]
+              },
+              "occurredAt": {
+                  "type": "string",
+                  "format": "date-time"
+              }
+          },
+          "required": [
+              "id",
+              "actorKind",
+              "actorRef",
+              "action",
+              "aggregateType",
+              "aggregateId",
+              "beforeStatus",
+              "afterStatus",
+              "reasonCode",
+              "occurredAt"
+          ]
+      },
+      "InboxRejudgementAuditPage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+              "items": {
+                  "type": "array",
+                  "items": {
+                      "$ref": "#/components/schemas/InboxRejudgementAudit"
+                  }
+              },
+              "page": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "size": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+              },
+              "totalElements": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              },
+              "totalPages": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+              }
+          },
+          "required": [
+              "items",
+              "page",
+              "size",
+              "totalElements",
+              "totalPages"
+          ]
+      },
       "FieldError": {
         "type": "object",
         "additionalProperties": false,

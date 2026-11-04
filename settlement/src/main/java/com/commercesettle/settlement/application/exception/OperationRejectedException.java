@@ -16,6 +16,10 @@ public class OperationRejectedException extends RuntimeException {
   public enum Reason {
     /** 예상 버전이 현재 버전과 다르다. */
     VERSION_CONFLICT,
+    INBOX_TARGETS_CHANGED,
+    INBOX_NOT_REJUDGEABLE,
+    INBOX_REJUDGEMENT_ACTIVE,
+    INBOX_RUN_STATE_CONFLICT,
     /** 지급 작업이 실행 중(임대 보유)이다. */
     LEASE_ACTIVE,
     /** 운영 확인 대기가 아니거나, 같은 업무 키로 다시 돌려도 결과가 바뀌지 않는 지급(확정 거절·성공)이다. */

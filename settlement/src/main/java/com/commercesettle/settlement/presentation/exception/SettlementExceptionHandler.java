@@ -71,6 +71,12 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
     return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "지급 작업을 찾을 수 없습니다.", null, request);
   }
 
+  @ExceptionHandler(
+      com.commercesettle.settlement.application.exception.InboxOperationNotFoundException.class)
+  ResponseEntity<Object> inboxNotFound(RuntimeException e, WebRequest request) {
+    return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, request);
+  }
+
   @ExceptionHandler(QuarantineNotFoundException.class)
   ResponseEntity<Object> quarantineNotFound(QuarantineNotFoundException e, WebRequest request) {
     return respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, "격리 기록을 찾을 수 없습니다.", null, request);
@@ -80,6 +86,10 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
   ResponseEntity<Object> operationRejected(OperationRejectedException e, WebRequest request) {
     ErrorCode code =
         switch (e.reason()) {
+          case INBOX_TARGETS_CHANGED -> ErrorCode.SETTLEMENT_INBOX_TARGETS_CHANGED;
+          case INBOX_NOT_REJUDGEABLE -> ErrorCode.SETTLEMENT_INBOX_NOT_REJUDGEABLE;
+          case INBOX_REJUDGEMENT_ACTIVE -> ErrorCode.SETTLEMENT_INBOX_REJUDGEMENT_ACTIVE;
+          case INBOX_RUN_STATE_CONFLICT -> ErrorCode.SETTLEMENT_INBOX_RUN_STATE_CONFLICT;
           case VERSION_CONFLICT -> ErrorCode.COMMON_VERSION_CONFLICT;
           case LEASE_ACTIVE -> ErrorCode.PAYOUT_JOB_LEASE_ACTIVE;
           case NOT_REPLAYABLE -> ErrorCode.PAYOUT_JOB_NOT_REPLAYABLE;

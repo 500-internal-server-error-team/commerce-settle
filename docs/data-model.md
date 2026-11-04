@@ -1242,11 +1242,27 @@ Payment는 별도 선점 트랜잭션에서 attempts와 30초 임대를 저장�
 
 Payment의 `result_ref`는 생성·취소된 결제 ID입니다. 결제·마일리지·금융 작업·Outbox·Inbox 완료는 같은 트랜잭션으로 저장합니다. 취소 요청과 결제 요청은 Inbox보다 주문 advisory lock을 먼저 잡습니다. 취소 때 참조한 결제 요청이 WAITING이면 APPLIED로 완료하고 REVIEW_REQUIRED이면 상태·사유를 보존하며 두 경우 모두 결제 참조를 연결합니다. 원요청의 주문·회차·당사자·금액·정책·수단은 재요청에서도 대조합니다. 원문 없이 먼저 온 취소의 결과 참조는 늦게 온 결제 요청을 처리할 때 연결합니다. 원문 금액 오류는 `PAYMENT_CANCELLATION_REQUEST_INVALID`로 남깁니다. 가용 마일리지 부족·지갑 부재는 결제를 만들지 않고 REVIEW_REQUIRED로 남깁니다. 실행·취소 조건은 [Payment 수신 실행](development.md#kafka-전달-기반)을 따릅니다.
 
-Settlement의 `result_ref`는 정산 항목 ID입니다. 선행 결제가 없는 구매확정은 WAITING이며 소진하면 REVIEW_REQUIRED·`PAYMENT_NOT_ARRIVED`가 됩니다. 이후 PaymentConfirmed가 항목을 만들면 **그 사유의 구매확정만** 같은 트랜잭션에서 WAITING으로 되돌립니다. 다른 확인 대상은 자동 재개하지 않습니다. Listener 버전 충돌은 새 트랜잭션으로 한 번 재판정합니다. [이벤트 연동](api.md#이벤트-연동)을 따릅니다.
+Settlement의 `result_ref`는 정산 항목 ID입니다. 선행 결제가 없는 구매확정은 WAITING이며 소진하면 REVIEW_REQUIRED·`PAYMENT_NOT_ARRIVED`가 됩니다. 이후 PaymentConfirmed가 항목을 만들면 **그 사유의 구매확정만** 같은 트랜잭션에서 WAITING으로 되돌립니다. 다른 확인 대상은 자동 재개하지 않으며 [제한된 재판정](#inbox_rejudgement_runs--inbox_rejudgement_targets--inbox_rejudgement_attempts)으로 별도 판정합니다. Listener 버전 충돌은 새 트랜잭션으로 한 번 재판정합니다. [이벤트 연동](api.md#이벤트-연동)을 따릅니다.
 
 Commerce의 `result_ref`는 주문 ID입니다. 주문 연결·결과 반영과 Inbox 완료를 원자 저장하고 충돌 원문·사유·최초 출처를 보존합니다. 회차·버전·결제 ID 검사는 [결제 접수 결과 수신](development.md#결제-접수-결과-수신)을 따릅니다.
 
 **인덱스:** 공통 (status,created_at,id), 세 서비스 WAITING의 (consumer,next_run_at,id). Payment는 결과 참조 조회의 `(consumer,result_ref,created_at,id)` 부분 인덱스와 주문·회차 조회의 `(consumer,aggregate_id,paymentCycleId,created_at,id)` 표현식 인덱스를 사용합니다. Settlement는 `RefundReservationRequested`의 `(consumer,payload의 refundId uuid,created_at,id)` 부분 인덱스를 추가합니다.
+
+### inbox_rejudgement_runs · inbox_rejudgement_targets · inbox_rejudgement_attempts
+
+소유: `settlement`. 해석된 업무 Inbox의 제한된 재판정이며 격리 원문 발행과 별개입니다. 사유·전이·운영 범위는 [업무 Inbox 재판정](policies.md#업무-inbox-재판정)을 따릅니다. 자동 삭제하지 않습니다.
+
+| 테이블 | 저장 내용·제약 |
+| --- | --- |
+| `inbox_rejudgement_runs` | UUID PK, `consumer`, RUNNING/PAUSED/COMPLETED/CANCELLED, 낙관적 `version`; 고정한 `filter_reason`·선택 `filter_event_type`·`received_before`·선택 `filter_inbox_id`, `expected_count`(1~100), `requested_by`·운영 `reason_code`, 생성·최근 진행 시각 |
+| `inbox_rejudgement_targets` | UUID PK, `run_id`·`inbox_id`·원 `event_id`/`event_type`/`reason_code`·`expected_version`·고정 `position`; PENDING/RUNNING/DONE/CANCELLED, `outcome`·시도 수·임대 token/만료, 실제 결과 버전·사유. UNIQUE(run_id,inbox_id), UNIQUE(run_id,position), 미완료(PENDING/RUNNING)의 inbox_id 부분 UNIQUE로 중단된 실행도 대상을 계속 소유 |
+| `inbox_rejudgement_attempts` | UUID PK, `run_id`·`target_id`·시도 번호, RUNNING/판정 결과/LEASE_EXPIRED/PAUSED/CANCELLED, 시작·종료 시각. UNIQUE(target_id,attempt); RUNNING만 종료 시각이 없음 |
+
+임대 token과 만료는 RUNNING 대상에만 존재합니다. 실행은 consumer·상태·생성 순서로, 대상은 실행·position으로, 이력은 실행·시작 시각·ID로 인덱싱합니다. 실행 행을 먼저 잠가 한 실행에서는 한 대상만 적용하고, 잠긴 다른 실행은 건너뜁니다. 대상의 버전·사유와 현재 Inbox를 비교한 뒤 원문에서 읽은 기존 처리기를 호출하며 결과·시도 종료·감사를 업무 변경과 원자 저장합니다. 실패하면 업무 변경을 롤백한 뒤 별도 트랜잭션에서 PROCESSING_FAILED를 기록합니다. 데이터 참조의 FK는 추가하지 않습니다.
+
+실행의 생성·중단·재개·취소는 OPERATOR의 `INBOX_REJUDGEMENT_CREATED/PAUSED/RESUMED/CANCELLED` 행위로, 대상 완료는 SYSTEM의 `INBOX_REJUDGEMENT_TARGET_FINISHED`로 감사합니다. 대상 감사의 aggregate_type/id는 INBOX_REJUDGEMENT_TARGET과 대상 ID, before/after는 RUNNING→DONE(임대 소진 종결은 실제 기존 대상 상태→DONE), reason_code는 실제 판정 결과입니다. correlation_id는 실행 ID이며 대상 행에서 원 Inbox로 연결합니다. 버전 변경으로 건너뛴 결과를 Inbox의 금융 상태 전환으로 기록하지 않습니다.
+
+Inbox의 확인 사유 조회에는 `(consumer,last_error_code,event_type,created_at,id)` 부분 인덱스를 사용합니다. 새 확인 전환은 `last_error_code`를 항상 저장하며 과거 null을 로그로 추정해 채우지 않습니다. 응답은 크기·SHA-256만 제공하고 원문·금융 키는 원래 Inbox에 보존합니다.
 
 ### inbox_conflicts
 
