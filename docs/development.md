@@ -665,6 +665,8 @@ docker compose -f compose.yml -f compose.kakao-self.yml --profile observability 
 
 `demo-ui/`는 React·TypeScript·Vite·TanStack Query 기반의 로컬 화면입니다. `demo-control/`은 같은 출처의 UI를 제공하고 명세에 있는 사용자 요청은 Gateway로, 운영 요청은 설정된 소유 서비스로 전달하는 Java 21 실행 앱입니다. 운영 자격은 서버에만 두며 DB를 직접 읽거나 수정하지 않습니다. 기본 Compose에는 이 앱을 추가하지 않습니다.
 
+화면의 **데이터 흐름**은 선택한 요청의 중계·Gateway·소유 Spring Boot·DB 경계를 인프라 지도와 시간순 왕복으로 보여줍니다. 노드를 누르면 역할과 조건을 볼 수 있고, 실행 기록을 선택하면 해당 요청의 경로·보낸 값·받은 결과가 함께 바뀝니다. Kafka 상세는 OpenAPI의 이벤트 계약에서 생산자 Outbox·토픽·소비 그룹·소비자 Inbox를 연결합니다. 여러 소비 그룹이 있으면 따로 선택합니다. 이 도식은 내부 실행 추적이 아니며 DB 접근·이벤트 발행·소비 완료를 HTTP 응답으로 판정하지 않습니다. 실제 HTTP 상태·왕복 시간만 실행 기록의 관측값입니다. 추가 조회나 폴링 없이 기존 Zipkin·Kafka UI 링크에서 별도로 확인합니다. 자세한 경계는 [인프라 구조도와 비동기 실행](architecture.md), 이벤트별 조건은 [이벤트 연동](api.md#이벤트-연동)을 따릅니다.
+
 로컬 개발은 Node.js 24 이상에서 Vite 프록시로 실행합니다. 기존 Gateway를 먼저 켜고 저장소 루트에서 다음을 실행합니다.
 
 ```bash
