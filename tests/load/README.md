@@ -30,11 +30,25 @@ python3 tests/load/payment_load.py reconcile          # 원장 ↔ Payment ↔ f
 - `scenario`는 PG 시나리오를 바꿔 Worker를 다시 만들고 초당 100건을 60초 넣은 뒤 대조합니다. `restart`는 시작 25초 뒤 `payment-worker`를 SIGKILL하고 다시 띄웁니다.
 - `prepare`는 시험 스택의 finance-mock DB에 `load-pg-*` 시나리오를 직접 넣습니다.
 - `replay`는 시험 스택의 `payment-api`에만 운영자 자격(`operator:load`)을 설정합니다. 자격은 `tests/load/work/operator.credential`에 무작위로 만듭니다.
-- 주입 원장·표본·요약·대조 결과는 Git에서 제외한 `tests/load/work/<실행 이름>/`에 남습니다. 정리는 `docker compose -p commerce-settle-load -f compose.yml -f tests/load/compose.load.yml down -v`입니다.
+- 주입 원장·표본·요약·대조 결과는 Git에서 제외한 `tests/load/work/<실행 이름>/`에 남습니다. `LOAD_WORK_DIR`를 지정하면 그 경로를 사용합니다.
 
 도구의 대조·재처리 회귀 검사는 `python3 -B -m unittest discover -s tests/load -p 'test_payment_load.py'`로 실행하며 CI에도 포함합니다. 메모리 SQLite의 대조 쿼리와 재처리 API 대역을 사용하므로 실제 PostgreSQL·PG의 부하·복구 시험을 대신하지 않습니다.
 
 부하/복구 후 Settlement의 영속 대조와 원천별 HTTP 검사는 [정산 대조 실행](../../docs/development.md#정산-대조-실행과-재개)의 `scripts/reconcile.py`로 연결합니다. 기존 `payment_load.py reconcile`은 시험 주입 원장과 실제 처리 결과의 누락·중복 검사를 계속 맡습니다. 새 읽기 계약의 검사가 주입 원장 검사를 대체하지 않습니다.
+
+### 종료
+
+주입 도구와 UI 제어 서버를 먼저 종료합니다. 기동 때 사용한 `LOAD_PROJECT`와 절대경로 `LOAD_WORK_DIR`를 지정한 상태에서 저장소 루트에서 실행합니다. 기본 CLI 환경은 각각 `commerce-settle-load`와 `<저장소>/tests/load/work`이며, UI 환경은 UI 준비 때 선택한 값을 그대로 사용합니다. 아래 명령은 **선택한 프로젝트와 볼륨만 삭제**하며 원장·요약 파일은 보존합니다. 변수가 없으면 Docker를 실행하지 않습니다.
+
+```bash
+: "${LOAD_PROJECT:?기동에 사용한 프로젝트를 지정하세요}" \
+  "${LOAD_WORK_DIR:?기동에 사용한 결과 경로를 지정하세요}" &&
+AUTH_REDIS_RUN_ID="${AUTH_REDIS_RUN_ID:-0000000000000000000000000000000000000000}" \
+LOAD_OPERATOR_CREDENTIAL="$(cat "$LOAD_WORK_DIR/operator.credential")" \
+  docker compose -p "$LOAD_PROJECT" -f compose.yml -f tests/load/compose.load.yml down -v
+```
+
+기존 운영자 자격을 읽고 Redis 승인 값은 Compose 렌더링에만 공급합니다. 공용 `.env`나 다른 프로젝트의 설정은 바꾸지 않습니다.
 
 ### 대조 항목
 
