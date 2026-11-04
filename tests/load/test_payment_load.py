@@ -1,6 +1,7 @@
 """부하 도구의 대조 쿼리와 운영 재처리 계약을 외부 서비스 없이 검증한다."""
 
 import argparse
+import csv
 import contextlib
 import importlib.util
 import io
@@ -164,7 +165,7 @@ class ReplayNormalTest(unittest.TestCase):
 class RestartRegressionTest(unittest.TestCase):
     def ramp(self, fail_on=None, skip_restart=False, stages="100:60"):
         class InlineThread:
-            def __init__(self, target, daemon):
+            def __init__(self, target, daemon=False):
                 self.target = target
 
             def start(self):
@@ -193,13 +194,14 @@ class RestartRegressionTest(unittest.TestCase):
         work = MagicMock()
         args = argparse.Namespace(stages=stages, run="restart", mix="card", offset=0,
                                   interval=1, drain=1, kill_after=25, scenario="normal")
-        with patch("threading.Thread", InlineThread), patch("builtins.open", mock_open()), \
+        with patch("threading.Thread", InlineThread), patch("threading.Event") as event, patch("builtins.open", mock_open()), \
                 patch.object(load, "time") as clock, patch.object(load, "WORK", work), \
                 patch.object(load, "produce"), patch.object(load, "remember_run"), \
                 patch.object(load, "snapshot", return_value=sample), \
                 patch.object(load, "compose", side_effect=compose), \
                 patch.object(load, "compose_env", return_value={}), \
                 contextlib.redirect_stdout(io.StringIO()):
+            event.return_value.wait.return_value = False
             clock.monotonic.side_effect = range(100)
             load.cmd_ramp(args)
         return json.loads(work.__truediv__.return_value.__truediv__.return_value.write_text.call_args.args[0])
@@ -227,6 +229,105 @@ class RestartRegressionTest(unittest.TestCase):
 
 
 class StopInjectionTest(unittest.TestCase):
+    def test_snapshot_failure_stops_the_producer_and_flushes_the_ledger(self):
+        import threading
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sent = threading.Event()
+            process = MagicMock()
+            process.returncode = 0
+            process.stdin.write.side_effect = lambda _: sent.set()
+            sample = {k: 0 for k in ("received", "confirmed", "declined", "unfinished", "waiting",
+                                      "kafkaLag", "outboxPending", "jobsReview", "inboxReview")}
+            sample['at'] = '2026-11-04T00:00:00Z'
+            calls = 0
+            def snapshot():
+                nonlocal calls
+                calls += 1
+                if calls > 1:
+                    self.assertTrue(sent.wait(2))
+                    raise SystemExit('snapshot unavailable')
+                return sample
+            args = argparse.Namespace(stages='10:30', run='failure', mix='card', offset=0,
+                                      interval=.01, drain=1, kill_after=25, scenario=None, stop_file=None)
+            with patch.object(load, 'WORK', root), patch.object(load, 'STACK_RUNS', root / 'runs'), \
+                    patch.object(load.subprocess, 'Popen', return_value=process), \
+                    patch.object(load, 'compose_env', return_value={}), \
+                    patch.object(load, 'snapshot', side_effect=snapshot), \
+                    patch.object(load, 'compose') as compose, \
+                    self.assertRaisesRegex(SystemExit, 'snapshot unavailable'):
+                load.cmd_ramp(args)
+            self.assertGreater(process.stdin.write.call_count, 0)
+            with (root / 'failure/requests.csv').open() as ledger:
+                self.assertEqual(len(list(csv.reader(ledger))), process.stdin.write.call_count)
+            process.stdin.close.assert_called_once()
+            process.wait.assert_called_once_with(timeout=10)
+            compose.assert_not_called()
+
+    def test_restart_finishing_after_drain_deadline_still_fails(self):
+        import threading
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entered = threading.Event()
+            release = threading.Event()
+            sample = {k: 0 for k in ("received", "confirmed", "declined", "unfinished", "waiting",
+                                      "kafkaLag", "outboxPending", "jobsReview", "inboxReview")}
+            sample.update(at='2026-11-04T00:00:00Z', unfinished=1)
+            calls = 0
+            def snapshot():
+                nonlocal calls
+                calls += 1
+                if calls > 1:
+                    self.assertTrue(entered.wait(2))
+                return sample
+            def compose(*args, **kwargs):
+                if args[0] == 'up':
+                    entered.set()
+                    self.assertTrue(release.wait(2))
+                return ''
+            timer = threading.Timer(.3, release.set)
+            args = argparse.Namespace(stages='1:1', run='deadline', mix='card', offset=0,
+                                      interval=.01, drain=.01, kill_after=.01, scenario=None, stop_file=None)
+            timer.start()
+            try:
+                with patch.object(load, 'WORK', root), patch.object(load, 'STACK_RUNS', root / 'runs'), \
+                        patch.object(load, 'produce'), patch.object(load, 'compose_env', return_value={}), \
+                        patch.object(load, 'snapshot', side_effect=snapshot), \
+                        patch.object(load, 'compose', side_effect=compose), \
+                        contextlib.redirect_stdout(io.StringIO()), \
+                        self.assertRaisesRegex(SystemExit, 'before drain timeout'):
+                    load.cmd_ramp(args)
+                self.assertFalse((root / 'deadline/summary.json').exists())
+            finally:
+                release.set()
+                timer.join()
+
+    def test_producer_error_reported_during_join_cannot_create_success_summary(self):
+        class DeferredThread:
+            def __init__(self, target):
+                self.target = target
+            def start(self):
+                pass
+            def is_alive(self):
+                return False
+            def join(self):
+                self.target()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sample = {k: 0 for k in ("received", "confirmed", "declined", "unfinished", "waiting",
+                                      "kafkaLag", "outboxPending", "jobsReview", "inboxReview")}
+            sample['at'] = '2026-11-04T00:00:00Z'
+            args = argparse.Namespace(stages='1:1', run='late-failure', mix='card', offset=0,
+                                      interval=0, drain=1, kill_after=0, scenario=None, stop_file=None)
+            with patch('threading.Thread', DeferredThread), patch.object(load, 'WORK', root), \
+                    patch.object(load, 'STACK_RUNS', root / 'runs'), \
+                    patch.object(load, 'produce', side_effect=SystemExit('late producer failure')), \
+                    patch.object(load, 'snapshot', return_value=sample), \
+                    contextlib.redirect_stdout(io.StringIO()), \
+                    self.assertRaisesRegex(SystemExit, 'late producer failure'):
+                load.cmd_ramp(args)
+            self.assertFalse((root / 'late-failure/summary.json').exists())
+
     def test_stop_during_delay_does_not_inject_the_next_request(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

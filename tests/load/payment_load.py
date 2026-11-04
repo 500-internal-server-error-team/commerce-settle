@@ -66,14 +66,14 @@ def compose_env():
     return env
 
 
-def compose(*args, input_text=None, check=True, capture=True, env=None):
+def compose(*args, input_text=None, check=True, capture=True, env=None, timeout=None):
     command = [
         "docker", "compose", "-p", PROJECT,
         "-f", str(ROOT / "compose.yml"), "-f", str(ROOT / "tests" / "load" / "compose.load.yml"),
         *args,
     ]
     result = subprocess.run(
-        command, cwd=ROOT, env=env or compose_env(), input=input_text, text=True,
+        command, cwd=ROOT, env=env or compose_env(), input=input_text, text=True, timeout=timeout,
         stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE if capture else None,
     )
     if check and result.returncode != 0:
@@ -242,7 +242,7 @@ def parse_stages(text):
     return stages
 
 
-def produce(stages, mix, directory, offset, marks, stop_file=None):
+def produce(stages, mix, directory, offset, marks, stop_file=None, stop_event=None):
     """단계별 도착률로 요청을 넣는다. 각 단계의 시작·끝 시각을 marks에 남긴다."""
     producer = subprocess.Popen(
         ["docker", "compose", "-p", PROJECT, "-f", str(ROOT / "compose.yml"),
@@ -253,43 +253,59 @@ def produce(stages, mix, directory, offset, marks, stop_file=None):
          "--command-property", "acks=all", "--command-property", "linger.ms=5"],
         cwd=ROOT, env=compose_env(), stdin=subprocess.PIPE, text=True)
     index = offset
-    with open(directory / "requests.csv", "a", newline="", encoding="utf-8") as ledger:
-        writer = csv.writer(ledger)
-        for number, (rate, seconds) in enumerate(stages):
-            begin_wall = datetime.now(timezone.utc)
-            begin = time.monotonic()
-            behind = 0.0
-            sent = 0
-            for step in range(rate * seconds):
-                if stop_file and Path(stop_file).is_file():
+    try:
+        with open(directory / "requests.csv", "a", newline="", encoding="utf-8") as ledger:
+            writer = csv.writer(ledger)
+            for number, (rate, seconds) in enumerate(stages):
+                begin_wall = datetime.now(timezone.utc)
+                begin = time.monotonic()
+                behind = 0.0
+                sent = 0
+                for step in range(rate * seconds):
+                    if (stop_event and stop_event.is_set()) or (stop_file and Path(stop_file).is_file()):
+                        break
+                    delay = begin + step / rate - time.monotonic()
+                    if delay > 0:
+                        if stop_event is not None:
+                            stop_event.wait(delay)
+                        else:
+                            time.sleep(delay)
+                    else:
+                        behind = max(behind, -delay)
+                    if (stop_event and stop_event.is_set()) or (stop_file and Path(stop_file).is_file()):
+                        break
+                    order_id, kind, gross, mileage, body = request_event(index, mix)
+                    index += 1
+                    sent += 1
+                    producer.stdin.write(f"{order_id}\t{body}\n")
+                    writer.writerow([order_id, kind, gross, mileage, number,
+                                     datetime.now(timezone.utc).isoformat()])
+                    if step % max(1, rate // 10) == 0:
+                        producer.stdin.flush()
+                producer.stdin.flush()
+                marks.append({"stage": number, "rate": rate, "seconds": seconds,
+                              "start": begin_wall.isoformat(),
+                              "end": datetime.now(timezone.utc).isoformat(),
+                              "sent": sent,
+                              "stopped": sent < rate * seconds,
+                              "elapsed": round(time.monotonic() - begin, 2),
+                              "maxBehindSeconds": round(behind, 2)})
+                if sent < rate * seconds:
                     break
-                delay = begin + step / rate - time.monotonic()
-                if delay > 0:
-                    time.sleep(delay)
-                else:
-                    behind = max(behind, -delay)
-                if stop_file and Path(stop_file).is_file():
-                    break
-                order_id, kind, gross, mileage, body = request_event(index, mix)
-                index += 1
-                sent += 1
-                producer.stdin.write(f"{order_id}\t{body}\n")
-                writer.writerow([order_id, kind, gross, mileage, number,
-                                 datetime.now(timezone.utc).isoformat()])
-                if step % max(1, rate // 10) == 0:
-                    producer.stdin.flush()
-            producer.stdin.flush()
-            marks.append({"stage": number, "rate": rate, "seconds": seconds,
-                          "start": begin_wall.isoformat(),
-                          "end": datetime.now(timezone.utc).isoformat(),
-                          "sent": sent,
-                          "stopped": sent < rate * seconds,
-                          "elapsed": round(time.monotonic() - begin, 2),
-                          "maxBehindSeconds": round(behind, 2)})
-            if sent < rate * seconds:
-                break
-        producer.stdin.close()
-    producer.wait()
+    finally:
+        try:
+            producer.stdin.close()
+        except BrokenPipeError:
+            pass
+        try:
+            producer.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            producer.terminate()
+            try:
+                producer.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                producer.kill()
+                producer.wait(timeout=2)
     if producer.returncode != 0:
         raise SystemExit(f"producer exited with {producer.returncode}")
     return index
@@ -360,16 +376,17 @@ def cmd_ramp(args):
     directory = WORK / run
     directory.mkdir(parents=True, exist_ok=True)
     marks, failure = [], []
+    stop_event = threading.Event()
     remember_run(run)
 
     def worker():
         try:
             produce(stages, args.mix.split(","), directory, args.offset, marks,
-                    getattr(args, "stop_file", None))
+                    getattr(args, "stop_file", None), stop_event)
         except BaseException as error:  # noqa: BLE001 - 주 스레드에서 보고한다
             failure.append(error)
 
-    thread = threading.Thread(target=worker, daemon=True)
+    thread = threading.Thread(target=worker)
     samples = [{**snapshot(), "elapsed": 0.0}]
     origin = time.monotonic()
     fault = {}
@@ -377,60 +394,72 @@ def cmd_ramp(args):
     if args.kill_after:
         def kill_worker():
             try:
-                time.sleep(args.kill_after)
+                if stop_event.wait(args.kill_after):
+                    return
                 fault["killedAt"] = round(time.monotonic() - origin, 2)
-                compose("kill", "payment-worker")
+                compose("kill", "payment-worker", timeout=30)
                 env = compose_env()
                 env["LOAD_PAYMENT_LISTENER_ENABLED"] = "true"
                 if args.scenario:
                     env["LOAD_PG_SCENARIO"] = args.scenario
-                compose("up", "-d", "--wait", "--no-deps", "payment-worker", env=env)
+                compose("up", "-d", "--wait", "--no-deps", "payment-worker", env=env, timeout=120)
                 fault["restartedAt"] = round(time.monotonic() - origin, 2)
             except BaseException as error:  # compose 실패(SystemExit)도 주 스레드에서 보고한다
                 failure.append(error)
-        fault_thread = threading.Thread(target=kill_worker, daemon=True)
+        fault_thread = threading.Thread(target=kill_worker)
         fault_thread.start()
     thread.start()
     drain_started = None
-    with open(directory / "samples.jsonl", "a", encoding="utf-8") as out:
-        out.write(json.dumps(samples[0]) + "\n")
-        while True:
-            time.sleep(args.interval)
-            sample = snapshot()
-            sample["elapsed"] = round(time.monotonic() - origin, 2)
-            previous = samples[-1]
-            # 상태 조회에도 시간이 걸리므로 설정 간격 대신 실제 경과 시간으로 나눈다.
-            seconds = max(0.001, sample["elapsed"] - previous["elapsed"])
-            sample["confirmedPerSecond"] = round(
-                (sample["confirmed"] - previous["confirmed"]) / seconds, 1)
-            sample["receivedPerSecond"] = round(
-                (sample["received"] - previous["received"]) / seconds, 1)
-            sample["stage"] = len(marks) if thread.is_alive() else "drain"
-            samples.append(sample)
-            out.write(json.dumps(sample) + "\n")
-            out.flush()
-            print(json.dumps({k: sample[k] for k in (
-                "stage", "receivedPerSecond", "confirmedPerSecond", "unfinished", "waiting",
-                "kafkaLag", "outboxPending", "jobsReview")}), flush=True)
-            if failure:
-                raise SystemExit(f"load worker failed: {failure[0]}")
-            if thread.is_alive():
-                continue
-            drain_started = drain_started or time.monotonic()
-            idle = (sample["unfinished"] == 0 and sample["waiting"] == 0
-                    and sample["kafkaLag"] == 0 and sample["outboxPending"] == 0)
-            if idle and (fault_thread is None or not fault_thread.is_alive()):
-                break
-            if time.monotonic() - drain_started > args.drain:
-                print("drain timeout; leaving remaining backlog for inspection")
-                break
+    restart_incomplete = False
+    try:
+        with open(directory / "samples.jsonl", "a", encoding="utf-8") as out:
+            out.write(json.dumps(samples[0]) + "\n")
+            while True:
+                time.sleep(args.interval)
+                sample = snapshot()
+                sample["elapsed"] = round(time.monotonic() - origin, 2)
+                previous = samples[-1]
+                # 상태 조회에도 시간이 걸리므로 설정 간격 대신 실제 경과 시간으로 나눈다.
+                seconds = max(0.001, sample["elapsed"] - previous["elapsed"])
+                sample["confirmedPerSecond"] = round(
+                    (sample["confirmed"] - previous["confirmed"]) / seconds, 1)
+                sample["receivedPerSecond"] = round(
+                    (sample["received"] - previous["received"]) / seconds, 1)
+                sample["stage"] = len(marks) if thread.is_alive() else "drain"
+                samples.append(sample)
+                out.write(json.dumps(sample) + "\n")
+                out.flush()
+                print(json.dumps({k: sample[k] for k in (
+                    "stage", "receivedPerSecond", "confirmedPerSecond", "unfinished", "waiting",
+                    "kafkaLag", "outboxPending", "jobsReview")}), flush=True)
+                if failure:
+                    raise SystemExit(f"load worker failed: {failure[0]}")
+                if thread.is_alive():
+                    continue
+                drain_started = drain_started or time.monotonic()
+                idle = (sample["unfinished"] == 0 and sample["waiting"] == 0
+                        and sample["kafkaLag"] == 0 and sample["outboxPending"] == 0)
+                if idle and (fault_thread is None or not fault_thread.is_alive()):
+                    break
+                if time.monotonic() - drain_started > args.drain:
+                    restart_incomplete = fault_thread is not None and fault_thread.is_alive()
+                    print("drain timeout; leaving remaining backlog for inspection")
+                    break
 
+    finally:
+        stop_event.set()
+        thread.join()
+        if fault_thread is not None:
+            fault_thread.join()
+
+    if restart_incomplete:
+        raise SystemExit("worker restart did not complete before drain timeout")
+    if failure:
+        raise SystemExit(f"load worker failed: {failure[0]}")
     if fault_thread is not None:
         if fault_thread.is_alive():
             raise SystemExit("worker restart did not complete before drain timeout")
         fault_thread.join()
-        if failure:
-            raise SystemExit(f"load worker failed: {failure[0]}")
         if "restartedAt" not in fault:
             raise SystemExit("worker restart did not complete")
 

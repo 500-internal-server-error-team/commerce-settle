@@ -55,7 +55,7 @@ const hints: Record<string, string> = {
   minSellerNetAmount: '할인 후 보장할 최소 판매자 정산액입니다. 단위: 원.', allowedMethods: '쿠폰을 허용할 결제수단을 선택하세요.',
   page: '첫 페이지는 0입니다. 다음 페이지는 1, 2 순서로 조회하세요.', size: '한 번에 조회할 건수입니다. 최대 100건입니다.',
   recipient: '배송받을 사람의 이름을 직접 입력하세요.', phone: '배송지 연락처를 입력하세요.', postalCode: '배송지 우편번호를 입력하세요.',
-  addressLine1: '배송지 기본 주소를 입력하세요.', addressLine2: '동·호수 등 상세 주소입니다.', isDefault: '이 배송지를 기본값으로 사용할지 선택하세요.',
+  addressLine1: '배송지 기본 주소를 입력하세요.', addressLine2: '동·호수 등 상세 주소입니다. 없으면 비워 두세요.', isDefault: '이 배송지를 기본값으로 사용할지 선택하세요.',
   reason: '이번 변경이나 처리의 사유를 직접 적으세요.', shipmentReference: '실제로 발송한 건을 식별할 배송 참조를 입력하세요.',
   requestId: '반품 요청 생성 응답의 ID입니다. 판매자는 반품 요청 목록에서도 선택할 수 있습니다.',
   refundId: '반품·취소 처리 뒤 실제 응답에서 확인한 환불 ID입니다. 먼저 해당 주문의 상태를 조회하세요.',
@@ -68,10 +68,12 @@ export function Field({ name, schema: input, value, change, required = false, as
   const base = resolve(input);
   const nullable = base.anyOf?.some(s => s.type === 'null');
   const schema = resolve(base.anyOf?.find(s => s.type !== 'null') ?? base);
+  // JSON required means the key must exist; a string may still allow an empty value.
+  const nonEmpty = required && (schema.type !== 'string' || (schema.minLength ?? 0) > 0 || !!schema.format || !!schema.enum && !schema.enum.includes(''));
   if (schema.type === 'object') return <fieldset className="object-fields"><legend>{labels[name] ?? name}</legend>
     <Fields schema={schema} value={value ?? {}} change={change} /></fieldset>;
   return <div className="field"><label htmlFor={`field-${name}`}>
-    {labels[name.split('.').at(-1)!] ?? name}{required && !nullable ? ' *' : ''}
+    {labels[name.split('.').at(-1)!] ?? name}{nonEmpty && !nullable ? ' *' : ''}
     <span className="field-name">{name}</span></label>
     {nullable && <label className="null-choice"><input type="checkbox" aria-label={`${labels[name] ?? name} 사용 안 함`} checked={value === null}
       onChange={e => change(e.target.checked ? null : defaults(schema))} />사용 안 함</label>}
@@ -87,7 +89,7 @@ export function Field({ name, schema: input, value, change, required = false, as
       : schema.type === 'array' ? <ArrayInput name={name} value={value} change={change} />
       : <input id={`field-${name}`} type={/password|token/i.test(name) ? 'password' : schema.type === 'integer' || schema.type === 'number' ? 'number' : schema.format === 'email' ? 'email' : schema.format === 'date' ? 'date' : schema.format === 'date-time' ? 'datetime-local' : 'text'}
         aria-describedby={`hint-${name}`}
-        value={schema.format === 'date-time' ? localTime(value) : String(value ?? '')} required={required} min={schema.minimum} max={schema.maximum} minLength={schema.minLength} maxLength={schema.maxLength}
+        value={schema.format === 'date-time' ? localTime(value) : String(value ?? '')} required={nonEmpty} min={schema.minimum} max={schema.maximum} minLength={schema.minLength} maxLength={schema.maxLength}
         placeholder={schema.format === 'date-time' ? 'YYYY-MM-DDThh:mm:ss+09:00' : schema.format === 'date' ? 'YYYY-MM-DD' : schema.format === 'uuid' ? '실제 목록에서 선택하거나 응답의 ID 입력' : ''}
         step={schema.type === 'integer' || schema.format === 'date-time' ? 1 : schema.type === 'number' ? 'any' : undefined}
         autoComplete={/password|token/i.test(name) ? 'off' : undefined}
@@ -101,7 +103,7 @@ export function Field({ name, schema: input, value, change, required = false, as
     <small id={`hint-${name}`} className="field-hint">{hints[name] ?? schema.description ?? (schema.format === 'uuid'
       ? '해당 항목의 생성·조회 응답에서 확인한 ID를 사용하세요.' : '명세의 조건에 맞는 값을 직접 입력하거나 선택하세요.')}
       {schema.minimum !== undefined && ` 최소 ${schema.minimum.toLocaleString('ko-KR')}.`}{schema.maximum !== undefined && ` 최대 ${schema.maximum.toLocaleString('ko-KR')}.`}
-      {schema.minLength !== undefined && ` ${schema.minLength}자 이상.`}{schema.maxLength !== undefined && ` ${schema.maxLength}자 이하.`}
+      {schema.minLength !== undefined && schema.minLength > 0 && ` ${schema.minLength}자 이상.`}{schema.maxLength !== undefined && ` ${schema.maxLength}자 이하.`}
       {schema.format === 'date-time' && ` 달력은 브라우저 시간대(${Intl.DateTimeFormat().resolvedOptions().timeZone})로 입력하며 서버에는 시간대를 포함해 보냅니다.`}</small>
     {assistance}
   </div>;
