@@ -131,19 +131,36 @@ public class JdbcQuarantineStore implements QuarantineStore {
             .addValue("operator", operator)
             .addValue("reason", reasonCode)
             .addValue("audit", UUID.randomUUID());
+    // 재처리 요청과 같은 순서(원문 → 작업)로 잠가, 같은 원문의 새 REPLAY 생성과 재개를 직렬화한다.
+    jdbc.queryForList(
+        """
+        SELECT q.id FROM payment.inbox_quarantines q
+        WHERE q.id=(SELECT quarantine_id FROM payment.inbox_quarantine_deliveries WHERE id=:id)
+        FOR UPDATE
+        """,
+        params);
     var rows =
         jdbc.query(
             """
-        SELECT attempts,version,status FROM payment.inbox_quarantine_deliveries
-        WHERE id=:id FOR UPDATE
+        SELECT d.attempts,d.version,d.status,
+          d.kind='REPLAY' AND EXISTS (SELECT 1 FROM payment.inbox_quarantine_deliveries o
+            WHERE o.quarantine_id=d.quarantine_id AND o.id<>d.id AND o.kind='REPLAY'
+              AND o.status IN ('PENDING','RUNNING','RETRY')) AS other_replay_active
+        FROM payment.inbox_quarantine_deliveries d
+        WHERE d.id=:id FOR UPDATE OF d
         """,
             params,
             (rs, row) ->
                 new Exhausted(
-                    rs.getInt("attempts"), rs.getLong("version"), rs.getString("status")));
+                    rs.getInt("attempts"),
+                    rs.getLong("version"),
+                    rs.getString("status"),
+                    rs.getBoolean("other_replay_active")));
+    // 같은 원문의 다른 REPLAY가 발행 중이면 활성 REPLAY 유일성 제약에 걸리기 전에 거절한다.
     if (rows.size() != 1
         || rows.getFirst().version() != expectedVersion
-        || !"REVIEW_REQUIRED".equals(rows.getFirst().status())) {
+        || !"REVIEW_REQUIRED".equals(rows.getFirst().status())
+        || rows.getFirst().otherReplayActive()) {
       return Optional.empty();
     }
     params.addValue("attempts", rows.getFirst().attempts());
@@ -373,5 +390,5 @@ public class JdbcQuarantineStore implements QuarantineStore {
 
   private record Original(UUID id, String key, byte[] body) {}
 
-  private record Exhausted(int attempts, long version, String status) {}
+  private record Exhausted(int attempts, long version, String status, boolean otherReplayActive) {}
 }

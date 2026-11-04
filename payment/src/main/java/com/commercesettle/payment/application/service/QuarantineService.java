@@ -57,7 +57,11 @@ public class QuarantineService {
             });
   }
 
-  /** 소진된 동일 발행 작업을 재개하며 이전 시도 수와 요청자·사유를 별도 이력에 보존한다. */
+  /**
+   * 소진된 동일 발행 작업을 재개하며 이전 시도 수와 요청자·사유를 별도 이력에 보존한다. 거절하면 없는 작업은 {@link
+   * QuarantineNotFoundException}, 버전 불일치·REVIEW_REQUIRED가 아닌 작업·같은 원문의 다른 REPLAY 발행 중은 {@link
+   * QuarantineOperationRejectedException}이다.
+   */
   @Transactional
   public UUID resumeDelivery(UUID id, long expectedVersion, String operator, String reasonCode) {
     validateOperatorRequest(id, expectedVersion, operator, reasonCode);
@@ -67,10 +71,16 @@ public class QuarantineService {
             () -> {
               QuarantineStore.DeliveryView current =
                   store.findDelivery(id).orElseThrow(QuarantineNotFoundException::new);
-              return new QuarantineOperationRejectedException(
-                  current.version() != expectedVersion
-                      ? Reason.VERSION_CONFLICT
-                      : Reason.DELIVERY_NOT_RESUMABLE);
+              Reason reason;
+              if (current.version() != expectedVersion) {
+                reason = Reason.VERSION_CONFLICT;
+              } else if (!"REVIEW_REQUIRED".equals(current.status())) {
+                reason = Reason.DELIVERY_NOT_RESUMABLE;
+              } else {
+                // 버전·상태가 맞는데 거절됐다면 같은 원문의 다른 REPLAY가 발행 중이다.
+                reason = Reason.REPLAY_ACTIVE;
+              }
+              return new QuarantineOperationRejectedException(reason);
             });
   }
 

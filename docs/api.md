@@ -124,7 +124,7 @@ Payment 격리 원문 API(`/internal/payment-quarantines/**`·`/internal/payment
 
 - 조회는 원문·키 bytes 대신 수신 위치, 오류 코드, 원문 크기와 SHA-256만 반환합니다. 원문 확인은 DB 권한 경로로 합니다.
 - 재처리는 원문 `version`, 재개는 발행 작업 `version`을 `expectedVersion`으로 받고, `reasonCode`는 `^[A-Z][A-Z0-9_]{0,79}$`입니다. 재처리는 원래 topic·key·bytes 그대로 REPLAY 작업을 만들고, 재개는 시도를 다 쓴 같은 작업을 PENDING·시도 수 0으로 되돌립니다. 202는 발행 접수일 뿐이며 Kafka 발행 완료(`PUBLISHED`)와 업무 반영은 따로 확인합니다.
-- 원문·작업 버전이 다르면 `409 COMMON_VERSION_CONFLICT`, 같은 원문의 REPLAY가 발행 중이면 `409 QUARANTINE_REPLAY_ACTIVE`, REVIEW_REQUIRED가 아닌 작업의 재개는 `409 QUARANTINE_DELIVERY_NOT_RESUMABLE`, 없는 원문·작업은 404입니다.
+- 원문·작업 버전이 다르면 `409 COMMON_VERSION_CONFLICT`, 같은 원문의 REPLAY가 발행 중이면 재처리와 소진 REPLAY의 재개 모두 `409 QUARANTINE_REPLAY_ACTIVE`, REVIEW_REQUIRED가 아닌 작업의 재개는 `409 QUARANTINE_DELIVERY_NOT_RESUMABLE`, 없는 원문·작업은 404입니다.
 - 같은 `Idempotency-Key`·본문 재요청은 처음 결과의 현재 상태를 돌려주고, 같은 키 다른 본문은 `409 COMMON_IDEMPOTENCY_CONFLICT`입니다. 멱등 기록은 운영 결제 작업 재처리와 같은 `payment.idempotency_records`에 남고, 같은 운영자·작업·키의 요청은 직렬화되어 동시 재요청도 한 번만 반영됩니다. 요청자·사유는 작업·재개 이력과 `payment.audit_logs`에 남습니다(correlation은 격리 ID).
 
 ### 정산 대조 조회
