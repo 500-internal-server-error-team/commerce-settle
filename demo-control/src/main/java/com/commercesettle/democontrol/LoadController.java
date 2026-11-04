@@ -125,14 +125,18 @@ class LoadController {
     if (run == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "실행 기록이 없습니다.");
     if (run.state.get().equals("RUNNING") || run.state.get().equals("STOP_REQUESTED")) {
       try {
-        Files.createDirectories(run.directory);
-        Files.writeString(run.directory.resolve("stop"), "stop additional injection\n");
-        run.state.compareAndSet("RUNNING", "STOP_REQUESTED");
+        requestStop(run);
       } catch (IOException e) {
         throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "중지 요청을 저장하지 못했습니다.");
       }
     }
     return run.view();
+  }
+
+  private void requestStop(Run run) throws IOException {
+    Files.createDirectories(run.directory);
+    Files.writeString(run.directory.resolve("stop"), "stop additional injection\n");
+    run.state.compareAndSet("RUNNING", "STOP_REQUESTED");
   }
 
   private void execute(Run run, Path root, Path work, Start start) {
@@ -210,28 +214,34 @@ class LoadController {
 
   @PreDestroy
   void close() {
-    synchronized (this) {
-      closing = true;
-      runs.values().stream()
-          .filter(r -> r.state.get().equals("RUNNING"))
-          .map(r -> r.id)
-          .toList()
-          .forEach(this::stop);
-    }
-    executor.shutdown();
     try {
-      if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+      synchronized (this) {
+        closing = true;
+        for (Run run : runs.values()) {
+          if (!run.state.get().equals("RUNNING")) continue;
+          try {
+            requestStop(run);
+          } catch (IOException e) {
+            run.append("중지 요청을 저장하지 못했습니다. 종료 대기 뒤 실행 프로세스를 정리합니다.");
+          }
+        }
+      }
+    } finally {
+      executor.shutdown();
+      try {
+        executor.awaitTermination(5, TimeUnit.SECONDS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      } finally {
         synchronized (this) {
           runs.values().stream()
               .map(r -> r.process)
               .filter(java.util.Objects::nonNull)
+              .filter(Process::isAlive)
               .forEach(LoadController::terminate);
         }
         executor.shutdownNow();
       }
-    } catch (InterruptedException e) {
-      executor.shutdownNow();
-      Thread.currentThread().interrupt();
     }
   }
 }

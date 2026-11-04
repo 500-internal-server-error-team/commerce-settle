@@ -16,6 +16,45 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ComposeConfigurationTest(unittest.TestCase):
+    def test_documented_load_cleanup_uses_the_selected_project_and_existing_credential(self):
+        document = (ROOT / "tests/load/README.md").read_text()
+        command = re.search(r"### 종료\n.*?```bash\n(.*?)```", document, re.S).group(1)
+        with tempfile.TemporaryDirectory(prefix="commerce-cleanup-test-") as directory:
+            work = Path(directory) / "work with spaces"
+            work.mkdir()
+            (work / "operator.credential").write_text("cleanup-test")
+            docker = Path(directory) / "docker"
+            docker.write_text(
+                "#!/usr/bin/env python3\nimport json,os,sys\n"
+                "print(json.dumps({'args':sys.argv[1:], 'credential':os.environ.get('LOAD_OPERATOR_CREDENTIAL'),"
+                "'redis':os.environ.get('AUTH_REDIS_RUN_ID')}))\n"
+            )
+            docker.chmod(0o700)
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in {"LOAD_PROJECT", "LOAD_WORK_DIR", "LOAD_OPERATOR_CREDENTIAL", "AUTH_REDIS_RUN_ID"}}
+            environment["PATH"] = directory + os.pathsep + environment["PATH"]
+            for project in ("commerce-settle-load", "commerce-settle-ui-load", "commerce-settle-ui-load-test"):
+                with self.subTest(project=project):
+                    result = subprocess.run(
+                        ["bash", "-e", "-c", command], cwd=ROOT, capture_output=True, text=True, check=True,
+                        env={**environment, "LOAD_PROJECT": project, "LOAD_WORK_DIR": str(work)}, timeout=10,
+                    )
+                    actual = json.loads(result.stdout)
+                    self.assertEqual(actual["args"], ["compose", "-p", project, "-f", "compose.yml",
+                                                     "-f", "tests/load/compose.load.yml", "down", "-v"])
+                    self.assertEqual(actual["credential"], "cleanup-test")
+                    self.assertEqual(actual["redis"], "0" * 40)
+            for missing in ("LOAD_PROJECT", "LOAD_WORK_DIR"):
+                selected = {**environment, "LOAD_PROJECT": "commerce-settle-ui-load", "LOAD_WORK_DIR": str(work)}
+                selected.pop(missing)
+                for shell in (["bash", "--noprofile", "--norc", "-c"],
+                              ["bash", "--noprofile", "--norc", "-i", "-c"]):
+                    with self.subTest(missing=missing, shell=shell):
+                        result = subprocess.run([*shell, command], cwd=ROOT, env=selected,
+                                                capture_output=True, text=True, timeout=10)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertEqual(result.stdout, "")
+
     def test_demo_ui_smoke_rejects_existing_demo_before_running_checks(self):
         with patch.object(smoke, "compose", return_value=SimpleNamespace(stdout='{"name":"commerce-settle-demo"}')) as cli, \
                 patch.object(smoke, "internal_json") as health, \
