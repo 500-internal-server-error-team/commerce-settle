@@ -611,6 +611,12 @@ main {
   min-height:0;
   margin:0
 }
+.request-inputs {
+  border:0;
+  padding:0;
+  margin:0;
+  min-width:0
+}
 .object-fields {
   grid-column:1/-1;
   border:1px solid var(--line);

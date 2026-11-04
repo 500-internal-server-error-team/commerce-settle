@@ -213,3 +213,37 @@ it('동일 작업을 다시 제출할 때 멱등키와 본문을 보존한다', 
   expect(run.mock.calls[0][0]).toEqual(run.mock.calls[1][0]);
   expect(run.mock.calls[0][0].idempotencyKey.length).toBeGreaterThanOrEqual(8);
 });
+
+it('요청 대기 중 입력·목록·견적·키 조작을 막고 응답 뒤 다시 사용할 수 있다', () => {
+  const operation = operations.find(op => op.id === 'post_api_orders')!;
+  const context = { productId: 'product-1', quantity: 2, expectedTotalAmount: 10000 };
+  const run = vi.fn();
+  const { rerender } = render(<OperationForm operation={operation} context={context} pending allowed run={run} />);
+  const controls = [...screen.getByRole('form', { name: 'API 요청' }).querySelectorAll('input,select,button,textarea')];
+  expect(controls.length).toBeGreaterThan(8);
+  expect(controls.every(control => control.matches(':disabled'))).toBe(true);
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  expect(run).not.toHaveBeenCalled();
+
+  rerender(<OperationForm operation={operation} context={context} pending={false} allowed run={run} />);
+  expect(controls.every(control => !control.matches(':disabled'))).toBe(true);
+  expect((screen.getByLabelText(/수량.*quantity/) as HTMLInputElement).value).toBe('2');
+});
+
+it('주문 제출 전에 시작한 견적이 늦게 도착해도 보낸 금액·버전·키를 덮어쓰지 않는다', async () => {
+  let finish!: (value: Response) => void;
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(resolve => { finish = resolve; })));
+  const run = vi.fn();
+  render(<OperationForm operation={operations.find(op => op.id === 'post_api_orders')!}
+    context={{ productId: 'product-1', quantity: 2, expectedProductVersion: 3, expectedTotalAmount: 10000 }}
+    pending={false} allowed run={run} />);
+  fireEvent.click(screen.getByRole('button', { name: '현재 입력으로 견적 조회' }));
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+
+  await act(async () => finish(new Response(JSON.stringify({ upstreamStatus: 200,
+    data: { totalAmount: 24000, productVersion: 9, eventVersion: null } }))));
+  expect((screen.getByLabelText(/확인한 결제 금액/) as HTMLInputElement).value).toBe('10000');
+  expect((screen.getByLabelText(/확인한 상품 버전/) as HTMLInputElement).value).toBe('3');
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  expect(run.mock.calls[1][0]).toEqual(run.mock.calls[0][0]);
+});

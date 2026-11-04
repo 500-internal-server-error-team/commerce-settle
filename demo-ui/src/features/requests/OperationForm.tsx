@@ -16,6 +16,9 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
   const latestValues = useRef({ body, pathParameters }); latestValues.current = { body, pathParameters };
   useEffect(() => () => lookupAbort.current?.abort(), []);
   useEffect(() => {
+    if (pending) { lookupAbort.current?.abort(); setLookupBusy(false); }
+  }, [pending]);
+  useEffect(() => {
     const fields = operation.schema ? resolve(operation.schema).properties ?? {} : {};
     const values = operation.schema ? defaults(operation.schema) as Record<string, Json> : null;
     if (values && 'quantity' in fields) values.quantity = 1;
@@ -117,7 +120,11 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
     } catch (e) { if (!controller.signal.aborted) setLookup(e instanceof Error ? e.message : '조회하지 못했습니다.'); }
     finally { if (lookupAbort.current === controller) setLookupBusy(false); }
   }
-  return <form aria-label="API 요청" onSubmit={event => { event.preventDefault(); run({ body, pathParameters, query, idempotencyKey: key }); }}>
+  return <form aria-label="API 요청" onSubmit={event => {
+    event.preventDefault(); if (pending || !allowed) return;
+    lookupAbort.current?.abort(); setLookupBusy(false);
+    run({ body, pathParameters, query, idempotencyKey: key });
+  }}>
     <div className="endpoint"><span className={`method ${operation.method.toLowerCase()}`}>{operation.method}</span><code>{operation.path}</code></div>
     <div className="input-guide"><strong>입력값 안내</strong><p>{operation.path.endsWith('-sessions')
       ? '가입할 때 정한 이메일과 비밀번호를 입력하세요. 계정이 없으면 위의 할 작업에서 해당 역할의 가입을 선택하세요.'
@@ -131,6 +138,7 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
       {['/api/orders', '/api/order-quotes'].includes(operation.path) && operation.method === 'POST' && <p>견적에서 쿠폰을 적용할 때는 마일리지를 0으로 두고 허용된 카드·간편결제를 선택하세요. 주문 접수 시 서버가 금액과 조건을 다시 확인합니다.</p>}
       {operation.schema && resolve(operation.schema).description && <details><summary>API 입력 제약 원문</summary><p>{resolve(operation.schema).description}</p></details>}
     </div>
+    <fieldset className="request-inputs" aria-label="요청 입력" disabled={pending}>
     <div className="fields">{operation.parameters.filter(p => p.in === 'path' || p.in === 'query').map(p =>
       <Field key={p.name} name={p.name} schema={p.schema} required={p.required}
         value={(p.in === 'path' ? pathParameters : query)[p.name] ?? ''}
@@ -151,6 +159,7 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
       <button type="button" className="text-button" onClick={() => setKey(crypto.randomUUID())}>새 작업 키 만들기</button></details>}
     <div className="form-footer"><span className="caption">* 필수 입력 · 서버가 가격·권한·상태를 최종 판단합니다.</span>
       <button className="primary" disabled={!allowed || pending}>{pending ? '응답 확인 중…' : '요청 실행'}</button></div>
+    </fieldset>
     {!allowed && <p className="caption">{operation.actor === 'OPERATOR' ? '제어 서버에 해당 서비스의 운영자 자격을 설정해야 실행할 수 있습니다.' : '이 작업에 필요한 역할로 전환하고 로그인하세요.'}</p>}
   </form>;
 }

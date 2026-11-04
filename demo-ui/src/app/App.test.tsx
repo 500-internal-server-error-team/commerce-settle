@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, expect, it, vi } from 'vitest';
 import { App } from './App';
@@ -147,4 +147,39 @@ it('주문 요청의 응답을 기다리는 동안 입력과 멱등키를 보존
   expect(screen.getByRole('button', { name: /202.*주문·결제 접수/ })).toBeTruthy();
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
   expect(JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body)).idempotencyKey).toBe(originalKey);
+});
+
+it('주문 대기 중 과거 결과를 연결해도 응답 유실 뒤 같은 입력과 키로 재요청한다', async () => {
+  const fetch = setup(); await login();
+  fireEvent.click(screen.getByRole('button', { name: /01.*구매·결제/ }));
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  await screen.findByText('격리된 조회 상품');
+  fireEvent.click(within(screen.getByLabelText('흐름별 작업 선택')).getByRole('button', { name: /02.*주문서/ }));
+  fireEvent.change(screen.getByLabelText(/상품 ID.*productId/), { target: { value: 'product-original' } });
+  fireEvent.change(screen.getByLabelText(/수량.*quantity/), { target: { value: '2' } });
+  let fail!: (error: Error) => void;
+  fetch.mockImplementationOnce(() => new Promise<Response>((_resolve, reject) => { fail = reject; }));
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  const sent = JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body));
+
+  fireEvent.click(screen.getByRole('button', { name: /200.*판매 상품 목록/ }));
+  fireEvent.click(screen.getByRole('button', { name: '입력에 연결' }));
+  expect((screen.getByLabelText('멱등키') as HTMLInputElement).value).toBe(sent.idempotencyKey);
+  expect((screen.getByLabelText(/상품 ID.*productId/) as HTMLInputElement).value).toBe('product-original');
+  expect((screen.getByLabelText(/수량.*quantity/) as HTMLInputElement).value).toBe('2');
+  await act(async () => fail(new TypeError('응답 유실 대역')));
+  await screen.findByText(/응답을 확인하지 못했습니다/);
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+
+  expect(JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body))).toEqual(sent);
+});
+
+it('대기하지 않을 때는 실제 결과의 ID·버전을 다음 주문 입력에 연결한다', async () => {
+  setup();
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  await screen.findByText('격리된 조회 상품');
+  fireEvent.click(screen.getByRole('button', { name: '입력에 연결' }));
+  fireEvent.click(within(screen.getByLabelText('흐름별 작업 선택')).getByRole('button', { name: /02.*주문서/ }));
+  expect((screen.getByLabelText(/상품 ID.*productId/) as HTMLInputElement).value).toBe('product-1');
+  expect((screen.getByLabelText(/확인한 상품 버전/) as HTMLInputElement).value).toBe('3');
 });

@@ -111,6 +111,9 @@ export function App() {
     setSessions(old => ({ ...old, [actor]: undefined })); setEvents(old => ({ ...old, [actor]: [] })); setContext(old => ({ ...old, [actor]: {} }));
   }
   function selectRow(row: Record<string, Json>) {
+    if (mutationPending) {
+      setNotice('현재 변경 요청의 응답을 확인 중입니다. 입력과 재요청 키를 보존하려면 응답을 확인한 뒤 결과를 연결하세요.'); return;
+    }
     if (!current || current.status < 200 || current.status >= 300) {
       setNotice('오류 응답은 입력에 연결하지 않습니다. 조회 조건을 확인하고 정상 응답에서 선택하세요.'); return;
     }
