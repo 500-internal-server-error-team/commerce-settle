@@ -130,7 +130,7 @@ PG 입금은 금융 Mock의 내부 매분 작업으로 원승인당 한 번 반�
 
 ### 격리 원문 운영
 
-Settlement 격리 원문 API는 `operator:<식별자>` 자격만 받고 Gateway에 공개하지 않습니다. 조회는 원문·키 bytes 대신 수신 위치, 오류 코드, 원문 크기와 SHA-256만 반환합니다. 원문 확인은 DB 권한 경로로 합니다. 재처리는 원문 `version`, 재개는 발행 작업 `version`을 `expectedVersion`으로 받고, `reasonCode`는 `^[A-Z][A-Z0-9_]{0,79}$`입니다. 재처리는 원래 topic·key·bytes 그대로 REPLAY 작업을 만들고, 재개는 시도를 다 쓴 같은 작업을 시도 수 0으로 되돌립니다. 202는 발행 접수일 뿐이며 Kafka 발행 완료(`PUBLISHED`)와 업무 반영은 따로 확인합니다. 같은 `Idempotency-Key`·본문 재요청은 처음 결과의 현재 상태를 돌려주고, 요청자·사유는 작업·재개 이력과 `audit_logs`에 남습니다(correlation은 격리 ID). Payment가 같은 운영 API를 추가할 때는 경로 접두사만 `payment-quarantines`로 바꿔 같은 요청·응답 모양을 씁니다.
+Settlement 격리 원문 API는 `operator:<식별자>` 자격만 받고 Gateway에 공개하지 않습니다. 조회는 원문·키 bytes 대신 수신 위치, 오류 코드, 원문 크기와 SHA-256만 반환합니다. 원문 확인은 DB 권한 경로로 합니다. 재처리는 원문 `version`, 재개는 발행 작업 `version`을 `expectedVersion`으로 받고, `reasonCode`는 `^[A-Z][A-Z0-9_]{0,79}$`입니다. 재처리는 원래 topic·key·bytes 그대로 REPLAY 작업을 만들고, 재개는 시도를 다 쓴 같은 작업을 시도 수 0으로 되돌립니다. 202는 발행 접수일 뿐이며 Kafka 발행 완료(`PUBLISHED`)와 업무 반영은 따로 확인합니다. 같은 `Idempotency-Key`·본문 재요청은 처음 결과의 현재 상태를 돌려주고, 요청자·사유는 작업·재개 이력과 `audit_logs`에 남습니다(correlation은 격리 ID).
 
 ### 금융 대역 조회와 장애 설정
 
