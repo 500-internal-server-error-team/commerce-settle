@@ -281,6 +281,31 @@ it.each([true,false])('동일 계정 재인증에만 미확정 원요청을 유�
   fireEvent.click(screen.getByRole('button',{name:/01.*구매·결제/}));selectOperation('post_api_orders');
   expect((screen.getByLabelText('멱등키') as HTMLInputElement).value===original.idempotencyKey).toBe(same);
 });
+it.each(['재로그인', '다른 흐름', '같은 작업 목록'])('%s 화면에서 원요청을 복구하면 작업 표시와 보낸 입력이 일치한다', async destination => {
+  const { fetch, original } = await loseOrder();
+  if (destination === '재로그인') {
+    fireEvent.click(screen.getByRole('button', { name: '로그인·가입 화면 열기' }));
+    fireEvent.change(screen.getByLabelText(/이메일/), { target: { value: 'buyer@example.test' } });
+    fireEvent.change(screen.getByLabelText(/비밀번호/), { target: { value: 'demo-test-password' } });
+    await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'API 요청' })));
+  } else {
+    fireEvent.click(screen.getByRole('button', { name: /05.*쿠폰·마일리지/ }));
+    if (destination === '다른 흐름') {
+      fireEvent.click(screen.getByRole('button', { name: '판매자 쿠폰 수량·예산 소진' }));
+      fireEvent.click(within(screen.getByLabelText('흐름별 작업 선택')).getAllByRole('button')[2]);
+    }
+  }
+  const beforeRestore = fetch.mock.calls.length;
+  fireEvent.click(screen.getByRole('button', { name: '원요청 다시 채우기' }));
+  expect(fetch).toHaveBeenCalledTimes(beforeRestore);
+  const selector = screen.getByLabelText('할 작업') as HTMLSelectElement;
+  expect(selector.value).toBe(original.operationId);
+  expect(Array.from(selector.options).filter(option => option.value === original.operationId)).toHaveLength(1);
+  expect((screen.getByLabelText('멱등키') as HTMLInputElement).value).toBe(original.idempotencyKey);
+  expect((screen.getByLabelText(/상품 ID.*productId/) as HTMLInputElement).value).toBe(original.body.productId);
+  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'API 요청' })));
+  expect(JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body))).toEqual(original);
+});
 it('원거래 결과를 확인한 사용자가 보존을 해제한 뒤 새 작업을 시작한다',async()=>{
   const {fetch,original}=await loseOrder();
   fireEvent.click(screen.getByRole('button',{name:'결과 확인 완료 · 보존 해제'}));

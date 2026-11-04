@@ -38,7 +38,7 @@ export function App() {
   }, retry: false });
   const scenario = scenarios.find(s => s.id === caseId);
   const steps = scenario ? workflow(scenario, role) : [];
-  const visibleActions = actions(group, steps.flatMap(step => step.operation ? [step.operation.id] : []));
+  const visibleActions = actions(group, [operationId, ...steps.flatMap(step => step.operation ? [step.operation.id] : [])]);
   const operation = operations.find(o => o.id === operationId) ?? visibleActions[0];
   const history = events[role] ?? []; const record = history.find(e => e.id === selected);
   const session = sessions[role];
