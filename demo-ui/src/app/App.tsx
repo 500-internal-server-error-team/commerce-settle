@@ -204,9 +204,10 @@ export function App() {
       <div className="breadcrumb">{roleLabels[role]} <span>/</span> {scenario?.groupTitle ?? '월간 혜택'}</div>
       <div className="page-heading"><div><h1>{group === 'monthly' ? '월 랭킹과 쿠폰 발급' : authRole(operation) ? operation.title : stepIndex < 0 ? operation?.title : scenario?.label}</h1><p>{group === 'monthly' ? '마감 시점에 고정한 선정 순위와 실제 발급 결과를 확인합니다.' : authRole(operation) ? operation.path.endsWith('-sessions') ? `${roleLabels[role]}의 가입 이메일과 비밀번호로 로그인하세요.` : '연습용 가입값을 채우거나 직접 입력한 뒤 회원가입을 누르세요.' : '작업을 선택하고 입력을 확인한 뒤 실행하세요.'}</p></div>
         <button className="secondary" onClick={() => setPanel(panel === 'requests' ? null : 'requests')}>실행 기록 {panel === 'requests' ? '접기' : '보기'}</button></div>
-      {info.error && <div role="alert" className="notice error">{import.meta.env.DEV
+      {info.error && <div role="alert" className="notice error"><p>{import.meta.env.DEV
         ? '운영·부하 제어 서버에 연결하지 못했습니다. 일반 API는 개발 프록시를 통해 계속 사용할 수 있습니다.'
-        : `${info.error.message} · 통합 실행 주소는 http://127.0.0.1:4174입니다.`}</div>}
+        : `${info.error.message} · 통합 실행 주소는 http://127.0.0.1:4174입니다.`}</p>
+        <button className="secondary" disabled={info.isFetching} onClick={() => { void info.refetch(); }}>{info.isFetching ? '제어 서버 연결 중' : '제어 서버 다시 연결'}</button></div>}
       {notice && <div role="status" className="notice">{notice}</div>}
       {mutationPending && <div className="notice"><p>응답이 계속 오지 않으면 대기를 중단하고 원거래를 조회할 수 있습니다. 거래 취소 기능은 아닙니다.</p>
         <button className="secondary" onClick={stopWaiting}>{operation.idempotent ? '응답 대기 중단 · 원요청 보존' : '응답 대기 중단'}</button></div>}
