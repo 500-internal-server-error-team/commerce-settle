@@ -161,7 +161,7 @@ export function App() {
           setSessions(old => ({ ...old, [actor]: { token: data.token as string, accountId: String(account.id), name: String(account.displayName),
             epoch: Math.max(Date.now(), (old[actor]?.epoch ?? 0) + 1), expiresAt } }));
           setSignupLogins(old => ({ ...old, [actor]: undefined }));
-          setEvents(old => ({ ...old, [actor]: [] })); setContext(old => ({ ...old, [actor]: {} })); setNotice('로그인했습니다. 이 역할의 계정과 세션을 사용합니다.');
+          setEvents(old => ({ ...old, [actor]: [] })); setContext(old => ({ ...old, [actor]: {} }));
         }
       }
       if (result.status >= 200 && result.status < 300) {
