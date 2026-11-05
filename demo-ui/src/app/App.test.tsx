@@ -36,6 +36,45 @@ async function login() {
   await screen.findByText('테스트 구매자');
 }
 
+it('명시한 조회의 응답을 흐름도보다 먼저 보여주고 결과 바로가기를 제공한다', async () => {
+  const fetch = setup();
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  await screen.findByText('격리된 조회 상품');
+  const result = document.querySelector('.result-section')!;
+  const diagram = screen.getByRole('region', { name: '데이터 흐름' });
+  expect(result.compareDocumentPosition(diagram) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.getByRole('link', { name: '받은 결과 보기' }).getAttribute('href')).toBe(`#${result.id}`);
+  expect(fetch.mock.calls.filter(([url]) => url !== '/demo/info')).toHaveLength(1);
+});
+
+it.each([
+  ['BUYER', '구매자', '/api/payments/{paymentId}', '/api/buyer-sessions'],
+  ['SELLER', '판매자', '/api/sellers/me/products', '/api/seller-sessions'],
+])('%s 보호 작업은 필요한 계정의 로그인 진입을 제공하고 자동 호출하지 않는다', (_role, label, path, loginPath) => {
+  const fetch = setup();
+  fireEvent.click(screen.getByRole('button', { name: label }));
+  const op = operations.find(o => o.path === path && o.method === 'GET')!;
+  fireEvent.change(screen.getByLabelText('할 작업'), { target: { value: op.id } });
+  expect((screen.getByLabelText('할 작업') as HTMLSelectElement).value).toBe(op.id);
+  expect((screen.getByRole('button', { name: '요청 실행' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: `${label}로 로그인·가입` }));
+  expect(screen.getByRole('form', { name: 'API 요청' }).textContent).toContain(loginPath);
+  expect(fetch.mock.calls.filter(([url]) => url !== '/demo/info')).toHaveLength(0);
+});
+
+it('구매·판매 계정과 운영 도구를 구분하고 미설정 운영 자격을 우회하지 않는다', () => {
+  const fetch = setup();
+  const accounts = screen.getByLabelText('API 실행 계정');
+  expect(within(accounts).getAllByRole('button').map(b => b.textContent)).toEqual(['구매자', '판매자']);
+  const tools = screen.getByRole('button', { name: '운영 도구' });
+  expect(accounts.contains(tools)).toBe(false);
+  expect(screen.queryByRole('button', { name: '발표자' })).toBeNull();
+  fireEvent.click(tools);
+  expect((screen.getByRole('button', { name: '요청 실행' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText(/현재 이 서비스의 운영 자격을 확인하지 못했습니다/)).toBeTruthy();
+  expect(fetch.mock.calls.filter(([url]) => url !== '/demo/info')).toHaveLength(0);
+});
+
 it('본문 없는 서버 로그아웃 후 세션·기록·해당 계정의 조회 캐시를 지운다', async () => {
   setup(); await login();
   fireEvent.click(screen.getByRole('button', { name: /구매·결제/ }));

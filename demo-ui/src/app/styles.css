@@ -215,6 +215,45 @@ small,.caption {
   align-self:stretch;
   align-items:center
 }
+.account-control {
+  display:flex;
+  align-items:center;
+  gap:8px
+}
+.account-control > span {
+  font-size:12px;
+  color:var(--muted);
+  white-space:nowrap
+}
+.tool-button[aria-pressed=true] {
+  color:var(--accent);
+  border-color:var(--accent)
+}
+.execution-guide {
+  margin:0 0 16px
+}
+.execution-readiness {
+  border:1px solid var(--line);
+  border-radius:6px;
+  background:#f8f9fa;
+  padding:12px 14px;
+  margin:14px 0 18px;
+  font-size:13px;
+  line-height:1.7
+}
+.execution-readiness p { margin:0 }
+.execution-readiness button { margin-top:10px }
+.request-outcome {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:8px 14px;
+  padding:14px 0;
+  border-top:1px solid var(--line);
+  font-size:13px
+}
+.request-outcome span { color:var(--muted) }
+.request-outcome a { color:var(--accent); text-underline-offset:3px }
 .role-tabs button {
   border:0;
   background:transparent;
@@ -988,7 +1027,8 @@ pre {
   .top-actions {
     width:100%;
     justify-content:space-between;
-    gap:10px
+    gap:10px;
+    flex-wrap:wrap
   }
   .sidebar {
     border-right:0;
