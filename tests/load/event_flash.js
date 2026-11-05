@@ -52,7 +52,13 @@ if (mode === 'seed') {
   if (gaugeRate) scenarios.gauge = arrival(gaugeRate, peakSeconds + tailSeconds, '0s', 'gauge');
 }
 
-export const options = { scenarios, summaryTrendStats: ['avg', 'p(50)', 'p(95)', 'p(99)', 'max'] };
+// 항상 참인 기준을 걸어 결과별 응답 시간을 요약에 따로 남긴다. 생성은 매진 전, 이벤트 마감 거절은 대부분 매진 뒤 구간이다.
+const thresholds = {};
+for (const metric of ['order_event_duration', 'order_normal_duration']) {
+  for (const outcome of Object.keys(outcomes)) thresholds[`${metric}{outcome:${outcome}}`] = ['max>=0'];
+}
+
+export const options = { scenarios, thresholds, summaryTrendStats: ['avg', 'p(50)', 'p(95)', 'p(99)', 'max'] };
 
 function headers(token) {
   return {
