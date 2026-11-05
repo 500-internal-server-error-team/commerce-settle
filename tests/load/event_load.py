@@ -149,14 +149,17 @@ INSERT INTO commerce.product_inventory (id,product_id,available_qty,reserved_qty
         until(gate_open, "order admission did not open", 300)
 
         # 주문 트랜잭션의 행 잠금 대기를 1초 간격으로 표본 추출한다.
+        # 같은 표본에서 이벤트의 예약+판매 수를 읽어 수량이 처음 다 찬 시각(k6 시작 기준 초)을 남긴다.
         samples, stop = [], threading.Event()
+        load_started = time.monotonic()
 
         def sample():
             while not stop.is_set():
                 try:
-                    row = sql("""select count(*) filter (where wait_event_type='Lock') || '|' || count(*) filter (where state='active')
+                    row = sql(f"""select count(*) filter (where wait_event_type='Lock') || '|' || count(*) filter (where state='active')
+|| '|' || (select reserved_count + sold_count from commerce.sale_events where id='{event['id']}')
 from pg_stat_activity where datname='commerce'""")
-                    samples.append([int(v) for v in row.split("|")])
+                    samples.append([round(time.monotonic() - load_started, 1), *(int(v) for v in row.split("|"))])
                 except RuntimeError:
                     pass
                 stop.wait(1)
@@ -170,6 +173,13 @@ from pg_stat_activity where datname='commerce'""")
             stop.set()
             sampler.join()
         (work / "k6.txt").write_text(output)
+        metrics = json.loads((work / "k6-flash.json").read_text())["metrics"]
+        latency = {name.split("{", 1)[0].removeprefix("order_").removesuffix("_duration") + "." + name.split("outcome:", 1)[1].rstrip("}"):
+                   {key: round(metrics[name][key]) for key in ["p(50)", "p(95)", "p(99)", "max"]}
+                   for name in metrics if "{outcome:" in name and metrics[name].get("max")}
+        counters = {name.removeprefix("order_"): int(metrics[name]["count"]) for name in metrics
+                    if name.startswith("order_") and "count" in metrics[name] and "{" not in name}
+        sold_out_at = next((s[0] for s in samples if s[3] >= args.quota), None)
 
         counts = dict(line.split("|") for line in sql(f"""
 select 'event', status||'/'||reserved_count||'/'||sold_count||'/'||quota from commerce.sale_events where id='{event['id']}'
@@ -201,8 +211,11 @@ union all select 'normalInventory', available_qty||'/'||reserved_qty||'/'||event
         summary = {
             "input": vars(args) | {"orders": orders},
             "counts": counts, "gauge": gauge, "checks": checks,
-            "lockWaitersMax": max((s[0] for s in samples), default=0),
-            "activeMax": max((s[1] for s in samples), default=0),
+            "outcomes": counters, "latencyMs": latency,
+            "soldOutAtSeconds": sold_out_at, "dropped": int(metrics.get("dropped_iterations", {}).get("count", 0)),
+            "lockWaitersMax": max((s[1] for s in samples), default=0),
+            "activeMax": max((s[2] for s in samples), default=0),
+            "timeline": samples,
             "scope": "A: Gateway+Commerce order admission and event reservation; payment consumers disabled",
         }
         (work / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False))
