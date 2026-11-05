@@ -73,7 +73,8 @@ python3 -B tests/load/event_load.py                                             
 - 구매자·판매자·상품은 SQL, 세션은 Redis에 직접 넣고, 주소는 주소 ID로 암호화되므로 [event_flash.js](event_flash.js)의 `seed`가 실제 API로 등록합니다.
 - 이벤트는 이미 시작한 기간으로 공개해 바로 `OPEN`으로 만듭니다. 구매자마다 주문을 한 번 보내며 10명 중 1명은 일반 상품을 주문합니다.
 - k6는 결과를 `created`·`sold_out`(`INVENTORY_INSUFFICIENT`)·`admission_closed`(`EVENT_ADMISSION_CLOSED`)·`capacity`(접수 gate 503)·`conflict`·`client_error`·`server_error`·`timeout`으로 나눕니다. 의도한 매진 거절은 결함으로 세지 않습니다.
-- 시험 중 1초마다 Commerce DB의 잠금 대기·활성 세션 수를 표본 추출합니다.
+- 시험 중 1초마다 Commerce DB의 잠금 대기·활성 세션 수와 이벤트의 예약+판매 수를 표본 추출해, 수량이 처음 다 찬 시각(`soldOutAtSeconds`)을 남깁니다.
+- 응답 시간은 이벤트·일반 상품과 결과별로 나눠 기록합니다. 생성은 매진 전, 이벤트 마감 거절은 대부분 매진 뒤 구간이라 두 구간을 따로 비교할 수 있습니다.
 - 끝나면 초과 판매·구매자 중복 참여 0, 참여 수=이벤트 예약 수=이벤트 주문 수, 두 상품의 재고 합 보존, 게이지 조회를 확인하고 하나라도 어긋나면 실패로 끝납니다. 결과는 `tests/load/work/event-<시각>/`에 남습니다.
 
 ## 실측 기록
