@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { App } from './App';
@@ -14,9 +14,13 @@ beforeEach(() => {
   vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { callback(0); return 0; });
 });
 afterEach(() => { cleanup(); client?.clear(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
-function setup(items: unknown[] = [{ id: 'product-1', name: '격리된 조회 상품', version: 3 }]) {
+function setup(items: unknown[] = [{ id: 'product-1', name: '격리된 조회 상품', version: 3 }], infoFailures = 0) {
+  let infoCalls = 0;
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
-    if (url === '/demo/info') return response({ operatorServices: [], links: [], loadEnabled: false });
+    if (url === '/demo/info') {
+      if (++infoCalls <= infoFailures) throw new Error('control unavailable');
+      return response({ operatorServices: [], links: [], loadEnabled: false });
+    }
     const command = JSON.parse(String(init?.body));
     if (command.operationId === 'post_api_buyer_sessions') return response({ upstreamStatus: 200,
       data: { token: 'private-buyer', account: { id: 'buyer-1', actorKind: 'BUYER', displayName: '테스트 구매자' } } });
@@ -39,6 +43,24 @@ async function login() {
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
   await screen.findByText('테스트 구매자');
 }
+
+it('제어 서버 연결 실패 후 명시 재연결은 로그인·입력·기존 요청을 보존하고 자동 재시도하지 않는다', async () => {
+  const fetch = setup(undefined, 2);
+  await screen.findByRole('button', { name: '제어 서버 다시 연결' });
+  await login();
+  fireEvent.click(screen.getByRole('button', { name: '판매 상품 보기' }));
+  fireEvent.change(screen.getByLabelText('할 작업'), { target: { value: 'get_api_orders_orderId' } });
+  fireEvent.change(screen.getByLabelText(/주문 ID/), { target: { value: 'preserved-order' } });
+  expect(fetch.mock.calls.filter(([url]) => url === '/demo/info')).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button', { name: '제어 서버 다시 연결' }));
+  await waitFor(() => expect((screen.getByRole('button', { name: '제어 서버 다시 연결' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: '제어 서버 다시 연결' }));
+  await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  expect(within(document.querySelector('header')!).getByText('테스트 구매자')).toBeTruthy();
+  expect((screen.getByLabelText(/주문 ID/) as HTMLInputElement).value).toBe('preserved-order');
+  expect(fetch.mock.calls.filter(([url]) => url === '/demo/info')).toHaveLength(3);
+  expect(fetch.mock.calls.filter(([url]) => url !== '/demo/info')).toHaveLength(1);
+});
 
 it('명시한 조회의 응답을 흐름도보다 먼저 보여주고 결과 바로가기를 제공한다', async () => {
   const fetch = setup();
