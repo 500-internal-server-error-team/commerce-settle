@@ -7,6 +7,13 @@ import { mergeResponseContext, responseContext } from './responseContext';
 
 beforeEach(() => vi.stubEnv('DEV', false));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+it.each([['post_api_buyers', '회원가입'], ['post_api_sellers', '회원가입'], ['post_api_buyer_sessions', '로그인'], ['post_api_seller_sessions', '로그인']])('%s의 실제 제출 행동을 표시한다', (id, label) => {
+  const operation = operations.find(op => op.id === id)!;
+  const run = vi.fn();
+  render(<OperationForm operation={operation} context={{}} pending={false} allowed run={run} />);
+  expect(screen.getByRole('button', { name: label })).toBeTruthy();
+  expect(run).not.toHaveBeenCalled();
+});
 it.each(['buyers', 'sellers'])('%s 연습값은 유효한 폼을 채우고 요청 대기 중에는 다시 바꾸지 않는다', resource => {
   const run = vi.fn(); const context = {};
   const operation = operations.find(op => op.id === `post_api_${resource}`)!;

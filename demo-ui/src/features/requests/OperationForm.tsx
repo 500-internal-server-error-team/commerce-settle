@@ -46,6 +46,7 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
     setBody(recoveryValues.body); setPath(recoveryValues.pathParameters); setQuery(recoveryValues.query);
     setKey(recoveryValues.idempotencyKey);
   }, [recoveryValues]);
+  const login = operation.method === 'POST' && ['/api/buyer-sessions', '/api/seller-sessions'].includes(operation.path);
   const signup = operation.method === 'POST' && (operation.path === '/api/buyers' || operation.path === '/api/sellers');
   function fillPracticeSignup() {
     if (pending) return;
@@ -146,10 +147,8 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
     run({ body, pathParameters, query, idempotencyKey: key });
   }}>
     <div className="endpoint"><span className={`method ${operation.method.toLowerCase()}`}>{operation.method}</span><code>{operation.path}</code></div>
-    <div className="input-guide"><strong>입력값 안내</strong><p>{operation.path.endsWith('-sessions')
-      ? '가입할 때 정한 이메일과 비밀번호를 입력하세요. 계정이 없으면 위의 할 작업에서 해당 역할의 가입을 선택하세요.'
-      : operation.path === '/api/buyers' || operation.path === '/api/sellers'
-        ? '직접 값을 정하지 않아도 아래 버튼으로 연습용 가입값을 채울 수 있습니다. 요청 실행을 눌러야 실제로 가입됩니다.'
+    {!login && <div className="input-guide"><strong>입력값 안내</strong><p>{signup
+        ? '직접 값을 정하지 않아도 아래 버튼으로 연습용 가입값을 채울 수 있습니다. 확인 후 회원가입을 눌러 가입하세요.'
       : operation.method === 'GET'
         ? '조회할 ID와 조회 조건을 입력하세요. 목록이 제공되는 항목은 아래에서 선택할 수 있습니다.'
       : '목록이 있는 ID는 아래에서 선택하고, 나머지는 생성·조회 응답에서 확인하세요. 이름·가격·일정은 직접 정합니다.'}</p>
@@ -157,18 +156,18 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
       {operation.path === '/api/orders' && operation.method === 'POST' && <p>일반·이벤트 구매와 쿠폰 사용을 지원합니다. 선택한 조건으로 견적을 조회한 뒤 주문하세요.</p>}
       {['/api/orders', '/api/order-quotes'].includes(operation.path) && operation.method === 'POST' && <p>견적에서 쿠폰을 적용할 때는 마일리지를 0으로 두고 허용된 카드·간편결제를 선택하세요. 주문 접수 시 서버가 금액과 조건을 다시 확인합니다.</p>}
       {operation.schema && resolve(operation.schema).description && <details><summary>API 입력 제약 원문</summary><p>{resolve(operation.schema).description}</p></details>}
-    </div>
+    </div>}
     <fieldset className="request-inputs" aria-label="요청 입력" disabled={pending}>
     {signup && <div className="input-guide"><button type="button" className="secondary" onClick={fillPracticeSignup}>연습용 가입값 채우기</button>
       <p className="caption">테스트 이메일·비밀번호·이름{operation.path === '/api/sellers' ? '·판매자 지급 대상' : ''}을 만듭니다. 가입에 성공하면 같은 정보로 로그인할 수 있습니다.</p></div>}
-    <div className="fields">{operation.parameters.filter(p => p.in === 'path' || p.in === 'query').map(p =>
+    {operation.parameters.some(p => p.in === 'path' || p.in === 'query') && <div className="fields">{operation.parameters.filter(p => p.in === 'path' || p.in === 'query').map(p =>
       <Field key={p.name} name={p.name} schema={p.schema} required={p.required}
         value={(p.in === 'path' ? pathParameters : query)[p.name] ?? ''}
         change={value => { (p.in === 'path' ? setPath : setQuery)(old => ({ ...old, [p.name]: String(value) }));
           if (p.in === 'path') {
             if ('expectedVersion' in object) setBody({ ...object, expectedVersion: '' });
             if (operation.parameters.some(p => p.in === 'query' && p.name === 'expectedVersion')) setQuery(old => ({ ...old, expectedVersion: '' }));
-          } }} assistance={assistance(p.name)} />)}</div>
+          } }} assistance={assistance(p.name)} />)}</div>}
     {operation.schema && <Fields schema={operation.schema} value={body} change={changeBody} assistance={assistance} />}
     {'expectedVersion' in object && detail && <button type="button" className="secondary" disabled={lookupBusy || !allowed || operation.parameters.some(p => p.in === 'path' && !pathParameters[p.name])}
       onClick={() => lookupValues('detail')}>대상 최신 값 불러오기</button>}
@@ -180,7 +179,7 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
       <p className="caption">응답이 불명확하면 먼저 원래 거래를 조회하세요. 같은 작업을 재요청할 때는 입력과 키를 유지합니다. 입력을 바꾸려면 기존 결과부터 확인하세요.</p>
       <button type="button" className="text-button" onClick={() => setKey(crypto.randomUUID())}>새 작업 키 만들기</button></details>}
     <div className="form-footer"><span className="caption">* 필수 입력 · 서버가 가격·권한·상태를 최종 판단합니다.</span>
-      <button className="primary" disabled={!allowed || pending}>{pending ? '응답 확인 중…' : '요청 실행'}</button></div>
+      <button className="primary" disabled={!allowed || pending}>{pending ? '응답 확인 중…' : login ? '로그인' : signup ? '회원가입' : '요청 실행'}</button></div>
     </fieldset>
     {!allowed && <p className="caption">{operation.actor === 'OPERATOR' ? '제어 서버에 해당 서비스의 운영자 자격을 설정해야 실행할 수 있습니다.' : '이 작업에 필요한 역할로 전환하고 로그인하세요.'}</p>}
   </form>;
