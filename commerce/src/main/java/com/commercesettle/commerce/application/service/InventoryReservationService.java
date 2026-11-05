@@ -294,10 +294,27 @@ public class InventoryReservationService {
    * 미공개 이벤트는 구매자에게 없는 이벤트다.
    */
   private RuntimeException admissionRejected(UUID eventId, Instant now) {
-    EventAdmission admission =
-        events
-            .findAdmission(eventId, now)
-            .orElseThrow(() -> new SaleEventNotFoundException(eventId));
+    return rejection(admission(eventId, now));
+  }
+
+  /**
+   * 주문을 저장하기 전에 커밋된 이벤트 행만 읽어 신청할 수 없는 이벤트를 먼저 거절한다. 잠금을 잡지 않으므로 매진·종료 뒤 요청은 주문·주소 사본 저장과 암호화를 하지
+   * 않는다. 열려 있다고 읽어도 수량 확보는 {@link #reserveForEvent}의 조건부 갱신이 결정한다.
+   */
+  public void requireEventOpen(UUID eventId) {
+    EventAdmission admission = admission(eventId, clock.instant());
+    if (admission != EventAdmission.OPEN) {
+      throw rejection(admission);
+    }
+  }
+
+  private EventAdmission admission(UUID eventId, Instant now) {
+    return events
+        .findAdmission(eventId, now)
+        .orElseThrow(() -> new SaleEventNotFoundException(eventId));
+  }
+
+  private static EventAdmissionClosedException rejection(EventAdmission admission) {
     boolean notOpen = admission == EventAdmission.NOT_STARTED || admission == EventAdmission.CLOSED;
     return new EventAdmissionClosedException(notOpen ? Reason.NOT_OPEN : Reason.NO_REMAINING);
   }
