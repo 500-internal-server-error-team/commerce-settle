@@ -3,12 +3,12 @@ import { operations, redact, type Operation } from '../../shared/api/contract';
 import type { Execution } from '../../shared/api/client';
 import type { DemoInfo } from '../experiments/Experiments';
 import { Select, ArrowIcon } from '../../shared/ui/Select';
-import { application, consumerApplication, database, eventContracts, requestRoute, type FlowNode } from './flowModel';
+import { application, consumerApplication, database, eventContracts, requestRoute, authenticationRoute, loginStages, protectedStages, type FlowNode } from './flowModel';
 
 function Node({ node, x, y, width = 152, selected, onSelect }: { node: FlowNode; x: number; y: number;
   width?: number; selected: boolean; onSelect: (node: FlowNode) => void }) {
   return <g className={`flow-node ${selected ? 'is-selected' : ''}`} role="button" tabIndex={0}
-    aria-label={`${node.title} · ${node.subtitle}`} aria-pressed={selected} onClick={() => onSelect(node)}
+    aria-label={`${node.title} · ${node.id.startsWith('login-') ? '로그인 발급 경로' : node.id.startsWith('protected-') ? '보호 요청 인증 경로' : node.subtitle}`} aria-pressed={selected} onClick={() => onSelect(node)}
     onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(node); } }}>
     <rect x={x} y={y} width={width} height="76" rx="8" />
     <text x={x + 16} y={y + 30} className="flow-node-title">{node.title}</text>
@@ -23,9 +23,32 @@ function Markers({ id }: { id: string }) {
     <path d="M0 0 8 3 0 6" fill="currentColor" /></marker></defs>;
 }
 
-export function DataFlow({ operation, record, pending, info }: { operation: Operation; record?: Execution;
-  pending: boolean; info?: DemoInfo }) {
-  const [view, setView] = useState<'map' | 'sequence'>('map');
+function AuthenticationDiagram({ nodes, protectedRequest, active, select, id }: { nodes: FlowNode[]; protectedRequest: boolean; active: FlowNode; select: (node: FlowNode) => void; id: string }) {
+  const marker = `${id}-${protectedRequest ? 'protected' : 'login'}`;
+  const redisOwner = protectedRequest ? 350 : 604;
+  return <div className="flow-scroll" tabIndex={0} role="region" aria-label={protectedRequest ? '보호 요청 검증 도식 · 좌우로 스크롤' : '로그인 세션 발급 도식 · 좌우로 스크롤'}>
+    <svg viewBox="0 0 820 390" className="flow-diagram" role="group" aria-label={protectedRequest ? '보호 요청의 인증 설계' : '로그인과 세션 발급 설계'}>
+      <Markers id={marker} />
+      <rect className="flow-zone" x="250" y="235" width="548" height="139" rx="12" />
+      <text x="270" y="259" className="flow-zone-label">{protectedRequest ? 'Gateway 세션 검증 · 서비스 DB 접근' : 'Commerce가 접근하는 인증 저장소'}</text>
+      {[0, 1].map(index => <g key={index}><Arrow d={`M${220 + index * 254} 105 H${274 + index * 254}`} marker={marker} />
+        <Arrow d={`M${274 + index * 254} 132 H${220 + index * 254}`} marker={marker} returning /></g>)}
+      <Arrow d={`M${redisOwner} 156 V210 H350 V280`} marker={marker} />
+      <Arrow d={`M400 280 V225 H${redisOwner + 30} V156`} marker={marker} returning />
+      <Arrow d="M674 156 V280" marker={marker} /><Arrow d="M710 280 V156" marker={marker} returning />
+      <text x="427" y="202" className="flow-edge-label">{protectedRequest ? '세션·가드 확인' : 'gate·제한·세션 저장'}</text>
+      <text x="713" y="210" className="flow-edge-label">{protectedRequest ? '업무 DB' : '계정 확인'}</text>
+      <text x="35" y="192" className="flow-edge-label">{protectedRequest ? '검증한 요청 전달 / 업무 응답' : '로그인 요청 / 세션 토큰 응답'}</text>
+      {nodes.slice(0, 3).map((node, index) => <Node key={node.id} node={node} x={20 + index * 254} y={80} width={200} selected={active.id === node.id} onSelect={select} />)}
+      <Node node={nodes[3]} x={528} y={280} width={200} selected={active.id === nodes[3].id} onSelect={select} />
+      <Node node={nodes[4]} x={274} y={280} width={200} selected={active.id === nodes[4].id} onSelect={select} />
+    </svg>
+  </div>;
+}
+
+export function DataFlow({ operation, record, pending, info, authenticated = false }: { operation: Operation; record?: Execution;
+  pending: boolean; info?: DemoInfo; authenticated?: boolean }) {
+  const [view, setView] = useState<'auto' | 'map' | 'sequence' | 'auth'>('auto');
   const [selectedNode, selectNode] = useState<FlowNode>();
   const [eventName, setEventName] = useState(eventContracts.find(e => e.producer === operation.owner)?.name ?? eventContracts[0].name);
   const [consumerName, setConsumerName] = useState('');
@@ -34,11 +57,15 @@ export function DataFlow({ operation, record, pending, info }: { operation: Oper
   const observedOperation = record && operations.find(op => op.method === record.method && op.path === record.path);
   const displayed = observedOperation || operation;
   const nodes = requestRoute(displayed, import.meta.env.DEV);
+  const isLogin = displayed.method === 'POST' && ['/api/buyer-sessions', '/api/seller-sessions'].includes(displayed.path);
+  const currentView = view === 'auto' ? isLogin ? 'auth' : 'map' : view;
+  const authNodes = authenticationRoute(displayed);
+  const protectedNodes = authenticationRoute(displayed, true);
+  const selectableNodes = currentView === 'auth' ? [...authNodes, ...protectedNodes] : [...nodes, ...(displayed.actor !== 'PUBLIC' && displayed.actor !== 'OPERATOR' ? [redis] : [])];
   const head = nodes.slice(0, -1); const db = nodes.at(-1)!;
   const gap = head.length === 4 ? 204 : 306;
   const serviceX = 20 + gap * (head.length - 1);
-  const active = selectedNode && [...nodes, ...(displayed.actor !== 'PUBLIC' && displayed.actor !== 'OPERATOR' ? [redis] : [])]
-    .find(node => node.id === selectedNode.id) || nodes[0];
+  const active = selectedNode && selectableNodes.find(node => node.id === selectedNode.id) || selectableNodes[0];
   const event = eventContracts.find(e => e.name === eventName) ?? eventContracts[0];
   const consumer = event.consumers.includes(consumerName) ? consumerName : event.consumers[0];
   const topic = `commerce-settle.${event.producer}.v1`;
@@ -56,14 +83,26 @@ export function DataFlow({ operation, record, pending, info }: { operation: Oper
       <span className="badge neutral">내부 단계 · 설계 경로</span></div>
     <div className="flow-call"><div><code>{displayed.method}</code> <code>{displayed.path}</code></div>
       <span className={pending ? '' : record ? record.status < 300 ? 'http-ok' : 'http-error' : ''} aria-live="polite">
-        {pending ? '응답 확인 중' : record ? `HTTP ${record.status} · ${record.elapsedMs}ms` : '수신한 응답 없음'}</span>
+        {pending ? '응답 확인 중' : record ? `HTTP ${record.status} · ${record.elapsedMs}ms` : '표시할 HTTP 응답 기록 없음'}</span>
     </div>
     <div className="flow-switch" aria-label="흐름 보기 방식">
-      <button aria-pressed={view === 'map'} onClick={() => setView('map')}>인프라 지도</button>
-      <button aria-pressed={view === 'sequence'} onClick={() => setView('sequence')}>시간순 왕복</button>
+      <button aria-pressed={currentView === 'map'} onClick={() => setView('map')}>인프라 지도</button>
+      <button aria-pressed={currentView === 'sequence'} onClick={() => setView('sequence')}>시간순 왕복</button>
+      <button aria-pressed={currentView === 'auth'} onClick={() => setView('auth')}>로그인·인증</button>
     </div>
-    <div className="flow-scroll" tabIndex={0} role="region" aria-label="요청 경로 도식 · 작은 화면에서 좌우로 스크롤">
-      {view === 'map' ? <svg viewBox="0 0 820 355" className="flow-diagram" role="group" aria-label="요청의 인프라 지도">
+    {currentView === 'auth' ? <div className="authentication-flow" role="region" aria-label="로그인·세션 인증 경로">
+      <div className="auth-flow-status"><strong>로그인과 세션 발급</strong><span className="badge neutral">{authenticated ? '브라우저에 세션 보관 중' : '브라우저 세션 없음'}</span></div>
+      <p className="caption">아래는 구매자·판매자의 로그인 설계입니다. {isLogin ? '선택한 로그인 요청의 내부 통과 여부는 관측하지 않습니다.' : '현재 선택한 API의 실행 경로와는 구분해서 살펴보세요.'} 보관한 세션의 유효성은 각 요청에서 서버가 확인합니다.</p>
+      {isLogin && record && record.status >= 400 && <p className="notice error">로그인 요청에서 HTTP {record.status}를 받았습니다. 응답과 추적 ID로 원인을 확인하세요. 이 도식은 내부 실패 단계를 확정하지 않습니다.</p>}
+      <AuthenticationDiagram nodes={authNodes} protectedRequest={false} active={active} select={selectNode} id={id} />
+      <ol className="auth-flow-stages">{loginStages.map(([title, detail], index) => <li key={title}><span>{String(index + 1).padStart(2, '0')}</span><div><strong>{title}</strong><p>{detail}</p></div></li>)}</ol>
+      <details className="protected-flow"><summary>로그인 이후 · 보호 요청의 인증 과정</summary>
+        <p className="caption">Gateway 검증을 통과한 뒤 소유 서비스가 권한과 업무 상태를 검사합니다. 회원가입은 DB 계정 생성이며, 위 로그인 과정은 별도로 실행합니다.</p>
+        <AuthenticationDiagram nodes={protectedNodes} protectedRequest active={active} select={selectNode} id={id} />
+        <ol className="auth-flow-stages">{protectedStages.map(([title, detail], index) => <li key={title}><span>{String(index + 1).padStart(2, '0')}</span><div><strong>{title}</strong><p>{detail}</p></div></li>)}</ol>
+      </details>
+    </div> : <div className="flow-scroll" tabIndex={0} role="region" aria-label="요청 경로 도식 · 작은 화면에서 좌우로 스크롤">
+      {currentView === 'map' ? <svg viewBox="0 0 820 355" className="flow-diagram" role="group" aria-label="요청의 인프라 지도">
         <Markers id={`${id}-http`} />
         <rect className="flow-zone" x="202" y="28" width="596" height="308" rx="12" />
         <text className="flow-zone-label" x="222" y="51">로컬 중계 · 백엔드 / 실제 내부 통과 여부는 미관측</text>
@@ -93,7 +132,7 @@ export function DataFlow({ operation, record, pending, info }: { operation: Oper
         </g>)}
         {nodes.map((node, index) => <Node key={node.id} node={node} x={20 + index * 153} y={16} width={144} selected={active.id === node.id} onSelect={selectNode} />)}
       </svg>}
-    </div>
+    </div>}
     <div className="flow-legend"><span><i />요청 방향</span><span><i className="return" />응답 방향</span><span>도식은 조건부 경로 · 실행 추적 아님</span></div>
     <div className="flow-detail" aria-live="polite"><strong>{active.title} <span>{active.subtitle}</span></strong><p>{active.detail}</p></div>
     <p className="caption">HTTP 상태와 시간은 수신한 응답의 관측값입니다. DB·캐시·내부 HTTP·Kafka 통과와 완료는 확인하지 않습니다.
@@ -102,7 +141,7 @@ export function DataFlow({ operation, record, pending, info }: { operation: Oper
       <section><h3>보낸 값</h3><pre>{JSON.stringify(redact(record.request), null, 2)}</pre></section>
       <section><h3>받은 결과</h3><pre>{JSON.stringify(redact(record.response), null, 2)}</pre></section>
     </div></details>}
-    <details className="event-flow" open><summary><span>Kafka · Outbox → Inbox</span><small>이벤트 계약 {eventContracts.length}개</small></summary>
+    <details className="event-flow" open={currentView !== 'auth'}><summary><span>Kafka · Outbox → Inbox</span><small>이벤트 계약 {eventContracts.length}개</small></summary>
       <p className="caption">아래는 선택한 이벤트의 전달 계약입니다. 위 HTTP 요청이 이 이벤트를 만들었다는 뜻은 아닙니다. 실제 발행·소비 여부와 활성화 설정은 별도로 확인하세요.</p>
       <div className="event-controls"><label>살펴볼 이벤트<Select value={event.name} onChange={e => { setEventName(e.target.value); setConsumerName(''); }}>
         {eventContracts.map(e => <option key={e.name} value={e.name}>{e.name} · {e.producer} → {e.consumers.join(', ')}</option>)}</Select></label>

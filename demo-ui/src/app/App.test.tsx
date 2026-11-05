@@ -170,6 +170,20 @@ it('좁은 화면의 공통 선택 경로에서도 49개 흐름과 월간 화면
   expect(fetch.mock.calls.filter(([url]) => url !== '/demo/info')).toHaveLength(0);
 });
 
+it('오류 결과는 ID 연결 동작을 제공하지 않고 가입한 정보의 로그인 연결은 유지한다', async () => {
+  const fetch = setup();
+  fireEvent.click(screen.getByRole('button', { name: '구매자 회원가입 화면 열기' }));
+  fireEvent.click(screen.getByRole('button', { name: '연습용 가입값 채우기' }));
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  fireEvent.click(await screen.findByRole('button', { name: '가입한 구매자로 로그인' }));
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: 503, data: { status: 503, detail: '실제 인증 준비를 확인하세요.' } }));
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  await screen.findByText('실제 인증 준비를 확인하세요.');
+  const result = document.querySelector('.result-section') as HTMLElement;
+  expect(within(result).queryByRole('button', { name: 'ID·버전을 입력에 연결' })).toBeNull();
+  expect(within(result).getByRole('button', { name: '가입한 구매자로 로그인' })).toBeTruthy();
+});
+
 it('본문 없는 서버 로그아웃 후 세션·기록·해당 계정의 조회 캐시를 지운다', async () => {
   setup(); await login();
   fireEvent.click(screen.getByRole('button', { name: /구매·결제/ }));
