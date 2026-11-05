@@ -222,7 +222,8 @@ docker compose -f compose.yml -f compose.financial-flow.yml up -d --wait commerc
 2. 카드·혼합·전액 마일리지·간편결제를 대조합니다. 1,000원 중 마일리지 300원이면 외부 환불은 700원이며, 전액 마일리지는 외부 HTTP 호출이 0회여야 합니다. 원장 상쇄는 최초 5 leg 각각에 반대 부호로 한 줄씩 대응하고 복원·금융 완료 이벤트도 한 번이어야 합니다.
 3. 실제 입금 작업이 현금을 받은 뒤 환불 차감을 확인합니다. 입금 전 환불은 예정 입금 0원, 간편결제 지갑은 원잔액으로 복원되며 최종 현금 원장·재원 잔액도 대조합니다.
 4. Settlement 중단 중 예약 대기, 환불 확정 거절 뒤 실제 예약 해제, 응답 유실·조회 불가 중 UNKNOWN·예약 유지, 외부 성공 직후 Payment 강제 종료·재기동과 만료 임대 인계, 늦은 응답의 토큰 차단을 확인합니다.
-5. 호출 전 중단(REQUESTED지만 외부 거래 없음)과 PROCESSING은 격리 DB fixture로 주입합니다. 실제 HTTP 조회에서 각각 거래 부재 뒤 같은 키 재전송·처리 중 예약 유지를 확인하며, Finance Mock이 자연스럽게 PROCESSING을 반환한 시험으로 표시하지 않습니다. 마지막에는 Inbox·Outbox와 지갑·재고·외부 거래 중복을 대조합니다.
+5. 호출 전 중단(REQUESTED지만 외부 거래 없음)과 PROCESSING은 격리 DB fixture로 주입합니다. 실제 HTTP 조회에서 각각 거래 부재 뒤 같은 키 재전송·처리 중 예약 유지를 확인하며, Finance Mock이 자연스럽게 PROCESSING을 반환한 시험으로 표시하지 않습니다.
+6. 발송한 주문의 반품을 판매자 API로 승인합니다. 환불 완료만으로는 재고를 바꾸지 않고, 재판매 가능 입고가 가용 재고를 한 번 복원하는지 확인합니다. Settlement 중단 중 재판매 불가로 입고한 반품은 판매 수량만 줄이고 가용 재고에 더하지 않으며, 재기동 뒤 같은 환불이 완료되는지 확인합니다. 마지막에는 Inbox·Outbox와 지갑·재고·외부 거래 중복을 대조합니다.
 
 CI는 `financial-flow`와 `reconciliation` 시나리오를 각각 25분 상한으로 실행하며 다른 통합 시나리오는 기존 15분 상한을 유지합니다. 이 시험의 계정·시나리오·시각·임대 변경과 무작위 루프백 포트는 새 시험 프로젝트에만 적용하며 기존 DB·사용자 데모에는 적용하지 않습니다. 지급 배정 뒤 예약 거절(`PAYOUT_RESERVED`)은 구매확정(도착+168시간)과 지급 선점이 먼저 필요하므로 Settlement `RefundPayoutExclusionIntegrationTest`와 Payment `RefundSagaIntegrationTest`로 별도 검증합니다. 실제 금융기관과 카카오 알림은 이 smoke의 검증 범위가 아닙니다.
 
