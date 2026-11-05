@@ -20,8 +20,9 @@ export function requestRoute(operation: Operation, development: boolean): FlowNo
 }
 
 /** Consumer group names are not always process names. Payment events execute in the Worker. */
+export const producerApplication = (producer: string) => producer === 'payment' ? 'Payment Worker' : application(producer);
 export function consumerApplication(consumer: string): string {
-  return consumer === 'payment' ? 'Payment Worker' : consumer === 'commerce-notifications' ? 'Commerce · 알림' : application(consumer);
+  return consumer === 'commerce-notifications' ? 'Commerce · 알림' : producerApplication(consumer);
 }
 
 

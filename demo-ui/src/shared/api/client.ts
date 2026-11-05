@@ -19,7 +19,7 @@ export function parseResponse(text: string): Json {
   })) as Json;
 }
 export async function execute(operation: Operation, values: RequestValues, token: string | undefined,
-  signal?: AbortSignal): Promise<{ status: number; data: Json; elapsedMs: number }> {
+  signal?: AbortSignal, onUnauthorized?: (token: string) => void): Promise<{ status: number; data: Json; elapsedMs: number }> {
   const start = performance.now();
   const direct = import.meta.env.DEV && operation.actor !== 'OPERATOR' && operation.path.startsWith('/api/');
   let path = operation.path as string;
@@ -45,11 +45,17 @@ export async function execute(operation: Operation, values: RequestValues, token
     method: 'POST', signal, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify({ operationId: operation.id, ...values }),
   });
+  const rejectSession = () => {
+    if (token && operation.actor !== 'PUBLIC' && operation.actor !== 'OPERATOR' && !signal?.aborted) onUnauthorized?.(token);
+  };
+  if (response.status === 401) rejectSession();
   const text = await response.text();
   const result = response.status === 204 && text.trim() === '' ? null : parseResponse(text);
   const wrapped = !direct && result !== null && typeof result === 'object' && !Array.isArray(result)
     && typeof result.upstreamStatus === 'number' && Object.hasOwn(result, 'data');
-  return { status: wrapped ? result.upstreamStatus as number : response.status,
+  const status = wrapped ? result.upstreamStatus as number : response.status;
+  if (status === 401 && response.status !== 401) rejectSession();
+  return { status,
     data: wrapped ? result.data : result,
     elapsedMs: Math.round(performance.now() - start) };
 }

@@ -13,7 +13,8 @@ import { Select, ArrowIcon } from '../shared/ui/Select';
 import { actorLabel } from '../shared/ui/labels';
 
 type Role = 'BUYER' | 'SELLER' | 'OPERATOR';
-interface Session { token: string; accountId: string; name: string; epoch: number }
+type SessionReason = 'expired' | 'rejected' | 'unverified';
+interface Session { token?: string; accountId: string; name: string; epoch: number; expiresAt: number; reason?: SessionReason }
 interface Recovery { operation: Operation; values: RequestValues; accountId?: string }
 function authRole(operation?: Operation): 'BUYER' | 'SELLER' | undefined {
   if (operation?.method !== 'POST') return undefined;
@@ -22,7 +23,24 @@ function authRole(operation?: Operation): 'BUYER' | 'SELLER' | undefined {
 }
 const EMPTY_CONTEXT: Record<string, Json> = {};
 const roleLabels = { BUYER: '구매자', SELLER: '판매자', OPERATOR: '운영자' };
-const kst = (date: string) => new Date(date).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour12: false });
+const kst = (date: string | number) => new Date(date).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour12: false });
+const sessionActive = (session?: Session) => !!session?.token && Number.isFinite(session.expiresAt) && Date.now() < session.expiresAt;
+
+function SessionExpiry({ sessions, invalidate }: { sessions: Partial<Record<Role, Session>>;
+  invalidate: (actor: Role, token: string, epoch: number | undefined, reason?: SessionReason) => void }) {
+  useEffect(() => {
+    const check = () => Object.entries(sessions).forEach(([actor, session]) => {
+      if (session?.token && !sessionActive(session)) invalidate(actor as Role, session.token, session.epoch,
+        Number.isFinite(session.expiresAt) ? 'expired' : 'unverified');
+    });
+    check();
+    const deadlines = Object.values(sessions).filter(sessionActive).map(session => session!.expiresAt);
+    const timer = deadlines.length ? window.setTimeout(check, Math.min(2_147_483_647, Math.max(0, Math.min(...deadlines) - Date.now()))) : undefined;
+    window.addEventListener('focus', check); document.addEventListener('visibilitychange', check);
+    return () => { window.clearTimeout(timer); window.removeEventListener('focus', check); document.removeEventListener('visibilitychange', check); };
+  }, [sessions, invalidate]);
+  return null;
+}
 
 export function App() {
   const [role, setRole] = useState<Role>('BUYER'); const [group, setGroup] = useState('buy');
@@ -48,13 +66,23 @@ export function App() {
   const operation = operations.find(o => o.id === operationId) ?? visibleActions[0];
   const history = events[role] ?? []; const record = history.find(e => e.id === selected);
   const session = sessions[role];
-  const gauge = useEventGauge(operation, record, [role, session?.accountId ?? 'public', session?.epoch ?? 0], session?.token);
+  const authenticated = sessionActive(session); const token = authenticated ? session?.token : undefined;
+  const onUnauthorized = (rejected: string) => invalidateSession(role, rejected, session?.epoch);
+  const gauge = useEventGauge(operation, record, [role, session?.accountId ?? 'public', session?.epoch ?? 0], token, onUnauthorized);
   const current = gauge.current;
   const allowed = !!operation && (operation.actor === 'PUBLIC' || operation.actor.includes(role)
-    && (role === 'OPERATOR' ? !!info.data?.operatorServices.includes(operation.owner) : !!session));
+    && (role === 'OPERATOR' ? !!info.data?.operatorServices.includes(operation.owner) : authenticated));
   const mutationPending = pending && operation?.method !== 'GET';
 
   useEffect(() => () => abort.current?.abort(), []);
+  function invalidateSession(actor: Role, rejected: string, epoch: number | undefined, reason: SessionReason = 'rejected') {
+    setSessions(old => {
+      const current = old[actor];
+      if (!current || current.token !== rejected || current.epoch !== epoch) return old;
+      const next = { ...old, [actor]: { ...current, token: undefined, reason } };
+      sessionsRef.current = next; return next;
+    });
+  }
   function selectTask(id: string, index = -1, preferredRole = role) {
     if (mutationPending) {
       setNotice('현재 변경 요청의 응답을 확인 중입니다. 입력과 재요청 키를 유지하도록 응답을 확인한 뒤 다른 작업을 선택하세요.');
@@ -83,6 +111,10 @@ export function App() {
   async function run(values: RequestValues) {
     if (!operation || pending) return;
     const actor = role; const before = sessions[actor]; const op: Operation = operation;
+    if (op.actor !== 'PUBLIC' && op.actor !== 'OPERATOR' && !sessionActive(before)) {
+      if (before?.token) invalidateSession(actor, before.token, before.epoch, Number.isFinite(before.expiresAt) ? 'expired' : 'unverified');
+      setNotice('이 역할로 다시 로그인한 뒤 실행하세요. 현재 입력과 미확정 요청은 유지합니다.'); return;
+    }
     const recovery = recoveries[actor]?.[op.id];
     if (recovery && (recovery.accountId !== before?.accountId || JSON.stringify(recovery.values) !== JSON.stringify(values))) {
       setNotice('미확정 원요청과 입력·키가 다릅니다. 원요청을 다시 채워 재조회·재요청하거나, 결과를 확인한 뒤 보존을 해제하세요.'); return;
@@ -96,7 +128,7 @@ export function App() {
     activeMutation.current = op.method !== 'GET'
       ? { controller, actor, saved: { operation: op, values: dispatched, accountId: before?.accountId } } : null;
     try {
-      const call = () => execute(op, dispatched, before?.token, controller.signal);
+      const call = () => execute(op, dispatched, before?.token, controller.signal, rejected => invalidateSession(actor, rejected, before?.epoch));
       const result = op.method === 'GET' ? await client.fetchQuery({
         queryKey: ['actor', actor, before?.accountId ?? 'public', before?.epoch ?? 0, op.id, values], queryFn: call, staleTime: 0,
       }) : await call();
@@ -119,10 +151,15 @@ export function App() {
           if (!account || account.actorKind !== actor) {
             setNotice('응답 계정 종류가 현재 역할과 다릅니다. 해당 역할에서 다시 로그인하세요.'); return;
           }
+          const expiresAt = typeof data.expiresAt === 'string' ? Date.parse(data.expiresAt) : NaN;
+          if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+            setNotice('로그인 응답의 만료 시각을 확인할 수 없습니다. 다시 로그인해 주세요.'); return;
+          }
           client.removeQueries({ queryKey: ['actor', actor] });
           setRecoveries(old => ({ ...old, [actor]: Object.fromEntries(Object.entries(old[actor] ?? {})
             .filter(([, saved]) => saved.accountId === String(account.id))) }));
-          setSessions(old => ({ ...old, [actor]: { token: data.token as string, accountId: String(account.id), name: String(account.displayName), epoch: Date.now() } }));
+          setSessions(old => ({ ...old, [actor]: { token: data.token as string, accountId: String(account.id), name: String(account.displayName),
+            epoch: Math.max(Date.now(), (old[actor]?.epoch ?? 0) + 1), expiresAt } }));
           setSignupLogins(old => ({ ...old, [actor]: undefined }));
           setEvents(old => ({ ...old, [actor]: [] })); setContext(old => ({ ...old, [actor]: {} })); setNotice('로그인했습니다. 이 역할의 계정과 세션을 사용합니다.');
         }
@@ -131,9 +168,11 @@ export function App() {
         if (op.path === '/api/sessions/current') clearActor(actor);
         else if (op.method !== 'GET') client.invalidateQueries({ queryKey: ['actor', actor] });
       }
-      if (result.status === 401 || result.status === 403) setNotice(op.actor === 'OPERATOR'
+      if (result.status === 401) setNotice(op.actor === 'OPERATOR'
         ? '운영자 인증이 거절됐습니다. 제어 서버의 해당 서비스 운영자 자격 설정을 확인하세요.'
-        : '인증이 거절됐습니다. 현재 거래 ID를 보존하고 해당 역할로 다시 로그인한 뒤 조회하세요.');
+        : op.actor === 'PUBLIC' ? '로그인·인증 입력을 확인하세요. 기존 계정의 세션은 변경하지 않았습니다.'
+          : '이 세션의 인증이 거절됐습니다. 현재 입력과 거래 ID를 유지한 채 이 역할로 다시 로그인하세요.');
+      else if (result.status === 403) setNotice('이 작업의 권한이 없습니다. 계정 역할과 대상의 소유권을 확인하세요.');
       else if (result.status === 409) setNotice('상태·버전·조건 충돌입니다. 최신 결과를 조회하고 변경된 값을 확인하세요.');
       else if (result.status === 202) setNotice('요청이 접수됐습니다. 최종 완료는 해당 거래 조회로 확인하세요.');
     } catch (error) {
@@ -179,6 +218,7 @@ export function App() {
     setContext(old => ({ ...old, [role]: mergeResponseContext(old[role] ?? {}, next) })); setNotice('선택한 응답의 ID·버전을 입력에 연결했습니다. 실행 전 값을 확인하세요.');
   }
   return <div className={`shell ${panel ? 'with-panel' : ''}`}>
+    <SessionExpiry sessions={sessions} invalidate={invalidateSession} />
     <header className="topbar"><a className="brand" href="#" onClick={e => { e.preventDefault(); navigate('buy'); }}>
       <svg className="brand-mark" width="30" height="32" viewBox="0 0 30 32" aria-hidden="true" focusable="false">
         <rect width="30" height="32" rx="7" fill="currentColor" />
@@ -187,7 +227,8 @@ export function App() {
       </svg><span>commerce<span className="brand-light">settle</span></span></a>
       <div className="account-control"><div className="role-tabs" aria-label="API 실행 계정">{(['BUYER', 'SELLER'] as Role[]).map(r => <button key={r} className={role === r ? 'active' : ''} aria-pressed={role === r} onClick={() => switchRole(r)}>{roleLabels[r]}</button>)}</div></div>
       <div className="top-actions">{role === 'OPERATOR' ? <span className="account-name">서버 운영 자격</span> : <>
-        <span className="account-name" title={session?.name}>{session ? <><span className="live-dot" />{session.name}</> : '로그인 전'}</span>
+        <span className="account-name" title={session?.name}>{authenticated ? <><span className="live-dot" />{session!.name}</>
+          : session ? `${session.name} · 재로그인 필요` : '로그인 전'}</span>
         <div className="auth-actions"><button className="primary" disabled={mutationPending} aria-label={`${roleLabels[role]} 로그인 화면 열기`} onClick={() => navigate('account', 'account.login', role)}>로그인</button>
           <button className="secondary" disabled={mutationPending} aria-label={`${roleLabels[role]} 회원가입 화면 열기`} onClick={() => navigate('account', role === 'SELLER' ? 'account.seller' : 'account.buyer', role)}>회원가입</button></div>
         {session && <button className="text-button" disabled={mutationPending} onClick={() => clearActor(role)}>로컬 세션 지우기</button>}</>}
@@ -209,6 +250,10 @@ export function App() {
         : `${info.error.message} · 통합 실행 주소는 http://127.0.0.1:4174입니다.`}</p>
         <button className="secondary" disabled={info.isFetching} onClick={() => { void info.refetch(); }}>{info.isFetching ? '제어 서버 연결 중' : '제어 서버 다시 연결'}</button></div>}
       {notice && <div role="status" className="notice">{notice}</div>}
+      {session && !authenticated && <div role="status" className="notice" aria-label="세션 재로그인 안내">
+        <p>{session.reason === 'expired' ? '세션이 만료됐습니다.' : session.reason === 'rejected' ? '서버에서 이 세션의 인증을 거절했습니다.' : '세션의 만료 정보를 확인할 수 없습니다.'} 현재 입력·기록·미확정 요청은 유지합니다.</p>
+        <button className="secondary" disabled={mutationPending} onClick={() => navigate('account', 'account.login', role)}>{roleLabels[role]}로 다시 로그인</button>
+      </div>}
       {mutationPending && <div className="notice"><p>응답이 계속 오지 않으면 대기를 중단하고 원거래를 조회할 수 있습니다. 거래 취소 기능은 아닙니다.</p>
         <button className="secondary" onClick={stopWaiting}>{operation.idempotent ? '응답 대기 중단 · 원요청 보존' : '응답 대기 중단'}</button></div>}
       {Object.values(recoveries[role] ?? {}).map(saved => <div className="notice" key={saved.operation.id} aria-label="미확정 요청 보존">
@@ -249,7 +294,7 @@ export function App() {
               <button className="secondary" disabled={pending} onClick={() => navigate('account', 'account.login', role)}>{roleLabels[role]}로 로그인·가입</button></>
             : <p>{session?.name} · {roleLabels[role]} 계정으로 실행합니다.</p>}
         </div>}
-        {operation && <OperationForm key={`${role}:${operation.id}:${session?.epoch ?? 0}`} operation={operation} context={context[role] ?? EMPTY_CONTEXT} pending={pending} allowed={allowed} run={run} role={role} token={session?.token}
+        {operation && <OperationForm key={`${role}:${operation.id}:${session?.epoch ?? 0}`} operation={operation} context={context[role] ?? EMPTY_CONTEXT} pending={pending} allowed={allowed} run={run} role={role} token={token} onUnauthorized={onUnauthorized}
           loginValues={operation.path === (role === 'SELLER' ? '/api/seller-sessions' : '/api/buyer-sessions') ? signupLogins[role] : undefined}
           recoveryValues={recoveries[role]?.[operation.id]?.values} />}
         {!pending && current && current.path === operation?.path && current.method === operation?.method && <div className="request-outcome" aria-label="요청 응답 확인">
@@ -258,7 +303,7 @@ export function App() {
         </div>}
         {role !== 'OPERATOR' && <button className="text-button login-link" onClick={() => navigate('account', 'account.login')}>로그인·가입 화면 열기</button>}
       </section>
-      <section className="work-card result-section" id="server-result"><div className="card-heading"><div><span className="overline">서버에서 확인한 결과</span><h2>{current?.operation ?? (session && authRole(operation) && operation.path.endsWith('-sessions') ? '로그인 상태' : pending ? '응답 확인 중' : '실행 결과')}</h2></div>{current && <span className={`badge ${current.status < 300 ? 'success' : 'failure'}`}>HTTP {current.status}</span>}</div>
+      <section className="work-card result-section" id="server-result"><div className="card-heading"><div><span className="overline">서버에서 확인한 결과</span><h2>{current?.operation ?? (authenticated && authRole(operation) && operation.path.endsWith('-sessions') ? '로그인 상태' : pending ? '응답 확인 중' : '실행 결과')}</h2></div>{current && <span className={`badge ${current.status < 300 ? 'success' : 'failure'}`}>HTTP {current.status}</span>}</div>
         {operation?.path.endsWith('/gauge') && current?.path === operation.path && <p className="caption">정상 조회 후 1초마다 갱신합니다. 입력 오류가 있으면 값을 고친 뒤 다시 실행하세요. 백그라운드에서는 중단합니다.</p>}
         {gauge.error && <p role="alert" className="notice error">게이지를 다시 확인하지 못했습니다. 아래는 마지막 관측값이며 현재 판매 가능 여부는 주문 요청에서 다시 검증합니다.</p>}
         {current ? <><p className="caption">{kst(current.at)} KST · <span title="요청 시작부터 프록시·서버 왕복과 응답 본문 수신·해석까지의 브라우저 관측 시간입니다. 서버 내부 처리시간이나 비동기 거래의 최종 완료시간이 아닙니다.">응답 확인 {current.elapsedMs}ms</span> · {roleLabels[current.actor as Role] ?? current.actor} · {current.status === 202 ? '접수 응답 · 최종 완료 아님' : '해당 요청의 응답'}</p>
@@ -267,9 +312,10 @@ export function App() {
             && 'items' in current.response && Array.isArray(current.response.items) && current.response.items.length === 0 && <div className="learning-start">
               <p>판매 상품이 없습니다. 판매자로 로그인해 상품을 등록하고 판매 가능한 재고를 준비한 뒤 기본 구매로 돌아오세요.</p>
               <button onClick={() => { navigate('sell', 'sell.product', 'SELLER'); selectTask('post_api_sellers_me_products', -1, 'SELLER'); }}>판매자로 상품 등록하기</button></div>}
-        </> : session && authRole(operation) && operation.path.endsWith('-sessions') ? <div className="auth-success" aria-label="로그인 완료">
-          <span className="badge success">로그인 완료</span><h3>{roleLabels[role]} 계정을 사용할 수 있습니다</h3><p>{session.name} 계정으로 로그인되어 있습니다. 다음 작업으로 이동해 시작하세요.</p>
+        </> : authenticated && authRole(operation) && operation.path.endsWith('-sessions') ? <div className="auth-success" aria-label="로그인 완료">
+          <span className="badge success">로그인 완료</span><h3>{roleLabels[role]} 세션을 발급받았습니다</h3><p>{session!.name} 계정의 로그인 요청이 성공했습니다. 다음 작업으로 이동해 시작하세요.</p>
           <button className="primary" onClick={() => switchRole(role)}>{role === 'SELLER' ? '상품·재고 준비하기' : '판매 상품 보기'} <ArrowIcon /></button>
+          <p className="caption">세션 만료: {kst(session!.expiresAt)} KST. 서버는 보호 요청마다 세션의 유효성을 확인합니다.</p>
           <p className="caption">구매자·판매자는 각각 로그인하며, 상단에서 전환해도 이 화면의 세션은 유지됩니다.</p>
         </div> : <div className="empty"><span className="empty-icon"><ArrowIcon /></span><strong>{pending ? '서버 응답을 기다리고 있습니다' : '여기에 서버 응답이 표시됩니다'}</strong><p>왼쪽 또는 위의 폼에서 실행하세요.<br />ID·금액·상태와 응답 시간을 여기서 확인합니다.</p></div>}
       {(['BUYER', 'SELLER'] as const).map(actor => signupLogins[actor] && <div className="notice" key={actor}>
@@ -277,7 +323,7 @@ export function App() {
         <button className="secondary" disabled={pending} onClick={() => navigate('account', 'account.login', actor)}>가입한 {roleLabels[actor]}로 로그인</button>
       </div>)}
       </section></div>
-      {operation && <DataFlow key={`${role}:${session?.epoch ?? 0}`} operation={operation} record={pending ? undefined : current} pending={pending} info={info.data} authenticated={!!session} />}
+      {operation && <DataFlow key={`${role}:${session?.epoch ?? 0}`} operation={operation} record={pending ? undefined : current} pending={pending} info={info.data} authenticated={authenticated} />}
     </main>
     {panel && <aside className="inspector"><div className="inspector-tabs"><button className={panel === 'requests' ? 'active' : ''} onClick={() => setPanel('requests')}>요청·응답</button><button className={panel === 'experiments' ? 'active' : ''} onClick={() => setPanel('experiments')}>실험·모니터링</button><button aria-label="패널 닫기" onClick={() => setPanel(null)}><svg className="icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg></button></div>
       {panel === 'experiments' ? <Experiments info={info.data} /> : <><div className="journal-heading"><h2>실행 기록</h2><span>{history.length}건 · {roleLabels[role]}</span></div>

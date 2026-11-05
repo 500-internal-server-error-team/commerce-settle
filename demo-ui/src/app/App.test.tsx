@@ -6,14 +6,18 @@ import { App } from './App';
 import { operations } from '../shared/api/contract';
 import { scenarios, workflow } from '../scenarios/catalog';
 
-const response = (body: unknown) => new Response(JSON.stringify(body));
+const response = (body: unknown) => {
+  const value = body as { data?: Record<string, unknown> };
+  return new Response(JSON.stringify(value?.data?.token && value.data.account
+    ? { ...value, data: { expiresAt: new Date(Date.now() + 1_800_000).toISOString(), ...value.data } } : body));
+};
 let client: QueryClient;
 beforeEach(() => {
   vi.stubEnv('DEV', false);
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
   vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { callback(0); return 0; });
 });
-afterEach(() => { cleanup(); client?.clear(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); client?.clear(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 function setup(items: unknown[] = [{ id: 'product-1', name: '격리된 조회 상품', version: 3 }], infoFailures = 0) {
   let infoCalls = 0;
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
@@ -43,6 +47,118 @@ async function login() {
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
   await screen.findByText('테스트 구매자');
 }
+
+async function sessionLogin(fetch: ReturnType<typeof setup>, actor: 'BUYER' | 'SELLER' = 'BUYER', extra: Record<string, unknown> = {}) {
+  const label = actor === 'SELLER' ? '판매자' : '구매자';
+  fireEvent.click(screen.getByRole('button', { name: label }));
+  fireEvent.click(screen.getByRole('button', { name: `${label} 로그인 화면 열기` }));
+  fireEvent.change(screen.getByLabelText(/이메일/), { target: { value: 'session@example.test' } });
+  fireEvent.change(screen.getByLabelText(/비밀번호/), { target: { value: 'synthetic-session-password' } });
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: 200, data: { token: `${actor}-session`,
+    account: { id: actor === 'BUYER' ? 'buyer-1' : 'seller-1', actorKind: actor, displayName: `세션 ${label}` }, ...extra } }));
+  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'API 요청' })));
+}
+
+it.each(['timer', 'focus'])('서버 만료 시각을 %s에서 반영하고 추가 인증 요청을 보내지 않는다', async trigger => {
+  vi.useFakeTimers(); const fetch = setup(); const deadline = Date.now() + 1000;
+  await sessionLogin(fetch, 'BUYER', { expiresAt: new Date(deadline).toISOString() });
+  expect(screen.getByLabelText('로그인 완료')).toBeTruthy(); const calls = fetch.mock.calls.length;
+  await act(async () => {
+    if (trigger === 'timer') await vi.advanceTimersByTimeAsync(1100);
+    else { vi.setSystemTime(deadline + 1); fireEvent.focus(window); }
+  });
+  expect(document.querySelector('header .live-dot')).toBeNull();
+  expect(screen.queryByLabelText('로그인 완료')).toBeNull();
+  expect(screen.getByLabelText('세션 재로그인 안내').textContent).toContain('만료');
+  expect(screen.getByText('브라우저 세션 없음')).toBeTruthy();
+  expect(fetch).toHaveBeenCalledTimes(calls);
+});
+
+it.each(['BUYER', 'SELLER'] as const)('%s 보호 요청의401은 입력·기록을 유지하고 재로그인 필요로 표시한다', async actor => {
+  const fetch = setup(); await sessionLogin(fetch, actor);
+  fireEvent.click(screen.getByRole('button', { name: actor === 'SELLER' ? '판매자' : '구매자' }));
+  fireEvent.change(screen.getByLabelText('할 작업'), { target: { value: actor === 'SELLER' ? 'get_api_sellers_me_products' : 'get_api_orders' } });
+  fireEvent.change(screen.getByLabelText(/페이지 번호/), { target: { value: '3' } });
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: 401, data: { code: 'COMMON_AUTHENTICATION_REQUIRED' } }));
+  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'API 요청' })));
+  expect(document.querySelector('header .live-dot')).toBeNull();
+  expect(screen.getByLabelText('세션 재로그인 안내').textContent).toContain('인증을 거절');
+  expect((screen.getByLabelText(/페이지 번호/) as HTMLInputElement).value).toBe('3');
+  expect(document.querySelector('.result-section')!.textContent).toContain('HTTP 401');
+  expect((screen.getByRole('button', { name: '요청 실행' }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it.each([403, 503])('보호 요청의%s를 세션 만료로 오인하지 않는다', async status => {
+  const fetch = setup(); await sessionLogin(fetch);
+  fireEvent.click(screen.getByRole('button', { name: '구매자' }));
+  fireEvent.change(screen.getByLabelText('할 작업'), { target: { value: 'get_api_orders' } });
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: status, data: { code: 'REJECTED' } }));
+  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'API 요청' })));
+  expect(document.querySelector('header .live-dot')).not.toBeNull();
+  expect(screen.queryByLabelText('세션 재로그인 안내')).toBeNull();
+});
+
+it('공개 로그인 실패는 기존 세션을 폐기하지 않고 잘못된 만료 응답을 로그인 성공으로 표시하지 않는다', async () => {
+  const fetch = setup(); await sessionLogin(fetch);
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: 401, data: { code: 'COMMON_AUTHENTICATION_REQUIRED' } }));
+  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'API 요청' })));
+  expect(document.querySelector('header .live-dot')).not.toBeNull();
+  expect(screen.queryByLabelText('세션 재로그인 안내')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '로컬 세션 지우기' }));
+  await sessionLogin(fetch, 'BUYER', { expiresAt: undefined });
+  expect(document.querySelector('header .live-dot')).toBeNull();
+  expect(screen.queryByLabelText('로그인 완료')).toBeNull();
+  expect(screen.getByText(/로그인 응답의 만료 시각을 확인할 수 없습니다/)).toBeTruthy();
+});
+
+it('변경 요청 도중 만료돼도 요청을 중단하거나 입력·키와 성공 응답을 잃지 않는다', async () => {
+  vi.useFakeTimers(); const fetch = setup(); await sessionLogin(fetch, 'BUYER', { expiresAt: new Date(Date.now() + 1000).toISOString() });
+  fireEvent.click(screen.getByRole('button', { name: '구매자' })); selectOperation('post_api_orders');
+  fireEvent.change(screen.getByLabelText(/상품 ID.*productId/), { target: { value: 'preserved-product' } });
+  const key = (screen.getByLabelText('멱등키') as HTMLInputElement).value;
+  let finish!: (response: Response) => void;
+  fetch.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  const signal = fetch.mock.calls.at(-1)![1]!.signal!;
+  await act(async () => { await vi.advanceTimersByTimeAsync(1100); });
+  expect(signal.aborted).toBe(false);
+  expect((screen.getByRole('button', { name: '구매자로 다시 로그인' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByLabelText('멱등키') as HTMLInputElement).value).toBe(key);
+  await act(async () => finish(response({ upstreamStatus: 201, data: { id: 'accepted-after-expiry' } })));
+  expect(screen.getByText('accepted-after-expiry')).toBeTruthy();
+  expect(screen.getByLabelText('세션 재로그인 안내')).toBeTruthy();
+  expect((screen.getByLabelText(/상품 ID.*productId/) as HTMLInputElement).value).toBe('preserved-product');
+});
+
+it('목록 보조 조회의401도 로그인 표시에 반영하고 폼의 입력·키는 유지한다', async () => {
+  const fetch = setup(); await sessionLogin(fetch);
+  fireEvent.click(screen.getByRole('button', { name: '구매자' })); selectOperation('post_api_orders');
+  const key = (screen.getByLabelText('멱등키') as HTMLInputElement).value;
+  fireEvent.change(screen.getByLabelText(/상품 ID.*productId/), { target: { value: 'kept-product' } });
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: 401, data: {} }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '배송지 목록 불러오기' })));
+  expect(document.querySelector('header .live-dot')).toBeNull();
+  expect(screen.getByLabelText('세션 재로그인 안내')).toBeTruthy();
+  expect((screen.getByLabelText(/상품 ID.*productId/) as HTMLInputElement).value).toBe('kept-product');
+  expect((screen.getByLabelText('멱등키') as HTMLInputElement).value).toBe(key);
+});
+
+it('만료 뒤 같은 계정으로 재로그인하면 미확정 원요청의 본문과 키로 복귀한다', async () => {
+  vi.useFakeTimers(); const fetch = setup(); await sessionLogin(fetch, 'BUYER', { expiresAt: new Date(Date.now() + 1000).toISOString() });
+  fireEvent.click(screen.getByRole('button', { name: '구매자' })); selectOperation('post_api_orders');
+  fireEvent.change(screen.getByLabelText(/상품 ID.*productId/), { target: { value: 'original-product' } });
+  fetch.mockRejectedValueOnce(new TypeError('synthetic response loss'));
+  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'API 요청' })));
+  const original = JSON.parse(String(fetch.mock.calls.at(-1)![1]!.body));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1100); });
+  expect(screen.getByLabelText('미확정 요청 보존')).toBeTruthy();
+  await sessionLogin(fetch, 'BUYER', { token: 'new-session' });
+  fireEvent.click(screen.getByRole('button', { name: '원요청 다시 채우기' }));
+  expect((screen.getByLabelText('멱등키') as HTMLInputElement).value).toBe(original.idempotencyKey);
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: 201, data: { id: 'restored-order' } }));
+  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'API 요청' })));
+  expect(JSON.parse(String(fetch.mock.calls.at(-1)![1]!.body))).toEqual(original);
+});
 
 it('제어 서버 연결 실패 후 명시 재연결은 로그인·입력·기존 요청을 보존하고 자동 재시도하지 않는다', async () => {
   const fetch = setup(undefined, 2);

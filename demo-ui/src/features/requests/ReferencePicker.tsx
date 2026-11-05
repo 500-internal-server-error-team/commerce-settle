@@ -39,9 +39,11 @@ export function referenceRows(items: Json[], path: string): Record<string, Json>
   });
 }
 
-export function ReferencePicker({ source, token, choose }: {
+export function ReferencePicker({ source, token, choose, onUnauthorized, enabled }: {
   source: { title: string; operation: Operation }; token?: string;
   choose: (row: Record<string, Json>, source: Operation) => void;
+  onUnauthorized?: (token: string) => void;
+  enabled: boolean;
 }) {
   const [rows, setRows] = useState<Record<string, Json>[] | null>(null);
   const [page, setPage] = useState(0); const [pages, setPages] = useState(0);
@@ -54,7 +56,7 @@ export function ReferencePicker({ source, token, choose }: {
     setLoading(true); setError(''); setRows(null); setSelected('');
     try {
       const result = await execute(source.operation, { body: null, pathParameters: {},
-        query: { page: String(nextPage), size: '20' }, idempotencyKey: '' }, token, controller.signal);
+        query: { page: String(nextPage), size: '20' }, idempotencyKey: '' }, token, controller.signal, onUnauthorized);
       if (controller.signal.aborted) return;
       if (result.status >= 300) throw new Error(result.status === 401 || result.status === 403
         ? source.operation.actor === 'OPERATOR' ? '제어 서버의 해당 서비스 운영자 자격 설정을 확인하세요.' : '이 역할로 먼저 로그인하세요.'
@@ -71,7 +73,7 @@ export function ReferencePicker({ source, token, choose }: {
     finally { if (abort.current === controller) setLoading(false); }
   }
   return <div className="reference-picker">
-    <button type="button" className="text-button" disabled={loading} onClick={() => load(0)}>
+    <button type="button" className="text-button" disabled={loading || !enabled} onClick={() => load(0)}>
       {loading ? '목록 확인 중…' : `${source.title} 목록 불러오기`}</button>
     {error && <small role="alert" className="error">{error}</small>}
     {rows && <><Select aria-label={`${source.title} 선택`} value={selected} disabled={loading} onChange={event => {

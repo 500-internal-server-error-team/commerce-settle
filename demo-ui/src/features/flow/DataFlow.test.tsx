@@ -38,7 +38,7 @@ it('allows inspecting every event and each of its consumers without any network 
   render(<DataFlow operation={operation('/api/products')} pending={false} />);
   for (const event of eventContracts) {
     fireEvent.change(screen.getByLabelText('살펴볼 이벤트'), { target: { value: event.name } });
-    expect(screen.getByText(`commerce-settle.${event.producer}.v1`)).toBeTruthy();
+    expect(document.querySelector('.event-contract')?.textContent).toContain(`commerce-settle.${event.producer}.v1`);
     for (const consumer of event.consumers) {
       fireEvent.change(screen.getByLabelText('소비 그룹'), { target: { value: consumer } });
       const svg = screen.getByRole('img', { name: `${event.name}: ${event.producer} Outbox에서 ${consumer} Inbox까지의 설계 경로` });
@@ -101,4 +101,17 @@ it('가입 요청과 별도의 로그인·보호 경로를 구분하고 기존 �
   expect(screen.getByText(/현재 선택한 API의 실행 경로와는 구분/)).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: '인프라 지도' }));
   expect(screen.getByRole('group', { name: '요청의 인프라 지도' })).toBeTruthy();
+});
+
+it('이벤트 발행 앱·수신 앱 안의 코드와 앱 밖 브로커·토픽·DB를 구분한다', () => {
+  render(<DataFlow operation={operation('/api/products')} pending={false} />);
+  fireEvent.change(screen.getByLabelText('살펴볼 이벤트'), { target: { value: 'PaymentConfirmed' } });
+  fireEvent.change(screen.getByLabelText('소비 그룹'), { target: { value: 'settlement' } });
+  const diagram = screen.getByRole('img', { name: 'PaymentConfirmed: payment Outbox에서 settlement Inbox까지의 설계 경로' });
+  for (const name of ['Payment Worker', 'Settlement', 'Kafka 브로커', 'Kafka 토픽', 'payment DB', 'settlement DB']) {
+    expect(within(diagram).getByText(name, { exact: true })).toBeTruthy();
+  }
+  expect(within(diagram).getByText('앱 밖 · 독립 인프라')).toBeTruthy();
+  expect(within(diagram).getByText('commerce-settle.payment.v1')).toBeTruthy();
+  expect(document.querySelector('.event-flow')?.textContent).not.toContain('생산자 앱 · 별도 실행');
 });
