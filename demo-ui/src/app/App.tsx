@@ -74,6 +74,7 @@ export function App() {
     if (selectTask(task?.operation?.id ?? actions(next)[0]?.id ?? '', target ? index : -1,
       task?.screen[0] === '판매자' ? 'SELLER' : task?.screen[0] === '구매자' ? 'BUYER' : preferredRole)) {
       setGroup(next); setCase(target?.id ?? '');
+      window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }));
     }
   }
   function switchRole(next: Role) {
