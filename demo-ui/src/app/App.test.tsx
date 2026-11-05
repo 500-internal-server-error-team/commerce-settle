@@ -8,7 +8,11 @@ import { scenarios, workflow } from '../scenarios/catalog';
 
 const response = (body: unknown) => new Response(JSON.stringify(body));
 let client: QueryClient;
-beforeEach(() => vi.stubEnv('DEV', false));
+beforeEach(() => {
+  vi.stubEnv('DEV', false);
+  vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => { callback(0); return 0; });
+});
 afterEach(() => { cleanup(); client?.clear(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 function setup(items: unknown[] = [{ id: 'product-1', name: '격리된 조회 상품', version: 3 }]) {
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
@@ -99,6 +103,25 @@ it.each([['구매자', 'seller', '판매자'], ['판매자', 'buyer', '구매자
   await screen.findByLabelText('로그인 완료');
   expect(within(document.querySelector('header')!).getByText(`테스트 ${label}`)).toBeTruthy();
   expect(within(screen.getByLabelText('로그인 완료')).getByRole('button', { name: target === 'seller' ? /상품·재고 준비하기/ : /판매 상품 보기/ })).toBeTruthy();
+});
+
+it('가입 결과에서 로그인으로 이동하면 화면 시작 위치로 돌아가고 대기 중 전환은 이동하지 않는다', async () => {
+  const fetch = setup();
+  fireEvent.click(screen.getByRole('button', { name: '구매자 회원가입 화면 열기' }));
+  fireEvent.click(screen.getByRole('button', { name: '연습용 가입값 채우기' }));
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  const next = await screen.findByRole('button', { name: '가입한 구매자로 로그인' });
+  vi.mocked(window.scrollTo).mockClear();
+  fireEvent.click(next);
+  expect(window.scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 0, behavior: 'auto' });
+  let finish!: (value: Response) => void;
+  fetch.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  vi.mocked(window.scrollTo).mockClear();
+  fireEvent.change(screen.getByLabelText('시연 흐름 선택'), { target: { value: 'buy.normal' } });
+  expect(window.scrollTo).not.toHaveBeenCalled();
+  expect(screen.getByRole('form', { name: 'API 요청' }).textContent).toContain('/api/buyer-sessions');
+  await act(async () => finish(response({ upstreamStatus: 401, data: { status: 401 } })));
 });
 
 it('두 계정을 각각 로그인한 뒤 전환해도 각 세션으로 요청하고 서로의 기록을 섞지 않는다', async () => {
