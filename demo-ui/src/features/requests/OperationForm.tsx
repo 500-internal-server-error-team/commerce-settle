@@ -5,9 +5,9 @@ import { Field, Fields } from '../../shared/ui/SchemaFields';
 import { ReferencePicker, referenceSource } from './ReferencePicker';
 import { responseContext } from './responseContext';
 
-export function OperationForm({ operation, context, pending, allowed, run, role = 'BUYER', token, loginValues, recoveryValues }:
+export function OperationForm({ operation, context, pending, allowed, run, role = 'BUYER', token, loginValues, recoveryValues, onUnauthorized }:
   { operation: Operation; context: Record<string, Json>; pending: boolean; allowed: boolean; run: (v: RequestValues) => void; role?: string; token?: string;
-    loginValues?: { email: string; password: string }; recoveryValues?: RequestValues }) {
+    loginValues?: { email: string; password: string }; recoveryValues?: RequestValues; onUnauthorized?: (token: string) => void }) {
   const [body, setBody] = useState<Json>(operation.schema ? defaults(operation.schema) : null);
   const [pathParameters, setPath] = useState<Record<string, string>>({});
   const [query, setQuery] = useState<Record<string, string>>({});
@@ -77,7 +77,7 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
   }
   function assistance(name: string) {
     const source = referenceSource(name, operation, role);
-    return source && <ReferencePicker source={source} token={token} choose={(row, sourceOperation) => {
+    return source && <ReferencePicker source={source} token={token} onUnauthorized={onUnauthorized} enabled={allowed || source.operation.actor === 'PUBLIC'} choose={(row, sourceOperation) => {
       const values = responseContext(row, sourceOperation.path);
       const id = row.id; if (typeof id !== 'string') return;
       const pathField = operation.parameters.some(p => p.in === 'path' && p.name === name);
@@ -125,7 +125,7 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
     const before = JSON.stringify({ body, pathParameters }); setLookupBusy(true); setLookup('');
     try {
       const result = await execute(op, { body: kind === 'quote' ? Object.fromEntries(quoteFields.map(key => [key, object[key] ?? null])) : null,
-        pathParameters, query: {}, idempotencyKey: key }, token, controller.signal);
+        pathParameters, query: {}, idempotencyKey: key }, token, controller.signal, onUnauthorized);
       if (controller.signal.aborted) return;
       if (result.status >= 300) throw new Error(`조회 실패 (HTTP ${result.status}) · ${result.data && typeof result.data === 'object' && !Array.isArray(result.data) ? String(result.data.detail ?? result.data.code ?? '') : ''}`);
       if (JSON.stringify(latestValues.current) !== before) throw new Error('조회 중 입력값이 바뀌었습니다. 현재 값으로 다시 조회하세요.');

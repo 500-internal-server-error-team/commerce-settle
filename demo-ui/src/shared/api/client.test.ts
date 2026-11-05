@@ -78,3 +78,33 @@ it.each([{productId:'../internal'},{wrong:'product-1'},{}] as Record<string,stri
   await expect(execute(operations.find(op=>op.id==='get_api_products_productId')!,{body:null,pathParameters,query:{},idempotencyKey:''},undefined)).rejects.toBeInstanceOf(RequestInputError);
   expect(fetch).not.toHaveBeenCalled();
 });
+
+it.each([true, false])('개발 직접 호출=%s의 보호 사용자401을 공통 경계에서 한 번 관측한다', async direct => {
+  vi.stubEnv('DEV', direct);
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(direct ? '{"code":"COMMON_AUTHENTICATION_REQUIRED"}'
+    : '{"upstreamStatus":401,"data":{"code":"COMMON_AUTHENTICATION_REQUIRED"}}', { status: direct ? 401 : 200 })));
+  const rejected = vi.fn(); const protectedOperation = operations.find(op => op.id === 'get_api_accounts_me')!;
+  expect((await execute(protectedOperation, { ...values, body: null }, 'session-under-test', undefined, rejected)).status).toBe(401);
+  expect(rejected).toHaveBeenCalledExactlyOnceWith('session-under-test');
+});
+
+it.each([
+  ['post_api_buyer_sessions', 401], ['get_internal_coupon_issue_runs', 401],
+  ['get_api_accounts_me', 403], ['get_api_accounts_me', 503],
+])('%s의%s를 사용자 세션 폐기로 관측하지 않는다', async (id, status) => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ upstreamStatus: status, data: {} }))));
+  const rejected = vi.fn(); await execute(operations.find(op => op.id === id)!, values, 'retained-session', undefined, rejected);
+  expect(rejected).not.toHaveBeenCalled();
+});
+
+it('취소된 이전 호출의401을 관측하지 않고 직접401은 잘못된 응답 본문에도 관측한다', async () => {
+  vi.stubEnv('DEV', true);
+  const rejected = vi.fn(); const controller = new AbortController(); controller.abort();
+  const protectedOperation = operations.find(op => op.id === 'get_api_accounts_me')!;
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 401 })));
+  await execute(protectedOperation, { ...values, body: null }, 'cancelled-session', controller.signal, rejected);
+  expect(rejected).not.toHaveBeenCalled();
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('invalid-json', { status: 401 })));
+  await expect(execute(protectedOperation, { ...values, body: null }, 'rejected-session', undefined, rejected)).rejects.toBeInstanceOf(SyntaxError);
+  expect(rejected).toHaveBeenCalledExactlyOnceWith('rejected-session');
+});

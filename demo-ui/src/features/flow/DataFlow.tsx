@@ -3,7 +3,7 @@ import { operations, redact, type Operation } from '../../shared/api/contract';
 import type { Execution } from '../../shared/api/client';
 import type { DemoInfo } from '../experiments/Experiments';
 import { Select, ArrowIcon } from '../../shared/ui/Select';
-import { application, consumerApplication, database, eventContracts, requestRoute, authenticationRoute, loginStages, protectedStages, type FlowNode } from './flowModel';
+import { producerApplication, consumerApplication, database, eventContracts, requestRoute, authenticationRoute, loginStages, protectedStages, type FlowNode } from './flowModel';
 
 function Node({ node, x, y, width = 152, selected, onSelect }: { node: FlowNode; x: number; y: number;
   width?: number; selected: boolean; onSelect: (node: FlowNode) => void }) {
@@ -70,12 +70,14 @@ export function DataFlow({ operation, record, pending, info, authenticated = fal
   const consumer = event.consumers.includes(consumerName) ? consumerName : event.consumers[0];
   const topic = `commerce-settle.${event.producer}.v1`;
   const receivingDb = database(consumer === 'commerce-notifications' ? 'commerce' : consumer);
+  const producingApp = producerApplication(event.producer);
+  const consumingApp = consumerApplication(consumer);
   const monitoring = info?.links.filter(link => /zipkin|kafka/i.test(link.title)) ?? [];
   const eventNodes: FlowNode[] = [
-    { id: 'outbox', title: `${application(event.producer).replace(' API', '')} DB`, subtitle: '업무 상태 + Outbox', detail: '' },
-    { id: 'relay', title: 'Outbox Relay', subtitle: '생산자 앱 · 별도 실행', detail: '' },
-    { id: 'kafka', title: 'Kafka', subtitle: '생산자별 토픽', detail: '' },
-    { id: 'consumer', title: consumerApplication(consumer), subtitle: `그룹 ${consumer}.v1`, detail: '' },
+    { id: 'outbox', title: `${database(event.producer)} DB`, subtitle: '업무 상태 + Outbox', detail: '' },
+    { id: 'relay', title: 'Outbox Relay', subtitle: '앱 안의 Kafka 전송 코드', detail: '' },
+    { id: 'kafka', title: 'Kafka 토픽', subtitle: topic, detail: '' },
+    { id: 'consumer', title: 'Kafka Consumer', subtitle: `Listener · ${consumer}.v1`, detail: '' },
     { id: 'inbox', title: `${receivingDb} DB`, subtitle: 'Inbox + 처리 내용', detail: '' },
   ];
   return <section className="work-card data-flow" aria-label="데이터 흐름">
@@ -148,20 +150,28 @@ export function DataFlow({ operation, record, pending, info, authenticated = fal
         <label>소비 그룹<Select value={consumer} onChange={e => setConsumerName(e.target.value)}>{event.consumers.map(c => <option key={c} value={c}>{c}.v1</option>)}</Select></label></div>
       <div className="event-contract"><code>{topic}</code><span>key <code>{event.key}</code> · v{event.version}</span></div>
       <div className="flow-scroll" tabIndex={0} role="region" aria-label="이벤트 전달 도식 · 작은 화면에서 좌우로 스크롤">
-        <svg viewBox="0 0 820 325" className="flow-diagram" role="img" aria-label={`${event.name}: ${event.producer} Outbox에서 ${consumer} Inbox까지의 설계 경로`}>
+        <svg viewBox="0 0 840 410" className="flow-diagram" style={{ minWidth: 840 }} role="img" aria-label={`${event.name}: ${event.producer} Outbox에서 ${consumer} Inbox까지의 설계 경로`}>
           <Markers id={`${id}-event`} />
-          <Arrow d="M228 92 H300" marker={`${id}-event`} /><Arrow d="M508 92 H580" marker={`${id}-event`} />
-          <Arrow d="M684 130 V214" marker={`${id}-event`} /><Arrow d="M580 244 H508" marker={`${id}-event`} />
-          <Arrow d="M508 270 H580" returning marker={`${id}-event`} />
-          <Arrow d="M788 252 H796 Q804 252 804 244 V150 Q804 142 796 142 H754 Q746 142 746 134 V130" returning marker={`${id}-event`} />
-          <text x="697" y="180" className="flow-edge-label">수신</text><text x="585" y="310" className="flow-edge-label">소비자가 DB 커밋 확인 후 ack</text>
-          {[[20,54],[300,54],[580,54],[580,214],[300,214]].map(([x,y],i) => <g key={eventNodes[i].id} className="flow-node">
+          {[12,286,560].map(x => <rect key={x} x={x} y="18" width="248" height="166" rx="12" className="flow-zone" />)}
+          <text x="30" y="44" className="flow-node-title">{producingApp}</text><text x="30" y="64" className="flow-zone-label">Spring Boot 앱 안 · 발행 담당</text>
+          <text x="304" y="44" className="flow-node-title">Kafka 브로커</text><text x="304" y="64" className="flow-zone-label">앱 밖 · 독립 인프라</text>
+          <text x="578" y="44" className="flow-node-title">{consumingApp}</text><text x="578" y="64" className="flow-zone-label">Spring Boot 앱 안 · 수신 담당</text>
+          <Arrow d="M240 118 H306" marker={`${id}-event`} /><Arrow d="M514 118 H580" marker={`${id}-event`} />
+          <Arrow d="M72 184 V300" marker={`${id}-event`} /><Arrow d="M190 300 V156" marker={`${id}-event`} />
+          <Arrow d="M620 156 V300" marker={`${id}-event`} /><Arrow d="M748 300 V156" returning marker={`${id}-event`} />
+          <Arrow d="M788 132 H820 V208 H414 V156" returning marker={`${id}-event`} />
+          <text x="244" y="103" className="flow-edge-label">발행</text><text x="520" y="103" className="flow-edge-label">수신</text>
+          <text x="36" y="242" className="flow-edge-label">업무 코드가 저장</text><text x="194" y="274" className="flow-edge-label">Outbox 읽기</text>
+          <text x="574" y="242" className="flow-edge-label">저장·처리</text><text x="752" y="274" className="flow-edge-label">DB 커밋</text>
+          <text x="430" y="227" className="flow-edge-label">DB 커밋 확인 후 ack</text>
+          <text x="36" y="398" className="flow-zone-label">DB는 앱 밖의 PostgreSQL · 각 앱이 자기 DB에 접근</text>
+          {[[32,300],[32,80],[306,80],[580,80],[580,300]].map(([x,y],i) => <g key={eventNodes[i].id} className="flow-node">
             <rect x={x} y={y} width="208" height="76" rx="8" /><text x={x+16} y={y+30} className="flow-node-title">{eventNodes[i].title}</text><text x={x+16} y={y+54} className="flow-node-subtitle">{eventNodes[i].subtitle}</text></g>)}
         </svg></div>
-      <ol className="event-explanation"><li><strong>생산자 DB에 함께 저장</strong><span>업무 상태와 Outbox를 같은 트랜잭션에 저장합니다.</span></li>
-        <li><strong>Relay가 Kafka로 발행</strong><span>Kafka 응답 대기는 DB 트랜잭션 밖입니다. 재발행해도 eventId를 유지합니다.</span></li>
-        <li><strong>소비 DB 커밋 뒤 ack</strong><span>Inbox와 실행 작업·처리 내용을 함께 저장합니다. 선행 상태가 없으면 영속 대기하고, 중복을 식별해 같은 업무를 다시 반영하지 않습니다.</span></li></ol>
-      <p className="caption">Relay·Consumer·후속 처리기는 설정에 따라 비활성일 수 있습니다. Payment 생산자 Relay·소비는 Worker에서 실행하며 API와 DB를 공유합니다. 알림 소비 그룹은 Commerce 앱 안에 있습니다.</p>
+      <ol className="event-explanation"><li><strong>업무 코드가 자기 DB에 저장</strong><span>{event.producer}의 업무 코드가 상태와 Outbox를 같은 트랜잭션에 저장합니다. DB 자체가 Kafka로 전송하지는 않습니다.</span></li>
+        <li><strong>{producingApp} 안에서 발행</strong><span>앱 안의 Relay 스케줄러·실행 스레드가 Outbox를 읽어 Producer 코드로 보냅니다. Kafka 응답 대기는 DB 트랜잭션 밖이며 재발행해도 eventId를 유지합니다.</span></li>
+        <li><strong>{consumingApp} 안에서 수신</strong><span>Consumer가 자기 DB에 Inbox·실행 작업·처리 내용을 저장하고 커밋 확인 후 Kafka에 ack합니다. 중복을 식별하고 선행 상태가 없으면 영속 대기합니다.</span></li></ol>
+      <p className="caption">Kafka는 앱 밖의 독립 브로커이며 토픽은 그 안에 저장됩니다. Producer·Consumer는 위 Spring Boot 앱 안의 코드입니다. Payment API와 Payment Worker는 서로 다른 Spring Boot 프로세스로 같은 payment DB를 사용하며, Payment의 Relay·Consumer는 Worker에서 동작합니다. 알림 소비는 Commerce 앱 안입니다. Relay·Consumer·후속 처리기는 설정에 따라 비활성일 수 있습니다.</p>
     </details>
     <div className="flow-monitoring">{monitoring.map(link => <a key={link.title} href={link.url} target="_blank" rel="noreferrer">{link.title} 열기 <ArrowIcon /></a>)}
       <span className="caption">Zipkin은 수집·샘플링된 추적, Kafka UI는 토픽·그룹을 확인합니다.</span></div>
