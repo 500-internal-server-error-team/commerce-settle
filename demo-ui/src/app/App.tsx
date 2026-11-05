@@ -16,7 +16,7 @@ type Role = 'BUYER' | 'SELLER' | 'OPERATOR';
 interface Session { token: string; accountId: string; name: string; epoch: number }
 interface Recovery { operation: Operation; values: RequestValues; accountId?: string }
 const EMPTY_CONTEXT: Record<string, Json> = {};
-const roleLabels = { BUYER: '구매자', SELLER: '판매자', OPERATOR: '발표자' };
+const roleLabels = { BUYER: '구매자', SELLER: '판매자', OPERATOR: '운영자' };
 const kst = (date: string) => new Date(date).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour12: false });
 
 export function App() {
@@ -179,9 +179,10 @@ export function App() {
         <path d="M17 11c-1-1-2-1.5-3.5-1.5a6.5 6.5 0 0 0 0 13c1.5 0 2.5-.5 3.5-1.5" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" />
         <circle cx="22" cy="21" r="1.5" fill="white" />
       </svg><span>commerce<span className="brand-light">settle</span></span></a>
-      <div className="role-tabs" aria-label="사용자 역할">{(['BUYER', 'SELLER', 'OPERATOR'] as Role[]).map(r => <button key={r} className={role === r ? 'active' : ''} aria-pressed={role === r} onClick={() => switchRole(r)}>{roleLabels[r]}</button>)}</div>
-      <div className="top-actions"><span className="account-name">{role === 'OPERATOR' ? '로컬 제어' : session?.name ?? '로그인 전'}</span>
+      <div className="account-control"><span>실행 계정</span><div className="role-tabs" aria-label="API 실행 계정">{(['BUYER', 'SELLER'] as Role[]).map(r => <button key={r} className={role === r ? 'active' : ''} aria-pressed={role === r} onClick={() => switchRole(r)}>{roleLabels[r]}</button>)}</div></div>
+      <div className="top-actions"><span className="account-name">{role === 'OPERATOR' ? '운영 도구 사용 중' : session?.name ?? '로그인 전'}</span>
         {session && <button className="text-button" disabled={mutationPending} onClick={() => clearActor(role)}>로컬 세션 지우기</button>}
+        <button className="secondary tool-button" aria-pressed={role === 'OPERATOR'} onClick={() => switchRole('OPERATOR')}>운영 도구</button>
         <button className="secondary" onClick={() => setPanel(panel === 'experiments' ? null : 'experiments')}>실험·모니터링 <ArrowIcon /></button></div></header>
     <aside className="sidebar"><div className="sidebar-heading">시연 흐름 <span>{scenarios.length}</span></div>
       <input className="search" aria-label="흐름 검색" placeholder="흐름 검색…" value={search} onChange={e => setSearch(e.target.value)} />
@@ -215,7 +216,7 @@ export function App() {
         aria-current={stepIndex === index ? 'step' : undefined} disabled={!task}
         onClick={() => task && selectTask(task.id, index, screen[0] === '판매자' ? 'SELLER' : screen[0] === '구매자' ? 'BUYER' : role)}>
         <span>{String(index + 1).padStart(2, '0')}</span><strong>{screen[1]}</strong><small>{task ? `${actorLabel(task.actor)} · ${task.title}` : '연결된 작업 없음'}</small></button>)}</div>
-        <p className="caption step-help">단계를 누르면 해당 작업과 역할을 선택합니다. 선택 표시는 거래의 완료 상태가 아닙니다. 요청은 입력을 확인한 뒤 직접 실행하세요.</p></>}
+        <p className="caption step-help">단계는 작업을 선택하는 버튼입니다. 입력을 확인한 뒤 아래의 ‘요청 실행’을 눌러야 실제 API를 호출합니다. 선택 표시는 거래 완료를 뜻하지 않습니다.</p></>}
       {caseId === 'buy.normal' && <section className="learning-start" aria-label="처음 구매하기 준비">
         <h2>처음에는 정상 주문 1건부터</h2>
         <p>계정이 없으면 아래 가입 버튼부터 시작하세요. 가입 폼의 연습용 가입값 채우기로 값을 만들고, 가입 뒤 같은 정보로 로그인할 수 있습니다. 판매자로 상품·재고를 준비한 뒤 구매자로 주문합니다.</p>
@@ -229,15 +230,26 @@ export function App() {
       <details className="prerequisites"><summary>시연 준비 조건과 정책</summary><p>{scenario?.note}</p>{requirements(caseId).map(note => <p key={note}>{note}</p>)}
         {group === 'monthly' && <p>전월 구매확정·미환불 거래의 외부 결제액으로 상위 100위와 동점자를 선정합니다. 매월 1일 00:00 마감·00:10 자동 발급. 수동 발급·업무 시간 이동 기능은 없습니다.</p>}</details>
       <section className="work-card"><div className="card-heading"><div><span className="overline">실제 작업</span><h2>{operation?.title ?? '작업 선택'}</h2></div><span className="badge neutral">{operation ? actorLabel(operation.actor) : ''}</span></div>
+        <p className="caption execution-guide">시연자 한 명이 이 화면에서 구매·판매 계정을 전환해 사용합니다. 계정 선택과 로그인은 별도이며, 운영 도구는 서버 운영 자격을 사용합니다.</p>
         <label className="operation-select">할 작업<Select value={operationId} onChange={e => selectTask(e.target.value)}>{visibleActions.map(op => <option key={op.id} value={op.id}>{op.method} · {op.title}</option>)}</Select></label>
         <div className="quick-actions">{visibleActions.filter(op => op.method === 'GET').slice(0, 5).map(op => <button key={op.id} className={op.id === operationId ? 'chip selected' : 'chip'} onClick={() => selectTask(op.id)}>{op.title}</button>)}</div>
+        {operation && <div className="execution-readiness" aria-label="실행 준비">
+          {operation.actor === 'PUBLIC' ? <p>로그인 없이 실행할 수 있습니다. 입력을 확인한 뒤 <strong>요청 실행</strong>을 누르세요.</p>
+            : role === 'OPERATOR' ? <p><strong>운영자 전용 작업입니다.</strong> {allowed ? '서버에 설정한 운영 자격으로 실행합니다.' : '현재 이 서비스의 운영 자격을 확인하지 못했습니다. 구매자·판매자 로그인으로 대신할 수 없습니다.'}</p>
+            : !allowed ? <><p><strong>{roleLabels[role]} 로그인이 필요합니다.</strong> 로그인한 뒤 필요한 ID를 생성·조회 응답에서 선택하세요.</p>
+              <button className="secondary" disabled={pending} onClick={() => navigate('account', 'account.login', role)}>{roleLabels[role]}로 로그인·가입</button></>
+            : <p>현재 {roleLabels[role]} 계정으로 실행합니다. 필요한 값을 확인한 뒤 <strong>요청 실행</strong>을 누르세요.</p>}
+        </div>}
         {operation && <OperationForm key={`${role}:${operation.id}:${session?.epoch ?? 0}`} operation={operation} context={context[role] ?? EMPTY_CONTEXT} pending={pending} allowed={allowed} run={run} role={role} token={session?.token}
           loginValues={operation.path === (role === 'SELLER' ? '/api/seller-sessions' : '/api/buyer-sessions') ? signupLogins[role] : undefined}
           recoveryValues={recoveries[role]?.[operation.id]?.values} />}
+        {!pending && current && current.path === operation?.path && current.method === operation?.method && <div className="request-outcome" aria-label="요청 응답 확인">
+          <strong className={current.status < 300 ? 'http-ok' : 'http-error'}>HTTP {current.status} · {current.elapsedMs}ms</strong>
+          <span>{current.status === 202 ? '마지막 응답은 접수입니다. 최종 완료는 거래 조회로 확인하세요.' : '마지막으로 받은 응답입니다.'}</span><a href="#server-result">받은 결과 보기</a>
+        </div>}
         {role !== 'OPERATOR' && <button className="text-button login-link" onClick={() => navigate('account', 'account.login')}>로그인·가입 화면 열기</button>}
       </section>
-      {operation && <DataFlow key={`${role}:${session?.epoch ?? 0}`} operation={operation} record={pending ? undefined : current} pending={pending} info={info.data} />}
-      <section className="work-card result-section"><div className="card-heading"><div><span className="overline">서버에서 확인한 결과</span><h2>{current?.operation ?? '아직 실행한 작업이 없습니다'}</h2></div>{current && <span className={`badge ${current.status < 300 ? 'success' : 'failure'}`}>HTTP {current.status}</span>}</div>
+      <section className="work-card result-section" id="server-result"><div className="card-heading"><div><span className="overline">서버에서 확인한 결과</span><h2>{current?.operation ?? '아직 실행한 작업이 없습니다'}</h2></div>{current && <span className={`badge ${current.status < 300 ? 'success' : 'failure'}`}>HTTP {current.status}</span>}</div>
         {operation?.path.endsWith('/gauge') && current?.path === operation.path && <p className="caption">정상 조회 후 1초마다 갱신합니다. 입력 오류가 있으면 값을 고친 뒤 다시 실행하세요. 백그라운드에서는 중단합니다.</p>}
         {gauge.error && <p role="alert" className="notice error">게이지를 다시 확인하지 못했습니다. 아래는 마지막 관측값이며 현재 판매 가능 여부는 주문 요청에서 다시 검증합니다.</p>}
         {current ? <><p className="caption">{kst(current.at)} KST · <span title="요청 시작부터 프록시·서버 왕복과 응답 본문 수신·해석까지의 브라우저 관측 시간입니다. 서버 내부 처리시간이나 비동기 거래의 최종 완료시간이 아닙니다.">응답 확인 {current.elapsedMs}ms</span> · {roleLabels[current.actor as Role] ?? current.actor} · {current.status === 202 ? '접수 응답 · 최종 완료 아님' : '해당 요청의 응답'}</p>
@@ -247,6 +259,7 @@ export function App() {
               <p>판매 상품이 없습니다. 판매자로 로그인해 상품을 등록하고 판매 가능한 재고를 준비한 뒤 기본 구매로 돌아오세요.</p>
               <button onClick={() => { navigate('sell', 'sell.product', 'SELLER'); selectTask('post_api_sellers_me_products', -1, 'SELLER'); }}>판매자로 상품 등록하기</button></div>}
         </> : <div className="empty"><span className="empty-icon"><ArrowIcon /></span><strong>선택한 작업의 응답을 확인하세요</strong><p>필요한 값을 입력한 뒤 요청을 실행하세요. 이전 결과는 실행 기록에서 다시 선택할 수 있습니다.<br />로그인이 필요한 작업은 해당 역할로 먼저 로그인하세요.</p></div>}</section>
+      {operation && <DataFlow key={`${role}:${session?.epoch ?? 0}`} operation={operation} record={pending ? undefined : current} pending={pending} info={info.data} />}
     </main>
     {panel && <aside className="inspector"><div className="inspector-tabs"><button className={panel === 'requests' ? 'active' : ''} onClick={() => setPanel('requests')}>요청·응답</button><button className={panel === 'experiments' ? 'active' : ''} onClick={() => setPanel('experiments')}>실험·모니터링</button><button aria-label="패널 닫기" onClick={() => setPanel(null)}><svg className="icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg></button></div>
       {panel === 'experiments' ? <Experiments info={info.data} /> : <><div className="journal-heading"><h2>실행 기록</h2><span>{history.length}건 · {roleLabels[role]}</span></div>
