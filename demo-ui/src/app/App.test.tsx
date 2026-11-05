@@ -66,12 +66,84 @@ it('구매·판매 계정과 운영 도구를 구분하고 미설정 운영 자�
   const fetch = setup();
   const accounts = screen.getByLabelText('API 실행 계정');
   expect(within(accounts).getAllByRole('button').map(b => b.textContent)).toEqual(['구매자', '판매자']);
-  const tools = screen.getByRole('button', { name: '운영 도구' });
+  expect(within(document.querySelector('header')!).queryByRole('button', { name: '운영 도구' })).toBeNull();
+  const tools = screen.getByRole('button', { name: /월 랭킹·자동 발급/ });
   expect(accounts.contains(tools)).toBe(false);
   expect(screen.queryByRole('button', { name: '발표자' })).toBeNull();
   fireEvent.click(tools);
   expect((screen.getByRole('button', { name: '요청 실행' }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByText(/현재 이 서비스의 운영 자격을 확인하지 못했습니다/)).toBeTruthy();
+  expect(fetch.mock.calls.filter(([url]) => url !== '/demo/info')).toHaveLength(0);
+});
+
+it.each([['BUYER', '구매자'], ['SELLER', '판매자']])('%s 상단 로그인·가입은 명확한 실행 폼을 열고 자동 호출하지 않는다', (_actor, label) => {
+  const fetch = setup();
+  fireEvent.click(screen.getByRole('button', { name: label }));
+  fireEvent.click(screen.getByRole('button', { name: `${label} 로그인 화면 열기` }));
+  expect(within(screen.getByRole('form', { name: 'API 요청' })).getByRole('button', { name: '로그인' })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: `${label} 회원가입 화면 열기` }));
+  expect(within(screen.getByRole('form', { name: 'API 요청' })).getByRole('button', { name: '회원가입' })).toBeTruthy();
+  expect(fetch.mock.calls.filter(([url]) => url !== '/demo/info')).toHaveLength(0);
+});
+
+it.each([['구매자', 'seller', '판매자'], ['판매자', 'buyer', '구매자']])('%s 상태에서 반대 계정 로그인 작업을 선택하면 실제 응답의 역할로 로그인한다', async (from, target, label) => {
+  setup();
+  fireEvent.click(screen.getByRole('button', { name: from }));
+  fireEvent.click(screen.getByRole('button', { name: `${from} 로그인 화면 열기` }));
+  fireEvent.click(screen.getByText('다른 계정 작업 선택'));
+  fireEvent.change(screen.getByLabelText('할 작업'), { target: { value: `post_api_${target}_sessions` } });
+  expect(screen.getByRole('button', { name: label }).getAttribute('aria-pressed')).toBe('true');
+  fireEvent.change(screen.getByLabelText(/이메일/), { target: { value: `${target}@example.test` } });
+  fireEvent.change(screen.getByLabelText(/비밀번호/), { target: { value: 'isolated-test-password' } });
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  await screen.findByLabelText('로그인 완료');
+  expect(within(document.querySelector('header')!).getByText(`테스트 ${label}`)).toBeTruthy();
+  expect(within(screen.getByLabelText('로그인 완료')).getByRole('button', { name: target === 'seller' ? /상품·재고 준비하기/ : /판매 상품 보기/ })).toBeTruthy();
+});
+
+it('두 계정을 각각 로그인한 뒤 전환해도 각 세션으로 요청하고 서로의 기록을 섞지 않는다', async () => {
+  const fetch = setup(); await login();
+  fireEvent.click(screen.getByRole('button', { name: '판매자' }));
+  fireEvent.click(screen.getByRole('button', { name: '판매자 로그인 화면 열기' }));
+  fireEvent.change(screen.getByLabelText(/이메일/), { target: { value: 'seller@example.test' } });
+  fireEvent.change(screen.getByLabelText(/비밀번호/), { target: { value: 'isolated-test-password' } });
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  await screen.findByText('테스트 판매자');
+  fireEvent.click(screen.getByRole('button', { name: /상품·재고 준비하기/ }));
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  await screen.findByText('격리된 조회 상품');
+  expect(new Headers(fetch.mock.calls.at(-1)![1]?.headers).get('Authorization')).toBe('Bearer private-seller');
+  fireEvent.click(screen.getByRole('button', { name: '구매자' }));
+  expect(screen.queryByText('격리된 조회 상품')).toBeNull();
+  expect(within(document.querySelector('header')!).getByText('테스트 구매자')).toBeTruthy();
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  await screen.findByText('격리된 조회 상품');
+  expect(new Headers(fetch.mock.calls.at(-1)![1]?.headers).get('Authorization')).toBe('Bearer private-buyer');
+});
+
+it('운영 화면에서 공개 복구 작업을 거쳐 선택한 가입·로그인은 작업의 고유 계정에 결속한다', () => {
+  const fetch = setup();
+  for (const [id, label] of [['post_api_buyers', '구매자'], ['post_api_sellers', '판매자'], ['post_api_buyer_sessions', '구매자'], ['post_api_seller_sessions', '판매자']]) {
+    fireEvent.change(screen.getByLabelText('시연 흐름 선택'), { target: { value: 'monthly' } });
+    fireEvent.change(screen.getByLabelText('시연 흐름 선택'), { target: { value: 'account.password' } });
+    expect(document.querySelector('.breadcrumb')?.textContent).toContain('운영자');
+    fireEvent.change(screen.getByLabelText('할 작업'), { target: { value: id } });
+    expect((screen.getByLabelText('할 작업') as HTMLSelectElement).value).toBe(id);
+    expect(screen.getByRole('button', { name: label }).getAttribute('aria-pressed')).toBe('true');
+  }
+  expect(fetch.mock.calls.filter(([url]) => url !== '/demo/info')).toHaveLength(0);
+});
+
+it('좁은 화면의 공통 선택 경로에서도 49개 흐름과 월간 화면을 열며 자동 실행하지 않는다', () => {
+  const fetch = setup(); const menu = screen.getByLabelText('시연 흐름 선택') as HTMLSelectElement;
+  expect(Array.from(menu.options).map(o => o.value).sort()).toEqual([...scenarios.map(s => s.id), 'monthly'].sort());
+  for (const scenario of scenarios) {
+    fireEvent.change(menu, { target: { value: scenario.id } });
+    expect(menu.value).toBe(scenario.id);
+    expect(screen.getByRole('form', { name: 'API 요청' })).toBeTruthy();
+  }
+  fireEvent.change(menu, { target: { value: 'monthly' } });
+  expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('월 랭킹과 쿠폰 발급');
   expect(fetch.mock.calls.filter(([url]) => url !== '/demo/info')).toHaveLength(0);
 });
 
@@ -82,6 +154,7 @@ it('본문 없는 서버 로그아웃 후 세션·기록·해당 계정의 조�
   await screen.findByText('격리된 조회 상품');
   expect(client.getQueryCache().findAll({ queryKey: ['actor', 'BUYER'] }).length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole('button', { name: '로그인·가입 화면 열기' }));
+  fireEvent.click(screen.getByText('다른 계정 작업 선택'));
   fireEvent.change(screen.getByLabelText('할 작업'), { target: { value: 'delete_api_sessions_current' } });
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
   await screen.findByText('로그인 전');
@@ -106,7 +179,8 @@ it('역할을 전환하면 다른 역할의 계정·응답을 보여주지 않�
 it.each([['BUYER', '구매자', 'buyers', 'buyer'], ['SELLER', '판매자', 'sellers', 'seller']])(
   '%s 연습 가입 후 같은 정보로 로그인하고 비밀번호를 메모리에서 비운다', async (_role, label, resource, session) => {
     const fetch = setup();
-    fireEvent.click(screen.getByRole('button', { name: `${label} 가입부터 시작` }));
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    fireEvent.click(screen.getByRole('button', { name: `${label} 회원가입 화면 열기` }));
     expect((screen.getByLabelText('할 작업') as HTMLSelectElement).value).toBe(`post_api_${resource}`);
     fireEvent.click(screen.getByRole('button', { name: '연습용 가입값 채우기' }));
     const email = (screen.getByLabelText(/이메일/) as HTMLInputElement).value;
@@ -179,6 +253,7 @@ it('흐름을 바꾸면 이전 응답을 비우고 실행 기록에서는 다시
   await screen.findByText('격리된 조회 상품');
   fireEvent.click(screen.getByRole('button', { name: '결제 확인 중·응답 유실' }));
   expect(screen.queryByText('격리된 조회 상품')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '실행 기록 보기' }));
   const journal = screen.getByRole('heading', { name: '실행 기록' }).parentElement!.parentElement!;
   fireEvent.click(within(journal).getByRole('button', { name: /200.*판매 상품 목록/ }));
   expect(screen.getByText('격리된 조회 상품')).toBeTruthy();
@@ -214,6 +289,7 @@ it('주문 요청의 응답을 기다리는 동안 입력과 멱등키를 보존
   expect((screen.getByLabelText('할 작업') as HTMLSelectElement).value).toBe('post_api_orders');
   finish(response({ upstreamStatus: 202, data: { id: 'order-1', status: 'PAYMENT_PENDING' } }));
   await screen.findByText('요청이 접수됐습니다. 최종 완료는 해당 거래 조회로 확인하세요.');
+  fireEvent.click(screen.getByRole('button', { name: '실행 기록 보기' }));
   expect(screen.getByRole('button', { name: /202.*주문·결제 접수/ })).toBeTruthy();
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
   expect(JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body)).idempotencyKey).toBe(originalKey);
@@ -232,6 +308,7 @@ it('주문 대기 중 과거 결과를 연결해도 응답 유실 뒤 같은 입
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
   const sent = JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body));
 
+  fireEvent.click(screen.getByRole('button', { name: '실행 기록 보기' }));
   fireEvent.click(screen.getByRole('button', { name: /200.*판매 상품 목록/ }));
   fireEvent.click(screen.getByRole('button', { name: '입력에 연결' }));
   expect((screen.getByLabelText('멱등키') as HTMLInputElement).value).toBe(sent.idempotencyKey);
