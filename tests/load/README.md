@@ -75,6 +75,22 @@ LOAD_OPERATOR_CREDENTIAL="$(cat "$LOAD_WORK_DIR/operator.credential")" \
 
 복구 시간은 주입이 끝난 뒤 미완료·처리 대기·Kafka lag·미발행 Outbox가 모두 0이 될 때까지입니다. 조회 시도를 소진한 결제 작업은 `REVIEW_REQUIRED`로 남기며, 결제는 미확정 상태와 예약을 유지합니다. `replay`는 `POST /internal/payment-jobs/{jobId}/replays`로 같은 업무 키의 원거래 조회를 재개합니다. 재처리 뒤에도 위 대조를 다시 실행합니다.
 
+## 선착순 이벤트 집중 부하
+
+[선착순 집중 부하](../../docs/design.md#선착순-이벤트-집중-부하)의 A단계로, Gateway·Commerce의 주문 접수와 이벤트 예약 경합만 측정합니다. [event_load.py](event_load.py)가 새 Compose 프로젝트를 만들고 끝나면 소유 자원만 지웁니다. 신규 접수 gate는 실제 관측을 그대로 쓰며, Payment·Settlement 소비를 꺼 두므로 주문은 `PAYMENT_PENDING`에서 예약을 잡은 채 남습니다. 결제 확정·환불 복원·적체 배출을 포함한 B단계는 이 시험이 대신하지 않습니다.
+
+```bash
+./gradlew assemble
+python3 -B tests/load/event_load.py --buyers 6000 --peak-rate 600 --tail-rate 100 --tail-seconds 25   # 축소 단계
+python3 -B tests/load/event_load.py                                                                    # 60,000명, 첫 5초 6,000/s
+```
+
+- 구매자·판매자·상품은 SQL, 세션은 Redis에 직접 넣고, 주소는 주소 ID로 암호화되므로 [event_flash.js](event_flash.js)의 `seed`가 실제 API로 등록합니다.
+- 이벤트는 이미 시작한 기간으로 공개해 바로 `OPEN`으로 만듭니다. 구매자마다 주문을 한 번 보내며 10명 중 1명은 일반 상품을 주문합니다.
+- k6는 결과를 `created`·`sold_out`(`INVENTORY_INSUFFICIENT`)·`admission_closed`(`EVENT_ADMISSION_CLOSED`)·`capacity`(접수 gate 503)·`conflict`·`client_error`·`server_error`·`timeout`으로 나눕니다. 의도한 매진 거절은 결함으로 세지 않습니다.
+- 시험 중 1초마다 Commerce DB의 잠금 대기·활성 세션 수를 표본 추출합니다.
+- 끝나면 초과 판매·구매자 중복 참여 0, 참여 수=이벤트 예약 수=이벤트 주문 수, 두 상품의 재고 합 보존, 게이지 조회를 확인하고 하나라도 어긋나면 실패로 끝납니다. 결과는 `tests/load/work/event-<시각>/`에 남습니다.
+
 ## 실측 기록
 
 2026-11-03의 [시험 환경·단계별 수치·병목 분석·장애 복구 관측 원문](https://github.com/500-internal-server-error-team/commerce-settle/blob/7a3affbd34cde810951d21e35aefcb4aa557dafc/tests/load/README.md#시험-환경)을 보존합니다. 당시 60초 단계 시험의 관측이며, 15분 지속 가능 TPS 판정을 대신하지 않습니다.
