@@ -1173,6 +1173,29 @@ pre {
 .flow-values h3 { font-size:12px; margin:16px 0 8px }
 .flow-values pre { max-height:260px; overflow:auto; background:#f8f9fa; padding:12px; border-radius:6px; font-size:11px; line-height:1.7 }
 .event-flow { border-top:1px solid var(--line); margin-top:18px; padding-top:16px }
+.event-observation { margin-top:24px; padding-block:20px; border-top:1px solid var(--line); border-bottom:1px solid var(--line) }
+.event-observation h3 { margin:0; font-size:18px }
+.event-query { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin:16px 0 }
+.event-query label { display:grid; gap:8px; flex:1; min-width:min(100%,280px); font-size:13px }
+.event-query input { font-family:ui-monospace,monospace; font-size:13px }
+.event-sources { display:flex; flex-wrap:wrap; gap:12px 24px; margin:16px 0 }
+.event-sources > div { display:grid; gap:4px; font-size:12px; min-width:0; overflow-wrap:anywhere }
+.event-sources span { color:var(--muted) }
+.event-record-browser { display:grid; grid-template-columns:minmax(210px,1fr) minmax(0,3fr); gap:24px; margin-top:20px }
+.event-record-browser nav { display:flex; flex-direction:column; align-items:stretch; gap:6px; max-height:520px; overflow:auto }
+.event-record-browser nav button { display:grid; gap:6px; text-align:left; min-width:0; overflow-wrap:anywhere; padding:12px; font-size:13px }
+.event-record-browser nav button[aria-pressed=true] { border-color:var(--accent); background:#fff2eb }
+.event-record-browser code { overflow-wrap:anywhere; white-space:normal; font-size:12px }
+.event-record-detail { min-width:0 }
+.event-record-detail h4 { margin:0 0 8px; font-size:14px }
+.event-record-detail p { font-size:13px; line-height:1.7 }
+.event-record-path { list-style:none; margin:18px 0; padding:0; display:grid; gap:20px }
+.event-record-path > li { padding-left:16px; border-left:2px solid var(--line) }
+.event-record { display:grid; gap:7px; padding-block:8px; overflow-wrap:anywhere; font-size:13px }
+.event-record > span { color:var(--muted); font-size:12px }
+.event-consumer + .event-consumer { margin-top:14px; padding-top:14px; border-top:1px solid var(--line) }
+.empty-event-records { font-size:13px; line-height:1.8; color:var(--muted) }
+@media (max-width:720px) { .event-record-browser { grid-template-columns:minmax(0,1fr) } .event-record-browser nav { max-height:220px } }
 .event-flow summary small { margin-left:10px; font-weight:400; color:var(--muted) }
 .event-controls { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:12px; margin:16px 0 }
 .event-controls label { min-width:0; display:grid; gap:7px; font-size:12px; color:var(--muted) }

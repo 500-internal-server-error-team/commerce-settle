@@ -90,12 +90,12 @@ class NotificationKafkaIntegrationTest {
         .untilAsserted(
             () -> {
               assertThat(
-                      jdbc.queryForObject(
+                      jdbc.queryForList(
                           "SELECT status FROM commerce.inbox WHERE consumer=? AND event_id=?",
                           String.class,
                           GROUP,
                           event.eventId()))
-                  .isEqualTo("WAITING");
+                  .containsExactly("WAITING");
               assertThat(offset(GROUP, sent)).isGreaterThan(sent.offset());
               assertThat(offset("commerce.v1", sent)).isGreaterThan(sent.offset());
             });

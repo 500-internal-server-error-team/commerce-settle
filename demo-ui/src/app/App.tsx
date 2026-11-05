@@ -9,6 +9,7 @@ import { useEventGauge } from '../features/requests/useEventGauge';
 import { ResultView } from '../features/results/ResultView';
 import { Experiments, type DemoInfo } from '../features/experiments/Experiments';
 import { DataFlow } from '../features/flow/DataFlow';
+import type { ResultTarget } from '../features/flow/eventRecords';
 import { Select, ArrowIcon } from '../shared/ui/Select';
 import { actorLabel } from '../shared/ui/labels';
 
@@ -217,6 +218,18 @@ export function App() {
     const next = responseContext(row, current?.path ?? '', request?.pathParameters, request?.body);
     setContext(old => ({ ...old, [role]: mergeResponseContext(old[role] ?? {}, next) })); setNotice('선택한 응답의 ID·버전을 입력에 연결했습니다. 실행 전 값을 확인하세요.');
   }
+  function inspectEventResult(target: ResultTarget, id: string) {
+    const actor: Role = target === 'settlement-item' ? 'SELLER' : target === 'payment' || target === 'refund' ? 'BUYER' : role === 'SELLER' ? 'SELLER' : 'BUYER';
+    const operation = target === 'settlement-item' ? 'get_api_sellers_me_settlement_items' : target === 'payment' ? 'get_api_payments_paymentId'
+      : target === 'refund' ? 'get_api_refunds_refundId'
+      : actor === 'SELLER' ? 'get_api_sellers_me_orders_orderId' : 'get_api_orders_orderId';
+    if (!selectTask(operation, -1, actor)) return;
+    setGroup(target === 'refund' ? 'refund' : actor === 'SELLER' ? 'sell' : 'buy'); setCase('');
+    if (target !== 'settlement-item') setContext(old => ({ ...old, [actor]: { ...old[actor], [`${target}Id`]: id } }));
+    setNotice(target === 'settlement-item' ? `Inbox의 정산 항목 ID는 ${id}입니다. 판매자 목록을 조회해 해당 항목과 대조하세요.`
+      : 'Inbox의 반영 결과 ID를 연결했습니다. 해당 거래 소유 계정으로 로그인한 뒤 조회를 실행하세요.');
+    window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }));
+  }
   return <div className={`shell ${panel ? 'with-panel' : ''}`}>
     <SessionExpiry sessions={sessions} invalidate={invalidateSession} />
     <header className="topbar"><a className="brand" href="#" onClick={e => { e.preventDefault(); navigate('buy'); }}>
@@ -323,7 +336,7 @@ export function App() {
         <button className="secondary" disabled={pending} onClick={() => navigate('account', 'account.login', actor)}>가입한 {roleLabels[actor]}로 로그인</button>
       </div>)}
       </section></div>
-      {operation && <DataFlow key={`${role}:${session?.epoch ?? 0}`} operation={operation} record={pending ? undefined : current} pending={pending} info={info.data} authenticated={authenticated} />}
+      {operation && <DataFlow key={`${role}:${session?.epoch ?? 0}`} operation={operation} record={pending ? undefined : current} pending={pending} info={info.data} authenticated={authenticated} onInspectResult={inspectEventResult} />}
     </main>
     {panel && <aside className="inspector"><div className="inspector-tabs"><button className={panel === 'requests' ? 'active' : ''} onClick={() => setPanel('requests')}>요청·응답</button><button className={panel === 'experiments' ? 'active' : ''} onClick={() => setPanel('experiments')}>실험·모니터링</button><button aria-label="패널 닫기" onClick={() => setPanel(null)}><svg className="icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg></button></div>
       {panel === 'experiments' ? <Experiments info={info.data} /> : <><div className="journal-heading"><h2>실행 기록</h2><span>{history.length}건 · {roleLabels[role]}</span></div>

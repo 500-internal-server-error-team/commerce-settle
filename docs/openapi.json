@@ -12,6 +12,363 @@
     }
   ],
   "paths": {
+    "/internal/commerce-event-snapshot": {
+      "get": {
+        "operationId": "get_internal_commerce_event_snapshot",
+        "summary": "commerce Outbox·Inbox 연결 관측",
+        "tags": [
+          "commerce"
+        ],
+        "x-owner-service": "commerce",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "description": "운영자 전용 읽기 스냅샷. UUID 1~20개 필수, 결과 상한50·읽기트랜잭션3초. 공개 Gateway에 노출하지 않는다. 상태·추적 위치만 반환하며 raw_body/payload는 제외한다.",
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "required": true,
+            "style": "form",
+            "explode": false,
+            "description": "거래·이벤트 UUID의 쉼표 목록. 빈 조회와20개 초과는 거절한다.",
+            "schema": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 20,
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "제한된 관측 완료. 일부 서비스/연결 기록의 부재를 전달 실패로 확정하지 않는다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventRecordSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/payment-event-snapshot": {
+      "get": {
+        "operationId": "get_internal_payment_event_snapshot",
+        "summary": "payment Outbox·Inbox 연결 관측",
+        "tags": [
+          "payment"
+        ],
+        "x-owner-service": "payment",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "description": "운영자 전용 읽기 스냅샷. UUID 1~20개 필수, 결과 상한50·읽기트랜잭션3초. 공개 Gateway에 노출하지 않는다. 상태·추적 위치만 반환하며 raw_body/payload는 제외한다.",
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "required": true,
+            "style": "form",
+            "explode": false,
+            "description": "거래·이벤트 UUID의 쉼표 목록. 빈 조회와20개 초과는 거절한다.",
+            "schema": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 20,
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "제한된 관측 완료. 일부 서비스/연결 기록의 부재를 전달 실패로 확정하지 않는다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventRecordSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/settlement-event-snapshot": {
+      "get": {
+        "operationId": "get_internal_settlement_event_snapshot",
+        "summary": "settlement Outbox·Inbox 연결 관측",
+        "tags": [
+          "settlement"
+        ],
+        "x-owner-service": "settlement",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "description": "운영자 전용 읽기 스냅샷. UUID 1~20개 필수, 결과 상한50·읽기트랜잭션3초. 공개 Gateway에 노출하지 않는다. 상태·추적 위치만 반환하며 raw_body/payload는 제외한다.",
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "required": true,
+            "style": "form",
+            "explode": false,
+            "description": "거래·이벤트 UUID의 쉼표 목록. 빈 조회와20개 초과는 거절한다.",
+            "schema": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 20,
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "제한된 관측 완료. 일부 서비스/연결 기록의 부재를 전달 실패로 확정하지 않는다.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventRecordSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "형식·값 오류",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "인증 필요/만료",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "역할·서비스 권한 없음",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 타인 소유",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "상태·버전·기한·잔액·멱등 충돌",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "요청 제한",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "일시적 저장/외부 장애",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/coupon-issue-runs/{runId}/targets": {
       "get": {
         "tags": [
@@ -9819,6 +10176,142 @@
       }
     },
     "schemas": {
+      "EventRecordSnapshot": {
+        "type": "object",
+        "description": "서버가 자기 DB에서 읽은 최대50개 이벤트 메타데이터 스냅샷. 전체 건수·페이지나 금융 완료를 뜻하지 않는다. raw_body와 payload는 반환하지 않는다.",
+        "required": [
+          "records",
+          "limit",
+          "truncated",
+          "observedAt"
+        ],
+        "properties": {
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventRecordMetadata"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "enum": [
+              50
+            ]
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "관측 상한을 넘는 기록이 있어 일부만 반환했는지"
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "이 서비스의 조회 완료 시각(KST). 서비스 간 원자적 snapshot이 아니다."
+          }
+        }
+      },
+      "EventRecordMetadata": {
+        "type": "object",
+        "required": [
+          "id",
+          "eventId",
+          "aggregateId",
+          "kind",
+          "eventType",
+          "status",
+          "topic",
+          "consumer",
+          "lastErrorCode",
+          "partition",
+          "offset",
+          "attempts",
+          "resultRef",
+          "createdAt",
+          "updatedAt",
+          "referenceIds"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "aggregateId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "OUTBOX",
+              "INBOX"
+            ]
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "topic": {
+            "type": "string"
+          },
+          "consumer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastErrorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "partition": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "resultRef": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "referenceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "집계·결과와 허용된 업무 참조. 계정·주소·자격 원문 제외."
+          }
+        },
+        "description": "eventId로 발행·소비를 연결한다. 재발행 때문에 발행/최초수신 offset은 다를 수 있다. APPLIED는 이벤트 반영이며 금융 최종 성공은 별도 업무 조회로 확인한다."
+      },
       "CouponIssueTarget": {
         "type": "object",
         "additionalProperties": false,

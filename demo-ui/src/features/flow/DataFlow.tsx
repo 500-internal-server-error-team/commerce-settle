@@ -3,6 +3,8 @@ import { operations, redact, type Operation } from '../../shared/api/contract';
 import type { Execution } from '../../shared/api/client';
 import type { DemoInfo } from '../experiments/Experiments';
 import { Select, ArrowIcon } from '../../shared/ui/Select';
+import { EventRecords } from './EventRecords.tsx';
+import type { ResultTarget } from './eventRecords';
 import { producerApplication, consumerApplication, database, eventContracts, requestRoute, authenticationRoute, loginStages, protectedStages, type FlowNode } from './flowModel';
 
 function Node({ node, x, y, width = 152, selected, onSelect }: { node: FlowNode; x: number; y: number;
@@ -46,8 +48,8 @@ function AuthenticationDiagram({ nodes, protectedRequest, active, select, id }: 
   </div>;
 }
 
-export function DataFlow({ operation, record, pending, info, authenticated = false }: { operation: Operation; record?: Execution;
-  pending: boolean; info?: DemoInfo; authenticated?: boolean }) {
+export function DataFlow({ operation, record, pending, info, authenticated = false, onInspectResult }: { operation: Operation; record?: Execution;
+  pending: boolean; info?: DemoInfo; authenticated?: boolean; onInspectResult?: (target: ResultTarget, id: string) => void }) {
   const [view, setView] = useState<'auto' | 'map' | 'sequence' | 'auth'>('auto');
   const [selectedNode, selectNode] = useState<FlowNode>();
   const [eventName, setEventName] = useState(eventContracts.find(e => e.producer === operation.owner)?.name ?? eventContracts[0].name);
@@ -82,11 +84,14 @@ export function DataFlow({ operation, record, pending, info, authenticated = fal
   ];
   return <section className="work-card data-flow" aria-label="데이터 흐름">
     <div className="flow-heading"><div><h2>데이터 흐름</h2><p>요청의 서비스 경계와 응답 뒤 이어지는 이벤트를 살펴보세요.</p></div>
-      <span className="badge neutral">내부 단계 · 설계 경로</span></div>
+      <span className="badge neutral">관측과 설계 구분</span></div>
     <div className="flow-call"><div><code>{displayed.method}</code> <code>{displayed.path}</code></div>
       <span className={pending ? '' : record ? record.status < 300 ? 'http-ok' : 'http-error' : ''} aria-live="polite">
         {pending ? '응답 확인 중' : record ? `HTTP ${record.status} · ${record.elapsedMs}ms` : '표시할 HTTP 응답 기록 없음'}</span>
     </div>
+    <EventRecords record={pending ? undefined : record} info={info} onInspectResult={pending ? undefined : onInspectResult} onSelectEvent={name => {
+      if (eventContracts.some(event => event.name === name)) { setEventName(name); setConsumerName(''); }
+    }} />
     <div className="flow-switch" aria-label="흐름 보기 방식">
       <button aria-pressed={currentView === 'map'} onClick={() => setView('map')}>인프라 지도</button>
       <button aria-pressed={currentView === 'sequence'} onClick={() => setView('sequence')}>시간순 왕복</button>
@@ -137,7 +142,7 @@ export function DataFlow({ operation, record, pending, info, authenticated = fal
     </div>}
     <div className="flow-legend"><span><i />요청 방향</span><span><i className="return" />응답 방향</span><span>도식은 조건부 경로 · 실행 추적 아님</span></div>
     <div className="flow-detail" aria-live="polite"><strong>{active.title} <span>{active.subtitle}</span></strong><p>{active.detail}</p></div>
-    <p className="caption">HTTP 상태와 시간은 수신한 응답의 관측값입니다. DB·캐시·내부 HTTP·Kafka 통과와 완료는 확인하지 않습니다.
+    <p className="caption">HTTP 상태와 시간은 수신한 응답의 관측값이며 내부 실행을 증명하지 않습니다. 위 실제 이벤트 기록은 별도 시각에 읽은 DB 메타데이터입니다.
       {record?.status === 202 && ' 202는 접수 응답이며 최종 완료가 아닙니다.'}</p>
     {record && <details className="flow-values"><summary>이 응답의 보낸 값·받은 결과</summary><div>
       <section><h3>보낸 값</h3><pre>{JSON.stringify(redact(record.request), null, 2)}</pre></section>
