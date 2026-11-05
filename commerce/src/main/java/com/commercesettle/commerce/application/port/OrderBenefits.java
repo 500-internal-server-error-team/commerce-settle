@@ -17,6 +17,9 @@ public interface OrderBenefits {
       Order.ExternalMethod method,
       Instant now);
 
+  /** 주문·주소 사본을 만들기 전에 커밋된 이벤트 상태만 읽어 신청할 수 없는 이벤트를 거절한다. 잠금을 잡지 않으며 수량 확보는 reserve가 결정한다. */
+  void requireEventOpen(UUID eventId);
+
   /** 주문 트랜잭션에 참여한다. 이벤트 가격/버전·기간·참여 한도와 쿠폰 소유/수단/기한/예산을 재검사한다. */
   void reserve(Order order, Long expectedEventVersion, Instant now);
 

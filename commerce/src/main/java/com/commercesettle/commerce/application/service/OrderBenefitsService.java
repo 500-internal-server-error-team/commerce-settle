@@ -69,6 +69,11 @@ public class OrderBenefitsService implements OrderBenefits {
         : new Offer(price, eventVersion, 0, discount.amount());
   }
 
+  @Override
+  public void requireEventOpen(UUID eventId) {
+    inventory.requireEventOpen(eventId);
+  }
+
   /** 이벤트 가격·버전은 같은 트랜잭션의 견적에서 확인했고 공개 후 바뀌지 않으므로, 여기서는 참여 기간·남은 수량·참여 한도만 검사한다. */
   @Override
   public void reserve(Order order, Long expectedEventVersion, Instant now) {
