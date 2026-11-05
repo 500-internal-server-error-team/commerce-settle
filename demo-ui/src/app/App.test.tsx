@@ -486,7 +486,7 @@ it('주문 대기 중 과거 결과를 연결해도 응답 유실 뒤 같은 입
 
   fireEvent.click(screen.getByRole('button', { name: '실행 기록 보기' }));
   fireEvent.click(screen.getByRole('button', { name: /200.*판매 상품 목록/ }));
-  fireEvent.click(screen.getByRole('button', { name: '입력에 연결' }));
+  fireEvent.click(screen.getByRole('button', { name: '이 항목 사용' }));
   expect((screen.getByLabelText('멱등키') as HTMLInputElement).value).toBe(sent.idempotencyKey);
   expect((screen.getByLabelText(/상품 ID.*productId/) as HTMLInputElement).value).toBe('product-original');
   expect((screen.getByLabelText(/수량.*quantity/) as HTMLInputElement).value).toBe('2');
@@ -501,7 +501,7 @@ it('대기하지 않을 때는 실제 결과의 ID·버전을 다음 주문 입�
   setup();
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
   await screen.findByText('격리된 조회 상품');
-  fireEvent.click(screen.getByRole('button', { name: '입력에 연결' }));
+  fireEvent.click(screen.getByRole('button', { name: '이 항목 사용' }));
   fireEvent.click(within(screen.getByLabelText('흐름별 작업 선택')).getByRole('button', { name: /02.*주문서/ }));
   expect((screen.getByLabelText(/상품 ID.*productId/) as HTMLInputElement).value).toBe('product-1');
   expect((screen.getByLabelText(/확인한 상품 버전/) as HTMLInputElement).value).toBe('3');
@@ -642,4 +642,45 @@ it('중단한 이전 호출의 늦은 오류는 해제한 보존값이나 새 �
   await act(async()=>fail(new TypeError('late cancelled error')));
   expect(screen.queryByLabelText('미확정 요청 보존')).toBeNull();
   expect(screen.queryByText(/응답을 확인하지 못했습니다/)).toBeNull();
+});
+
+it('주문 목록 행에서 데이터 흐름을 누르면 ID 입력 없이 그 거래만 명시적으로 조회한다', async () => {
+  const fetch = setup(); await sessionLogin(fetch);
+  await act(async () => client.setQueryData(['demo-info'], { operatorServices: ['commerce', 'payment', 'settlement'], links: [] }));
+  fireEvent.click(screen.getByRole('button', { name: /01.*구매·결제/ })); selectOperation('get_api_orders');
+  const first = '10000000-0000-4000-8000-000000000001'; const second = '10000000-0000-4000-8000-000000000002';
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: 200, data: { items: [{ id: first, status: 'PAID' }, { id: second, status: 'PAID' }] } }));
+  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'API 요청' })));
+  const before = fetch.mock.calls.length;
+  fetch.mockImplementation(async (_url, init) => {
+    const op = JSON.parse(String(init?.body)).operationId;
+    return response({ upstreamStatus: 200, data: { records: op === 'get_internal_commerce_event_snapshot' ? [{ kind: 'OUTBOX',
+      id: 'aaaaaaaa-0000-4000-8000-000000000001', eventId: 'aaaaaaaa-0000-4000-8000-000000000001', eventType: 'OrderPaymentRequested',
+      aggregateId: first, status: 'PENDING', topic: 'commerce-settle.commerce.v1', consumer: null, partition: null, offset: null,
+      attempts: 0, lastErrorCode: null, resultRef: null, createdAt: '2026-11-05T12:00:00+09:00', updatedAt: '2026-11-05T12:00:00+09:00', referenceIds: [first] }] : [],
+      limit: 50, truncated: false, observedAt: '2026-11-05T12:00:00+09:00' } });
+  });
+  fireEvent.click(within(document.querySelector('.result-section') as HTMLElement).getAllByRole('button', { name: '데이터 흐름 보기' })[0]);
+  await within(screen.getByRole('region', { name: '실제 이벤트 기록' })).findByText('PENDING');
+  const calls = fetch.mock.calls.slice(before); expect(calls).toHaveLength(6);
+  for (const [, init] of calls) {
+    const command = JSON.parse(String(init?.body)); expect(command.operationId).toMatch(/^get_internal_.*_event_snapshot$/);
+    expect(command.query.ids).not.toContain(second); expect(init?.headers).not.toHaveProperty('Authorization');
+  }
+  expect(screen.getByRole('table').textContent).toContain(second);
+  expect(screen.getByText('직접 ID로 찾기 · 고급').closest('details')!.open).toBe(false);
+});
+
+it('성공한 주문의 결제 ID는 다음 결제 조회에 자동으로 이어지고 현재 입력을 먼저 바꾸지 않는다', async () => {
+  const fetch = setup(); await sessionLogin(fetch); fireEvent.click(screen.getByRole('button', { name: /01.*구매·결제/ }));
+  selectOperation('post_api_orders');
+  const payment = '20000000-0000-4000-8000-000000000001';
+  const key = (screen.getByLabelText('멱등키') as HTMLInputElement).value;
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: 201, data: { order: { id: '10000000-0000-4000-8000-000000000001', status: 'PAID', version: 1 }, paymentId: payment } }));
+  await act(async () => fireEvent.submit(screen.getByRole('form', { name: 'API 요청' })));
+  expect((screen.getByLabelText('멱등키') as HTMLInputElement).value).toBe(key);
+  selectOperation('get_api_payments_paymentId');
+  expect((screen.getByLabelText(/결제 ID.*paymentId/) as HTMLInputElement).value).toBe(payment);
+  expect(screen.getByRole('button', { name: '결제 목록 불러오기' })).toBeTruthy();
+  expect(screen.getByLabelText(/결제 ID.*paymentId/).closest('details')!.open).toBe(false);
 });

@@ -1423,6 +1423,44 @@ class OrderWorkflowIntegrationTest {
     for (int count = 0; count < 20 && worker.processNext(); count++) {}
   }
 
+  @Test
+  @DisplayName("구매자는 ID 없이 자기 반품 요청만 안정된 순서로 찾고 다른 계정 count는 보지 않는다")
+  void buyerListsOnlyOwnRefundRequests() {
+    var owner = fixture();
+    var other = fixture();
+    UUID low = UUID.fromString("00000000-0000-4000-8000-000000000001");
+    UUID high = UUID.fromString("00000000-0000-4000-8000-000000000002");
+    for (UUID id : java.util.List.of(low, high, UUID.randomUUID())) {
+      jdbc.update(
+          "INSERT INTO commerce.order_refund_requests(id,order_id,buyer_id,seller_id,kind,status,accepted_at,reason,created_at,updated_at,version) VALUES(?,?,?,?,'CANCEL','PENDING_SELLER','2026-11-02T00:00:00Z','list test','2026-11-02T00:00:00Z','2026-11-02T00:00:00Z',0)",
+          id,
+          UUID.randomUUID(),
+          id.equals(low) || id.equals(high) ? owner.buyer() : other.buyer(),
+          owner.seller());
+    }
+    var first = call("BUYER", owner.buyer(), "/api/refund-requests?page=0&size=1", null, 200);
+    assertThat(first.path("totalElements").asLong()).isEqualTo(2);
+    assertThat(first.path("items").get(0).path("id").asText()).isEqualTo(high.toString());
+    assertThat(
+            call("BUYER", owner.buyer(), "/api/refund-requests?page=1&size=1", null, 200)
+                .path("items")
+                .get(0)
+                .path("id")
+                .asText())
+        .isEqualTo(low.toString());
+    assertThat(
+            call("BUYER", owner.buyer(), "/api/refund-requests?page=2147483647&size=100", null, 200)
+                .path("items")
+                .size())
+        .isZero();
+    call("SELLER", owner.seller(), "/api/refund-requests", null, 403);
+    call("BUYER", owner.buyer(), "/api/refund-requests?page=-1", null, 400);
+    call("BUYER", owner.buyer(), "/api/refund-requests?size=101", null, 400);
+    var headers = new HttpHeaders();
+    headers.setBearerAuth(GATEWAY);
+    exchange("/api/refund-requests", null, 401, "list-no-user", headers);
+  }
+
   private Fixture fixture() {
     UUID buyer = UUID.randomUUID(), seller = UUID.randomUUID();
     jdbc.update(

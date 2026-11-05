@@ -4,7 +4,7 @@ import type { Execution } from '../../shared/api/client';
 import type { DemoInfo } from '../experiments/Experiments';
 import { Select, ArrowIcon } from '../../shared/ui/Select';
 import { EventRecords } from './EventRecords.tsx';
-import type { ResultTarget } from './eventRecords';
+import type { ResultTarget, FlowInspection } from './eventRecords';
 import { producerApplication, consumerApplication, database, eventContracts, requestRoute, authenticationRoute, loginStages, protectedStages, type FlowNode } from './flowModel';
 
 function Node({ node, x, y, width = 152, selected, onSelect }: { node: FlowNode; x: number; y: number;
@@ -48,8 +48,9 @@ function AuthenticationDiagram({ nodes, protectedRequest, active, select, id }: 
   </div>;
 }
 
-export function DataFlow({ operation, record, pending, info, authenticated = false, onInspectResult }: { operation: Operation; record?: Execution;
-  pending: boolean; info?: DemoInfo; authenticated?: boolean; onInspectResult?: (target: ResultTarget, id: string) => void }) {
+export function DataFlow({ operation, record, pending, info, authenticated = false, inspection, onPickRecord, onStartTrade, onInspectResult }: { operation: Operation; record?: Execution;
+  pending: boolean; info?: DemoInfo; authenticated?: boolean; inspection?: FlowInspection; onPickRecord?: () => void; onStartTrade?: () => void;
+  onInspectResult?: (target: ResultTarget, id: string) => void }) {
   const [view, setView] = useState<'auto' | 'map' | 'sequence' | 'auth'>('auto');
   const [selectedNode, selectNode] = useState<FlowNode>();
   const [eventName, setEventName] = useState(eventContracts.find(e => e.producer === operation.owner)?.name ?? eventContracts[0].name);
@@ -82,14 +83,14 @@ export function DataFlow({ operation, record, pending, info, authenticated = fal
     { id: 'consumer', title: 'Kafka Consumer', subtitle: `Listener · ${consumer}.v1`, detail: '' },
     { id: 'inbox', title: `${receivingDb} DB`, subtitle: 'Inbox + 처리 내용', detail: '' },
   ];
-  return <section className="work-card data-flow" aria-label="데이터 흐름">
+  return <section className="work-card data-flow" id="data-flow" aria-label="데이터 흐름">
     <div className="flow-heading"><div><h2>데이터 흐름</h2><p>요청의 서비스 경계와 응답 뒤 이어지는 이벤트를 살펴보세요.</p></div>
       <span className="badge neutral">관측과 설계 구분</span></div>
     <div className="flow-call"><div><code>{displayed.method}</code> <code>{displayed.path}</code></div>
       <span className={pending ? '' : record ? record.status < 300 ? 'http-ok' : 'http-error' : ''} aria-live="polite">
         {pending ? '응답 확인 중' : record ? `HTTP ${record.status} · ${record.elapsedMs}ms` : '표시할 HTTP 응답 기록 없음'}</span>
     </div>
-    <EventRecords record={pending ? undefined : record} info={info} onInspectResult={pending ? undefined : onInspectResult} onSelectEvent={name => {
+    <EventRecords record={pending ? undefined : record} info={info} inspection={pending ? undefined : inspection} onPickRecord={onPickRecord} onStartTrade={onStartTrade} onInspectResult={pending ? undefined : onInspectResult} onSelectEvent={name => {
       if (eventContracts.some(event => event.name === name)) { setEventName(name); setConsumerName(''); }
     }} />
     <div className="flow-switch" aria-label="흐름 보기 방식">

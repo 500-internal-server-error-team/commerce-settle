@@ -154,13 +154,42 @@ class RefundRepositoryIntegrationTest {
         .isEqualTo(RefundStatus.EXTERNAL_PENDING);
   }
 
+  @Test
+  @DisplayName("환불 목록은 결제 소유권을 페이지와 count에 먼저 적용하고 같은 시각에는 ID 역순이다")
+  void listsOnlyBuyersRefunds() {
+    UUID buyer = UUID.randomUUID();
+    Payment first = payments.save(confirmed(new PaymentAmounts(10_000, 0, 0, 0), buyer));
+    Payment second = payments.save(confirmed(new PaymentAmounts(10_000, 0, 0, 0), buyer));
+    Payment foreign = payments.save(confirmed(new PaymentAmounts(10_000, 0, 0, 0)));
+    Refund a = refunds.save(Refund.accept(first, UUID.randomUUID(), NOW));
+    Refund b = refunds.save(Refund.accept(second, UUID.randomUUID(), NOW));
+    refunds.save(Refund.accept(foreign, UUID.randomUUID(), NOW));
+    var expected =
+        java.util.stream.Stream.of(a.getId(), b.getId())
+            .sorted(java.util.Comparator.comparing(UUID::toString).reversed())
+            .toList();
+    assertThat(refunds.countByBuyer(buyer)).isEqualTo(2);
+    assertThat(refunds.findByBuyer(buyer, 0, 1))
+        .extracting(Refund::getId)
+        .containsExactly(expected.get(0));
+    assertThat(refunds.findByBuyer(buyer, 1, 1))
+        .extracting(Refund::getId)
+        .containsExactly(expected.get(1));
+    assertThat(refunds.findByBuyer(buyer, (long) Integer.MAX_VALUE * 100, 100)).isEmpty();
+    assertThat(refunds.countByBuyer(UUID.randomUUID())).isZero();
+  }
+
   private static Payment confirmed(PaymentAmounts amounts) {
+    return confirmed(amounts, UUID.randomUUID());
+  }
+
+  private static Payment confirmed(PaymentAmounts amounts, UUID buyer) {
     Payment payment =
         Payment.create(
             UUID.randomUUID(),
             0,
             UUID.randomUUID(),
-            UUID.randomUUID(),
+            buyer,
             UUID.randomUUID(),
             UUID.randomUUID(),
             amounts,

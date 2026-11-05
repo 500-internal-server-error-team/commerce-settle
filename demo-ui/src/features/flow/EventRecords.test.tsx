@@ -83,7 +83,7 @@ it('설정미확인과설정없음을구분하고설정도착시사용자ID입�
   expect(screen.getByText('settlement 설정 없음')).toBeTruthy();
 });
 
-it.each(['', 'not-a-uuid', Array.from({ length: 21 }, (_, n) => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`).join(',')])('잘못된ID목록은호출전에거절한다: %s', async input => {
+it.each(['not-a-uuid', Array.from({ length: 21 }, (_, n) => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`).join(',')])('잘못된ID목록은호출전에거절한다: %s', async input => {
   const fetch = mock(() => reply()); render(<EventRecords record={record()} info={info} onSelectEvent={() => {}} />);
   fireEvent.change(screen.getByLabelText('연결할 거래·이벤트 ID'), { target: { value: input } });
   fireEvent.click(screen.getByRole('button', { name: '실제 이벤트 기록 조회' }));
@@ -159,4 +159,25 @@ it('카드는합성참조를정하고간편결제는준비된지갑을쓰도록�
   render(<Field name="methodAccountRef" schema={{ type: 'string' }} value="" change={() => {}} />);
   expect(screen.getByText(/신용·체크카드는 시연용 참조값/)).toBeTruthy();
   expect(screen.getByText(/간편결제는 모의 금융 서버에 준비한 지갑/)).toBeTruthy();
+});
+
+
+it('거래가 없으면 UUID 입력 대신 선택할 작업을 안내하고 조회하지 않는다', () => {
+  const fetch = mock(() => reply()); const pick = vi.fn(); const start = vi.fn();
+  render(<EventRecords info={info} onPickRecord={pick} onStartTrade={start} onSelectEvent={() => {}} />);
+  expect(screen.getByText('확인할 거래를 먼저 선택하세요')).toBeTruthy();
+  expect((screen.getByRole('button', { name: '실제 이벤트 기록 조회' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByText('직접 ID로 찾기 · 고급').closest('details')!.open).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: '내 주문에서 선택' })); expect(start).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button', { name: '실행 기록에서 선택' })); expect(pick).toHaveBeenCalledOnce();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it('명시적으로 선택한 거래의 흐름은 ID 입력 없이 조회하고 선택이 바뀌면 초기화한다', async () => {
+  const fetch = mock(owner => reply(owner === 'commerce' ? [row(owner, 'OUTBOX', 'PENDING')] : []));
+  const { rerender } = render(<EventRecords record={record()} info={info} inspection={{ recordId: 'first', references: [ORDER], request: 1 }} onSelectEvent={() => {}} />);
+  await screen.findByText('PENDING'); expect(fetch).toHaveBeenCalledTimes(6);
+  expect(screen.getByText('직접 ID로 찾기 · 고급').closest('details')!.open).toBe(false);
+  rerender(<EventRecords record={record('second', OTHER)} info={info} inspection={{ recordId: 'first', references: [ORDER], request: 1 }} onSelectEvent={() => {}} />);
+  expect(screen.queryByText('PENDING')).toBeNull(); expect(fetch).toHaveBeenCalledTimes(6);
 });

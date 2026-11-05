@@ -1174,7 +1174,22 @@ pre {
 .flow-values pre { max-height:260px; overflow:auto; background:#f8f9fa; padding:12px; border-radius:6px; font-size:11px; line-height:1.7 }
 .event-flow { border-top:1px solid var(--line); margin-top:18px; padding-top:16px }
 .event-observation { margin-top:24px; padding-block:20px; border-top:1px solid var(--line); border-bottom:1px solid var(--line) }
+.reference-label { font-weight:600; font-size:14px }
+.reference-status { font-size:12px; color:var(--muted) }
+.reference-manual { margin-top:4px }
+.reference-manual summary { cursor:pointer; font-size:12px; color:var(--muted) }
+.reference-manual[open] { display:grid; gap:8px }
+.reference-manual label { margin-top:8px }
 .event-observation h3 { margin:0; font-size:18px }
+.event-linked { margin:16px 0; color:var(--muted) }
+.event-start { margin:16px 0; padding:16px; border-radius:8px; background:#f8f9fa }
+.event-start p { line-height:1.7; color:var(--muted) }
+.event-start button + button { margin-left:8px }
+.event-manual { margin:12px 0 }
+.event-manual summary { font-size:12px; color:var(--muted); cursor:pointer }
+.event-manual label { display:grid; gap:8px; margin-top:12px; font-size:13px }
+.journal-entry { border-bottom:1px solid var(--line) }
+.journal-flow { margin:0 12px 12px; font-size:12px }
 .event-query { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin:16px 0 }
 .event-query label { display:grid; gap:8px; flex:1; min-width:min(100%,280px); font-size:13px }
 .event-query input { font-family:ui-monospace,monospace; font-size:13px }

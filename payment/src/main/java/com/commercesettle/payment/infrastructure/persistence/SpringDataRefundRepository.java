@@ -12,6 +12,19 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 interface SpringDataRefundRepository extends JpaRepository<Refund, UUID> {
+  @Query(
+      value =
+          "SELECT r.* FROM payment.refunds r JOIN payment.payments p ON p.id=r.payment_id WHERE p.buyer_id=:buyerId ORDER BY r.created_at DESC,r.id DESC LIMIT :size OFFSET :offset",
+      nativeQuery = true)
+  java.util.List<Refund> findByBuyer(
+      @Param("buyerId") UUID buyerId, @Param("offset") long offset, @Param("size") int size);
+
+  @Query(
+      value =
+          "SELECT count(*) FROM payment.refunds r JOIN payment.payments p ON p.id=r.payment_id WHERE p.buyer_id=:buyerId",
+      nativeQuery = true)
+  long countByBuyer(@Param("buyerId") UUID buyerId);
+
   @Lock(LockModeType.PESSIMISTIC_WRITE)
   @Query("select r from Refund r where r.id = :id")
   Optional<Refund> findByIdForUpdate(@Param("id") UUID id);

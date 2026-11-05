@@ -1,11 +1,16 @@
 package com.commercesettle.payment.domain.repository;
 
 import com.commercesettle.payment.domain.model.Refund;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 public interface RefundRepository {
   Refund save(Refund refund);
+
+  List<Refund> findByBuyer(UUID buyerId, long offset, int size);
+
+  long countByBuyer(UUID buyerId);
 
   Optional<Refund> findById(UUID id);
 

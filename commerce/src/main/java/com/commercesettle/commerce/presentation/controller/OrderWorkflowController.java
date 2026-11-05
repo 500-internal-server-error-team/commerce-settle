@@ -235,6 +235,17 @@ public class OrderWorkflowController {
   }
 
   @ApiResponse(responseCode = "200", description = "조회 완료", useReturnTypeSchema = true)
+  @GetMapping("/api/refund-requests")
+  @Operation(operationId = "get_api_refund_requests", summary = "본인 취소·반품 요청 목록")
+  public OrderWorkflowResponses.Page<OrderWorkflowResponses.Refund> buyerRefunds(
+      @Parameter(hidden = true) AuthenticatedBuyer buyer,
+      @RequestParam(defaultValue = "0") @Min(0) int page,
+      @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
+    return OrderWorkflowResponses.Page.from(
+        refunds.buyerList(buyer.id(), page, size), OrderWorkflowResponses.Refund::from);
+  }
+
+  @ApiResponse(responseCode = "200", description = "조회 완료", useReturnTypeSchema = true)
   @GetMapping("/api/sellers/me/refund-requests")
   @Operation(operationId = "get_api_sellers_me_refund_requests", summary = "본인 판매 취소·반품 목록")
   public OrderWorkflowResponses.Page<OrderWorkflowResponses.Refund> sellerRefunds(
