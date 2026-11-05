@@ -1,4 +1,4 @@
-"""Real Compose: order -> payment -> settlement -> refund SAGA -> COMPLETED, and a Settlement outage.
+"""Real Compose: order -> payment -> settlement -> refund SAGA -> COMPLETED, a Settlement outage, and shipped returns.
 
 Owns a fresh Compose project and removes only its resources. Approval/refund use Finance Mock HTTP;
 Commerce, Payment and Settlement use real PostgreSQL/Kafka. Payouts/notifications are separate.
@@ -112,21 +112,26 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
 """)
 
         epoch = json.loads(compose("config", "--format", "json"))["services"]["gateway"]["environment"]["AUTH_SESSION_EPOCH"]
-        token = secrets.token_urlsafe(32)
 
         def redis(*args):
             return compose("exec", "-T", "redis", "sh", "-c", 'export REDISCLI_AUTH="$REDIS_PASSWORD"; exec redis-cli --raw "$@"',
                            "flow", *args)
 
-        seconds, micros = redis("TIME").split()
-        now = int(seconds) * 1000 + int(micros) // 1000
-        redis("HSET", f"commerce-settle:auth:session:{epoch}:{hashlib.sha256(token.encode()).hexdigest()}",
-              "actorKind", "BUYER", "actorId", buyer, "purpose", "SESSION", "authVersion", "0",
-              "issuedAt", str(now), "expiresAt", str(now + 3_600_000))
-        redis("HSET", f"commerce-settle:auth:subject:{epoch}:BUYER:{buyer}", "authVersion", "0", "state", "ACTIVE")
+        def session(kind, actor):
+            token = secrets.token_urlsafe(32)
+            seconds, micros = redis("TIME").split()
+            now = int(seconds) * 1000 + int(micros) // 1000
+            redis("HSET", f"commerce-settle:auth:session:{epoch}:{hashlib.sha256(token.encode()).hexdigest()}",
+                  "actorKind", kind, "actorId", actor, "purpose", "SESSION", "authVersion", "0",
+                  "issuedAt", str(now), "expiresAt", str(now + 3_600_000))
+            redis("HSET", f"commerce-settle:auth:subject:{epoch}:{kind}:{actor}", "authVersion", "0", "state", "ACTIVE")
+            return token
 
-        def request(method, path, body=None):
-            return gateway_json(base, method, path, body, token, {"Idempotency-Key": str(uuid.uuid4())})
+        token = session("BUYER", buyer)
+        seller_token = session("SELLER", seller)
+
+        def request(method, path, body=None, actor_token=None):
+            return gateway_json(base, method, path, body, actor_token or token, {"Idempotency-Key": str(uuid.uuid4())})
 
         status, address = request("POST", "/api/buyers/me/addresses", {
             "recipient": "test", "phone": "010-0000-0000", "postalCode": "00000",
@@ -178,12 +183,14 @@ from commerce.product_inventory where product_id='{product}'""")
 select r.status || '/' || s.step from payment.refunds r join payment.refund_sagas s on s.refund_id = r.id
 where r.payment_id='{payment}'""")
 
-        def completed(order_id, payment, expected_mileage=MILEAGE):
+        def completed(order_id, payment, expected_mileage=MILEAGE, stock="RESTORED"):
             until(lambda: refund_state(payment) == "COMPLETED/COMPLETED", "refund SAGA did not complete", 240)
             until(lambda: sql("commerce", f"select status from commerce.orders where id='{order_id}'") == "REFUNDED",
                   "Commerce did not restore the refunded order")
             # The order's own reservation ends restored, so a matching total cannot hide another order's stock.
-            assert reservation(order_id) == "RESTORED", reservation(order_id)
+            # A return's stock follows the seller's receipt, not the refund, so its caller checks it.
+            if stock is not None:
+                assert reservation(order_id) == stock, reservation(order_id)
             refund = sql("payment", f"select id || '/' || external_amount || '/' || mileage_amount from payment.refunds where payment_id='{payment}'")
             refund_id, external, mileage = refund.split("/")
             assert (int(external), int(mileage)) == (PRICE - expected_mileage, expected_mileage), refund
@@ -354,12 +361,16 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
             print(json.dumps({"httpRefundCases": "card,mixed,mileage-only,easy-pay,receipt,timeout,lookup-unavailable,crash,late-token,absent,processing,declined",
                               "processingAndAbsence": "explicit isolated DB fixtures; transport is real HTTP"}), flush=True)
 
+            worker_settings()
+            returns(paid_order, request, seller_token, completed, inventory, reservation, compose)
+
             for database in ["commerce", "payment", "settlement"]:
                 assert sql(database, f"select count(*) from {database}.inbox where status='REVIEW_REQUIRED'") == "0", database
                 until(lambda: sql(database, f"select count(*) from {database}.outbox where status<>'PUBLISHED'") == "0",
                       database + " outbox was not drained", 60)
             assert sql("payment", f"select balance || '/' || reserved_amount from payment.mileage_wallets where buyer_id='{buyer}'") == f"{10_000-MILEAGE}/0"
-            assert inventory() == "9/0/1", inventory()
+            # The declined refund keeps one sale and the disposed return leaves stock without restoring it.
+            assert inventory() == "8/0/1", inventory()
             print(json.dumps({"result": "PASS", "refunds": [first_refund, second_refund],
                               "externalRefund": PRICE - MILEAGE, "mileageRestored": MILEAGE,
                               "scope": "actual HTTP Finance Mock approval/refund and Commerce, Payment, Settlement over Kafka/Inbox/Outbox"}),
@@ -388,6 +399,56 @@ def scenarios(paid_order, cancel, refund_state, completed, inventory, reservatio
     compose("start", "settlement")
     second_refund = completed(second_order, second_payment)
     return first_refund, second_refund
+
+
+def returns(paid_order, request, seller_token, completed, inventory, reservation, compose):
+    def seller(method, path, body=None):
+        return request(method, path, body, seller_token)
+
+    def returned(order_id):
+        status, view = seller("GET", "/api/sellers/me/orders/" + order_id)
+        assert status == 200, (status, view)
+        status, order = seller("POST", f"/api/sellers/me/orders/{order_id}/shipments",
+                               {"expectedVersion": view["order"]["version"], "shipmentReference": "flow-" + order_id})
+        assert status == 200, (status, order)
+        status, order = request("GET", "/api/orders/" + order_id)
+        assert status == 200, (status, order)
+        status, refund = request("POST", f"/api/orders/{order_id}/refund-requests",
+                                 {"kind": "RETURN", "reason": "financial flow return", "expectedVersion": order["version"]})
+        assert status == 201 and refund["status"] == "PENDING_SELLER", (status, refund)
+        status, refund = seller("POST", f"/api/sellers/me/refund-requests/{refund['id']}/decision",
+                                {"decision": "APPROVE", "reason": "financial flow return", "expectedVersion": refund["version"]})
+        assert status == 202, (status, refund)
+        return refund["id"]
+
+    def receive(refund_id, resalable):
+        status, refund = request("GET", "/api/refund-requests/" + refund_id)
+        assert status == 200, (status, refund)
+        status, refund = seller("POST", f"/api/sellers/me/refund-requests/{refund_id}/receipt",
+                                {"expectedVersion": refund["version"], "resalable": resalable})
+        assert status == 200 and refund["receiptResalable"] is resalable, (status, refund)
+
+    # 3. A resalable return: the refund completes without touching stock; the later receipt restores it once.
+    before = inventory()
+    resalable_order, resalable_payment = paid_order()
+    resalable_refund = returned(resalable_order)
+    completed(resalable_order, resalable_payment, stock="CONSUMED")
+    receive(resalable_refund, True)
+    assert reservation(resalable_order) == "RESTORED", reservation(resalable_order)
+    assert inventory() == before, (inventory(), before)
+
+    # 4. An unsellable return received while Settlement holds the refund: the sale is removed, stock is not added,
+    # and the refund still completes afterwards.
+    disposed_order, disposed_payment = paid_order()
+    available, reserved, sold = map(int, inventory().split("/"))
+    compose("stop", "settlement")
+    disposed_refund = returned(disposed_order)
+    receive(disposed_refund, False)
+    assert reservation(disposed_order) == "DISPOSED", reservation(disposed_order)
+    assert inventory() == f"{available}/{reserved}/{sold - 1}", inventory()
+    compose("start", "settlement")
+    completed(disposed_order, disposed_payment, stock="DISPOSED")
+    print(json.dumps({"returns": "resalable after refund, disposed before refund"}), flush=True)
 
 
 if __name__ == "__main__":
