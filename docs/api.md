@@ -61,6 +61,16 @@ Commerce의 `/internal/coupon-issue-runs`에서 월간 회차 목록·단건을 
 
 ## 이벤트 연동
 
+### 실제 이벤트 기록 관측
+
+운영자는 `GET /internal/commerce-event-snapshot`, `/internal/payment-event-snapshot`, `/internal/settlement-event-snapshot`으로 각 소유 DB의 Outbox·Inbox 메타데이터를 읽습니다. Gateway에는 공개하지 않으며 데모 UI는 기존 Demo Control의 서비스별 운영자 자격 중계를 사용합니다. 일반 목록 API와 달리 한 번의 제한된 관측을 반환합니다.
+
+필수 `ids`는 UUID 1~20개의 쉼표 목록(`style=form`, `explode=false`)입니다. eventId·집계 ID·반영 결과 ID와 허용된 업무 참조(orderId·paymentId·refundId·requestId·payoutId·batchId)로 찾습니다. 계정·주소·상품 ID에 의한 전체 거래 조회는 제공하지 않습니다. 서비스는 최대3초의 읽기 트랜잭션에서 최대50개와 `truncated`·`limit`·KST `observedAt`을 반환하며 전체 건수·페이지를 주장하지 않습니다. raw_body와 payload는 제외합니다.
+
+같은 eventId로 발행 측과 소비자별 기록을 연결합니다. Outbox의 발행 파티션·offset과 Inbox의 최초 수신 위치는 재발행 때 달라질 수 있습니다. PUBLISHED는 저장된 발행 확인, RECEIVED·WAITING·APPLIED·REVIEW_REQUIRED는 수신·대기·이벤트 반영·확인 필요 상태이며 금융 최종 성공과 다릅니다. 조회 실패·자격 미설정·상한으로 미조회한 범위는 수신 기록 없음과 구분합니다. HTTP 응답과 서비스별 후속 관측은 하나의 원자적 추적이 아닙니다.
+
+### 이벤트 전달 계약
+
 비동기 업무 명령은 Kafka를 사용하고 같은 작업의 HTTP 명령을 중복 제공하지 않습니다. Envelope와 각 payload의 필수 필드는 OpenAPI components 및 x-event-contracts에 정의합니다. topic은 `commerce-settle.<producer>.v1`, consumer group은 `<소비자>.v1`; key는 아래 기준입니다. 발행자는 원래 eventId를 유지합니다. 소비자는 consumer+eventId와 도메인 업무 유일성을 함께 검사하고, 선행 결제/원장이 없으면 영속 대기로 남깁니다.
 
 | 이벤트 | 생산자 | 소비자 | key | payload |
