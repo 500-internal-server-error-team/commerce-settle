@@ -1772,6 +1772,8 @@ class OrderWorkflowIntegrationTest {
         jdbc.update("insert into commerce.test_benefit_calls values (?,?)", o.getId(), op);
     }
 
+    public void requireEventOpen(UUID event) {}
+
     public void reserve(Order o, Long version, Instant now) {
       record(o, "RESERVE");
     }

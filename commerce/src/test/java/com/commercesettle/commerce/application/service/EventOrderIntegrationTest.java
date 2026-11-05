@@ -128,6 +128,32 @@ class EventOrderIntegrationTest {
   }
 
   @Test
+  @DisplayName("남은 수량이 없으면 주소·주문을 만들기 전에 거절하고, 매진 전에 성공한 주문의 같은 키 재요청은 원래 주문을 돌려준다")
+  void rejectsSoldOutBeforeOrderWorkAndReplaysEarlierOrder() {
+    Sale sale = openSale(1);
+    Buyer first = buyer();
+    String key = key();
+    JsonNode created = actor("BUYER", first.id(), "/api/orders", order(sale, first), 201, key);
+    Buyer late = buyer();
+    Integer orders = jdbc.queryForObject("select count(*) from commerce.orders", Integer.class);
+
+    // 다른 구매자의 주소를 써도 이벤트 매진이 먼저 판정돼 주소 검사·주문 저장에 이르지 않는다.
+    JsonNode rejected =
+        exchange(
+            late.id(),
+            "/api/orders",
+            body(sale.productId(), sale.eventId(), sale.version(), first),
+            409);
+    JsonNode replayed = actor("BUYER", first.id(), "/api/orders", order(sale, first), 201, key);
+
+    assertThat(rejected.path("code").asText()).isEqualTo("EVENT_ADMISSION_CLOSED");
+    assertThat(replayed.path("id").asText()).isEqualTo(created.path("id").asText());
+    assertThat(jdbc.queryForObject("select count(*) from commerce.orders", Integer.class))
+        .isEqualTo(orders);
+    assertSlots(sale, 0, 1);
+  }
+
+  @Test
   @DisplayName("선착순 주문은 이벤트 가격으로 R을 잡고, 참여·확정이 이벤트 버전을 바꾸지 않아 같은 버전으로 계속 주문하며 남은 수량이 없으면 거절한다")
   void ordersAtEventPriceUntilNoRemaining() throws Exception {
     Sale sale = openSale(2);
@@ -399,6 +425,10 @@ class EventOrderIntegrationTest {
         expected);
   }
 
+  private ObjectNode order(Sale sale, Buyer buyer) {
+    return body(sale.productId(), sale.eventId(), sale.version(), buyer);
+  }
+
   private ObjectNode couponBody(Sale sale, Buyer buyer, UUID coupon, long expectedTotal) {
     return body(sale.productId(), sale.eventId(), sale.version(), buyer)
         .put("buyerCouponId", coupon.toString())
@@ -581,10 +611,16 @@ class EventOrderIntegrationTest {
   }
 
   private JsonNode actor(String kind, UUID id, String path, ObjectNode body, int expected) {
+    return actor(kind, id, path, body, expected, key());
+  }
+
+  private JsonNode actor(
+      String kind, UUID id, String path, ObjectNode body, int expected, String key) {
     HttpHeaders headers = new HttpHeaders();
     headers.setBearerAuth(GATEWAY);
     headers.set("X-Authenticated-Actor-Kind", kind);
     headers.set("X-Authenticated-Actor-Id", id.toString());
+    headers.set("Idempotency-Key", key);
     return send(path, body, expected, headers);
   }
 
@@ -596,7 +632,7 @@ class EventOrderIntegrationTest {
 
   private JsonNode send(String path, ObjectNode body, int expected, HttpHeaders headers) {
     headers.setContentType(MediaType.APPLICATION_JSON);
-    headers.set("Idempotency-Key", key());
+    if (!headers.containsKey("Idempotency-Key")) headers.set("Idempotency-Key", key());
     var response =
         http.exchange(
             path,
