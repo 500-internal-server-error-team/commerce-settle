@@ -69,6 +69,7 @@ it.each(['timer', 'focus'])('서버 만료 시각을 %s에서 반영하고 추�
   });
   expect(document.querySelector('header .live-dot')).toBeNull();
   expect(screen.queryByLabelText('로그인 완료')).toBeNull();
+  expect(screen.queryByText('로그인했습니다. 이 역할의 계정과 세션을 사용합니다.')).toBeNull();
   expect(screen.getByLabelText('세션 재로그인 안내').textContent).toContain('만료');
   expect(screen.getByText('브라우저 세션 없음')).toBeTruthy();
   expect(fetch).toHaveBeenCalledTimes(calls);
