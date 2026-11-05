@@ -244,6 +244,7 @@ small,.caption {
 .execution-readiness p { margin:0 }
 .execution-readiness button { margin-top:10px }
 .request-outcome {
+  margin-top:16px;
   display:flex;
   align-items:center;
   flex-wrap:wrap;
@@ -427,6 +428,9 @@ main {
   line-height:1.8;
   margin:0 0 18px
 }
+.notice > * + * { margin-top:10px }
+.learning-start > * + * { margin-top:12px }
+.result-section > .notice { margin:18px 0 0 }
 .error {
   color:var(--error)
 }
@@ -1187,3 +1191,15 @@ pre {
   .event-controls, .flow-values > div, .event-explanation { grid-template-columns:minmax(0,1fr) }
   .event-flow summary small { display:block; margin-left:15px }
 }
+
+.authentication-flow { margin-top:20px }
+.auth-flow-status { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px }
+.auth-flow-status > strong { font-size:15px }
+.auth-flow-stages { list-style:none; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; padding:0; margin:18px 0 }
+.auth-flow-stages li { display:flex; align-items:flex-start; gap:12px; border-top:1px solid var(--line); padding-top:14px }
+.auth-flow-stages li > span { color:var(--accent); font:12px ui-monospace,monospace; padding-top:3px }
+.auth-flow-stages strong { font-size:13px }
+.auth-flow-stages p { color:var(--muted); font-size:12px; line-height:1.8; margin-top:6px }
+.protected-flow { border-top:1px solid var(--line); margin-top:20px; padding-top:16px }
+.protected-flow summary { cursor:pointer; font-size:13px; font-weight:600; margin-bottom:14px }
+@media(max-width:760px) { .auth-flow-stages { grid-template-columns:minmax(0,1fr) } }

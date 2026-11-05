@@ -63,3 +63,42 @@ it('shows the Redis authentication branch only for protected user requests and s
   expect(screen.queryByRole('button', { name: /Gateway ·/ })).toBeNull();
   expect(screen.getByRole('button', { name: /Demo Control · 운영 요청 중계/ })).toBeTruthy();
 });
+
+
+it.each(['/api/buyer-sessions', '/api/seller-sessions'])('%s는 Commerce 세션 발급을 기본으로 보여주고 원문 토큰이나 추가 요청을 만들지 않는다', path => {
+  const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+  render(<DataFlow operation={operation(path, 'POST')} pending={false} authenticated />);
+  expect(screen.getByRole('button', { name: '로그인·인증' }).getAttribute('aria-pressed')).toBe('true');
+  expect(screen.getByRole('region', { name: '로그인·세션 인증 경로' })).toBeTruthy();
+  expect(screen.getByText('브라우저에 세션 보관 중')).toBeTruthy();
+  expect(screen.getByText('표시할 HTTP 응답 기록 없음')).toBeTruthy();
+  expect(screen.queryByText('수신한 응답 없음')).toBeNull();
+  const login = screen.getByRole('group', { name: '로그인과 세션 발급 설계' });
+  fireEvent.keyDown(within(login).getByRole('button', { name: 'Redis · 로그인 발급 경로' }), { key: 'Enter' });
+  expect(document.querySelector('.flow-detail')?.textContent).toContain('Commerce가 인증 게이트');
+  fireEvent.click(screen.getByText('로그인 이후 · 보호 요청의 인증 과정'));
+  const protectedFlow = screen.getByRole('group', { name: '보호 요청의 인증 설계' });
+  fireEvent.click(within(protectedFlow).getByRole('button', { name: 'Gateway · 보호 요청 인증 경로' }));
+  expect(document.querySelector('.flow-detail')?.textContent).toContain('Gateway가 승인한 Redis');
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it('로그인503과 세션보유 상태를 내부 실패 단계의 확정으로 바꾸지 않는다', () => {
+  const op = operation('/api/buyer-sessions', 'POST');
+  const record = journal(op, { ...values, body: { email: 'probe@example.test', password: 'private-input' } }, 'BUYER',
+    { status: 503, data: { code: 'COMMON_TEMPORARILY_UNAVAILABLE' }, elapsedMs: 166 });
+  render(<DataFlow operation={op} record={record} pending={false} />);
+  expect(screen.getByText('HTTP 503 · 166ms')).toBeTruthy();
+  expect(screen.getByText(/이 도식은 내부 실패 단계를 확정하지 않습니다/)).toBeTruthy();
+  expect(screen.getByText('브라우저 세션 없음')).toBeTruthy();
+  expect(screen.queryByText(/Redis에서 실패했습니다/)).toBeNull();
+  expect(document.body.textContent).not.toContain('private-input');
+});
+
+it('가입 요청과 별도의 로그인·보호 경로를 구분하고 기존 인프라 지도로 돌아갈 수 있다', () => {
+  render(<DataFlow operation={operation('/api/buyers', 'POST')} pending={false} />);
+  fireEvent.click(screen.getByRole('button', { name: '로그인·인증' }));
+  expect(screen.getByText(/현재 선택한 API의 실행 경로와는 구분/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '인프라 지도' }));
+  expect(screen.getByRole('group', { name: '요청의 인프라 지도' })).toBeTruthy();
+});

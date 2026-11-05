@@ -261,7 +261,7 @@ export function App() {
         {operation?.path.endsWith('/gauge') && current?.path === operation.path && <p className="caption">정상 조회 후 1초마다 갱신합니다. 입력 오류가 있으면 값을 고친 뒤 다시 실행하세요. 백그라운드에서는 중단합니다.</p>}
         {gauge.error && <p role="alert" className="notice error">게이지를 다시 확인하지 못했습니다. 아래는 마지막 관측값이며 현재 판매 가능 여부는 주문 요청에서 다시 검증합니다.</p>}
         {current ? <><p className="caption">{kst(current.at)} KST · <span title="요청 시작부터 프록시·서버 왕복과 응답 본문 수신·해석까지의 브라우저 관측 시간입니다. 서버 내부 처리시간이나 비동기 거래의 최종 완료시간이 아닙니다.">응답 확인 {current.elapsedMs}ms</span> · {roleLabels[current.actor as Role] ?? current.actor} · {current.status === 202 ? '접수 응답 · 최종 완료 아님' : '해당 요청의 응답'}</p>
-          <ResultView data={current.response as Json} select={selectRow} />
+          <ResultView data={current.response as Json} select={current.status >= 200 && current.status < 300 ? selectRow : undefined} />
           {current.status === 200 && current.path === '/api/products' && current.response && typeof current.response === 'object'
             && 'items' in current.response && Array.isArray(current.response.items) && current.response.items.length === 0 && <div className="learning-start">
               <p>판매 상품이 없습니다. 판매자로 로그인해 상품을 등록하고 판매 가능한 재고를 준비한 뒤 기본 구매로 돌아오세요.</p>
@@ -276,7 +276,7 @@ export function App() {
         <button className="secondary" disabled={pending} onClick={() => navigate('account', 'account.login', actor)}>가입한 {roleLabels[actor]}로 로그인</button>
       </div>)}
       </section></div>
-      {operation && <DataFlow key={`${role}:${session?.epoch ?? 0}`} operation={operation} record={pending ? undefined : current} pending={pending} info={info.data} />}
+      {operation && <DataFlow key={`${role}:${session?.epoch ?? 0}`} operation={operation} record={pending ? undefined : current} pending={pending} info={info.data} authenticated={!!session} />}
     </main>
     {panel && <aside className="inspector"><div className="inspector-tabs"><button className={panel === 'requests' ? 'active' : ''} onClick={() => setPanel('requests')}>요청·응답</button><button className={panel === 'experiments' ? 'active' : ''} onClick={() => setPanel('experiments')}>실험·모니터링</button><button aria-label="패널 닫기" onClick={() => setPanel(null)}><svg className="icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg></button></div>
       {panel === 'experiments' ? <Experiments info={info.data} /> : <><div className="journal-heading"><h2>실행 기록</h2><span>{history.length}건 · {roleLabels[role]}</span></div>
