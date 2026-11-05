@@ -65,49 +65,58 @@ const hints: Record<string, string> = {
 };
 export function Field({ name, schema: input, value, change, required = false, assistance }:
   { name: string; schema: Schema; value: Json; change: (v: Json) => void; required?: boolean; assistance?: ReactNode }) {
+  const [selectionError, setSelectionError] = useState('');
+  useEffect(() => setSelectionError(''), [value]);
   const base = resolve(input);
   const nullable = base.anyOf?.some(s => s.type === 'null');
   const schema = resolve(base.anyOf?.find(s => s.type !== 'null') ?? base);
-  // JSON required means the key must exist; a string may still allow an empty value.
+  const reference = schema.format === 'uuid' && !!assistance;
   const nonEmpty = required && (schema.type !== 'string' || (schema.minLength ?? 0) > 0 || !!schema.format || !!schema.enum && !schema.enum.includes(''));
   if (schema.type === 'object') return <fieldset className="object-fields"><legend>{labels[name] ?? name}</legend>
     <Fields schema={schema} value={value ?? {}} change={change} /></fieldset>;
-  return <div className="field"><label htmlFor={`field-${name}`}>
-    {labels[name.split('.').at(-1)!] ?? name}{nonEmpty && !nullable ? ' *' : ''}
-    <span className="field-name">{name}</span></label>
+  const label = <label htmlFor={`field-${name}`}>{labels[name.split('.').at(-1)!] ?? name}{nonEmpty && !nullable ? ' *' : ''}
+    <span className="field-name">{name}</span></label>;
+  const control = (value !== null || !nullable) && (schema.enum ? <Select id={`field-${name}`} aria-describedby={`hint-${name}`} value={String(value ?? '')} required={required} onChange={e => change(e.target.value)}>
+    <option value="">{required ? '값을 선택하세요' : '선택 안 함'}</option>
+    {schema.enum.map(v => <option key={String(v)} value={String(v)}>{codeLabel(String(v))}</option>)}</Select>
+    : schema.type === 'boolean' ? <Select id={`field-${name}`} aria-describedby={`hint-${name}`} value={String(value)} onChange={e => change(e.target.value === 'true')}>
+      <option value="false">아니요</option><option value="true">예</option></Select>
+    : schema.type === 'array' && schema.items && resolve(schema.items).enum ? <div className="array-options">{resolve(schema.items).enum!.map(item =>
+      <label key={String(item)}><input type="checkbox" checked={Array.isArray(value) && value.includes(item)} onChange={event => {
+        const values = Array.isArray(value) ? value : []; change(event.target.checked ? [...values, item] : values.filter(v => v !== item));
+      }} />{codeLabel(String(item))}</label>)}</div>
+    : schema.type === 'array' ? <ArrayInput name={name} value={value} change={change} />
+    : <input id={`field-${name}`} type={/password|token/i.test(name) ? 'password' : schema.type === 'integer' || schema.type === 'number' ? 'number' : schema.format === 'email' ? 'email' : schema.format === 'date' ? 'date' : schema.format === 'date-time' ? 'datetime-local' : 'text'}
+      aria-describedby={`hint-${name}`} value={schema.format === 'date-time' ? localTime(value) : String(value ?? '')} required={nonEmpty}
+      min={schema.minimum} max={schema.maximum} minLength={schema.minLength} maxLength={schema.maxLength}
+      placeholder={schema.format === 'date-time' ? 'YYYY-MM-DDThh:mm:ss+09:00' : schema.format === 'date' ? 'YYYY-MM-DD' : schema.format === 'uuid' ? '이미 알고 있는 ID' : ''}
+      step={schema.type === 'integer' || schema.format === 'date-time' ? 1 : schema.type === 'number' ? 'any' : undefined}
+      autoComplete={/password|token/i.test(name) ? 'off' : undefined}
+      onInvalid={e => { if (reference && !e.currentTarget.closest('details')?.open) { e.preventDefault(); setSelectionError('먼저 목록을 불러와 대상을 선택하세요.');
+        e.currentTarget.closest('.field')?.querySelector<HTMLButtonElement>('.reference-picker button')?.focus(); } }}
+      onChange={e => {
+        if (schema.format === 'date-time') { change(e.target.value ? new Date(e.target.value).toISOString() : ''); return; }
+        const number = Number(e.target.value);
+        e.target.setCustomValidity(schema.type === 'integer' && e.target.value !== '' && !Number.isSafeInteger(number)
+          ? '정확하게 표현할 수 있는 정수 범위로 입력하세요.' : '');
+        change((schema.type === 'integer' || schema.type === 'number') && e.target.value !== '' ? number : e.target.value);
+      }} />);
+  return <div className="field">
+    {reference ? <div className="reference-label">{(labels[name] ?? name).replace(/ ID$/, '')} 선택{nonEmpty && !nullable ? ' *' : ''}</div> : label}
     {nullable && <label className="null-choice"><input type="checkbox" aria-label={`${labels[name] ?? name} 사용 안 함`} checked={value === null}
       onChange={e => change(e.target.checked ? null : defaults(schema))} />사용 안 함</label>}
-    {(value !== null || !nullable) && (schema.enum ? <Select id={`field-${name}`} aria-describedby={`hint-${name}`} value={String(value ?? '')} required={required} onChange={e => change(e.target.value)}>
-      <option value="">{required ? '값을 선택하세요' : '선택 안 함'}</option>
-      {schema.enum.map(v => <option key={String(v)} value={String(v)}>{codeLabel(String(v))}</option>)}</Select>
-      : schema.type === 'boolean' ? <Select id={`field-${name}`} aria-describedby={`hint-${name}`} value={String(value)} onChange={e => change(e.target.value === 'true')}>
-        <option value="false">아니요</option><option value="true">예</option></Select>
-      : schema.type === 'array' && schema.items && resolve(schema.items).enum ? <div className="array-options">{resolve(schema.items).enum!.map(item =>
-        <label key={String(item)}><input type="checkbox" checked={Array.isArray(value) && value.includes(item)} onChange={event => {
-          const values = Array.isArray(value) ? value : []; change(event.target.checked ? [...values, item] : values.filter(v => v !== item));
-        }} />{codeLabel(String(item))}</label>)}</div>
-      : schema.type === 'array' ? <ArrayInput name={name} value={value} change={change} />
-      : <input id={`field-${name}`} type={/password|token/i.test(name) ? 'password' : schema.type === 'integer' || schema.type === 'number' ? 'number' : schema.format === 'email' ? 'email' : schema.format === 'date' ? 'date' : schema.format === 'date-time' ? 'datetime-local' : 'text'}
-        aria-describedby={`hint-${name}`}
-        value={schema.format === 'date-time' ? localTime(value) : String(value ?? '')} required={nonEmpty} min={schema.minimum} max={schema.maximum} minLength={schema.minLength} maxLength={schema.maxLength}
-        placeholder={schema.format === 'date-time' ? 'YYYY-MM-DDThh:mm:ss+09:00' : schema.format === 'date' ? 'YYYY-MM-DD' : schema.format === 'uuid' ? '실제 목록에서 선택하거나 응답의 ID 입력' : ''}
-        step={schema.type === 'integer' || schema.format === 'date-time' ? 1 : schema.type === 'number' ? 'any' : undefined}
-        autoComplete={/password|token/i.test(name) ? 'off' : undefined}
-        onChange={e => {
-          if (schema.format === 'date-time') { change(e.target.value ? new Date(e.target.value).toISOString() : ''); return; }
-          const number = Number(e.target.value);
-          e.target.setCustomValidity(schema.type === 'integer' && e.target.value !== '' && !Number.isSafeInteger(number)
-            ? '정확하게 표현할 수 있는 정수 범위로 입력하세요.' : '');
-          change((schema.type === 'integer' || schema.type === 'number') && e.target.value !== '' ? number : e.target.value);
-        }} />)}
-    <small id={`hint-${name}`} className="field-hint">{hints[name] ?? schema.description ?? (schema.format === 'uuid'
-      ? '해당 항목의 생성·조회 응답에서 확인한 ID를 사용하세요.' : '명세의 조건에 맞는 값을 직접 입력하거나 선택하세요.')}
+    {reference ? <>{assistance}<span className="reference-status">{value ? '대상이 입력에 연결됐습니다.' : value === null && nullable ? '사용하지 않습니다.' : '목록에서 대상을 선택하세요.'}</span>
+      {selectionError && <small role="alert" className="error">{selectionError}</small>}
+      <details className="reference-manual"><summary>직접 ID 입력 · 고급</summary>{label}{control}</details></> : control}
+    <small id={`hint-${name}`} className="field-hint">{reference ? '목록에서 선택하면 필요한 ID가 자동으로 채워집니다.' : hints[name] ?? schema.description ?? (schema.format === 'uuid'
+      ? '선행 작업의 결과에서 이 항목을 연결하세요. 직접 ID 입력은 이미 값을 알고 있을 때 사용합니다.' : '명세의 조건에 맞는 값을 직접 입력하거나 선택하세요.')}
       {schema.minimum !== undefined && ` 최소 ${schema.minimum.toLocaleString('ko-KR')}.`}{schema.maximum !== undefined && ` 최대 ${schema.maximum.toLocaleString('ko-KR')}.`}
       {schema.minLength !== undefined && schema.minLength > 0 && ` ${schema.minLength}자 이상.`}{schema.maxLength !== undefined && ` ${schema.maxLength}자 이하.`}
       {schema.format === 'date-time' && ` 달력은 브라우저 시간대(${Intl.DateTimeFormat().resolvedOptions().timeZone})로 입력하며 서버에는 시간대를 포함해 보냅니다.`}</small>
-    {assistance}
+    {!reference && assistance}
   </div>;
 }
+
 function localTime(value: Json): string {
   if (typeof value !== 'string' || !value) return '';
   const date = new Date(value); if (!Number.isFinite(date.getTime())) return '';

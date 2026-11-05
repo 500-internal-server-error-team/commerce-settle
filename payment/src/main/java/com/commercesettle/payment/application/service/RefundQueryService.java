@@ -1,9 +1,12 @@
 package com.commercesettle.payment.application.service;
 
 import com.commercesettle.payment.application.dto.RefundView;
+import com.commercesettle.payment.domain.model.Refund;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
 import com.commercesettle.payment.domain.repository.RefundRepository;
 import com.commercesettle.payment.domain.repository.RefundSagaRepository;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -21,6 +24,43 @@ public class RefundQueryService {
     this.refunds = refunds;
     this.sagas = sagas;
     this.payments = payments;
+  }
+
+  public record Summary(
+      UUID id,
+      UUID paymentId,
+      long externalAmount,
+      long mileageAmount,
+      String status,
+      long version,
+      Instant createdAt) {
+    static Summary from(Refund r) {
+      return new Summary(
+          r.getId(),
+          r.getPaymentId(),
+          r.getExternalAmount(),
+          r.getMileageAmount(),
+          r.getStatus().name(),
+          r.getVersion(),
+          r.getCreatedAt());
+    }
+  }
+
+  public record Page(List<Summary> items, int page, int size, long totalElements) {
+    public int totalPages() {
+      return (int)
+          Math.min(Integer.MAX_VALUE, totalElements == 0 ? 0 : (totalElements - 1) / size + 1);
+    }
+  }
+
+  @Transactional(readOnly = true)
+  public Page list(UUID buyerId, int page, int size) {
+    if (page < 0 || size < 1 || size > 100) throw new IllegalArgumentException("Invalid page");
+    return new Page(
+        refunds.findByBuyer(buyerId, (long) page * size, size).stream().map(Summary::from).toList(),
+        page,
+        size,
+        refunds.countByBuyer(buyerId));
   }
 
   @Transactional(readOnly = true)

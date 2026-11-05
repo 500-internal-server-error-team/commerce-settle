@@ -3,6 +3,7 @@ import { operations } from '../../shared/api/contract';
 
 export const owners = ['commerce', 'payment', 'settlement'] as const;
 export type Owner = typeof owners[number];
+export interface FlowInspection { recordId: string; references: string[]; request: number }
 export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const referenceKeys = new Set(['orderId', 'paymentId', 'refundId', 'requestId', 'payoutId', 'batchId', 'eventId']);
 export interface EventRecord {

@@ -78,6 +78,43 @@ class RefundControllerTest {
     verifyNoInteractions(refunds);
   }
 
+  @Test
+  @DisplayName("본인 환불 목록의 요약과 KST를 반환하고 권한·페이지 범위를 검사한다")
+  void listsOwnedSummaries() throws Exception {
+    given(refunds.list(BUYER, 0, 20))
+        .willReturn(
+            new RefundQueryService.Page(
+                java.util.List.of(
+                    new RefundQueryService.Summary(
+                        REFUND,
+                        PAYMENT,
+                        8000,
+                        2000,
+                        "RESERVING",
+                        0,
+                        Instant.parse("2026-11-02T00:00:00Z"))),
+                0,
+                20,
+                1));
+    mvc.perform(asBuyer(get("/api/refunds")))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.items[0].id").value(REFUND.toString()))
+        .andExpect(jsonPath("$.items[0].createdAt").value("2026-11-02T09:00:00+09:00"))
+        .andExpect(jsonPath("$.items[0].sagaStep").doesNotExist())
+        .andExpect(jsonPath("$.totalElements").value(1));
+    mvc.perform(asBuyer(get("/api/refunds").param("page", "-1")))
+        .andExpect(status().isBadRequest());
+    mvc.perform(asBuyer(get("/api/refunds").param("size", "0"))).andExpect(status().isBadRequest());
+    mvc.perform(asBuyer(get("/api/refunds").param("size", "101")))
+        .andExpect(status().isBadRequest());
+    mvc.perform(get("/api/refunds")).andExpect(status().isUnauthorized());
+    mvc.perform(
+            get("/api/refunds")
+                .header("X-Authenticated-Actor-Kind", "SELLER")
+                .header("X-Authenticated-Actor-Id", BUYER.toString()))
+        .andExpect(status().isForbidden());
+  }
+
   private static MockHttpServletRequestBuilder asBuyer(MockHttpServletRequestBuilder request) {
     return request
         .header("X-Authenticated-Actor-Kind", "BUYER")

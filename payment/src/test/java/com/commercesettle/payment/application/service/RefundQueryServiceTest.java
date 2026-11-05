@@ -29,6 +29,22 @@ class RefundQueryServiceTest {
   private final RefundQueryService service = new RefundQueryService(refunds, sagas, payments);
 
   @Test
+  @DisplayName("목록은 SAGA와 결제 단건을 반복 조회하지 않고 long offset으로 페이지를 읽는다")
+  void listsWithoutPerItemQueries() {
+    UUID buyer = UUID.randomUUID();
+    given(refunds.findByBuyer(buyer, (long) Integer.MAX_VALUE * 100, 100))
+        .willReturn(java.util.List.of());
+    given(refunds.countByBuyer(buyer)).willReturn(2L);
+    var page = service.list(buyer, Integer.MAX_VALUE, 100);
+    assertThat(page.items()).isEmpty();
+    assertThat(page.totalElements()).isEqualTo(2);
+    org.mockito.Mockito.verify(refunds).findByBuyer(buyer, (long) Integer.MAX_VALUE * 100, 100);
+    org.mockito.Mockito.verifyNoInteractions(payments, sagas);
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.list(buyer, -1, 20))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
   @DisplayName("본인 결제의 환불이면 상태와 SAGA 단계를 함께 돌려준다")
   void returnsOwnRefundWithSagaStep() {
     Payment payment = confirmed();

@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { operations } from '../../shared/api/contract';
 import { OperationForm } from './OperationForm';
+import { referenceSource } from './ReferencePicker';
 import { mergeResponseContext, responseContext } from './responseContext';
 
 beforeEach(() => vi.stubEnv('DEV', false));
@@ -269,4 +270,46 @@ it('주문 제출 전에 시작한 견적이 늦게 도착해도 보낸 금액·
   expect((screen.getByLabelText(/확인한 상품 버전/) as HTMLInputElement).value).toBe('3');
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
   expect(run.mock.calls[1][0]).toEqual(run.mock.calls[0][0]);
+});
+
+it('결제는 UUID 없이 금액·상태·시각 목록에서 고르고 필수 미선택은 보이는 선택기로 안내한다', async () => {
+  const id = '20000000-0000-4000-8000-000000000001'; const run = vi.fn();
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ upstreamStatus: 200, data: { items: [{ id,
+    status: 'CONFIRMED', totalAmount: 10000, createdAt: '2026-11-05T12:00:00+09:00' }], totalPages: 1 } }))));
+  render(<OperationForm operation={operations.find(op => op.id === 'get_api_payments_paymentId')!} context={{}} pending={false} allowed run={run} />);
+  const input = screen.getByLabelText(/결제 ID.*paymentId/) as HTMLInputElement;
+  expect(input.closest('details')!.open).toBe(false);
+  const form = screen.getByRole('form', { name: 'API 요청' }) as HTMLFormElement;
+  expect(form.checkValidity()).toBe(false);
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', '먼저 목록을 불러와 대상을 선택하세요.');
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: '결제 목록 불러오기' }));
+  fireEvent.click(screen.getByRole('button', { name: '결제 목록 불러오기' }));
+  const option = await screen.findByRole('option', { name: /10,000원/ }); expect(option.textContent).not.toContain(id);
+  fireEvent.change(screen.getByRole('combobox', { name: '결제 선택' }), { target: { value: id } });
+  expect(form.checkValidity()).toBe(true); fireEvent.submit(form);
+  expect(run.mock.calls[0][0].pathParameters.paymentId).toBe(id);
+});
+
+it.each([['get_api_refund_requests_requestId', '반품 요청', 'get_api_refund_requests'], ['get_api_refunds_refundId', '환불', 'get_api_refunds']])(
+  '%s는 본인 목록에서 기존 거래를 찾는다', async (operation, title, source) => {
+    const id = '20000000-0000-4000-8000-000000000001'; const run = vi.fn();
+    const fetch = vi.fn(async (_url: string, _options: RequestInit) => new Response(JSON.stringify({ upstreamStatus: 200, data: { items: [{ id, status: 'COMPLETED' }], totalPages: 1 } }))); vi.stubGlobal('fetch', fetch);
+    render(<OperationForm operation={operations.find(op => op.id === operation)!} context={{}} role="BUYER" token="buyer-token" pending={false} allowed run={run} />);
+    fireEvent.click(screen.getByRole('button', { name: `${title} 목록 불러오기` }));
+    await screen.findByRole('option', { name: /완료/ });
+    expect(JSON.parse(String(fetch.mock.calls[0][1].body)).operationId).toBe(source);
+    fireEvent.change(screen.getByRole('combobox', { name: `${title} 선택` }), { target: { value: id } });
+    fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+    expect(Object.values(run.mock.calls[0][0].pathParameters)).toContain(id);
+  });
+
+
+it('운영 ID는 소유 서비스와 자원 종류를 섞어 선택하지 않는다', () => {
+  const payment = operations.find(op => op.path === '/internal/payment-quarantines/{quarantineId}/replays')!;
+  expect(referenceSource('quarantineId', payment, 'OPERATOR')?.operation.path).toBe('/internal/payment-quarantines');
+  const rejudge = operations.find(op => op.path === '/internal/settlement-inbox-rejudgements/{runId}')!;
+  expect(referenceSource('runId', rejudge, 'OPERATOR')?.operation.path).toBe('/internal/settlement-inbox-rejudgements');
+  const reconciliation = operations.find(op => op.path === '/internal/settlement-reconciliations/{runId}')!;
+  expect(referenceSource('runId', reconciliation, 'OPERATOR')).toBeUndefined();
+  expect(referenceSource('deliveryId', { ...payment, path: '/internal/payment-quarantine-deliveries/{deliveryId}/resumes' }, 'OPERATOR')).toBeUndefined();
 });

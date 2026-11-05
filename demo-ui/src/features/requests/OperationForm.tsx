@@ -5,9 +5,10 @@ import { Field, Fields } from '../../shared/ui/SchemaFields';
 import { ReferencePicker, referenceSource } from './ReferencePicker';
 import { responseContext } from './responseContext';
 
-export function OperationForm({ operation, context, pending, allowed, run, role = 'BUYER', token, loginValues, recoveryValues, onUnauthorized }:
+export function OperationForm({ operation, context, pending, allowed, run, role = 'BUYER', token, loginValues, recoveryValues, accounts, onUnauthorized }:
   { operation: Operation; context: Record<string, Json>; pending: boolean; allowed: boolean; run: (v: RequestValues) => void; role?: string; token?: string;
-    loginValues?: { email: string; password: string }; recoveryValues?: RequestValues; onUnauthorized?: (token: string) => void }) {
+    loginValues?: { email: string; password: string }; recoveryValues?: RequestValues;
+    accounts?: Partial<Record<'BUYER' | 'SELLER', { id: string; name: string }>>; onUnauthorized?: (token: string) => void }) {
   const [body, setBody] = useState<Json>(operation.schema ? defaults(operation.schema) : null);
   const [pathParameters, setPath] = useState<Record<string, string>>({});
   const [query, setQuery] = useState<Record<string, string>>({});
@@ -76,8 +77,17 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
     setBody(next);
   }
   function assistance(name: string) {
+    const account = name === 'buyerId' ? accounts?.BUYER : name === 'sellerId' ? accounts?.SELLER : undefined;
+    if (account) return <div className="reference-picker"><button type="button" className="secondary" disabled={!allowed}
+      onClick={() => {
+        if (operation.parameters.some(p => p.in === 'path' && p.name === name)) setPath(old => ({ ...old, [name]: account.id }));
+        else if (operation.parameters.some(p => p.in === 'query' && p.name === name)) setQuery(old => ({ ...old, [name]: account.id }));
+        else changeBody({ ...object, [name]: account.id });
+      }}>이 탭의 {name === 'buyerId' ? '구매자' : '판매자'} {account.name} 선택</button></div>;
     const source = referenceSource(name, operation, role);
-    return source && <ReferencePicker source={source} token={token} onUnauthorized={onUnauthorized} enabled={allowed || source.operation.actor === 'PUBLIC'} choose={(row, sourceOperation) => {
+    const currentValue = operation.parameters.some(p => p.in === 'path' && p.name === name) ? pathParameters[name]
+      : operation.parameters.some(p => p.in === 'query' && p.name === name) ? query[name] : object[name];
+    return source && <ReferencePicker source={source} value={typeof currentValue === 'string' ? currentValue : ''} token={token} onUnauthorized={onUnauthorized} enabled={allowed || source.operation.actor === 'PUBLIC'} choose={(row, sourceOperation) => {
       const values = responseContext(row, sourceOperation.path);
       const id = row.id; if (typeof id !== 'string') return;
       const pathField = operation.parameters.some(p => p.in === 'path' && p.name === name);

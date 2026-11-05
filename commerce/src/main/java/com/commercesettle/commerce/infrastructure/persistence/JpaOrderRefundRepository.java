@@ -38,6 +38,14 @@ class JpaOrderRefundRepository implements OrderRefundRepository {
     return requests.findByRefundId(id);
   }
 
+  public PageResult<OrderRefundRequest> findByBuyer(UUID buyer, int page, int size) {
+    return new PageResult<>(
+        requests.findByBuyer(buyer, (long) page * size, size),
+        page,
+        size,
+        requests.countByBuyerId(buyer));
+  }
+
   public PageResult<OrderRefundRequest> findBySeller(UUID seller, int page, int size) {
     return new PageResult<>(
         requests.findBySeller(seller, (long) page * size, size),

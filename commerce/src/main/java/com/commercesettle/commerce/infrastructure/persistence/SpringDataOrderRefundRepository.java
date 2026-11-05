@@ -22,4 +22,15 @@ interface SpringDataOrderRefundRepository extends JpaRepository<OrderRefundReque
       @org.springframework.data.repository.query.Param("size") int size);
 
   long countBySellerId(UUID sellerId);
+
+  @org.springframework.data.jpa.repository.Query(
+      value =
+          "SELECT r.* FROM commerce.order_refund_requests r WHERE buyer_id=:buyer ORDER BY created_at DESC,id DESC LIMIT :size OFFSET :offset",
+      nativeQuery = true)
+  java.util.List<OrderRefundRequest> findByBuyer(
+      @org.springframework.data.repository.query.Param("buyer") UUID buyer,
+      @org.springframework.data.repository.query.Param("offset") long offset,
+      @org.springframework.data.repository.query.Param("size") int size);
+
+  long countByBuyerId(UUID buyerId);
 }

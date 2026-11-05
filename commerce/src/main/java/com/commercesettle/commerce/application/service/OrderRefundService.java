@@ -124,6 +124,15 @@ public class OrderRefundService {
   }
 
   @Transactional(readOnly = true)
+  public PageResult<OrderRefundView> buyerList(UUID buyer, int page, int size) {
+    workflow.requireAccount(ActorKind.BUYER, buyer);
+    if (page < 0 || size < 1 || size > 100) throw OrderWorkflowService.invalid("page");
+    var p = requests.findByBuyer(buyer, page, size);
+    return new PageResult<>(
+        p.items().stream().map(OrderRefundView::from).toList(), page, size, p.totalElements());
+  }
+
+  @Transactional(readOnly = true)
   public PageResult<OrderRefundView> sellerList(UUID seller, int page, int size) {
     workflow.requireAccount(ActorKind.SELLER, seller);
     if (page < 0 || size < 1 || size > 100) throw OrderWorkflowService.invalid("page");

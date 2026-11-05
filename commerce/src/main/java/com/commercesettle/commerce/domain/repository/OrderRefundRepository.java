@@ -13,5 +13,7 @@ public interface OrderRefundRepository {
 
   Optional<OrderRefundRequest> findByRefundId(UUID refundId);
 
+  PageResult<OrderRefundRequest> findByBuyer(UUID buyer, int page, int size);
+
   PageResult<OrderRefundRequest> findBySeller(UUID seller, int page, int size);
 }

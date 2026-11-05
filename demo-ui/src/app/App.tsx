@@ -9,7 +9,7 @@ import { useEventGauge } from '../features/requests/useEventGauge';
 import { ResultView } from '../features/results/ResultView';
 import { Experiments, type DemoInfo } from '../features/experiments/Experiments';
 import { DataFlow } from '../features/flow/DataFlow';
-import type { ResultTarget } from '../features/flow/eventRecords';
+import { requestReferences, type ResultTarget, type FlowInspection } from '../features/flow/eventRecords';
 import { Select, ArrowIcon } from '../shared/ui/Select';
 import { actorLabel } from '../shared/ui/labels';
 
@@ -54,7 +54,7 @@ export function App() {
   const [context, setContext] = useState<Partial<Record<Role, Record<string, Json>>>>({});
   const [events, setEvents] = useState<Partial<Record<Role, Execution[]>>>({});
   const [recoveries, setRecoveries] = useState<Partial<Record<Role, Record<string, Recovery>>>>({});
-  const [selected, setSelected] = useState<string>(); const [pending, setPending] = useState(false);
+  const [selected, setSelected] = useState<string | FlowInspection>(); const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState(''); const [panel, setPanel] = useState<'requests' | 'experiments' | null>(null);
   const abort = useRef<AbortController | null>(null); const client = useQueryClient();
   const activeMutation = useRef<{ controller: AbortController; actor: Role; saved: Recovery } | null>(null);
@@ -65,7 +65,7 @@ export function App() {
   const steps = scenario ? workflow(scenario, role) : [];
   const visibleActions = actions(group, [operationId, ...steps.flatMap(step => step.operation ? [step.operation.id] : [])]);
   const operation = operations.find(o => o.id === operationId) ?? visibleActions[0];
-  const history = events[role] ?? []; const record = history.find(e => e.id === selected);
+  const history = events[role] ?? []; const record = history.find(e => e.id === (typeof selected === 'string' ? selected : selected?.recordId));
   const session = sessions[role];
   const authenticated = sessionActive(session); const token = authenticated ? session?.token : undefined;
   const onUnauthorized = (rejected: string) => invalidateSession(role, rejected, session?.epoch);
@@ -88,6 +88,12 @@ export function App() {
     if (mutationPending) {
       setNotice('현재 변경 요청의 응답을 확인 중입니다. 입력과 재요청 키를 유지하도록 응답을 확인한 뒤 다른 작업을 선택하세요.');
       return false;
+    }
+    if (current && current.actor === preferredRole && current.status >= 200 && current.status < 300
+      && current.response && typeof current.response === 'object' && !Array.isArray(current.response)) {
+      const sent = current.request as RequestValues;
+      const connected = responseContext(current.response as Record<string, Json>, current.path, sent.pathParameters, sent.body);
+      if (Object.keys(connected).length) setContext(old => ({ ...old, [preferredRole]: mergeResponseContext(old[preferredRole] ?? {}, connected) }));
     }
     abort.current?.abort(); setPending(false); setSelected(undefined); setNotice('');
     const task = operations.find(op => op.id === id);
@@ -230,6 +236,20 @@ export function App() {
       : 'Inbox의 반영 결과 ID를 연결했습니다. 해당 거래 소유 계정으로 로그인한 뒤 조회를 실행하세요.');
     window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }));
   }
+  function inspectFlow(event: Execution, row?: Record<string, Json>) {
+    if (pending) { setNotice('현재 요청의 응답을 확인한 뒤 흐름을 선택하세요.'); return; }
+    const references = requestReferences(row ? { ...event, request: {}, response: row } : event);
+    if (!references.length) return;
+    setSelected(old => ({ recordId: event.id, references, request: (typeof old === 'object' ? old.request : 0) + 1 })); setPanel(null);
+    window.requestAnimationFrame(() => { const target = document.getElementById('data-flow');
+      if (target) window.scrollTo({ top: target.getBoundingClientRect().top + window.scrollY - 24, behavior: 'smooth' }); });
+  }
+  function chooseOrder() {
+    if (selectTask(role === 'SELLER' ? 'get_api_sellers_me_orders' : 'get_api_orders', -1, role === 'SELLER' ? 'SELLER' : 'BUYER')) {
+      setGroup(role === 'SELLER' ? 'sell' : 'history'); setCase('');
+      window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }));
+    }
+  }
   return <div className={`shell ${panel ? 'with-panel' : ''}`}>
     <SessionExpiry sessions={sessions} invalidate={invalidateSession} />
     <header className="topbar"><a className="brand" href="#" onClick={e => { e.preventDefault(); navigate('buy'); }}>
@@ -309,7 +329,9 @@ export function App() {
         </div>}
         {operation && <OperationForm key={`${role}:${operation.id}:${session?.epoch ?? 0}`} operation={operation} context={context[role] ?? EMPTY_CONTEXT} pending={pending} allowed={allowed} run={run} role={role} token={token} onUnauthorized={onUnauthorized}
           loginValues={operation.path === (role === 'SELLER' ? '/api/seller-sessions' : '/api/buyer-sessions') ? signupLogins[role] : undefined}
-          recoveryValues={recoveries[role]?.[operation.id]?.values} />}
+          recoveryValues={recoveries[role]?.[operation.id]?.values}
+          accounts={{ BUYER: sessions.BUYER ? { id: sessions.BUYER.accountId, name: sessions.BUYER.name } : undefined,
+            SELLER: sessions.SELLER ? { id: sessions.SELLER.accountId, name: sessions.SELLER.name } : undefined }} />}
         {!pending && current && current.path === operation?.path && current.method === operation?.method && <div className="request-outcome" aria-label="요청 응답 확인">
           <strong className={current.status < 300 ? 'http-ok' : 'http-error'}>HTTP {current.status} · {current.elapsedMs}ms</strong>
           <span>{current.status === 202 ? '마지막 응답은 접수입니다. 최종 완료는 거래 조회로 확인하세요.' : '마지막으로 받은 응답입니다.'}</span><a href="#server-result">받은 결과 보기</a>
@@ -320,7 +342,9 @@ export function App() {
         {operation?.path.endsWith('/gauge') && current?.path === operation.path && <p className="caption">정상 조회 후 1초마다 갱신합니다. 입력 오류가 있으면 값을 고친 뒤 다시 실행하세요. 백그라운드에서는 중단합니다.</p>}
         {gauge.error && <p role="alert" className="notice error">게이지를 다시 확인하지 못했습니다. 아래는 마지막 관측값이며 현재 판매 가능 여부는 주문 요청에서 다시 검증합니다.</p>}
         {current ? <><p className="caption">{kst(current.at)} KST · <span title="요청 시작부터 프록시·서버 왕복과 응답 본문 수신·해석까지의 브라우저 관측 시간입니다. 서버 내부 처리시간이나 비동기 거래의 최종 완료시간이 아닙니다.">응답 확인 {current.elapsedMs}ms</span> · {roleLabels[current.actor as Role] ?? current.actor} · {current.status === 202 ? '접수 응답 · 최종 완료 아님' : '해당 요청의 응답'}</p>
-          <ResultView data={current.response as Json} select={current.status >= 200 && current.status < 300 ? selectRow : undefined} />
+          <ResultView data={current.response as Json} select={current.status >= 200 && current.status < 300 ? selectRow : undefined}
+            inspect={!pending && info.data && current.status >= 200 && current.status < 300 ? row => inspectFlow(current, row) : undefined}
+            canInspect={row => requestReferences({ ...current, request: {}, response: row }).length > 0} />
           {current.status === 200 && current.path === '/api/products' && current.response && typeof current.response === 'object'
             && 'items' in current.response && Array.isArray(current.response.items) && current.response.items.length === 0 && <div className="learning-start">
               <p>판매 상품이 없습니다. 판매자로 로그인해 상품을 등록하고 판매 가능한 재고를 준비한 뒤 기본 구매로 돌아오세요.</p>
@@ -336,12 +360,14 @@ export function App() {
         <button className="secondary" disabled={pending} onClick={() => navigate('account', 'account.login', actor)}>가입한 {roleLabels[actor]}로 로그인</button>
       </div>)}
       </section></div>
-      {operation && <DataFlow key={`${role}:${session?.epoch ?? 0}`} operation={operation} record={pending ? undefined : current} pending={pending} info={info.data} authenticated={authenticated} onInspectResult={inspectEventResult} />}
+      {operation && <DataFlow key={`${role}:${session?.epoch ?? 0}`} operation={operation} record={pending ? undefined : current} pending={pending} info={info.data} authenticated={authenticated}
+        inspection={typeof selected === 'object' ? selected : undefined} onPickRecord={() => setPanel('requests')} onStartTrade={chooseOrder} onInspectResult={inspectEventResult} />}
     </main>
     {panel && <aside className="inspector"><div className="inspector-tabs"><button className={panel === 'requests' ? 'active' : ''} onClick={() => setPanel('requests')}>요청·응답</button><button className={panel === 'experiments' ? 'active' : ''} onClick={() => setPanel('experiments')}>실험·모니터링</button><button aria-label="패널 닫기" onClick={() => setPanel(null)}><svg className="icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg></button></div>
       {panel === 'experiments' ? <Experiments info={info.data} /> : <><div className="journal-heading"><h2>실행 기록</h2><span>{history.length}건 · {roleLabels[role]}</span></div>
         <p className="caption inspector-caption">현재 역할에서 실행한 요청입니다. 비동기 작업의 최종 완료는 거래 조회에서 확인하세요.</p>
-        <div className="journal">{history.map(e => <button key={e.id} className={`journal-item ${current?.id === e.id ? 'selected' : ''}`} onClick={() => setSelected(e.id)}><span className={e.status < 300 ? 'http-ok' : 'http-error'}>{e.status}</span><span><strong>{e.operation}</strong><small>{kst(e.at)} · {e.elapsedMs}ms</small></span></button>)}</div>
+        <div className="journal">{history.map(e => <div className="journal-entry" key={e.id}><button className={`journal-item ${current?.id === e.id ? 'selected' : ''}`} onClick={() => setSelected(e.id)}><span className={e.status < 300 ? 'http-ok' : 'http-error'}>{e.status}</span><span><strong>{e.operation}</strong><small>{kst(e.at)} · {e.elapsedMs}ms</small></span></button>
+          {!pending && info.data && requestReferences(e).length > 0 && <button className="text-button journal-flow" onClick={() => inspectFlow(e)}>데이터 흐름 보기</button>}</div>)}</div>
         {current && <div className="payload"><h3>보낸 값</h3><pre>{JSON.stringify(redact(current.request), null, 2)}</pre><h3>받은 결과</h3><pre>{JSON.stringify(redact(current.response), null, 2)}</pre></div>}
       </> }</aside>}
   </div>;

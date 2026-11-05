@@ -27,6 +27,16 @@ class JpaRefundRepository implements RefundRepository {
   }
 
   @Override
+  public java.util.List<Refund> findByBuyer(UUID buyerId, long offset, int size) {
+    return repository.findByBuyer(buyerId, offset, size);
+  }
+
+  @Override
+  public long countByBuyer(UUID buyerId) {
+    return repository.countByBuyer(buyerId);
+  }
+
+  @Override
   public Refund save(Refund refund) {
     return repository.save(refund);
   }

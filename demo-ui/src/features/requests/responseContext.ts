@@ -7,7 +7,9 @@ export function responseContext(row: Record<string, Json>, sourcePath: string,
   const quote = sourcePath === '/api/order-quotes' && requestBody && typeof requestBody === 'object' && !Array.isArray(requestBody)
     ? Object.fromEntries(Object.entries(requestBody).filter(([key]) => ['productId', 'quantity', 'eventId', 'buyerCouponId', 'mileageAmount', 'externalMethod'].includes(key))) : {};
   const purchase = sourcePath === '/api/order-quotes' || /\/orders(\/|$)/.test(sourcePath);
-  const next: Record<string, Json> = { ...quote, ...parentParameters, ...Object.fromEntries(Object.entries(data).filter(([key, value]) =>
+  const related = data !== row ? Object.fromEntries(Object.entries(row).filter(([key, value]) =>
+    ['orderId', 'paymentId', 'requestId', 'refundId', 'payoutId', 'batchId'].includes(key) && (typeof value === 'string' || value === null))) : {};
+  const next: Record<string, Json> = { ...quote, ...parentParameters, ...related, ...Object.fromEntries(Object.entries(data).filter(([key, value]) =>
     !/password|token|address|credential|secret/i.test(key)
     // Shared context carries identities and explicit transaction inputs, not another resource's editable fields.
     && (key.endsWith('Id') || ['targetMonth', 'batchDate'].includes(key)

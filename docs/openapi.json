@@ -4937,6 +4937,65 @@
         }
       }
     },
+    "/api/refund-requests": {
+      "get": {
+        "operationId": "get_api_refund_requests",
+        "summary": "본인 취소·반품 요청 목록",
+        "tags": [
+          "commerce"
+        ],
+        "x-owner-service": "commerce",
+        "x-actor": "BUYER",
+        "x-implemented": true,
+        "description": "구매자 본인의 내역만 createdAt DESC,id DESC로 조회한다. page≥0,size=1..100(기본20), 빈 내역은200과 빈items를 반환한다. 다른 구매자의 행과totalElements는 포함하지 않는다.",
+        "security": [
+          {
+            "accountSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회·처리 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderRefundRequestPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
     "/api/refund-requests/{requestId}": {
       "get": {
         "operationId": "get_api_refund_requests_requestId",
@@ -5610,6 +5669,65 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PaymentAttemptPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/api/refunds": {
+      "get": {
+        "operationId": "get_api_refunds",
+        "summary": "본인 금융 환불 목록",
+        "tags": [
+          "payment"
+        ],
+        "x-owner-service": "payment",
+        "x-actor": "BUYER",
+        "x-implemented": true,
+        "description": "구매자 본인의 내역만 createdAt DESC,id DESC로 조회한다. page≥0,size=1..100(기본20), 빈 내역은200과 빈items를 반환한다. 다른 구매자의 행과totalElements는 포함하지 않는다.",
+        "security": [
+          {
+            "accountSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "조회·처리 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialRefundPage"
                 }
               }
             }
@@ -13576,6 +13694,101 @@
           "balanceAfter",
           "createdAt"
         ]
+      },
+      "FinancialRefundPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FinancialRefundSummary"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "totalElements": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "totalPages": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "size",
+          "totalElements",
+          "totalPages"
+        ]
+      },
+      "FinancialRefundSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "paymentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "externalAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000
+          },
+          "mileageAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "maximum": 10000000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "RESERVING",
+              "EXTERNAL_PENDING",
+              "RESTORING",
+              "INTERNAL_PENDING",
+              "COMPLETED",
+              "COMPENSATING",
+              "DECLINED",
+              "UNKNOWN"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "paymentId",
+          "externalAmount",
+          "mileageAmount",
+          "status",
+          "version",
+          "createdAt"
+        ],
+        "description": "Payment가 소유하는 금융 환불과 전체 SAGA 진행 상태. 외부 환불·마일리지 복원 후 원장 상쇄·주문 복구 확인 대기는 INTERNAL_PENDING이다. RefundCompleted 발행만으로 완료하지 않으며 RefundOrderRestored 수신·반영 후 COMPLETED로 전이한다."
       },
       "FinancialRefund": {
         "type": "object",

@@ -23,7 +23,8 @@ export function format(key: string, value: unknown): string {
   if (typeof value === 'string' && /status$|^kind$|^funder$|^externalMethod$|^actorKind$/i.test(key)) return codeLabel(value);
   return String(value);
 }
-export function ResultView({ data, select }: { data: Json; select?: (row: Record<string, Json>) => void }) {
+export function ResultView({ data, select, inspect, canInspect }: { data: Json; select?: (row: Record<string, Json>) => void;
+  inspect?: (row: Record<string, Json>) => void; canInspect?: (row: Record<string, Json>) => boolean }) {
   if (!data || typeof data !== 'object') return <p className="empty">반환 본문이 없습니다.</p>;
   const object = data as Record<string, Json>;
   const rows = Array.isArray(data) ? data : Array.isArray(object.items) ? object.items : null;
@@ -32,7 +33,8 @@ export function ResultView({ data, select }: { data: Json; select?: (row: Record
     const records = rows.filter(v => v && typeof v === 'object' && !Array.isArray(v)) as Record<string, Json>[];
     const columns = [...new Set(records.flatMap(r => Object.keys(r)))].filter(k => !/password|token|address|body/i.test(k)).slice(0, 8);
     return <><div className="table-scroll"><table><thead><tr>{select && <th>선택</th>}{columns.map(k => <th key={k}>{labels[k] ?? k}</th>)}</tr></thead>
-      <tbody>{records.map((row, index) => <tr key={String(row.id ?? index)}>{select && <td><button className="text-button" onClick={() => select(row)}>입력에 연결</button></td>}
+      <tbody>{records.map((row, index) => <tr key={String(row.id ?? index)}>{select && <td><button className="text-button" onClick={() => select(row)}>이 항목 사용</button>
+        {inspect && canInspect?.(row) && <button className="text-button" onClick={() => inspect(row)}>데이터 흐름 보기</button>}</td>}
         {columns.map(k => <td key={k} title={format(k, row[k])}>{format(k, row[k])}</td>)}</tr>)}</tbody></table></div>
       {object.totalPages !== undefined && <p className="caption">페이지 {Number(object.page) + 1} / {String(object.totalPages)} · 총 {String(object.totalElements)}건 · 다음 조회의 page 값을 변경할 수 있습니다.</p>}</>;
   }
@@ -42,5 +44,6 @@ export function ResultView({ data, select }: { data: Json; select?: (row: Record
     <div key={k} className="metric"><span>{labels[k] ?? k}</span><strong>{format(k, v)}</strong></div>)}</div>}
     <dl className="details">{Object.entries(object).filter(([k, v]) => !isMoney(k, v) && !/password|token/i.test(k)).map(([k, v]) =>
       <div key={k}><dt>{labels[k] ?? k}</dt><dd>{format(k, v)}</dd></div>)}</dl>
-    {select && <button className="secondary" onClick={() => select(object)}>ID·버전을 입력에 연결</button>}</>;
+    {select && <button className="secondary" onClick={() => select(object)}>이 결과를 다음 작업에 사용</button>}
+    {inspect && canInspect?.(object) && <button className="primary" onClick={() => inspect(object)}>데이터 흐름 보기</button>}</>;
 }

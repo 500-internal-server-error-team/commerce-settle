@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Execution } from '../../shared/api/client';
 import type { DemoInfo } from '../experiments/Experiments';
 import { eventContracts, producerApplication, consumerApplication } from './flowModel';
-import { observeEvents, owners, requestReferences, resultTarget, uuid, type EventRecord, type Observation, type ResultTarget } from './eventRecords';
+import { observeEvents, owners, requestReferences, resultTarget, uuid, type EventRecord, type Observation, type ResultTarget, type FlowInspection } from './eventRecords';
 
 const labels: Record<string, string> = { PENDING: '발행 대기', RUNNING: '발행 시도 중', RETRY: '재시도 대기', PUBLISHED: '발행 확인',
   RECEIVED: '수신 저장', WAITING: '선행 상태 대기', APPLIED: '이벤트 반영', REVIEW_REQUIRED: '확인 필요' };
@@ -17,9 +17,10 @@ function State({ row }: { row: EventRecord }) {
     {row.lastErrorCode && <code>{row.lastErrorCode}</code>}{row.resultRef && <span>반영 결과 ID <code>{row.resultRef}</code></span>}</>;
 }
 
-export function EventRecords({ record, info, onSelectEvent, onInspectResult }: { record?: Execution; info?: DemoInfo; onSelectEvent: (name: string) => void;
+export function EventRecords({ record, info, inspection, onPickRecord, onStartTrade, onSelectEvent, onInspectResult }: { record?: Execution; info?: DemoInfo;
+  inspection?: FlowInspection; onPickRecord?: () => void; onStartTrade?: () => void; onSelectEvent: (name: string) => void;
   onInspectResult?: (target: ResultTarget, id: string) => void }) {
-  const seed = requestReferences(record).join(',');
+  const seed = (inspection && inspection.recordId === record?.id ? inspection.references : requestReferences(record)).join(',');
   const [input, setInput] = useState(seed); const [observation, setObservation] = useState<Observation>();
   const [selected, select] = useState(''); const [loading, setLoading] = useState(false); const [error, setError] = useState('');
   const abort = useRef<AbortController | null>(null); const generation = useRef(0);
@@ -31,8 +32,11 @@ export function EventRecords({ record, info, onSelectEvent, onInspectResult }: {
   useEffect(() => {
     generation.current++; abort.current?.abort(); setLoading(false); setObservation(undefined); select(''); setError('');
   }, [configured]);
-  async function load() {
-    const ids = [...new Set(input.split(/[\s,]+/).filter(Boolean).map(id => id.toLowerCase()))];
+  useEffect(() => {
+    if (inspection && inspection.recordId === record?.id) void load(inspection.references.join(','));
+  }, [inspection?.request, inspection?.recordId, record?.id]);
+  async function load(target = input) {
+    const ids = [...new Set(target.split(/[\s,]+/).filter(Boolean).map(id => id.toLowerCase()))];
     if (!ids.length || ids.length > 20 || ids.some(id => !uuid.test(id))) { setError('거래·이벤트 UUID를 쉼표로 구분해 1~20개 입력하세요.'); return; }
     if (!info) { setError('제어 서버의 운영자 설정을 아직 확인할 수 없습니다.'); return; }
     abort.current?.abort(); const controller = new AbortController(); abort.current = controller;
@@ -51,13 +55,18 @@ export function EventRecords({ record, info, onSelectEvent, onInspectResult }: {
   const event = eventContracts.find(item => item.name === rows[0]?.eventType);
   const consumers = [...new Set([...(event?.consumers ?? []), ...inboxes.map(item => item.consumer?.replace(/\.v1$/, '')).filter((name): name is string => !!name)])];
   return <section className="event-observation" aria-label="실제 이벤트 기록">
-    <div className="flow-heading"><div><h3>실제 이벤트 기록</h3><p>선택한 HTTP 요청의 거래 ID로 각 서비스의 Outbox·Inbox를 읽습니다.</p></div><span className="badge neutral">수동 조회 · 읽기 전용</span></div>
-    <div className="event-query"><label>연결할 거래·이벤트 ID<input aria-label="연결할 거래·이벤트 ID" value={input} disabled={loading}
-      placeholder="주문·결제·환불·지급·이벤트 UUID" onChange={e => { setInput(e.target.value); setObservation(undefined); setError(''); }} /></label>
-      <button className="primary" aria-label="실제 이벤트 기록 조회" disabled={loading || !info} onClick={() => { void load(); }}>{loading ? '기록 조회 중' : '실제 기록 조회'}</button>
+    <div className="flow-heading"><div><h3>실제 이벤트 기록</h3><p>거래를 선택하면 발행부터 수신·반영까지 확인할 수 있습니다.</p></div><span className="badge neutral">읽기 전용</span></div>
+    {seed ? <p className="event-linked">{record?.operation}에서 거래를 연결했습니다. 필요한 ID는 자동으로 가져옵니다.</p>
+      : <div className="event-start"><strong>확인할 거래를 먼저 선택하세요</strong><p>{record && record.status >= 400
+        ? '이 응답에서는 생성된 거래를 확인하지 못했습니다. 기존 주문을 선택하거나 요청 오류를 먼저 해결하세요.'
+        : '주문·결제·환불 결과의 ‘데이터 흐름 보기’를 누르세요. 기존 거래는 내 주문이나 실행 기록에서 선택할 수 있습니다.'}</p>
+        {onStartTrade && <button className="secondary" onClick={onStartTrade}>내 주문에서 선택</button>}
+        {onPickRecord && <button className="secondary" onClick={onPickRecord}>실행 기록에서 선택</button>}</div>}
+    <div className="event-query"><button className="primary" aria-label="실제 이벤트 기록 조회" disabled={loading || !info || !input.trim()} onClick={() => { void load(); }}>{loading ? '흐름 확인 중' : observation ? '흐름 다시 확인' : '이 거래 흐름 확인'}</button>
       {loading && <button onClick={() => { generation.current++; abort.current?.abort(); setLoading(false); setError('조회 대기를 중단했습니다. 업무 요청은 변경하지 않았습니다.'); }}>조회 중단</button>}</div>
+    <details className="event-manual"><summary>직접 ID로 찾기 · 고급</summary><label>연결할 거래·이벤트 ID<input aria-label="연결할 거래·이벤트 ID" value={input} disabled={loading}
+      placeholder="이미 알고 있는 거래·이벤트 UUID" onChange={e => { setInput(e.target.value); setObservation(undefined); setError(''); }} /></label></details>
     {!info && <p className="caption">제어 서버 설정 확인 전입니다. 서비스별 조회 가능 여부는 아직 알 수 없습니다.</p>}
-    {!seed && !observation && <p className="caption">거래 단건의 응답·실행 기록을 선택하면 ID를 채웁니다. 목록·계정·상품 ID로 전체 거래를 조회하지 않습니다.</p>}
     {error && <p role="alert" className="notice error">{error}</p>}
     {observation && <>
       <div className="event-sources">{owners.map(owner => { const source = observation.sources[owner]; return <div key={owner}>
