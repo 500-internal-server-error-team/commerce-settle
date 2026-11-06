@@ -13,6 +13,7 @@ function createSwaggerSession(configuration) {
   let loginAttempt = 0;
   let timer;
   let ui;
+  let clearingAuthorization = false;
   let status;
   let message = '로그인 전 · Sessions에서 구매자 또는 판매자로 로그인하면 인증을 자동 연결합니다.';
 
@@ -27,13 +28,20 @@ function createSwaggerSession(configuration) {
     if (ui && active) ui.preauthorizeApiKey('accountSession', active.token);
   }
 
-  function clear(reason) {
+  function reset(reason) {
     active = null;
     generation += 1;
     window.clearTimeout(timer);
     message = reason;
-    if (ui) ui.authActions.logout(['accountSession']);
     render();
+  }
+
+  function clear(reason) {
+    reset(reason);
+    if (!ui) return;
+    clearingAuthorization = true;
+    try { ui.authActions.logout(['accountSession']); }
+    finally { clearingAuthorization = false; }
   }
 
   function expire() {
@@ -56,6 +64,24 @@ function createSwaggerSession(configuration) {
   }
 
   return {
+    plugin() {
+      return {
+        statePlugins: {
+          auth: {
+            wrapActions: {
+              logout: next => names => {
+                if (names.includes('accountSession') && !clearingAuthorization) {
+                  loginAttempt += 1;
+                  reset('Swagger 인증 연결을 해제했습니다. 다시 로그인해 주세요.');
+                }
+                return next(names);
+              },
+            },
+          },
+        },
+      };
+    },
+
     attach(instance) {
       ui = instance;
       if (!status) {

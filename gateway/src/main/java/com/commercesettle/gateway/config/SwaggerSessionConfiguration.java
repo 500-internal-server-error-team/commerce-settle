@@ -48,7 +48,10 @@ public class SwaggerSessionConfiguration {
         final var initializer = super.defaultTransformations(parameters, input);
         final var start = "window.onload = function() {";
         final var bundle = "SwaggerUIBundle({";
-        if (!initializer.contains(start) || !initializer.contains(bundle)) {
+        final var plugins = "plugins: [";
+        if (!initializer.contains(start)
+            || !initializer.contains(bundle)
+            || !initializer.contains(plugins)) {
           throw new IllegalStateException("Unsupported Swagger UI initializer");
         }
         return initializer
@@ -64,7 +67,8 @@ public class SwaggerSessionConfiguration {
                 bundle,
                 bundle
                     + "\nrequestInterceptor: session.request,"
-                    + "\nonComplete: function() { session.attach(window.ui); },");
+                    + "\nonComplete: function() { session.attach(window.ui); },")
+            .replace(plugins, plugins + "session.plugin,");
       }
     };
   }

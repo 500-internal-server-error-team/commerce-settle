@@ -256,6 +256,7 @@ class GatewayRoutingIntegrationTest {
             "function createSwaggerSession",
             "requestInterceptor: session.request",
             "session.attach(window.ui)",
+            "plugins: [session.plugin,",
             "/api/buyer-sessions",
             "/api/seller-sessions");
     assertThat(body).doesNotContain("localStorage", "sessionStorage");
