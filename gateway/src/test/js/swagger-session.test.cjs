@@ -45,6 +45,7 @@ function fixture() {
   const client = create(configuration);
   const ui = { preauthorizeApiKey: (name, token) => authorizations.push({ name, token }),
     authActions: { logout: names => logouts.push([...names]) } };
+  ui.authActions.logout = client.plugin().statePlugins.auth.wrapActions.logout(ui.authActions.logout);
   client.attach(ui);
   function request(method, url, headers = {}) {
     return client.request({ method, url, headers });
@@ -142,6 +143,73 @@ test('a late rejection of an old session cannot clear a newer login', async () =
   resolve(new Response('{}', { status: 401 }));
   await pending;
   assert.equal(f.request('GET', '/api/accounts/me').headers.Authorization, `Bearer ${seller}`);
+});
+
+test('Swagger native logout clears the active session across document changes', async () => {
+  const f = fixture();
+  await f.login();
+  f.client.attach(f.ui);
+  const before = f.logouts.length;
+
+  f.ui.authActions.logout(['accountSession']);
+  f.client.attach(f.ui);
+
+  assert.equal(f.request('GET', '/api/accounts/me').headers.Authorization, undefined);
+  assert.match(f.status(), /인증 연결을 해제/);
+  assert.equal(f.logouts.length, before + 1);
+  assert.equal(f.timers.size, 0);
+});
+
+test('Swagger native logout invalidates pending login responses with or without an active account', async () => {
+  for (const signedIn of [false, true]) {
+    const f = fixture();
+    if (signedIn) await f.login();
+    let resolve;
+    f.replies.push(new Promise(done => { resolve = done; }));
+    const login = f.request('POST', '/api/seller-sessions');
+    const pending = login.userFetch(login.url, login);
+
+    f.ui.authActions.logout(['accountSession']);
+    resolve(new Response(JSON.stringify(f.session('SELLER', seller)), { status: 200 }));
+    await pending;
+
+    assert.equal(f.request('GET', '/api/accounts/me').headers.Authorization, undefined);
+    assert.doesNotMatch(f.status(), /로그인 연결됨/);
+  }
+});
+
+test('other authorization schemes do not remove the account session and login works after native logout', async () => {
+  const f = fixture();
+  await f.login();
+
+  f.ui.authActions.logout(['anotherScheme']);
+  assert.equal(f.request('GET', '/api/accounts/me').headers.Authorization, `Bearer ${buyer}`);
+  f.ui.authActions.logout(['accountSession']);
+  await f.login('SELLER', seller);
+
+  assert.equal(f.request('GET', '/api/accounts/me').headers.Authorization, `Bearer ${seller}`);
+  assert.match(f.status(), /판매자.*로그인 연결됨/);
+});
+
+test('old-session rejection or expiry does not discard a newer login that is still pending', async () => {
+  for (const invalidation of ['rejection', 'expiry']) {
+    const f = fixture();
+    await f.login();
+    let resolve;
+    f.replies.push(new Promise(done => { resolve = done; }));
+    const login = f.request('POST', '/api/seller-sessions');
+    const pending = login.userFetch(login.url, login);
+
+    if (invalidation === 'rejection') await f.send('GET', '/api/accounts/me', 401);
+    else {
+      f.advance(1800000);
+      f.request('GET', '/api/accounts/me');
+    }
+    resolve(new Response(JSON.stringify(f.session('SELLER', seller)), { status: 200 }));
+    await pending;
+
+    assert.equal(f.request('GET', '/api/accounts/me').headers.Authorization, `Bearer ${seller}`);
+  }
 });
 
 test('logout cancels an older pending login and cannot resurrect its token', async () => {
