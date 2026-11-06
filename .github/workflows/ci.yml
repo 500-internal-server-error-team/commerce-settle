@@ -28,6 +28,8 @@ jobs:
           cache-dependency-path: demo-ui/package-lock.json
       - run: npm ci --no-audit --no-fund
       - run: npm test
+      - name: Test Swagger session client
+        run: node --test ../gateway/src/test/js/swagger-session.test.cjs
       - run: npm run build
 
   checks:

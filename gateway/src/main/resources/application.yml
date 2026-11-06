@@ -11,29 +11,6 @@ spring:
     name: gateway
   reactor:
     context-propagation: auto
-  cloud:
-    gateway:
-      server:
-        webflux:
-          routes:
-            - id: commerce-docs
-              uri: ${gateway.services.commerce}
-              predicates:
-                - Path=/v3/api-docs/commerce
-              filters:
-                - SetPath=/v3/api-docs
-            - id: payment-docs
-              uri: ${gateway.services.payment}
-              predicates:
-                - Path=/v3/api-docs/payment
-              filters:
-                - SetPath=/v3/api-docs
-            - id: settlement-docs
-              uri: ${gateway.services.settlement}
-              predicates:
-                - Path=/v3/api-docs/settlement
-              filters:
-                - SetPath=/v3/api-docs
 
 gateway:
   services:
@@ -54,6 +31,7 @@ gateway:
 springdoc:
   swagger-ui:
     disable-swagger-default-url: true
+    persist-authorization: false
     urls:
       - name: Commerce
         url: /v3/api-docs/commerce
