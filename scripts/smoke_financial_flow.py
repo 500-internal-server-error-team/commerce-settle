@@ -26,7 +26,7 @@ PRICE, MILEAGE = 1000, 300
 
 
 def verify():
-    with stack("cs-financial-flow-", memory_storage=True) as compose:
+    with stack("cs-financial-flow-", memory_storage=True, commerce_outbox=False) as compose:
         def flow(*args, **kwargs):
             return compose("-f", str(FLOW), *args, **kwargs)
 
@@ -45,7 +45,8 @@ def verify():
             return compose("exec", "-T", "postgres", "psql", "-U", "postgres", "-d", database, "-v", "ON_ERROR_STOP=1",
                            "-Atq", input_text=statement).strip()
 
-        # Producers created their topics with every consumer disabled; prepare offsets, then enable the flow.
+        # Follow the first-run procedure: base stack, explicit offsets, then the financial overlay.
+        assert json.loads(compose("config", "--format", "json"))["services"]["commerce"]["environment"]["APP_OUTBOX_ENABLED"] == "false"
         prepare_offsets(compose)
         # Publish the mock only on a random loopback port in this owned test project.
         flow("-f", "-", "up", "-d", "--wait", "--wait-timeout", "300", *APPS, "finance-mock",
@@ -133,7 +134,7 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
             "addressLine1": "test", "addressLine2": "", "isDefault": True})
         assert status == 201, (status, address)
 
-        def paid_order(mileage=MILEAGE, method="CREDIT_CARD", account="test-card"):
+        def paid_order(mileage=MILEAGE, method="CREDIT_CARD", account="test-card", *, recover_admission=True):
             body = {
                 "productId": product, "quantity": 1, "eventId": None, "buyerCouponId": None, "mileageAmount": mileage,
                 "addressId": address["id"], "expectedProductVersion": 0, "expectedEventVersion": None,
@@ -142,11 +143,11 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
             key = str(uuid.uuid4())
 
             def create_when_admitted():
-                if not gate_open():
+                if recover_admission and not gate_open():
                     return None
                 # The scraped gauge can lag an admission transition. Retry only this explicit rejection with the same key.
                 status, result = gateway_json(base, "POST", "/api/orders", body, token, {"Idempotency-Key": key})
-                if status == 503 and result.get("code") == "COMMON_CAPACITY_EXCEEDED":
+                if recover_admission and status == 503 and result.get("code") == "COMMON_CAPACITY_EXCEEDED":
                     return None
                 assert status == 201, (status, result)
                 return result
@@ -213,7 +214,7 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
 
         try:
             first_refund, second_refund = scenarios(paid_order, cancel, refund_state, completed, inventory, reservation,
-                                                    compose)
+                                                    compose, gate_open)
             # Card, all-mileage (including zero external HTTP calls), and external EASY_PAY wallet.
             card_order, card_payment = paid_order(0)
             cancel(card_order)
@@ -369,14 +370,22 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
             raise
 
 
-def scenarios(paid_order, cancel, refund_state, completed, inventory, reservation, compose):
+def scenarios(paid_order, cancel, refund_state, completed, inventory, reservation, compose, gate_open):
     # 1. Normal round trip.
-    first_order, first_payment = paid_order()
+    first_order, first_payment = paid_order(recover_admission=False)
+
+    # An unpublished first-order event closes admission after 60 seconds. Do not hide it with recovery retries.
+    started = time.monotonic()
+    while time.monotonic() - started < 65:
+        assert gate_open(), "order admission closed after the first order"
+        time.sleep(1)
     cancel(first_order)
     first_refund = completed(first_order, first_payment)
 
     # 2. Without Settlement the refund waits for the reservation; after a restart the same refund completes once.
-    second_order, second_payment = paid_order()
+    second_order, second_payment = paid_order(recover_admission=False)
+    print(json.dumps({"orderAdmission": "two paid orders without capacity retries",
+                      "elapsedSeconds": round(time.monotonic() - started, 1)}), flush=True)
     compose("stop", "settlement")
     cancel(second_order)
     until(lambda: refund_state(second_payment) == "RESERVING/RESERVATION_REQUESTED", "refund was not accepted by Payment")

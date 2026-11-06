@@ -15,6 +15,7 @@ python3 scripts/init_env.py
 python3 scripts/sync_redis_run_id.py
 docker compose up -d --build --wait --wait-timeout 300
 python3 -B scripts/prepare_financial_kafka.py
+docker compose -f compose.yml -f compose.financial-flow.yml up -d --wait --wait-timeout 300 commerce payment-worker settlement finance-mock
 python3 scripts/smoke.py
 ```
 
@@ -44,7 +45,7 @@ python3 scripts/sync_redis_run_id.py
 docker compose up -d --wait --wait-timeout 300
 ```
 
-기존 환경의 `COMPOSE_PROJECT_NAME`도 보존하므로, 기존 컨테이너·볼륨을 계속 사용하려면 그 값을 유지합니다. 신규 환경의 기본 프로젝트명은 `commerce-settle`입니다. `prepare_financial_kafka.py`는 같은 Compose 환경에서 [금융 그룹의 최초 소비 위치](#금융-관측과-접수-복구)를 준비합니다. 정상 관측이 60초 연속 유지된 뒤 신규 DB 주문을 받습니다.
+기존 환경의 `COMPOSE_PROJECT_NAME`도 보존하므로, 기존 컨테이너·볼륨을 계속 사용하려면 그 값을 유지합니다. 신규 환경의 기본 프로젝트명은 `commerce-settle`입니다. `prepare_financial_kafka.py`는 같은 Compose 환경에서 [금융 그룹의 최초 소비 위치](#금융-관측과-접수-복구)를 준비합니다. 이어서 `compose.financial-flow.yml`로 주문 이벤트 발행·수신과 결제·정산 처리를 켭니다. 정상 관측이 60초 연속 유지된 뒤 신규 DB 주문을 받고, 접수된 주문은 Finance Mock을 통한 결제까지 진행합니다. 이후 앱을 재생성할 때도 같은 두 Compose 파일을 사용합니다. 기본 `compose.yml`만으로는 후속 금융 처리가 꺼져 있어 첫 주문의 미발행 이벤트가 60초 이상 밀리면 다시 접수가 닫힙니다. `smoke.py`는 인프라 검사이며 주문·결제 검증은 [금융 왕복 시험](#주문결제정산환불-왕복)으로 확인합니다.
 
 기존 Docker의 `buildx/activity/...: permission denied` 오류가 발생하면 전역 파일의 소유권을 바꾸는 대신 작업용 설정 경로를 지정할 수 있습니다. 현재 셸에서만 적용되며 사용이 끝나면 `unset BUILDX_CONFIG`로 해제합니다.
 
@@ -214,7 +215,7 @@ python3 -B scripts/prepare_financial_kafka.py
 docker compose -f compose.yml -f compose.financial-flow.yml up -d --wait commerce payment-worker settlement finance-mock
 ```
 
-`python3 -B scripts/smoke_financial_flow.py`는 이 순서를 새 Compose 프로젝트·빈 시험용 tmpfs 데이터 볼륨에서 실행하고 소유 리소스만 지웁니다. PostgreSQL·Kafka의 실제 데이터와 저장공간 관측은 이 전용 파일시스템을 사용하므로 다른 Docker 프로젝트의 디스크 점유와 격리됩니다. 앱 재기동 동안에는 같은 볼륨을 유지합니다. 순서는 다음과 같습니다.
+`python3 -B scripts/smoke_financial_flow.py`는 처음 실행과 같은 순서로 발행기·소비자가 꺼진 새 Compose 프로젝트·빈 시험용 tmpfs 데이터 볼륨에서 시작하고 소유 리소스만 지웁니다. PostgreSQL·Kafka의 실제 데이터와 저장공간 관측은 이 전용 파일시스템을 사용하므로 다른 Docker 프로젝트의 디스크 점유와 격리됩니다. 첫 주문·결제 뒤 접수 상태를 관측하고 최소 65초가 지난 후 두 번째 주문·결제도 확인합니다. 이 두 주문은 용량 초과 응답을 재시도해 성공으로 바꾸지 않습니다. 앱 재기동 동안에는 같은 볼륨을 유지합니다. 순서는 다음과 같습니다.
 
 1. 시험 구매자·판매자·상품·재고와 Payment 마일리지 지갑을 넣고, HTTP 승인 → Kafka 정산 항목 → 취소 → 외부 HTTP 환불 → 마일리지 복원 → 원장 상쇄 → 주문 복구를 실행합니다.
 2. 카드·혼합·전액 마일리지·간편결제를 대조합니다. 1,000원 중 마일리지 300원이면 외부 환불은 700원이며, 전액 마일리지는 외부 HTTP 호출이 0회여야 합니다. 원장 상쇄는 최초 5 leg 각각에 반대 부호로 한 줄씩 대응하고 복원·금융 완료 이벤트도 한 번이어야 합니다.
@@ -619,7 +620,7 @@ docker compose --profile observability --profile tools down
 
 # 같은 데이터로 재실행. Redis가 새로 떠 run_id가 바뀌므로 승인값과 세대를 다시 맞춘다
 python3 scripts/sync_redis_run_id.py
-docker compose up -d --wait --wait-timeout 300
+docker compose -f compose.yml -f compose.financial-flow.yml up -d --wait --wait-timeout 300
 python3 scripts/smoke.py
 
 # 이 Compose 프로젝트의 로컬 데이터까지 삭제할 때만 실행
@@ -627,6 +628,8 @@ docker compose --profile observability --profile tools down -v --remove-orphans
 ```
 
 DB 볼륨이 남아 있으면 초기화 스크립트가 다시 실행되지 않습니다. 따라서 `.env`의 DB 비밀번호만 바꾸면 기존 DB와 연결할 수 없습니다. 필요한 경우 기존 DB에서 비밀번호를 변경하거나, 보존할 데이터가 없는 로컬 환경에서 위 초기화 명령으로 볼륨을 삭제하고 다시 시작합니다.
+
+위 재실행은 금융 처리를 켠 처음 실행의 설정을 유지합니다. 관측 도구 추가나 인증 복구 등 다른 절차에서 앱을 재생성할 때도 `-f compose.yml -f compose.financial-flow.yml`을 함께 지정합니다. 다른 덮어쓰기 파일을 사용한다면 이 두 파일 뒤에 추가합니다. 볼륨까지 삭제한 환경은 [처음 실행](#처음-실행) 순서로 Kafka 소비 위치부터 다시 준비합니다.
 
 Redis 비밀번호를 바꿀 때도 앱과 Redis를 함께 재생성해야 합니다. Redis 데이터는 AOF 볼륨에 보존됩니다. Zipkin 메모리 추적은 재시작하면 사라집니다.
 

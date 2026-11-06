@@ -39,7 +39,7 @@ def until(action, description, seconds=180):
 
 
 @contextmanager
-def stack(prefix="cs-admission-", *, memory_storage=False):
+def stack(prefix="cs-admission-", *, memory_storage=False, commerce_outbox=True):
     project = prefix + secrets.token_hex(5)
     directory = Path(tempfile.mkdtemp(prefix=project + "-"))
     settings = directory / "override.json"
@@ -59,7 +59,7 @@ def stack(prefix="cs-admission-", *, memory_storage=False):
         shutil.copyfile(ROOT / ".env.example", directory / ".env.example")
         initialize(directory)
         overrides = {"services": {
-            "commerce": {"environment": {"APP_OUTBOX_ENABLED": "true", "APP_ORDER_STUB_ENABLED": "false",
+            "commerce": {"environment": {"APP_OUTBOX_ENABLED": str(commerce_outbox).lower(), "APP_ORDER_STUB_ENABLED": "false",
                 "APP_KAFKA_PAYMENT_ACCEPTED_ENABLED": "false", "APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED": "false"}},
             "payment-worker": {"environment": {"APP_OUTBOX_ENABLED": "false", "APP_KAFKA_ORDER_PAYMENT_REQUESTED_ENABLED": "false",
                 "APP_PAYMENT_REQUEST_PROCESSOR_ENABLED": "false"}},
