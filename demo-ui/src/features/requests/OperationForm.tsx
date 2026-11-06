@@ -5,10 +5,10 @@ import { Field, Fields } from '../../shared/ui/SchemaFields';
 import { ReferencePicker, referenceSource } from './ReferencePicker';
 import { responseContext } from './responseContext';
 
-export function OperationForm({ operation, context, pending, allowed, run, role = 'BUYER', token, loginValues, recoveryValues, accounts, onUnauthorized }:
+export function OperationForm({ operation, context, pending, allowed, run, role = 'BUYER', token, loginValues, recoveryValues, accounts, onUnauthorized, submitLabel }:
   { operation: Operation; context: Record<string, Json>; pending: boolean; allowed: boolean; run: (v: RequestValues) => void; role?: string; token?: string;
     loginValues?: { email: string; password: string }; recoveryValues?: RequestValues;
-    accounts?: Partial<Record<'BUYER' | 'SELLER', { id: string; name: string }>>; onUnauthorized?: (token: string) => void }) {
+    accounts?: Partial<Record<'BUYER' | 'SELLER', { id: string; name: string }>>; onUnauthorized?: (token: string) => void; submitLabel?: string }) {
   const [body, setBody] = useState<Json>(operation.schema ? defaults(operation.schema) : null);
   const [pathParameters, setPath] = useState<Record<string, string>>({});
   const [query, setQuery] = useState<Record<string, string>>({});
@@ -189,7 +189,7 @@ export function OperationForm({ operation, context, pending, allowed, run, role 
       <p className="caption">응답이 불명확하면 먼저 원래 거래를 조회하세요. 같은 작업을 재요청할 때는 입력과 키를 유지합니다. 입력을 바꾸려면 기존 결과부터 확인하세요.</p>
       <button type="button" className="text-button" onClick={() => setKey(crypto.randomUUID())}>새 작업 키 만들기</button></details>}
     <div className="form-footer"><span className="caption">* 필수 입력 · 서버가 가격·권한·상태를 최종 판단합니다.</span>
-      <button className="primary" disabled={!allowed || pending}>{pending ? '응답 확인 중…' : login ? '로그인' : signup ? '회원가입' : '요청 실행'}</button></div>
+      <button className="primary" disabled={!allowed || pending}>{pending ? '응답 확인 중…' : login ? '로그인' : signup ? '회원가입' : submitLabel ?? '요청 실행'}</button></div>
     </fieldset>
     {!allowed && <p className="caption">{operation.actor === 'OPERATOR' ? '제어 서버에 해당 서비스의 운영자 자격을 설정해야 실행할 수 있습니다.' : '이 작업에 필요한 역할로 전환하고 로그인하세요.'}</p>}
   </form>;

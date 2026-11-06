@@ -82,7 +82,7 @@ const flowTasks: Record<string, (keyof typeof taskIds)[]> = {
   'account.address': ['addresses', 'editAddress', 'addresses', 'order'],
   'account.profile': ['profile', 'editProfile', 'profile', 'payout'],
   'account.denied': ['account', 'login', 'orders', 'account'],
-  'buy.normal': ['products', 'order', 'orderDetail', 'orderDetail'],
+  'buy.normal': ['products', 'quote', 'order', 'orderDetail'],
   'buy.waiting': ['orderDetail', 'payment', 'orderDetail', 'orders'],
   'buy.declined': ['payment', 'retry', 'payment', 'orderDetail'],
   'buy.changed': ['product', 'product', 'quote', 'order'],
