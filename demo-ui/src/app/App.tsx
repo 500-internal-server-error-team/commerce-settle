@@ -4,6 +4,7 @@ import { actions, groups, requirements, scenarios, startingStep, workflow } from
 import { operations, redact, type Json, type Operation } from '../shared/api/contract';
 import { execute, journal, RequestInputError, type Execution, type RequestValues } from '../shared/api/client';
 import { OperationForm } from '../features/requests/OperationForm';
+import { PurchaseFlow } from '../features/requests/PurchaseFlow';
 import { mergeResponseContext, responseContext } from '../features/requests/responseContext';
 import { useEventGauge } from '../features/requests/useEventGauge';
 import { ResultView } from '../features/results/ResultView';
@@ -48,6 +49,7 @@ export function App() {
   const [caseId, setCase] = useState('buy.normal'); const [search, setSearch] = useState('');
   const [operationId, setOperation] = useState('get_api_products');
   const [stepIndex, setStepIndex] = useState(0);
+  const [purchaseRecords, setPurchaseRecords] = useState<Partial<Record<number, Execution>>>({});
   const [sessions, setSessions] = useState<Partial<Record<Role, Session>>>({});
   const [signupLogins, setSignupLogins] = useState<Partial<Record<Role, { email: string; password: string }>>>({});
   const sessionsRef = useRef(sessions); sessionsRef.current = sessions;
@@ -74,6 +76,8 @@ export function App() {
   const allowed = !!operation && (operation.actor === 'PUBLIC' || operation.actor.includes(role)
     && (role === 'OPERATOR' ? !!info.data?.operatorServices.includes(operation.owner) : authenticated));
   const mutationPending = pending && operation?.method !== 'GET';
+  const guidedPurchase = caseId === 'buy.normal' && role === 'BUYER' && stepIndex >= 0
+    && operation?.id === steps[stepIndex]?.operation?.id;
 
   useEffect(() => () => abort.current?.abort(), []);
   function invalidateSession(actor: Role, rejected: string, epoch: number | undefined, reason: SessionReason = 'rejected') {
@@ -109,6 +113,10 @@ export function App() {
     if (selectTask(task?.operation?.id ?? actions(next)[0]?.id ?? '', target ? index : -1,
       task?.screen[0] === '판매자' ? 'SELLER' : task?.screen[0] === '구매자' ? 'BUYER' : preferredRole)) {
       setGroup(next); setCase(target?.id ?? '');
+      if (target?.id === 'buy.normal') {
+        setPurchaseRecords({});
+        setContext(old => ({ ...old, BUYER: Object.fromEntries(Object.entries(old.BUYER ?? {}).filter(([key]) => key === 'addressId')) }));
+      }
       window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }));
     }
   }
@@ -116,7 +124,7 @@ export function App() {
     navigate(next === 'SELLER' ? 'sell' : next === 'OPERATOR' ? 'monthly' : 'buy', undefined, next);
   }
   async function run(values: RequestValues) {
-    if (!operation || pending) return;
+    if (!operation || pending || activeMutation.current) return;
     const actor = role; const before = sessions[actor]; const op: Operation = operation;
     if (op.actor !== 'PUBLIC' && op.actor !== 'OPERATOR' && !sessionActive(before)) {
       if (before?.token) invalidateSession(actor, before.token, before.epoch, Number.isFinite(before.expiresAt) ? 'expired' : 'unverified');
@@ -144,8 +152,17 @@ export function App() {
       else if (result.status >= 200 && result.status < 300) releaseRecovery(actor, op.id);
       const event = journal(op, values, actor, result);
       setEvents(old => ({ ...old, [actor]: [event, ...(old[actor] ?? [])].slice(0, 60) })); setSelected(event.id);
+      if (guidedPurchase) setPurchaseRecords(old => ({ ...old, [stepIndex]: event }));
       if (result.status >= 200 && result.status < 300 && result.data && typeof result.data === 'object') {
         const data = result.data as Record<string, Json>;
+        if (guidedPurchase && (stepIndex === 1 || stepIndex === 2)) {
+          const connected = responseContext(data, op.path, dispatched.pathParameters, dispatched.body);
+          if (stepIndex === 1 && connected.expectedTotalAmount != null && connected.expectedProductVersion != null
+            || stepIndex === 2 && typeof connected.orderId === 'string') {
+            setContext(old => ({ ...old, BUYER: mergeResponseContext(old.BUYER ?? {}, connected) }));
+            setOperation(steps[stepIndex + 1].operation!.id); setStepIndex(stepIndex + 1); setSelected(undefined);
+          } else setNotice('다음 단계에 필요한 응답 값이 없습니다. 실행 기록에서 서버 응답을 확인하세요.');
+        }
         const signupRole = op.method === 'POST' && op.path === '/api/buyers' ? 'BUYER'
           : op.method === 'POST' && op.path === '/api/sellers' ? 'SELLER' : undefined;
         const submitted = values.body && typeof values.body === 'object' && !Array.isArray(values.body) ? values.body : undefined;
@@ -169,6 +186,7 @@ export function App() {
             epoch: Math.max(Date.now(), (old[actor]?.epoch ?? 0) + 1), expiresAt } }));
           setSignupLogins(old => ({ ...old, [actor]: undefined }));
           setEvents(old => ({ ...old, [actor]: [] })); setContext(old => ({ ...old, [actor]: {} }));
+          if (actor === 'BUYER') setPurchaseRecords({});
         }
       }
       if (result.status >= 200 && result.status < 300) {
@@ -212,6 +230,7 @@ export function App() {
     setSessions(old => ({ ...old, [actor]: undefined })); setEvents(old => ({ ...old, [actor]: [] })); setContext(old => ({ ...old, [actor]: {} }));
     setSignupLogins(old => ({ ...old, [actor]: undefined }));
     setRecoveries(old => ({ ...old, [actor]: undefined }));
+    if (actor === 'BUYER') setPurchaseRecords({});
   }
   function selectRow(row: Record<string, Json>) {
     if (mutationPending) {
@@ -223,6 +242,9 @@ export function App() {
     const request = current?.request as RequestValues | undefined;
     const next = responseContext(row, current?.path ?? '', request?.pathParameters, request?.body);
     setContext(old => ({ ...old, [role]: mergeResponseContext(old[role] ?? {}, next) })); setNotice('선택한 응답의 ID·버전을 입력에 연결했습니다. 실행 전 값을 확인하세요.');
+    if (guidedPurchase && stepIndex === 0 && current.path === '/api/products' && typeof next.productId === 'string') {
+      setOperation(steps[1].operation!.id); setStepIndex(1); setSelected(undefined);
+    }
   }
   function inspectEventResult(target: ResultTarget, id: string) {
     const actor: Role = target === 'settlement-item' ? 'SELLER' : target === 'payment' || target === 'refund' ? 'BUYER' : role === 'SELLER' ? 'SELLER' : 'BUYER';
@@ -250,73 +272,8 @@ export function App() {
       window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: 'auto' }));
     }
   }
-  return <div className={`shell ${panel ? 'with-panel' : ''}`}>
-    <SessionExpiry sessions={sessions} invalidate={invalidateSession} />
-    <header className="topbar"><a className="brand" href="#" onClick={e => { e.preventDefault(); navigate('buy'); }}>
-      <svg className="brand-mark" width="30" height="32" viewBox="0 0 30 32" aria-hidden="true" focusable="false">
-        <rect width="30" height="32" rx="7" fill="currentColor" />
-        <path d="M17 11c-1-1-2-1.5-3.5-1.5a6.5 6.5 0 0 0 0 13c1.5 0 2.5-.5 3.5-1.5" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" />
-        <circle cx="22" cy="21" r="1.5" fill="white" />
-      </svg><span>commerce<span className="brand-light">settle</span></span></a>
-      <div className="account-control"><div className="role-tabs" aria-label="API 실행 계정">{(['BUYER', 'SELLER'] as Role[]).map(r => <button key={r} className={role === r ? 'active' : ''} aria-pressed={role === r} onClick={() => switchRole(r)}>{roleLabels[r]}</button>)}</div></div>
-      <div className="top-actions">{role === 'OPERATOR' ? <span className="account-name">서버 운영 자격</span> : <>
-        <span className="account-name" title={session?.name}>{authenticated ? <><span className="live-dot" />{session!.name}</>
-          : session ? `${session.name} · 재로그인 필요` : '로그인 전'}</span>
-        <div className="auth-actions"><button className="primary" disabled={mutationPending} aria-label={`${roleLabels[role]} 로그인 화면 열기`} onClick={() => navigate('account', 'account.login', role)}>로그인</button>
-          <button className="secondary" disabled={mutationPending} aria-label={`${roleLabels[role]} 회원가입 화면 열기`} onClick={() => navigate('account', role === 'SELLER' ? 'account.seller' : 'account.buyer', role)}>회원가입</button></div>
-        {session && <button className="text-button" disabled={mutationPending} onClick={() => clearActor(role)}>로컬 세션 지우기</button>}</>}
-        <button className="secondary monitor-button" aria-expanded={panel === 'experiments'} onClick={() => setPanel(panel === 'experiments' ? null : 'experiments')}>실험·모니터링 <ArrowIcon /></button></div></header>
-    <aside className="sidebar"><div className="sidebar-heading">시연 흐름 <span>{scenarios.length}</span></div>
-      <input className="search" aria-label="흐름 검색" placeholder="흐름 검색…" value={search} onChange={e => setSearch(e.target.value)} />
-      <nav>{groups.map(([id, title, number]) => <div key={id} className="nav-group"><button className={group === id ? 'nav-item active' : 'nav-item'} onClick={() => navigate(id)}><span>{number}</span>{title}<small>{scenarios.filter(s => s.group === id).length}</small></button>
-        {(group === id || search) && scenarios.filter(s => s.group === id && (!search || s.label.includes(search))).map(s => <button key={s.id} className={`case-link ${caseId === s.id ? 'active' : ''}`} onClick={() => navigate(id, s.id)}>{s.label}</button>)}</div>)}
-        <button className={`nav-item ${group === 'monthly' ? 'active' : ''}`} onClick={() => navigate('monthly')}><span>08</span>월 랭킹·자동 발급</button></nav>
-      <div className="sidebar-foot"><span className="live-dot" /> 실제 API 연결<span>결과는 서버 응답으로 확인</span></div></aside>
-    <main id="main"><label className="compact-flow-select">시연 흐름 <Select aria-label="시연 흐름 선택" value={caseId || 'monthly'} onChange={e => {
-      const target = scenarios.find(s => s.id === e.target.value); navigate(target?.group ?? 'monthly', target?.id);
-    }}>{groups.map(([id, title]) => <optgroup key={id} label={title}>{scenarios.filter(s => s.group === id).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>)}<option value="monthly">월 랭킹·자동 발급</option></Select></label>
-      <div className="breadcrumb">{roleLabels[role]} <span>/</span> {scenario?.groupTitle ?? '월간 혜택'}</div>
-      <div className="page-heading"><div><h1>{group === 'monthly' ? '월 랭킹과 쿠폰 발급' : authRole(operation) ? operation.title : stepIndex < 0 ? operation?.title : scenario?.label}</h1><p>{group === 'monthly' ? '마감 시점에 고정한 선정 순위와 실제 발급 결과를 확인합니다.' : authRole(operation) ? operation.path.endsWith('-sessions') ? `${roleLabels[role]}의 가입 이메일과 비밀번호로 로그인하세요.` : '연습용 가입값을 채우거나 직접 입력한 뒤 회원가입을 누르세요.' : '작업을 선택하고 입력을 확인한 뒤 실행하세요.'}</p></div>
-        <button className="secondary" onClick={() => setPanel(panel === 'requests' ? null : 'requests')}>실행 기록 {panel === 'requests' ? '접기' : '보기'}</button></div>
-      {info.error && <div role="alert" className="notice error"><p>{import.meta.env.DEV
-        ? '운영·부하 제어 서버에 연결하지 못했습니다. 일반 API는 개발 프록시를 통해 계속 사용할 수 있습니다.'
-        : `${info.error.message} · 통합 실행 주소는 http://127.0.0.1:4174입니다.`}</p>
-        <button className="secondary" disabled={info.isFetching} onClick={() => { void info.refetch(); }}>{info.isFetching ? '제어 서버 연결 중' : '제어 서버 다시 연결'}</button></div>}
-      {notice && <div role="status" className="notice">{notice}</div>}
-      {session && !authenticated && <div role="status" className="notice" aria-label="세션 재로그인 안내">
-        <p>{session.reason === 'expired' ? '세션이 만료됐습니다.' : session.reason === 'rejected' ? '서버에서 이 세션의 인증을 거절했습니다.' : '세션의 만료 정보를 확인할 수 없습니다.'} 현재 입력·기록·미확정 요청은 유지합니다.</p>
-        <button className="secondary" disabled={mutationPending} onClick={() => navigate('account', 'account.login', role)}>{roleLabels[role]}로 다시 로그인</button>
-      </div>}
-      {mutationPending && <div className="notice"><p>응답이 계속 오지 않으면 대기를 중단하고 원거래를 조회할 수 있습니다. 거래 취소 기능은 아닙니다.</p>
-        <button className="secondary" onClick={stopWaiting}>{operation.idempotent ? '응답 대기 중단 · 원요청 보존' : '응답 대기 중단'}</button></div>}
-      {Object.values(recoveries[role] ?? {}).map(saved => <div className="notice" key={saved.operation.id} aria-label="미확정 요청 보존">
-        <p>{saved.operation.title}의 원래 입력과 키를 현재 계정 메모리에 보존했습니다. 조회 화면을 다녀와도 복구할 수 있습니다. 자동으로 재전송하지 않습니다.</p>
-        <div className="quick-actions"><button className="secondary" disabled={pending} onClick={() => {
-          if (selectTask(saved.operation.id)) setRecoveries(old => ({ ...old, [role]: { ...old[role],
-            [saved.operation.id]: { ...saved, values: structuredClone(saved.values) } } }));
-        }}>원요청 다시 채우기</button>
-          <button className="text-button" disabled={pending} onClick={() => releaseRecovery(role, saved.operation.id)}>결과 확인 완료 · 보존 해제</button></div>
-        <p className="caption">원거래 결과를 확인한 뒤에만 보존을 해제하세요. 로컬 세션을 지우거나 다른 계정으로 로그인하면 보존값도 지워집니다.</p>
-      </div>)}
-      {scenario && caseId !== 'account.login' && <details className={`scenario-steps ${authRole(operation) ? 'auth-flow' : ''}`} open={!authRole(operation)}><summary>가입 후 이어지는 흐름 보기</summary><div className="steps" aria-label="흐름별 작업 선택">{steps.map(({ screen, operation: task }, index) => <button key={index}
-        aria-current={stepIndex === index ? 'step' : undefined} disabled={!task}
-        onClick={() => task && selectTask(task.id, index, screen[0] === '판매자' ? 'SELLER' : screen[0] === '구매자' ? 'BUYER' : role)}>
-        <span>{String(index + 1).padStart(2, '0')}</span><strong>{screen[1]}</strong><small>{task ? `${actorLabel(task.actor)} · ${task.title}` : '연결된 작업 없음'}</small></button>)}</div>
-        <p className="caption step-help">단계를 눌러 작업 선택 → 입력 확인 → 실행. 선택 표시는 거래 완료를 뜻하지 않습니다.</p></details>}
-      {caseId === 'buy.normal' && <details className="learning-start" aria-label="처음 구매하기 준비"><summary>처음이라면 · 계정과 상품 준비하기</summary>
-        <h2>처음에는 정상 주문 1건부터</h2>
-        <p>계정이 없으면 아래 가입 버튼부터 시작하세요. 가입 폼의 연습용 가입값 채우기로 값을 만들고, 가입 뒤 같은 정보로 로그인할 수 있습니다. 판매자로 상품·재고를 준비한 뒤 구매자로 주문합니다.</p>
-        <div className="quick-actions"><button onClick={() => navigate('account', 'account.seller', 'SELLER')}>판매자 가입부터 시작</button>
-          <button onClick={() => navigate('account', 'account.buyer', 'BUYER')}>구매자 가입부터 시작</button>
-          <button onClick={() => navigate('sell', 'sell.product', 'SELLER')}>판매자로 상품·재고 준비</button>
-          <button onClick={() => { navigate('account', 'account.login', 'BUYER'); }}>구매자 로그인</button>
-          <button onClick={() => { navigate('account', 'account.address', 'BUYER'); selectTask('post_api_buyers_me_addresses', -1, 'BUYER'); }}>구매자 배송지 등록</button></div>
-        <p className="caption">외부 결제에는 준비된 모의 금융 시험계정이 필요합니다. 주문 생성 응답은 결제 확정이 아니며, 이후 내 주문·내 결제를 조회합니다. 배송·구매확정·지급은 실제 기한과 백엔드 처리기가 준비되어야 합니다.</p>
-      </details>}
-      <details className="prerequisites"><summary>시연 준비 조건과 정책</summary><p>{scenario?.note}</p>{requirements(caseId).map(note => <p key={note}>{note}</p>)}
-        {group === 'monthly' && <p>전월 구매확정·미환불 거래의 외부 결제액으로 상위 100위와 동점자를 선정합니다. 매월 1일 00:00 마감·00:10 자동 발급. 수동 발급·업무 시간 이동 기능은 없습니다.</p>}</details>
-      <div className="workbench"><section className="work-card request-section"><div className="card-heading"><div><span className="overline">실제 작업</span><h2>{operation?.title ?? '작업 선택'}</h2></div><span className="badge neutral">{authRole(operation) ? `${roleLabels[role]} 계정` : operation ? actorLabel(operation.actor) : ''}</span></div>
-        <details className={`task-tools ${authRole(operation) ? 'auth-tools' : ''}`} open={!authRole(operation)}><summary>다른 계정 작업 선택</summary>
+  const workbench = <div className="workbench"><section className="work-card request-section"><div className="card-heading"><div><span className="overline">실제 작업</span><h2>{operation?.title ?? '작업 선택'}</h2></div><span className="badge neutral">{authRole(operation) ? `${roleLabels[role]} 계정` : operation ? actorLabel(operation.actor) : ''}</span></div>
+        <details className={`task-tools ${authRole(operation) ? 'auth-tools' : ''}`} open={!authRole(operation) && !guidedPurchase}><summary>{guidedPurchase ? '개별 API 직접 실행' : '다른 계정 작업 선택'}</summary>
         <label className="operation-select">할 작업<Select value={operationId} onChange={e => selectTask(e.target.value)}>{visibleActions.map(op => <option key={op.id} value={op.id}>{op.method} · {op.title}</option>)}</Select></label>
         <div className="quick-actions">{visibleActions.filter(op => op.method === 'GET').slice(0, 5).map(op => <button key={op.id} className={op.id === operationId ? 'chip selected' : 'chip'} onClick={() => selectTask(op.id)}>{op.title}</button>)}</div>
         </details>
@@ -327,7 +284,7 @@ export function App() {
               <button className="secondary" disabled={pending} onClick={() => navigate('account', 'account.login', role)}>{roleLabels[role]}로 로그인·가입</button></>
             : <p>{session?.name} · {roleLabels[role]} 계정으로 실행합니다.</p>}
         </div>}
-        {operation && <OperationForm key={`${role}:${operation.id}:${session?.epoch ?? 0}`} operation={operation} context={context[role] ?? EMPTY_CONTEXT} pending={pending} allowed={allowed} run={run} role={role} token={token} onUnauthorized={onUnauthorized}
+        {operation && <OperationForm key={`${role}:${operation.id}:${session?.epoch ?? 0}`} operation={operation} context={context[role] ?? EMPTY_CONTEXT} pending={pending} allowed={allowed} run={run} submitLabel={guidedPurchase ? stepIndex === 0 ? '상품 불러오기' : stepIndex === 3 ? '결제·배송 상태 다시 확인' : '다음 단계 실행' : undefined} role={role} token={token} onUnauthorized={onUnauthorized}
           loginValues={operation.path === (role === 'SELLER' ? '/api/seller-sessions' : '/api/buyer-sessions') ? signupLogins[role] : undefined}
           recoveryValues={recoveries[role]?.[operation.id]?.values}
           accounts={{ BUYER: sessions.BUYER ? { id: sessions.BUYER.accountId, name: sessions.BUYER.name } : undefined,
@@ -359,7 +316,75 @@ export function App() {
         <p>{roleLabels[actor]} 가입정보가 준비됐습니다. 아래 버튼을 누르면 가입할 때 사용한 이메일과 비밀번호가 로그인 폼에 채워집니다.</p>
         <button className="secondary" disabled={pending} onClick={() => navigate('account', 'account.login', actor)}>가입한 {roleLabels[actor]}로 로그인</button>
       </div>)}
-      </section></div>
+      </section></div>;
+  return <div className={`shell ${panel ? 'with-panel' : ''}`}>
+    <SessionExpiry sessions={sessions} invalidate={invalidateSession} />
+    <header className="topbar"><a className="brand" href="#" onClick={e => { e.preventDefault(); navigate('buy'); }}>
+      <svg className="brand-mark" width="30" height="32" viewBox="0 0 30 32" aria-hidden="true" focusable="false">
+        <rect width="30" height="32" rx="7" fill="currentColor" />
+        <path d="M17 11c-1-1-2-1.5-3.5-1.5a6.5 6.5 0 0 0 0 13c1.5 0 2.5-.5 3.5-1.5" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" />
+        <circle cx="22" cy="21" r="1.5" fill="white" />
+      </svg><span>commerce<span className="brand-light">settle</span></span></a>
+      <div className="account-control"><div className="role-tabs" aria-label="API 실행 계정">{(['BUYER', 'SELLER'] as Role[]).map(r => <button key={r} className={role === r ? 'active' : ''} aria-pressed={role === r} onClick={() => switchRole(r)}>{roleLabels[r]}</button>)}</div></div>
+      <div className="top-actions">{role === 'OPERATOR' ? <span className="account-name">서버 운영 자격</span> : <>
+        <span className="account-name" title={session?.name}>{authenticated ? <><span className="live-dot" />{session!.name}</>
+          : session ? `${session.name} · 재로그인 필요` : '로그인 전'}</span>
+        <div className="auth-actions"><button className="primary" disabled={mutationPending} aria-label={`${roleLabels[role]} 로그인 화면 열기`} onClick={() => navigate('account', 'account.login', role)}>로그인</button>
+          <button className="secondary" disabled={mutationPending} aria-label={`${roleLabels[role]} 회원가입 화면 열기`} onClick={() => navigate('account', role === 'SELLER' ? 'account.seller' : 'account.buyer', role)}>회원가입</button></div>
+        {session && <button className="text-button" disabled={mutationPending} onClick={() => clearActor(role)}>로컬 세션 지우기</button>}</>}
+        <button className="secondary monitor-button" aria-expanded={panel === 'experiments'} onClick={() => setPanel(panel === 'experiments' ? null : 'experiments')}>실험·모니터링 <ArrowIcon /></button></div></header>
+    <aside className="sidebar"><div className="sidebar-heading">시연 흐름 <span>{scenarios.length}</span></div>
+      <input className="search" aria-label="흐름 검색" placeholder="흐름 검색…" value={search} onChange={e => setSearch(e.target.value)} />
+      <nav>{groups.map(([id, title, number]) => <div key={id} className="nav-group"><button className={group === id ? 'nav-item active' : 'nav-item'} onClick={() => navigate(id)}><span>{number}</span>{title}<small>{scenarios.filter(s => s.group === id).length}</small></button>
+        {(group === id || search) && scenarios.filter(s => s.group === id && (!search || s.label.includes(search))).map(s => <button key={s.id} className={`case-link ${caseId === s.id ? 'active' : ''}`} onClick={() => navigate(id, s.id)}>{s.label}</button>)}</div>)}
+        <button className={`nav-item ${group === 'monthly' ? 'active' : ''}`} onClick={() => navigate('monthly')}><span>08</span>월 랭킹·자동 발급</button></nav>
+      <div className="sidebar-foot"><span className="live-dot" /> 실제 API 연결<span>결과는 서버 응답으로 확인</span></div></aside>
+    <main id="main"><label className="compact-flow-select">시연 흐름 <Select aria-label="시연 흐름 선택" value={caseId || 'monthly'} onChange={e => {
+      const target = scenarios.find(s => s.id === e.target.value); navigate(target?.group ?? 'monthly', target?.id);
+    }}>{groups.map(([id, title]) => <optgroup key={id} label={title}>{scenarios.filter(s => s.group === id).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</optgroup>)}<option value="monthly">월 랭킹·자동 발급</option></Select></label>
+      <div className="breadcrumb">{roleLabels[role]} <span>/</span> {scenario?.groupTitle ?? '월간 혜택'}</div>
+      <div className="page-heading"><div><h1>{group === 'monthly' ? '월 랭킹과 쿠폰 발급' : authRole(operation) ? operation.title : stepIndex < 0 ? operation?.title : scenario?.label}</h1><p>{group === 'monthly' ? '마감 시점에 고정한 선정 순위와 실제 발급 결과를 확인합니다.' : authRole(operation) ? operation.path.endsWith('-sessions') ? `${roleLabels[role]}의 가입 이메일과 비밀번호로 로그인하세요.` : '연습용 가입값을 채우거나 직접 입력한 뒤 회원가입을 누르세요.' : guidedPurchase ? '상품을 선택하고 다음 단계 실행을 누르세요. 이전 결과가 다음 입력에 자동으로 연결됩니다.' : '작업을 선택하고 입력을 확인한 뒤 실행하세요.'}</p></div>
+        <button className="secondary" onClick={() => setPanel(panel === 'requests' ? null : 'requests')}>실행 기록 {panel === 'requests' ? '접기' : '보기'}</button></div>
+      {info.error && <div role="alert" className="notice error"><p>{import.meta.env.DEV
+        ? '운영·부하 제어 서버에 연결하지 못했습니다. 일반 API는 개발 프록시를 통해 계속 사용할 수 있습니다.'
+        : `${info.error.message} · 통합 실행 주소는 http://127.0.0.1:4174입니다.`}</p>
+        <button className="secondary" disabled={info.isFetching} onClick={() => { void info.refetch(); }}>{info.isFetching ? '제어 서버 연결 중' : '제어 서버 다시 연결'}</button></div>}
+      {notice && <div role="status" className="notice">{notice}</div>}
+      {session && !authenticated && <div role="status" className="notice" aria-label="세션 재로그인 안내">
+        <p>{session.reason === 'expired' ? '세션이 만료됐습니다.' : session.reason === 'rejected' ? '서버에서 이 세션의 인증을 거절했습니다.' : '세션의 만료 정보를 확인할 수 없습니다.'} 현재 입력·기록·미확정 요청은 유지합니다.</p>
+        <button className="secondary" disabled={mutationPending} onClick={() => navigate('account', 'account.login', role)}>{roleLabels[role]}로 다시 로그인</button>
+      </div>}
+      {mutationPending && <div className="notice"><p>응답이 계속 오지 않으면 대기를 중단하고 원거래를 조회할 수 있습니다. 거래 취소 기능은 아닙니다.</p>
+        <button className="secondary" onClick={stopWaiting}>{operation.idempotent ? '응답 대기 중단 · 원요청 보존' : '응답 대기 중단'}</button></div>}
+      {Object.values(recoveries[role] ?? {}).map(saved => <div className="notice" key={saved.operation.id} aria-label="미확정 요청 보존">
+        <p>{saved.operation.title}의 원래 입력과 키를 현재 계정 메모리에 보존했습니다. 조회 화면을 다녀와도 복구할 수 있습니다. 자동으로 재전송하지 않습니다.</p>
+        <div className="quick-actions"><button className="secondary" disabled={pending} onClick={() => {
+          if (selectTask(saved.operation.id)) setRecoveries(old => ({ ...old, [role]: { ...old[role],
+            [saved.operation.id]: { ...saved, values: structuredClone(saved.values) } } }));
+        }}>원요청 다시 채우기</button>
+          <button className="text-button" disabled={pending} onClick={() => releaseRecovery(role, saved.operation.id)}>결과 확인 완료 · 보존 해제</button></div>
+        <p className="caption">원거래 결과를 확인한 뒤에만 보존을 해제하세요. 로컬 세션을 지우거나 다른 계정으로 로그인하면 보존값도 지워집니다.</p>
+      </div>)}
+      {scenario && caseId !== 'buy.normal' && caseId !== 'account.login' && <details className={`scenario-steps ${authRole(operation) ? 'auth-flow' : ''}`} open={!authRole(operation)}><summary>가입 후 이어지는 흐름 보기</summary><div className="steps" aria-label="흐름별 작업 선택">{steps.map(({ screen, operation: task }, index) => <button key={index}
+        aria-current={stepIndex === index ? 'step' : undefined} disabled={!task}
+        onClick={() => task && selectTask(task.id, index, screen[0] === '판매자' ? 'SELLER' : screen[0] === '구매자' ? 'BUYER' : role)}>
+        <span>{String(index + 1).padStart(2, '0')}</span><strong>{screen[1]}</strong><small>{task ? `${actorLabel(task.actor)} · ${task.title}` : '연결된 작업 없음'}</small></button>)}</div>
+        <p className="caption step-help">단계를 눌러 작업 선택 → 입력 확인 → 실행. 선택 표시는 거래 완료를 뜻하지 않습니다.</p></details>}
+      {caseId === 'buy.normal' && <details className="learning-start" aria-label="처음 구매하기 준비"><summary>처음이라면 · 계정과 상품 준비하기</summary>
+        <h2>처음에는 정상 주문 1건부터</h2>
+        <p>계정이 없으면 아래 가입 버튼부터 시작하세요. 가입 폼의 연습용 가입값 채우기로 값을 만들고, 가입 뒤 같은 정보로 로그인할 수 있습니다. 판매자로 상품·재고를 준비한 뒤 구매자로 주문합니다.</p>
+        <div className="quick-actions"><button onClick={() => navigate('account', 'account.seller', 'SELLER')}>판매자 가입부터 시작</button>
+          <button onClick={() => navigate('account', 'account.buyer', 'BUYER')}>구매자 가입부터 시작</button>
+          <button onClick={() => navigate('sell', 'sell.product', 'SELLER')}>판매자로 상품·재고 준비</button>
+          <button onClick={() => { navigate('account', 'account.login', 'BUYER'); }}>구매자 로그인</button>
+          <button onClick={() => { navigate('account', 'account.address', 'BUYER'); selectTask('post_api_buyers_me_addresses', -1, 'BUYER'); }}>구매자 배송지 등록</button></div>
+        <p className="caption">외부 결제에는 준비된 모의 금융 시험계정이 필요합니다. 주문 생성 응답은 결제 확정이 아니며, 이후 내 주문·내 결제를 조회합니다. 배송·구매확정·지급은 실제 기한과 백엔드 처리기가 준비되어야 합니다.</p>
+      </details>}
+      <details className="prerequisites"><summary>시연 준비 조건과 정책</summary><p>{scenario?.note}</p>{requirements(caseId).map(note => <p key={note}>{note}</p>)}
+        {group === 'monthly' && <p>전월 구매확정·미환불 거래의 외부 결제액으로 상위 100위와 동점자를 선정합니다. 매월 1일 00:00 마감·00:10 자동 발급. 수동 발급·업무 시간 이동 기능은 없습니다.</p>}</details>
+      {guidedPurchase ? <PurchaseFlow active={stepIndex} records={purchaseRecords} productId={context.BUYER?.productId}>
+        {workbench}
+      </PurchaseFlow> : workbench}
       {operation && <DataFlow key={`${role}:${session?.epoch ?? 0}`} operation={operation} record={pending ? undefined : current} pending={pending} info={info.data} authenticated={authenticated}
         inspection={typeof selected === 'object' ? selected : undefined} onPickRecord={() => setPanel('requests')} onStartTrade={chooseOrder} onInspectResult={inspectEventResult} />}
     </main>

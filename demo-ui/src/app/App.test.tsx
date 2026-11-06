@@ -412,14 +412,12 @@ it('미확정 결제와 가격 변경은 원결제 조회와 견적부터 시작
   expect(fetch).toHaveBeenCalledTimes(1); // Only capability discovery, never a financial request.
 });
 
-it('구매 단계를 선택하면 주문 입력을 열고 거래를 자동 실행하지 않는다', () => {
+it('정상 구매는 순서대로 열리며 단계 표시만으로 거래를 실행하지 않는다', () => {
   const fetch = setup();
-  const steps = screen.getByLabelText('흐름별 작업 선택');
-  const orderStep = within(steps).getByRole('button', { name: /02.*주문서/ });
-  fireEvent.click(orderStep);
-  expect(orderStep.getAttribute('aria-current')).toBe('step');
-  expect((screen.getByLabelText('할 작업') as HTMLSelectElement).value).toBe('post_api_orders');
-  expect(screen.getByRole('button', { name: '요청 실행' }).hasAttribute('disabled')).toBe(true);
+  const flow = screen.getByLabelText('정상 구매 단계');
+  expect(within(flow).getAllByRole('listitem')).toHaveLength(4);
+  expect(flow.querySelector('[aria-current="step"]')?.textContent).toContain('상품 선택');
+  expect(within(flow).getByRole('button', { name: '상품 불러오기' })).toBeTruthy();
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
@@ -455,13 +453,13 @@ it('판매자의 반품 거절 흐름은 판매자 조회부터 시작한다', (
 it('주문 요청의 응답을 기다리는 동안 입력과 멱등키를 보존한다', async () => {
   const fetch = setup(); await login();
   fireEvent.click(screen.getByRole('button', { name: /01.*구매·결제/ }));
-  fireEvent.click(within(screen.getByLabelText('흐름별 작업 선택')).getByRole('button', { name: /02.*주문서/ }));
+  selectOperation('post_api_orders');
   let finish!: (value: Response) => void;
   fetch.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
   const originalKey = JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body)).idempotencyKey;
   fireEvent.click(screen.getByRole('button', { name: '결제 확인 중·응답 유실' }));
-  expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('기본 구매·배송·자동 확정');
+  expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('주문·결제 접수');
   expect((screen.getByLabelText('할 작업') as HTMLSelectElement).value).toBe('post_api_orders');
   finish(response({ upstreamStatus: 202, data: { id: 'order-1', status: 'PAYMENT_PENDING' } }));
   await screen.findByText('요청이 접수됐습니다. 최종 완료는 해당 거래 조회로 확인하세요.');
@@ -476,7 +474,7 @@ it('주문 대기 중 과거 결과를 연결해도 응답 유실 뒤 같은 입
   fireEvent.click(screen.getByRole('button', { name: /01.*구매·결제/ }));
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
   await screen.findByText('격리된 조회 상품');
-  fireEvent.click(within(screen.getByLabelText('흐름별 작업 선택')).getByRole('button', { name: /02.*주문서/ }));
+  selectOperation('post_api_orders');
   fireEvent.change(screen.getByLabelText(/상품 ID.*productId/), { target: { value: 'product-original' } });
   fireEvent.change(screen.getByLabelText(/수량.*quantity/), { target: { value: '2' } });
   let fail!: (error: Error) => void;
@@ -502,12 +500,103 @@ it('대기하지 않을 때는 실제 결과의 ID·버전을 다음 주문 입�
   fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
   await screen.findByText('격리된 조회 상품');
   fireEvent.click(screen.getByRole('button', { name: '이 항목 사용' }));
-  fireEvent.click(within(screen.getByLabelText('흐름별 작업 선택')).getByRole('button', { name: /02.*주문서/ }));
+  selectOperation('post_api_orders');
   expect((screen.getByLabelText(/상품 ID.*productId/) as HTMLInputElement).value).toBe('product-1');
   expect((screen.getByLabelText(/확인한 상품 버전/) as HTMLInputElement).value).toBe('3');
 });
 
 const selectOperation = (id: string) => fireEvent.change(screen.getByLabelText('할 작업'), { target: { value: id } });
+async function startPurchase(fetch: ReturnType<typeof setup>) {
+  await login();
+  fireEvent.click(screen.getByRole('button', { name: /01.*구매·결제/ }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '상품 불러오기' })));
+  fireEvent.click(screen.getByRole('button', { name: '이 항목 사용' }));
+  expect((screen.getByLabelText('할 작업') as HTMLSelectElement).value).toBe('post_api_order_quotes');
+  fireEvent.change(screen.getByLabelText(/수량.*quantity/), { target: { value: '2' } });
+  fireEvent.click(screen.getByLabelText('결제수단 사용 안 함'));
+  fireEvent.change(screen.getByLabelText(/결제수단externalMethod/), { target: { value: 'CREDIT_CARD' } });
+  expect((screen.getByRole('form', { name: 'API 요청' }) as HTMLFormElement).checkValidity()).toBe(true);
+  return fetch;
+}
+
+it('정상 구매의 실제 응답·입력을 이어 쓰고 성공한 요청만 다음 단계로 진행한다', async () => {
+  const fetch = await startPurchase(setup());
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: 200, data: { totalAmount: 46000, productVersion: 8, eventVersion: null } }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '다음 단계 실행' })));
+  expect((screen.getByLabelText('할 작업') as HTMLSelectElement).value).toBe('post_api_orders');
+  expect((screen.getByLabelText(/상품 ID.*productId/) as HTMLInputElement).value).toBe('product-1');
+  expect((screen.getByLabelText(/수량.*quantity/) as HTMLInputElement).value).toBe('2');
+  expect((screen.getByLabelText(/확인한 상품 버전/) as HTMLInputElement).value).toBe('8');
+  expect((screen.getByLabelText(/확인한 결제 금액/) as HTMLInputElement).value).toBe('46000');
+  expect((screen.getByLabelText(/결제수단externalMethod/) as HTMLSelectElement).value).toBe('CREDIT_CARD');
+  expect(document.activeElement?.textContent).toBe('주문 생성');
+  fireEvent.change(screen.getByLabelText(/배송지 ID/), { target: { value: 'chosen-address' } });
+  fireEvent.change(screen.getByLabelText(/결제 시험계정/), { target: { value: 'synthetic-finance-account' } });
+  expect((screen.getByRole('form', { name: 'API 요청' }) as HTMLFormElement).checkValidity()).toBe(true);
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: 201, data: { order: { id: 'new-order', productId: 'product-1', status: 'PAYMENT_PENDING' }, paymentId: 'new-payment' } }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '다음 단계 실행' })));
+  expect((screen.getByLabelText(/주문 ID/) as HTMLInputElement).value).toBe('new-order');
+  expect(screen.getByLabelText('정상 구매 단계').querySelector('[aria-current="step"]')?.textContent).toContain('결제·배송 상태 확인');
+  expect(screen.getAllByText(/이전 결과 보기/)).toHaveLength(3);
+  const calls = fetch.mock.calls.filter(([url]) => url === '/demo/requests').map(([, init]) => JSON.parse(String(init?.body)));
+  expect(calls.map(call => call.operationId)).toEqual(['post_api_buyer_sessions', 'get_api_products', 'post_api_order_quotes', 'post_api_orders']);
+  expect(calls[3].body).toMatchObject({ productId: 'product-1', quantity: 2, expectedTotalAmount: 46000, expectedProductVersion: 8 });
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: 200, data: { id: 'new-order', status: 'PAYMENT_PENDING' } }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '결제·배송 상태 다시 확인' })));
+  expect(document.querySelector('.result-section')?.textContent).toContain('결제 대기');
+  expect(fetch.mock.calls.filter(([, init]) => String(init?.body).includes('post_api_orders'))).toHaveLength(1);
+});
+
+it.each([409, 503, 'missing', 'transport'] as const)('견적 %s에서는 다음 주문을 실행하거나 단계 완료로 표시하지 않는다', async failure => {
+  const fetch = await startPurchase(setup());
+  if (failure === 'transport') fetch.mockRejectedValueOnce(new TypeError('synthetic transport failure'));
+  else fetch.mockResolvedValueOnce(response({ upstreamStatus: typeof failure === 'number' ? failure : 200, data: { detail: 'synthetic quote rejection' } }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '다음 단계 실행' })));
+  expect((screen.getByLabelText('할 작업') as HTMLSelectElement).value).toBe('post_api_order_quotes');
+  expect(screen.getByLabelText('정상 구매 단계').querySelector('[aria-current="step"]')?.textContent).toContain('견적 확인');
+  expect(fetch.mock.calls.filter(([, init]) => String(init?.body).includes('post_api_orders'))).toHaveLength(0);
+});
+
+it('정상 구매의 중복 제출을 막고 대기 중단 후 같은 주문 입력·키를 보존하며 늦은 응답을 무시한다', async () => {
+  const fetch = await startPurchase(setup());
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: 200, data: { totalAmount: 20000, productVersion: 3 } }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '다음 단계 실행' })));
+  fireEvent.change(screen.getByLabelText(/배송지 ID/), { target: { value: 'chosen-address' } });
+  fireEvent.change(screen.getByLabelText(/결제 시험계정/), { target: { value: 'synthetic-finance-account' } });
+  let finish!: (value: Response) => void;
+  fetch.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  const sent = JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body));
+  fireEvent.submit(screen.getByRole('form', { name: 'API 요청' }));
+  expect(fetch.mock.calls.filter(([, init]) => String(init?.body).includes('post_api_orders'))).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button', { name: '응답 대기 중단 · 원요청 보존' }));
+  expect(screen.getByLabelText('정상 구매 단계').querySelector('[aria-current="step"]')?.textContent).toContain('주문 생성');
+  expect((screen.getByLabelText('멱등키') as HTMLInputElement).value).toBe(sent.idempotencyKey);
+  fetch.mockResolvedValueOnce(response({ upstreamStatus: 201, data: { id: 'recovered-order', status: 'PAYMENT_PENDING' } }));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '다음 단계 실행' })));
+  expect(JSON.parse(String(fetch.mock.calls.at(-1)![1]?.body))).toEqual(sent);
+  await act(async () => finish(response({ upstreamStatus: 201, data: { id: 'late-unrelated-order' } })));
+  expect((screen.getByLabelText(/주문 ID/) as HTMLInputElement).value).toBe('recovered-order');
+  expect(screen.queryByLabelText('미확정 요청 보존')).toBeNull();
+});
+
+it.each(scenarios.map(s => [s.id, s] as const))('%s의 단계와 입력을 탐색해도 API를 자동 호출하지 않는다', (_id, scenario) => {
+  const fetch = setup();
+  fireEvent.change(screen.getByLabelText('시연 흐름 선택'), { target: { value: scenario.id } });
+  if (scenario.id === 'buy.normal') expect(screen.getByLabelText('정상 구매 단계').children).toHaveLength(4);
+  else for (const [index, { operation }] of workflow(scenario, 'BUYER').entries()) {
+    const buttons = screen.queryByLabelText('흐름별 작업 선택');
+    if (buttons) {
+      const details = buttons.closest('details');
+      if (details && !details.open) fireEvent.click(within(details).getByText('가입 후 이어지는 흐름 보기'));
+      fireEvent.click(within(buttons).getAllByRole('button')[index]);
+    } else selectOperation(operation!.id);
+    expect((screen.getByLabelText('할 작업') as HTMLSelectElement).value).toBe(operation!.id);
+    expect(screen.getByRole('form', { name: 'API 요청' }).textContent).toContain(operation!.path);
+  }
+  expect(fetch.mock.calls.filter(([url]) => url !== '/demo/info')).toHaveLength(0);
+});
+
 async function recoverCase(kind: string, quantity: number, navigate = true) {
   const fetch = setup(); await login();
   fireEvent.click(screen.getByRole('button', { name: /01.*구매·결제/ })); selectOperation('post_api_orders');

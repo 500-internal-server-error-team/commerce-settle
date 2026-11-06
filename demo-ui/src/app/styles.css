@@ -385,6 +385,17 @@ main {
 .workbench { display:grid; gap:20px; align-items:start }
 .workbench > .work-card { margin-bottom:0; min-width:0 }
 .workbench { margin-bottom:20px }
+.purchase-flow { list-style:none; margin:0 0 24px; padding:0; display:grid; gap:16px }
+.purchase-step { min-width:0; border-left:2px solid var(--line); padding-left:20px }
+.purchase-step.active { border-color:var(--accent) }
+.purchase-step-heading { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:12px 0 }
+.purchase-step-heading h2 { scroll-margin-top:24px }
+.purchase-step-heading .caption { margin-left:auto }
+.purchase-step-number { display:grid; place-items:center; width:28px; height:28px; border:1px solid var(--line); border-radius:50%; font-size:14px }
+.purchase-step.active .purchase-step-number { background:var(--accent); border-color:var(--accent); color:var(--surface) }
+.purchase-step-result { padding:0 0 12px }
+.purchase-step-result details { margin-top:8px }
+.purchase-step-result summary { cursor:pointer; color:var(--muted); padding:4px 0 }
 .auth-success { padding:24px 0 }
 .auth-success h3 { font-size:18px; line-height:1.6; margin:14px 0 8px }
 .auth-success p { font-size:13px; color:var(--muted); line-height:1.8; margin:10px 0 18px }
@@ -1241,3 +1252,7 @@ pre {
 .protected-flow { border-top:1px solid var(--line); margin-top:20px; padding-top:16px }
 .protected-flow summary { cursor:pointer; font-size:13px; font-weight:600; margin-bottom:14px }
 @media(max-width:760px) { .auth-flow-stages { grid-template-columns:minmax(0,1fr) } }
+
+.shell .purchase-flow .workbench { grid-template-columns:minmax(0,1fr); margin:0 }
+.shell .purchase-flow .workbench .result-section { position:static }
+.purchase-flow .task-tools > summary { display:list-item; cursor:pointer }
