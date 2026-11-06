@@ -8,28 +8,33 @@ function createSwaggerSession(configuration) {
       /^\{[^}]+\}$/.test(segment) ? '[^/]+' : segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     ).join('/') + '$'),
   }));
-  let active = null;
+  let details = null;
   let generation = 0;
   let loginAttempt = 0;
   let timer;
   let ui;
+  let system;
+  let applyingLogin = false;
   let clearingAuthorization = false;
   let status;
   let message = '로그인 전 · Sessions에서 구매자 또는 판매자로 로그인하면 인증을 자동 연결합니다.';
 
-  function render() {
-    if (!status) return;
-    status.textContent = active
-      ? `${active.actorKind === 'BUYER' ? '구매자' : '판매자'} ${active.displayName} · 로그인 연결됨 · 만료 ${new Date(active.expiresAt).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' })} KST · 새로고침하면 다시 로그인합니다.`
-      : message;
+  function currentToken() {
+    const value = system?.authSelectors.authorized().getIn(['accountSession', 'value']);
+    return typeof value === 'string' && value ? value : null;
   }
 
-  function connect() {
-    if (ui && active) ui.preauthorizeApiKey('accountSession', active.token);
+  function render() {
+    if (!status) return;
+    const token = currentToken();
+    status.textContent = token && details
+      ? `${details.actorKind === 'BUYER' ? '구매자' : '판매자'} ${details.displayName} · 로그인 연결됨 · 만료 ${new Date(details.expiresAt).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' })} KST · 새로고침하면 다시 로그인합니다.`
+      : token ? '수동 토큰 연결됨 · 만료 여부는 요청 시 확인합니다. 새로고침하면 다시 로그인합니다.'
+        : message;
   }
 
   function reset(reason) {
-    active = null;
+    details = null;
     generation += 1;
     window.clearTimeout(timer);
     message = reason;
@@ -37,15 +42,16 @@ function createSwaggerSession(configuration) {
   }
 
   function clear(reason) {
+    if (system) {
+      clearingAuthorization = true;
+      try { system.authActions.logout(['accountSession']); }
+      finally { clearingAuthorization = false; }
+    }
     reset(reason);
-    if (!ui) return;
-    clearingAuthorization = true;
-    try { ui.authActions.logout(['accountSession']); }
-    finally { clearingAuthorization = false; }
   }
 
   function expire() {
-    if (active && Date.now() >= active.expiresAt) clear('세션이 만료됐습니다. 다시 로그인해 주세요.');
+    if (details && Date.now() >= details.expiresAt) clear('세션이 만료됐습니다. 다시 로그인해 주세요.');
   }
 
   function acceptLogin(body, actor, attempt) {
@@ -55,26 +61,48 @@ function createSwaggerSession(configuration) {
       || typeof body.account.displayName !== 'string' || !body.account.displayName.trim()) return;
     const expiresAt = Date.parse(body.expiresAt);
     if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return;
+    applyingLogin = true;
+    try { ui.preauthorizeApiKey('accountSession', body.token); }
+    finally { applyingLogin = false; }
+    if (currentToken() !== body.token) return;
     window.clearTimeout(timer);
-    active = { token: body.token, actorKind: actor, displayName: body.account.displayName,
-      expiresAt, generation: ++generation };
+    details = { actorKind: actor, displayName: body.account.displayName, expiresAt };
+    generation += 1;
     timer = window.setTimeout(expire, Math.min(expiresAt - Date.now(), 2147483647));
-    connect();
     render();
   }
 
   return {
-    plugin() {
+    plugin(instance) {
+      system = instance;
       return {
         statePlugins: {
           auth: {
             wrapActions: {
+              restoreAuthorization: next => values => {
+                // Swagger's document selector clears in-memory auth. Keep this shared session
+                // in the same auth store; other schemes still follow Swagger's reset.
+                if (Object.keys(values.authorized).length === 0 && currentToken()) {
+                  const session = system.authSelectors.authorized().get('accountSession').toJS();
+                  return next({ ...values, authorized: { accountSession: session } });
+                }
+                return next(values);
+              },
+              authorize: next => values => {
+                const result = next(values);
+                if (Object.hasOwn(values, 'accountSession') && !applyingLogin) {
+                  loginAttempt += 1;
+                  reset('로그인 전 · Sessions에서 로그인하거나 유효한 토큰을 입력해 주세요.');
+                }
+                return result;
+              },
               logout: next => names => {
+                const result = next(names);
                 if (names.includes('accountSession') && !clearingAuthorization) {
                   loginAttempt += 1;
                   reset('Swagger 인증 연결을 해제했습니다. 다시 로그인해 주세요.');
                 }
-                return next(names);
+                return result;
               },
             },
           },
@@ -98,7 +126,6 @@ function createSwaggerSession(configuration) {
         root.before(section);
       }
       expire();
-      connect();
       render();
     },
 
@@ -114,19 +141,20 @@ function createSwaggerSession(configuration) {
       for (const key of Object.keys(request.headers)) {
         if (key.toLowerCase() === 'authorization') delete request.headers[key];
       }
-      const session = protectedRequest ? active : null;
-      if (session) request.headers.Authorization = `Bearer ${session.token}`;
+      const token = protectedRequest ? currentToken() : null;
+      if (token) request.headers.Authorization = `Bearer ${token}`;
+      const requestGeneration = generation;
       const actor = operation && method === 'POST'
         && Object.keys(configuration.login).find(kind => configuration.login[kind] === url.pathname);
       const logout = operation && method === 'DELETE' && url.pathname === configuration.logout;
       const attempt = actor || logout ? ++loginAttempt : 0;
-      if (session || actor) request.redirect = 'error';
+      if (token || actor) request.redirect = 'error';
       request.userFetch = async (input, options) => {
         const response = await nativeFetch(input, options);
         if (actor && response.status === 200) {
           try { acceptLogin(await response.clone().json(), actor, attempt); }
           catch (_) { /* An invalid login response must not replace a valid session. */ }
-        } else if (session && active && session.generation === active.generation) {
+        } else if (token && requestGeneration === generation && currentToken() === token) {
           if (response.status === 401) clear('서버에서 인증을 거절했습니다. 다시 로그인해 주세요.');
           else if (logout && response.status === 204) {
             clear('로그아웃됐습니다. 보호 API를 사용하려면 다시 로그인해 주세요.');
