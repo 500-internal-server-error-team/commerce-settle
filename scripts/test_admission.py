@@ -20,6 +20,7 @@ from urllib.request import urlopen
 import uuid
 
 from init_env import initialize
+from prepare_financial_kafka import prepare_offsets
 from smoke import gateway_json
 from sync_redis_run_id import PLACEHOLDER, approve
 
@@ -35,23 +36,6 @@ def until(action, description, seconds=180):
             return value
         time.sleep(1)
     raise AssertionError(description)
-
-
-SUBSCRIPTIONS = {
-    "commerce.v1": ["payment"], "payment.v1": ["commerce", "settlement"],
-    "settlement.v1": ["payment", "commerce"],
-}
-
-
-def prepare_offsets(compose):
-    """Start every financial group at the beginning of its contract topics in a new project."""
-    # The project is new and all consumers are disabled. Never reset a shared group's offsets.
-    for group, topics in SUBSCRIPTIONS.items():
-        arguments = ["exec", "-T", "kafka", "/opt/kafka/bin/kafka-consumer-groups.sh", "--bootstrap-server", "kafka:9092",
-                     "--group", group, "--reset-offsets", "--to-earliest", "--execute"]
-        for topic in topics:
-            arguments += ["--topic", "commerce-settle." + topic + ".v1"]
-        compose(*arguments)
 
 
 @contextmanager
@@ -150,6 +134,7 @@ def verify():
         until(lambda: gate(0), "gate did not start closed")
         started = time.monotonic()
         prepare_offsets(compose)
+        assert prepare_offsets(compose) == [], "repeating first-run preparation must preserve existing offsets"
         until(lambda: gate(1), "real observations did not open admission after recovery")
         first_recovery = time.monotonic() - started
         assert first_recovery >= 60, first_recovery

@@ -14,6 +14,7 @@ python3 scripts/init_env.py
 ./gradlew --continue clean build
 python3 scripts/sync_redis_run_id.py
 docker compose up -d --build --wait --wait-timeout 300
+python3 -B scripts/prepare_financial_kafka.py
 python3 scripts/smoke.py
 ```
 
@@ -43,7 +44,7 @@ python3 scripts/sync_redis_run_id.py
 docker compose up -d --wait --wait-timeout 300
 ```
 
-기존 환경의 `COMPOSE_PROJECT_NAME`도 보존하므로, 기존 컨테이너·볼륨을 계속 사용하려면 그 값을 유지합니다. 신규 환경의 기본 프로젝트명은 `commerce-settle`입니다.
+기존 환경의 `COMPOSE_PROJECT_NAME`도 보존하므로, 기존 컨테이너·볼륨을 계속 사용하려면 그 값을 유지합니다. 신규 환경의 기본 프로젝트명은 `commerce-settle`입니다. `prepare_financial_kafka.py`는 같은 Compose 환경에서 [금융 그룹의 최초 소비 위치](#금융-관측과-접수-복구)를 준비합니다. 정상 관측이 60초 연속 유지된 뒤 신규 DB 주문을 받습니다.
 
 기존 Docker의 `buildx/activity/...: permission denied` 오류가 발생하면 전역 파일의 소유권을 바꾸는 대신 작업용 설정 경로를 지정할 수 있습니다. 현재 셸에서만 적용되며 사용이 끝나면 `unset BUILDX_CONFIG`로 해제합니다.
 
@@ -144,7 +145,17 @@ DB 주문의 신규 접수와 새 결제 회차에는 기본으로 gate를 적�
 
 Payment API·Worker는 같은 소유 DB를 각각 관측합니다. Settlement도 자기 Inbox·Outbox·지급 Job을 관측하며, 중복 인스턴스를 합산하지 않습니다. 미래 재시도·유효 임대·수동 확인은 자동 실행 지연에서 제외합니다. 금융 UNKNOWN·환불·미지급·수동 확인 경보는 `infra/prometheus/financial.rules.yml`에서 기존 Alertmanager와 [Slack overlay](#dlt-관측과-조치)에 연결합니다. 격리·DLT와 알림 전용 경보는 기존 소유 규칙을 유지합니다.
 
-Kafka는 `commerce.v1 → payment.v1 토픽`, `payment.v1 → commerce.v1·settlement.v1 토픽`, `settlement.v1 → payment.v1·commerce.v1 토픽`의 **모든 파티션**을 수집합니다. 여기서 토픽은 `commerce-settle.` 접두사를 포함합니다. 초기 offset 부재·보존 범위 밖 offset·누락/실패 파티션을 0 lag로 바꾸지 않습니다. 신규 전용 환경에서 소비자를 켜기 전에 기존 offset 초기화 절차로 각 그룹의 모든 계약 토픽을 준비합니다. 예를 들어 새 Payment 그룹은 다음과 같습니다.
+Kafka는 `commerce.v1 → payment.v1 토픽`, `payment.v1 → commerce.v1·settlement.v1 토픽`, `settlement.v1 → payment.v1·commerce.v1 토픽`의 **모든 파티션**을 수집합니다. 여기서 토픽은 `commerce-settle.` 접두사를 포함합니다. 초기 offset 부재·보존 범위 밖 offset·누락/실패 파티션을 0 lag로 바꾸지 않습니다.
+
+새 환경은 기본 Compose로 토픽을 만든 뒤, 소비자를 켜기 전에 다음 명령으로 세 그룹을 준비합니다. `COMPOSE_PROJECT_NAME`·`COMPOSE_FILE`·`.env`는 기동 때와 같은 대상을 사용합니다.
+
+```bash
+python3 -B scripts/prepare_financial_kafka.py
+```
+
+모든 계약 파티션을 관측하고, offset이 전혀 없는 비활성 그룹의 구독 토픽이 모두 시작·끝 위치 0인 경우에만 초기화합니다. 정상 offset이 이미 있는 그룹은 활성 여부와 관계없이 그대로 두므로 재실행할 수 있습니다. 부분 offset·기존 메시지·보존 이력·활성 신규 그룹·관측 실패는 자동 초기화를 거절합니다. 최초 준비 중에는 다른 소비자나 관리자가 offset을 동시에 변경하지 않습니다. 토픽과 그룹 준비만 확인하며 다른 필수 관측과 60초 재개 검사는 계속 적용합니다.
+
+기존 데이터나 일부 offset이 있는 환경은 원인과 처리 이력을 확인하고 필요한 그룹·파티션의 시작점을 명시적으로 결정합니다. 아래 명령은 **새 전용 환경의 비활성 Payment 그룹**을 처음부터 읽도록 지정하는 예이며, 기존 그룹에 그대로 실행하면 이미 처리한 이벤트를 다시 읽을 수 있습니다.
 
 ```bash
 docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh \
@@ -199,7 +210,7 @@ Payment 내부 조회와 운영 종결은 `service:payment`·`operator:<식별�
 
 ```bash
 docker compose up -d --build --wait
-# commerce.v1·payment.v1·settlement.v1 그룹의 offset 준비(위 절의 명령)
+python3 -B scripts/prepare_financial_kafka.py
 docker compose -f compose.yml -f compose.financial-flow.yml up -d --wait commerce payment-worker settlement finance-mock
 ```
 
@@ -404,9 +415,11 @@ python3 scripts/reconcile.py --cutoff-at 2026-11-03T10:00:00+09:00 \
 python3 scripts/test_init_env.py
 python3 -B scripts/test_compose.py
 python3 scripts/test_sync_redis_run_id.py
+python3 -B scripts/test_prepare_financial_kafka.py
 ./gradlew --continue build
 python3 scripts/sync_redis_run_id.py
 docker compose up -d --build --wait --wait-timeout 300
+python3 -B scripts/prepare_financial_kafka.py
 python3 scripts/smoke.py
 ```
 
