@@ -33,11 +33,30 @@ public class GatewayRoutesConfiguration {
   RouteLocator apiRoutes(
       RouteLocatorBuilder builder,
       ApiOperations operations,
+      SwaggerDocumentation documentation,
       @Value("${gateway.services.commerce}") String commerce,
       @Value("${gateway.services.payment}") String payment,
       @Value("${gateway.services.settlement}") String settlement) {
     final var targets = Map.of("commerce", commerce, "payment", payment, "settlement", settlement);
     final var routes = builder.routes();
+    targets.forEach(
+        (owner, target) ->
+            routes.route(
+                owner + "-docs",
+                route ->
+                    route
+                        .path("/v3/api-docs/" + owner)
+                        .filters(
+                            filters ->
+                                filters
+                                    .setPath("/v3/api-docs")
+                                    .modifyResponseBody(
+                                        String.class,
+                                        String.class,
+                                        (exchange, body) ->
+                                            reactor.core.publisher.Mono.justOrEmpty(
+                                                documentation.enrich(owner, body))))
+                        .uri(target)));
     for (var operation : operations.all()) {
       final var target = targets.get(operation.owner());
       if (target == null) {

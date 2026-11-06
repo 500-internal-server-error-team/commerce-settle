@@ -80,7 +80,7 @@ UUID는 `00000000-0000-4000-8000-` 뒤에 아래 접미사를 12자리로 채웁
 | 판매자 A/B | `fixture-seller-a@example.test` / `fixture-seller-b@example.test`, 2 / 22 |
 | 주문 예제 | 상품 3(23,000원), 구매자 A 주소 101 |
 
-주소 없음·다중 페이지·정지/삭제·품절·판매 중단 등의 전체 입력은 [Commerce fixture](../commerce/src/main/java/com/commercesettle/commerce/infrastructure/persistence/DevFixtureLoader.java)를 기준으로 합니다. [Swagger UI](http://localhost:8080/swagger-ui.html)에서 구매자·판매자로 각각 로그인하고 token을 Authorize에 넣어 본인 목록과 단건을 조회합니다. 비밀번호는 `.env`의 `DEV_FIXTURE_PASSWORD`, 변경한 포트는 `GATEWAY_PORT`를 사용합니다.
+주소 없음·다중 페이지·정지/삭제·품절·판매 중단 등의 전체 입력은 [Commerce fixture](../commerce/src/main/java/com/commercesettle/commerce/infrastructure/persistence/DevFixtureLoader.java)를 기준으로 합니다. [Swagger UI](http://localhost:8080/swagger-ui.html)의 Commerce → Sessions에서 구매자 또는 판매자로 로그인하면 보호 요청에 토큰을 자동 연결합니다. 비밀번호는 `.env`의 `DEV_FIXTURE_PASSWORD`, 변경한 포트는 `GATEWAY_PORT`를 사용합니다.
 
 ### Payment·Settlement·Finance Mock
 
@@ -298,6 +298,16 @@ docker compose --profile observability up -d --wait --wait-timeout 300
 ```
 
 Grafana의 `commerce-settle / Runtime overview` 대시보드와 Prometheus 데이터 소스는 자동 등록됩니다. 수집 주기 때문에 첫 데이터가 표시되기까지 약 15초가 필요합니다. 이 구성은 로컬 전용이며 DB·Kafka·Redis·내부 앱·관리 포트는 호스트에 게시하지 않습니다. Zipkin은 기본 10% 샘플링이며 `.env`의 `TRACING_SAMPLING_PROBABILITY`로 바꿉니다. 모든 요청을 수집하면 부하·메모리 사용량이 달라집니다.
+
+### Swagger 로그인
+
+Commerce 명세의 `POST /api/buyer-sessions` 또는 `POST /api/seller-sessions`를 실행합니다. 성공하면 상단에 계정 종류·표시 이름·만료 시각이 나타나며, 토큰 복사나 Authorize 입력 없이 본인 API를 호출할 수 있습니다. 기존 계정이 없으면 Accounts에서 먼저 가입합니다.
+
+로그인은 현재 탭의 메모리에서만 유지합니다. Commerce·Payment·Settlement 명세를 전환해도 활성 계정은 유지되며, 다른 계정으로 로그인하면 성공한 시점에 교체합니다. 새로고침·탭 종료 뒤에는 다시 로그인합니다. 로그인 실패는 기존 유효 세션을 지우지 않습니다.
+
+`DELETE /api/sessions/current`의 로그아웃 성공, 서버가 발급한 고정 30분 만료, 현재 세션으로 보낸 보호 요청의 401에서는 연결을 해제합니다. 403 권한 부족과 503 확인 불가는 만료로 처리하지 않으며, 실패한 업무 요청을 자동 재전송하지 않습니다. 서버는 보호 요청마다 기존 Redis 세션을 계속 검증합니다.
+
+자동 인증은 같은 출처의 명세된 사용자 보호 API에만 적용합니다. 공개 요청·문서 조회·외부 주소·내부 및 운영자 요청에는 사용자 토큰을 붙이지 않습니다. 브라우저의 로그인 상태를 k6나 다른 클라이언트와 공유하지 않으므로, 별도 클라이언트에는 기존처럼 발급받은 토큰을 전달합니다. 주문의 상품·배송지·가격·멱등키와 금융 처리 준비는 로그인과 별도로 충족해야 합니다.
 
 ## k6 실행 확인
 

@@ -238,6 +238,68 @@ class GatewayRoutingIntegrationTest {
   }
 
   @Test
+  @DisplayName("Swagger 초기화 코드에 탭 세션 연결과 canonical 요청 범위를 포함한다")
+  void installsSwaggerSessionClient() {
+    final var body =
+        client
+            .get()
+            .uri("/swagger-ui/swagger-initializer.js")
+            .exchange()
+            .expectStatus()
+            .isOk()
+            .expectBody(String.class)
+            .returnResult()
+            .getResponseBody();
+
+    assertThat(body)
+        .contains(
+            "function createSwaggerSession",
+            "requestInterceptor: session.request",
+            "session.attach(window.ui)",
+            "/api/buyer-sessions",
+            "/api/seller-sessions");
+    assertThat(body).doesNotContain("localStorage", "sessionStorage");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"commerce", "payment", "settlement"})
+  @DisplayName("상류 명세의 보호 작업에 동일한 Bearer 정의를 연결한다")
+  void documentsCanonicalAccountSecurity(String service) {
+    final var body =
+        client
+            .get()
+            .uri("/v3/api-docs/" + service + "?mode=docs")
+            .exchange()
+            .expectStatus()
+            .isOk()
+            .expectBody(JsonNode.class)
+            .returnResult()
+            .getResponseBody();
+
+    assertThat(body.at("/components/securitySchemes/accountSession/scheme").asText())
+        .isEqualTo("bearer");
+    body.path("paths")
+        .properties()
+        .forEach(
+            path ->
+                path.getValue()
+                    .properties()
+                    .forEach(
+                        method -> {
+                          final var actor =
+                              CONTRACT
+                                  .path("paths")
+                                  .path(path.getKey())
+                                  .path(method.getKey())
+                                  .path("x-actor")
+                                  .asText();
+                          assertThat(method.getValue().path("security").isEmpty())
+                              .isEqualTo("PUBLIC".equals(actor));
+                          assertThat(method.getValue().path("x-actor").asText()).isNotBlank();
+                        }));
+  }
+
+  @Test
   @DisplayName("백엔드 오류 응답의 계약과 추적 ID를 바꾸지 않는다")
   void preservesBackendProblem() {
     client
@@ -579,18 +641,21 @@ class GatewayRoutingIntegrationTest {
                               final var problem = "mode=problem".equals(uri.getRawQuery());
                               try {
                                 final var payload =
-                                    MAPPER.writeValueAsString(
-                                        problem
-                                            ? Map.of(
-                                                "type",
-                                                    "urn:commerce-settle:error:payment-probe-conflict",
-                                                "title", "결제 충돌",
-                                                "status", 409,
-                                                "detail", "기존 결제 결과를 확인해 주세요.",
-                                                "instance", "/api/payments",
-                                                "code", "PAYMENT_PROBE_CONFLICT",
-                                                "traceId", "backend-trace-probe")
-                                            : Map.of("service", name, "path", uri.getRawPath()));
+                                    "mode=docs".equals(uri.getRawQuery())
+                                        ? documentation(name)
+                                        : MAPPER.writeValueAsString(
+                                            problem
+                                                ? Map.of(
+                                                    "type",
+                                                        "urn:commerce-settle:error:payment-probe-conflict",
+                                                    "title", "결제 충돌",
+                                                    "status", 409,
+                                                    "detail", "기존 결제 결과를 확인해 주세요.",
+                                                    "instance", "/api/payments",
+                                                    "code", "PAYMENT_PROBE_CONFLICT",
+                                                    "traceId", "backend-trace-probe")
+                                                : Map.of(
+                                                    "service", name, "path", uri.getRawPath()));
                                 return response
                                     .status(problem ? 409 : 200)
                                     .header(
@@ -604,6 +669,30 @@ class GatewayRoutingIntegrationTest {
                             }))
             .bindNow();
     return new Backend(server, last, count);
+  }
+
+  private static String documentation(String owner) throws IOException {
+    final var result = MAPPER.createObjectNode().put("openapi", "3.1.0");
+    final var paths = result.putObject("paths");
+    CONTRACT
+        .path("paths")
+        .properties()
+        .forEach(
+            path -> {
+              if (!path.getKey().startsWith("/api/")) return;
+              path.getValue()
+                  .properties()
+                  .forEach(
+                      method -> {
+                        if (owner.equals(method.getValue().path("x-owner-service").asText())) {
+                          paths
+                              .withObject("/" + path.getKey().replace("~", "~0").replace("/", "~1"))
+                              .putObject(method.getKey())
+                              .put("summary", "upstream operation");
+                        }
+                      });
+            });
+    return MAPPER.writeValueAsString(result);
   }
 
   record CapturedRequest(
