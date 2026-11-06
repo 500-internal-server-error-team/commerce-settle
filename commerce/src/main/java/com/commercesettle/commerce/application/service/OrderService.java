@@ -110,6 +110,8 @@ public class OrderService {
   private OrderView createNew(UUID buyerId, UUID orderId, RegularOrderCommand command) {
     admission.requireAdmission();
     validateRegular(command);
+    // 매진·종료된 이벤트는 멱등 기록 뒤, 주문·주소 사본을 만들기 전에 거절한다. 같은 키의 기존 주문 재요청은 위에서 원래 결과를 돌려받는다.
+    if (command.eventId() != null) benefits.requireEventOpen(command.eventId());
     var address =
         addresses
             .findById(command.addressId())
