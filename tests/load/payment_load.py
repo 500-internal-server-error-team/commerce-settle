@@ -365,6 +365,16 @@ def latency(start, end):
                     [int(row[0])] + [float(v) if v else None for v in row[1:]]))
 
 
+WORKER_SETTINGS = ("PAYMENT_REQUEST_CONCURRENCY", "PAYMENT_APPROVAL_CONCURRENCY", "PAYMENT_DB_POOL_SIZE")
+
+
+def worker_settings():
+    """실행 중인 payment-worker에 실제로 들어간 처리 설정. 기동 셸의 변수와 달라도 결과를 잘못 해석하지 않게 한다."""
+    out = compose("exec", "-T", "payment-worker", "env")
+    values = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    return {name: values.get(name) for name in WORKER_SETTINGS}
+
+
 def cmd_ramp(args):
     """단계적으로 도착률을 올리며 일정 간격으로 상태를 기록하고, 끝나면 단계별 처리량·적체·지연을 요약한다."""
     import threading
@@ -464,7 +474,7 @@ def cmd_ramp(args):
             raise SystemExit("worker restart did not complete")
 
     summary = {"run": run, "mix": args.mix, "scenario": args.scenario, "fault": fault,
-               "stages": []}
+               "workerSettings": worker_settings(), "stages": []}
     for mark in marks:
         in_stage = [s for s in samples[1:] if s.get("stage") == mark["stage"]]
         steady = in_stage[1:] or in_stage  # 첫 구간은 warm-up으로 뺀다
