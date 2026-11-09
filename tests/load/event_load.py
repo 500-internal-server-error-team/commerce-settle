@@ -16,6 +16,7 @@ import hashlib
 import json
 from pathlib import Path
 import secrets
+import signal
 import sys
 import threading
 import time
@@ -226,4 +227,8 @@ union all select 'normalInventory', available_qty||'/'||reserved_qty||'/'||event
 
 
 if __name__ == "__main__":
+    def stop(*_args):
+        raise SystemExit(143)
+
+    signal.signal(signal.SIGTERM, stop)
     main()
