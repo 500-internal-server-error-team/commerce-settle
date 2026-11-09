@@ -40,7 +40,7 @@ commerce-settle은 결제·환불을 정확히 반영한 판매대금을 최대�
 
 ## 통합 인프라 구조도
 
-Compose 개발·CI 구성입니다. 상세 연결은 [인프라 설계](docs/architecture.md#인프라-구조도)를 따릅니다.
+팀 공용 환경은 ECS 클러스터 하나에 앱용·공유 인프라용 EC2 두 대를 배치하는 구조입니다. 배치와 운영 기준은 [인프라 설계](docs/architecture.md#인프라-구조도)를 따릅니다.
 
 ![통합 인프라 구조도](docs/diagrams/infrastructure.svg)
 
