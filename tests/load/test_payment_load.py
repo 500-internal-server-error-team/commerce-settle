@@ -400,5 +400,22 @@ class StopInjectionTest(unittest.TestCase):
             process.wait.assert_called_once()
 
 
+class WorkerSettingsTest(unittest.TestCase):
+    def test_records_only_processing_settings_from_the_running_worker(self):
+        env = "DB_PASSWORD=secret\nPAYMENT_REQUEST_CONCURRENCY=6\nPAYMENT_DB_POOL_SIZE=20\n"
+        with patch.object(load, "compose", return_value=env) as compose:
+            settings = load.worker_settings()
+        compose.assert_called_once_with("exec", "-T", "payment-worker", "env")
+        self.assertEqual(settings, {"PAYMENT_REQUEST_CONCURRENCY": "6",
+                                    "PAYMENT_APPROVAL_CONCURRENCY": None,
+                                    "PAYMENT_DB_POOL_SIZE": "20"})
+
+    def test_ramp_summary_contains_worker_settings(self):
+        settings = {"PAYMENT_REQUEST_CONCURRENCY": "6"}
+        with patch.object(load, "worker_settings", return_value=settings):
+            summary = RestartRegressionTest().ramp()
+        self.assertEqual(summary["workerSettings"], settings)
+
+
 if __name__ == "__main__":
     unittest.main()
