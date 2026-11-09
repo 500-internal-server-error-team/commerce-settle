@@ -25,6 +25,7 @@ public final class SwaggerDocumentation {
                   .required("components")
                   .required("securitySchemes")
                   .required("accountSession");
+      scheme.put("description", "로그인하면 보호 API에 인증이 자동으로 연결됩니다.");
     }
   }
 
@@ -55,7 +56,7 @@ public final class SwaggerDocumentation {
     }
   }
 
-  public String clientConfiguration() throws IOException {
+  public String clientConfiguration(boolean fixtures) throws IOException {
     final var result = new LinkedHashMap<String, Object>();
     result.put(
         "operations",
@@ -75,6 +76,7 @@ public final class SwaggerDocumentation {
             "BUYER", requiredPath("api-post_api_buyer_sessions"),
             "SELLER", requiredPath("api-post_api_seller_sessions")));
     result.put("logout", requiredPath("api-delete_api_sessions_current"));
+    result.put("fixtures", fixtures);
     return mapper.writeValueAsString(result);
   }
 

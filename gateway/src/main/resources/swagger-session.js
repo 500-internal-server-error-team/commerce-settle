@@ -17,7 +17,9 @@ function createSwaggerSession(configuration) {
   let applyingLogin = false;
   let clearingAuthorization = false;
   let status;
-  let message = '로그인 전 · Sessions에서 구매자 또는 판매자로 로그인하면 인증을 자동 연결합니다.';
+  let message = configuration.fixtures
+    ? '개발용 계정을 선택하고 로그인하세요.'
+    : '개발용 계정 로그인이 꺼져 있습니다. 서버의 fixture 설정을 확인해 주세요.';
 
   function currentToken() {
     const value = system?.authSelectors.authorized().getIn(['accountSession', 'value']);
@@ -29,7 +31,7 @@ function createSwaggerSession(configuration) {
     const token = currentToken();
     status.textContent = token && details
       ? `${details.actorKind === 'BUYER' ? '구매자' : '판매자'} ${details.displayName} · 로그인 연결됨 · 만료 ${new Date(details.expiresAt).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul' })} KST · 새로고침하면 다시 로그인합니다.`
-      : token ? '수동 토큰 연결됨 · 만료 여부는 요청 시 확인합니다. 새로고침하면 다시 로그인합니다.'
+      : token ? '인증 연결됨 · 유효 여부는 요청 시 확인합니다. 새로고침하면 다시 로그인합니다.'
         : message;
   }
 
@@ -70,12 +72,88 @@ function createSwaggerSession(configuration) {
     generation += 1;
     timer = window.setTimeout(expire, Math.min(expiresAt - Date.now(), 2147483647));
     render();
+    return true;
+  }
+
+  function fixtureLogin(section) {
+    const form = document.createElement('form');
+    form.id = 'swagger-fixture-login';
+    form.className = 'wrapper';
+    Object.assign(form.style, { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '12px', padding: '0 20px 16px' });
+    const label = document.createElement('label');
+    label.textContent = '개발용 계정 ';
+    Object.assign(label.style, { color: 'inherit', fontSize: '14px', lineHeight: '20px', margin: '0', display: 'flex', alignItems: 'center', gap: '8px' });
+    const select = document.createElement('select');
+    select.id = 'swagger-fixture-account';
+    select.setAttribute('aria-label', '개발용 계정');
+    Object.assign(select.style, { height: '44px', boxSizing: 'border-box', lineHeight: '20px', backgroundSize: '16px 16px' });
+    for (const [value, text] of [['BUYER_A', '구매자 A'], ['BUYER_B', '구매자 B'], ['SELLER_A', '판매자 A'], ['SELLER_B', '판매자 B']]) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = text;
+      select.appendChild(option);
+    }
+    const button = document.createElement('button');
+    button.type = 'submit';
+    button.className = 'btn execute';
+    button.textContent = '로그인';
+    Object.assign(button.style, { height: '44px', boxSizing: 'border-box', lineHeight: '20px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' });
+    const feedback = document.createElement('span');
+    feedback.setAttribute('role', 'status');
+    label.appendChild(select);
+    form.appendChild(label);
+    form.appendChild(button);
+    form.appendChild(feedback);
+    form.onsubmit = async event => {
+      event.preventDefault();
+      if (button.disabled) return;
+      const account = select.value;
+      const actor = account.startsWith('BUYER_') ? 'BUYER' : 'SELLER';
+      const attempt = ++loginAttempt;
+      button.disabled = true;
+      select.disabled = true;
+      button.textContent = '로그인 중…';
+      feedback.textContent = '';
+      message = '로그인 중입니다.';
+      render();
+      try {
+        const response = await nativeFetch('/swagger-ui/fixture-sessions', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ account }), credentials: 'same-origin', redirect: 'error',
+        });
+        if (attempt !== loginAttempt) return;
+        if (response.status === 200) {
+          if (!acceptLogin(await response.json(), actor, attempt)) {
+            feedback.textContent = '로그인 응답을 확인할 수 없습니다. 다시 로그인해 주세요.';
+          }
+        } else {
+          feedback.textContent = response.status === 401
+            ? '개발용 계정을 확인해 주세요. 계정 적재 여부와 최초 fixture 비밀번호가 일치해야 합니다.'
+            : response.status === 429 ? '로그인 시도가 많습니다. 잠시 후 다시 시도해 주세요.'
+              : '로그인할 수 없습니다. 서버 상태를 확인하고 다시 시도해 주세요.';
+        }
+      } catch (_) {
+        if (attempt === loginAttempt) feedback.textContent = '로그인 응답을 확인할 수 없습니다. 서버 상태를 확인하고 다시 시도해 주세요.';
+      } finally {
+        button.disabled = false;
+        select.disabled = false;
+        button.textContent = '로그인';
+        if (attempt === loginAttempt && !currentToken()) message = '계정을 선택하고 다시 로그인하세요.';
+        render();
+      }
+    };
+    section.appendChild(form);
   }
 
   return {
     plugin(instance) {
       system = instance;
       return {
+        wrapComponents: {
+          authorizeBtn: () => () => null,
+          authorizeOperationBtn: () => () => null,
+          authorizationPopup: () => () => null,
+        },
         statePlugins: {
           auth: {
             wrapActions: {
@@ -92,7 +170,7 @@ function createSwaggerSession(configuration) {
                 const result = next(values);
                 if (Object.hasOwn(values, 'accountSession') && !applyingLogin) {
                   loginAttempt += 1;
-                  reset('로그인 전 · Sessions에서 로그인하거나 유효한 토큰을 입력해 주세요.');
+                  reset('로그인 정보가 변경됐습니다. 계정을 확인해 주세요.');
                 }
                 return result;
               },
@@ -122,6 +200,7 @@ function createSwaggerSession(configuration) {
         status.setAttribute('aria-live', 'polite');
         status.style.padding = '12px 20px';
         section.appendChild(status);
+        if (configuration.fixtures) fixtureLogin(section);
         const root = document.getElementById('swagger-ui');
         root.before(section);
       }

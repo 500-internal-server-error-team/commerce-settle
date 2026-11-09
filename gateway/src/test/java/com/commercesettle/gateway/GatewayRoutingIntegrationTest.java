@@ -260,6 +260,16 @@ class GatewayRoutingIntegrationTest {
             "/api/buyer-sessions",
             "/api/seller-sessions");
     assertThat(body).doesNotContain("localStorage", "sessionStorage");
+    assertThat(body).contains("\"fixtures\":false");
+    client
+        .post()
+        .uri("/swagger-ui/fixture-sessions")
+        .header(HttpHeaders.ORIGIN, "http://localhost")
+        .contentType(MediaType.APPLICATION_JSON)
+        .bodyValue(Map.of("account", "BUYER_A"))
+        .exchange()
+        .expectStatus()
+        .isNotFound();
   }
 
   @ParameterizedTest

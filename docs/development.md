@@ -56,7 +56,9 @@ export BUILDX_CONFIG="$PWD/work/buildx"
 
 ## 개발용 DB fixture
 
-`APP_DEV_FIXTURES_ENABLED=true`는 각 서비스 DB에 없는 실험 데이터를 추가합니다. 기본값은 false입니다. `APP_DEV_FIXTURE_SCENARIOS_ENABLED=true`도 지정하면 Payment 접수·정산 일배치·모의 지급을 실제 서비스 경로로 실행합니다. 기존 Worker/Relay 활성화 설정은 바꾸지 않습니다. 정산 일배치 스케줄러와 지급 Worker는 fixture 조회 상태를 바꾸지 않도록 모두 끕니다. 둘 중 하나라도 켜져 있으면 fixture 기동을 거절합니다. 개발 전용 DB에서 사용합니다.
+로컬과 팀 공용 배포는 모두 시연 환경입니다. Compose는 Gateway·Commerce의 계정 fixture와 Swagger 계정 선택 로그인을 기본으로 켭니다(`COMMERCE_DEV_FIXTURES_ENABLED=true`). 두 서비스는 같은 `DEV_FIXTURE_PASSWORD`를 사용합니다. 계정 적재를 제외하는 격리 시험에서만 `COMMERCE_DEV_FIXTURES_ENABLED=false`로 끕니다. Compose 밖에서 배포할 때도 두 서비스에 `APP_DEV_FIXTURES_ENABLED=true`와 같은 비밀번호를 명시합니다.
+
+금융 조회용 스냅샷까지 적재하려면 `APP_DEV_FIXTURES_ENABLED=true`를 지정합니다(기본 false). `APP_DEV_FIXTURE_SCENARIOS_ENABLED=true`도 지정하면 Payment 접수·정산 일배치·모의 지급을 실제 서비스 경로로 실행합니다. 기존 Worker/Relay 활성화 설정은 바꾸지 않습니다. 정산 일배치 스케줄러와 지급 Worker는 fixture 조회 상태를 바꾸지 않도록 모두 끕니다. 둘 중 하나라도 켜져 있으면 fixture 기동을 거절합니다. 시연 전용 DB에서 사용합니다.
 
 ```bash
 python3 scripts/init_env.py
@@ -79,7 +81,7 @@ UUID는 `00000000-0000-4000-8000-` 뒤에 아래 접미사를 12자리로 채웁
 | 판매자 A/B | `fixture-seller-a@example.test` / `fixture-seller-b@example.test`, 2 / 22 |
 | 주문 예제 | 상품 3(23,000원), 구매자 A 주소 101 |
 
-주소 없음·다중 페이지·정지/삭제·품절·판매 중단 등의 전체 입력은 [Commerce fixture](../commerce/src/main/java/com/commercesettle/commerce/infrastructure/persistence/DevFixtureLoader.java)를 기준으로 합니다. [Swagger UI](http://localhost:8080/swagger-ui.html)의 Commerce → Sessions에서 구매자 또는 판매자로 로그인하면 보호 요청에 토큰을 자동 연결합니다. 비밀번호는 `.env`의 `DEV_FIXTURE_PASSWORD`, 변경한 포트는 `GATEWAY_PORT`를 사용합니다.
+주소 없음·다중 페이지·정지/삭제·품절·판매 중단 등의 전체 입력은 [Commerce fixture](../commerce/src/main/java/com/commercesettle/commerce/infrastructure/persistence/DevFixtureLoader.java)를 기준으로 합니다. [Swagger UI](http://localhost:8080/swagger-ui.html) 상단에서 구매자·판매자 계정을 선택해 로그인합니다. 변경한 포트는 `GATEWAY_PORT`를 사용합니다.
 
 ### Payment·Settlement·Finance Mock
 
@@ -286,13 +288,13 @@ Grafana의 `commerce-settle / Runtime overview` 대시보드와 Prometheus 데�
 
 ### Swagger 로그인
 
-Commerce 명세의 `POST /api/buyer-sessions` 또는 `POST /api/seller-sessions`를 실행합니다. 성공하면 상단에 계정 종류·표시 이름·만료 시각이 나타나며, 토큰 복사나 Authorize 입력 없이 본인 API를 호출할 수 있습니다. 기존 계정이 없으면 Accounts에서 먼저 가입합니다.
+로컬·팀 공용 배포 모두 상단 `개발용 계정`에서 구매자·판매자 A/B를 고르고 `로그인`을 누릅니다. 별도 가입이나 이메일·비밀번호·토큰 입력 없이 기존 로그인 API로 인증합니다. Gateway·Commerce에 같은 fixture 설정과 최초 적재에 사용한 `DEV_FIXTURE_PASSWORD`가 필요하며, 비밀번호는 브라우저에 전달하지 않습니다. 이미 생성된 계정의 비밀번호는 fixture 재기동으로 바뀌지 않습니다.
+
+성공하면 상단에 계정 종류·표시 이름·만료 시각이 나타나며 보호 요청에 토큰이 자동 연결됩니다. 가입·로그인 API 자체의 입력과 응답을 시험할 때만 Accounts·Sessions 명세를 직접 실행합니다.
 
 로그인은 현재 탭의 메모리에서만 유지합니다. Commerce·Payment·Settlement 명세를 전환해도 활성 계정은 유지되며, 다른 계정으로 로그인하면 성공한 시점에 교체합니다. 새로고침·탭 종료 뒤에는 다시 로그인합니다. 로그인 실패는 기존 유효 세션을 지우지 않습니다.
 
-자동 로그인과 Authorize의 수동 입력은 Swagger의 같은 인증 저장소를 사용합니다. 토큰을 직접 입력하면 그 토큰으로 보호 요청을 보냅니다. 기존 계정 표시·만료 예약은 해제하고 수동 토큰 연결 상태를 표시합니다. 직접 입력한 토큰의 계정·만료 정보는 알 수 없으므로 서버의 요청별 검증 결과를 따릅니다.
-
-Authorize 창의 Logout은 현재 탭의 인증 연결을 해제합니다. 진행 중이던 로그인 응답도 이 연결을 다시 살리지 않습니다. 서버 세션까지 종료하려면 연결된 상태에서 `DELETE /api/sessions/current`를 실행합니다.
+Swagger에는 별도의 토큰 입력 버튼·인증창을 표시하지 않습니다. 로그인한 계정의 인증을 보호 요청에 자동 연결하며, 서버는 요청마다 기존 세션을 검증합니다. 로그아웃은 `DELETE /api/sessions/current`를 실행합니다.
 
 `DELETE /api/sessions/current`의 로그아웃 성공, 서버가 발급한 고정 30분 만료, 현재 세션으로 보낸 보호 요청의 401에서는 연결을 해제합니다. 403 권한 부족과 503 확인 불가는 만료로 처리하지 않으며, 실패한 업무 요청을 자동 재전송하지 않습니다. 서버는 보호 요청마다 기존 Redis 세션을 계속 검증합니다.
 
