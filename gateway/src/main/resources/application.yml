@@ -40,6 +40,11 @@ springdoc:
       - name: Settlement
         url: /v3/api-docs/settlement
 
+app:
+  dev-fixtures:
+    enabled: ${APP_DEV_FIXTURES_ENABLED:false}
+    password: ${DEV_FIXTURE_PASSWORD:}
+
 management:
   server:
     port: ${MANAGEMENT_SERVER_PORT:9091}

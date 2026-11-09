@@ -34,13 +34,14 @@ public class SwaggerSessionConfiguration {
       SwaggerWelcomeCommon welcome,
       ObjectMapperProvider mapper,
       SwaggerDocumentation documentation,
+      @Value("${app.dev-fixtures.enabled:false}") boolean fixtures,
       @Value("classpath:swagger-session.js") Resource client)
       throws IOException {
     final String script;
     try (var input = client.getInputStream()) {
       script = new String(input.readAllBytes(), StandardCharsets.UTF_8);
     }
-    final var configuration = documentation.clientConfiguration();
+    final var configuration = documentation.clientConfiguration(fixtures);
     return new SwaggerIndexPageTransformer(properties, oauth, welcome, mapper) {
       @Override
       protected String defaultTransformations(

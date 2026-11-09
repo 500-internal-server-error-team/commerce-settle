@@ -14,7 +14,7 @@ const configuration = { operations, login: { BUYER: '/api/buyer-sessions', SELLE
 const buyer = 'buyer-session-' + 'a'.repeat(32);
 const seller = 'seller-session-' + 'b'.repeat(32);
 
-function fixture() {
+function fixture(fixtures = false) {
   let now = Date.parse('2026-11-06T12:00:00+09:00');
   const replies = [];
   const calls = [];
@@ -34,8 +34,8 @@ function fixture() {
     Object.defineProperty(window, name, { get() { throw new Error('Persistent credentials are forbidden'); } });
   }
   const document = {
-    createElement() {
-      const element = { style: {}, children: [], setAttribute() {},
+    createElement(tag) {
+      const element = { tag, style: {}, children: [], setAttribute() {},
         appendChild(child) { this.children.push(child); } };
       Object.defineProperty(element, 'innerHTML', { set() { throw new Error('Use textContent'); } });
       return element;
@@ -43,7 +43,7 @@ function fixture() {
     getElementById: () => ({ before: element => elements.push(element) }),
   };
   const create = vm.runInNewContext(source + '\ncreateSwaggerSession', { window, document, URL, Date: Clock });
-  const client = create(configuration);
+  const client = create({ ...configuration, fixtures });
   const ui = {
     preauthorizeApiKey(name, token) {
       authorizations.push({ name, token });
@@ -62,7 +62,8 @@ function fixture() {
       get: name => ({ toJS: () => ({ ...authorized.get(name) }) }),
     }) },
   };
-  const wrappers = client.plugin(ui).statePlugins.auth.wrapActions;
+  const plugin = client.plugin(ui);
+  const wrappers = plugin.statePlugins.auth.wrapActions;
   for (const [name, wrap] of Object.entries(wrappers)) ui.authActions[name] = wrap(ui.authActions[name]);
   ui.authActions.authorizeWithPersistOption = values => ui.authActions.authorize(values);
   client.attach(ui);
@@ -81,8 +82,82 @@ function fixture() {
   }
   async function login(actor = 'BUYER', token = buyer) { await send('POST', configuration.login[actor], 200, session(actor, token)); }
   return { client, ui, request, send, session, login, replies, calls, authorizations, logouts, timers, authorized,
-    advance: milliseconds => { now += milliseconds; }, status: () => elements[0].children[0].textContent };
+    components: plugin.wrapComponents,
+    advance: milliseconds => { now += milliseconds; }, status: () => elements[0].children[0].textContent,
+    form: () => elements[0].children.find(child => child.id === 'swagger-fixture-login') };
 }
+
+for (const fixtures of [false, true]) {
+  test(`token entry buttons, operation locks and authorization popup are absent with fixtures=${fixtures}`, () => {
+    const f = fixture(fixtures);
+    for (const name of ['authorizeBtn', 'authorizeOperationBtn', 'authorizationPopup']) {
+      const component = f.components[name](() => { throw new Error('Token entry must not render'); });
+      assert.equal(component({}), null);
+    }
+    assert.equal(f.calls.length, 0);
+  });
+}
+
+test('fixture account selection logs in without browser passwords and switches roles', async () => {
+  const f = fixture(true);
+  const form = f.form();
+  const select = form.children[0].children[0];
+  const button = form.children[1];
+  for (const [account, actor, token] of [['BUYER_A', 'BUYER', buyer], ['SELLER_B', 'SELLER', seller]]) {
+    select.value = account;
+    f.replies.push(new Response(JSON.stringify(f.session(actor, token)), { status: 200 }));
+    await form.onsubmit({ preventDefault() {} });
+    assert.equal(f.calls.at(-1).url, '/swagger-ui/fixture-sessions');
+    assert.deepEqual(JSON.parse(f.calls.at(-1).options.body), { account });
+    assert.equal(f.request('GET', '/api/accounts/me').headers.Authorization, `Bearer ${token}`);
+    assert.equal(button.disabled, false);
+  }
+  assert.match(f.status(), /판매자.*로그인 연결됨/);
+});
+
+test('fixture login is absent by default and does not send any request on attach', () => {
+  const f = fixture();
+  assert.equal(f.form(), undefined);
+  assert.equal(f.calls.length, 0);
+});
+
+test('failed fixture account switch preserves the previous session and displays recovery', async () => {
+  const f = fixture(true);
+  await f.login();
+  const form = f.form();
+  form.children[0].children[0].value = 'SELLER_A';
+  f.replies.push(new Response('{}', { status: 401 }));
+  await form.onsubmit({ preventDefault() {} });
+  assert.equal(f.request('GET', '/api/accounts/me').headers.Authorization, `Bearer ${buyer}`);
+  assert.match(form.children[2].textContent, /계정 적재 여부.*최초 fixture 비밀번호/);
+});
+
+for (const status of [200, 401, 429, 503]) {
+  test(`first fixture login failure ${status} leaves the loading state and allows another attempt`, async () => {
+    const f = fixture(true);
+    const form = f.form();
+    form.children[0].children[0].value = 'BUYER_A';
+    f.replies.push(new Response('{}', { status }));
+    await form.onsubmit({ preventDefault() {} });
+    assert.doesNotMatch(f.status(), /로그인 중/);
+    assert.match(f.status(), /다시 로그인/);
+    assert.ok(form.children[2].textContent);
+    assert.equal(form.children[1].disabled, false);
+  });
+}
+
+test('pending fixture login cannot replace manually selected authorization', async () => {
+  const f = fixture(true);
+  const form = f.form();
+  form.children[0].children[0].value = 'BUYER_A';
+  let resolve;
+  f.replies.push(new Promise(done => { resolve = done; }));
+  const pending = form.onsubmit({ preventDefault() {} });
+  f.ui.authActions.authorize({ accountSession: { value: seller } });
+  resolve(new Response(JSON.stringify(f.session()), { status: 200 }));
+  await pending;
+  assert.equal(f.request('GET', '/api/accounts/me').headers.Authorization, `Bearer ${seller}`);
+});
 
 test('successful login authorizes canonical user operations across all three services without copying a token', async () => {
   const f = fixture();
@@ -122,7 +197,7 @@ test('a successful account switch replaces the active token and failed login pre
   assert.equal(f.request('GET', '/api/accounts/me').headers.Authorization, `Bearer ${seller}`);
 });
 
-test('manual Authorize supplies the credential on a fresh page and across document changes', () => {
+test('the shared auth store supplies credentials across document changes', () => {
   const f = fixture();
 
   f.ui.authActions.authorizeWithPersistOption({ accountSession: { value: seller } });
@@ -130,7 +205,7 @@ test('manual Authorize supplies the credential on a fresh page and across docume
   f.client.attach(f.ui);
 
   assert.equal(f.request('GET', '/api/accounts/me').headers.Authorization, `Bearer ${seller}`);
-  assert.match(f.status(), /수동 토큰 연결됨/);
+  assert.match(f.status(), /인증 연결됨/);
   assert.equal(f.authorizations.length, 0);
   assert.equal(f.timers.size, 0);
 });
@@ -156,7 +231,7 @@ test('document selection preserves only the shared account session and keeps its
   assert.equal(f.authorized.has('accountSession'), false);
 });
 
-test('manual credential replacement drops old account details and expiry without restoring the old token', async () => {
+test('auth store replacement drops old account details and expiry without restoring the old token', async () => {
   const f = fixture();
   await f.login();
   const oldTimers = [...f.timers.values()];
@@ -168,13 +243,13 @@ test('manual credential replacement drops old account details and expiry without
 
   assert.equal(f.request('POST', '/api/orders', { authorization: `Bearer ${buyer}` }).headers.Authorization,
     `Bearer ${seller}`);
-  assert.match(f.status(), /수동 토큰 연결됨/);
+  assert.match(f.status(), /인증 연결됨/);
   assert.doesNotMatch(f.status(), /테스트 계정/);
   assert.equal(f.timers.size, 0);
   assert.equal(f.authorizations.length, 1);
 });
 
-test('manual Authorize invalidates an older pending API login', async () => {
+test('auth store replacement invalidates an older pending API login', async () => {
   const f = fixture();
   let resolve;
   f.replies.push(new Promise(done => { resolve = done; }));
@@ -186,7 +261,7 @@ test('manual Authorize invalidates an older pending API login', async () => {
   await pending;
 
   assert.equal(f.request('GET', '/api/accounts/me').headers.Authorization, `Bearer ${seller}`);
-  assert.match(f.status(), /수동 토큰 연결됨/);
+  assert.match(f.status(), /인증 연결됨/);
 });
 
 test('a late rejection cannot remove a manually selected credential', async () => {
