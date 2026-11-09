@@ -59,7 +59,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "management.tracing.enabled=false",
       "app.dev-fixtures.enabled=true",
       "app.dev-fixtures.password=" + DevFixtureIntegrationTest.PASSWORD,
-      "app.order-stub.enabled=true",
       "app.auth.session-epoch=" + DevFixtureIntegrationTest.EPOCH,
       "app.auth.rate-limit.identifier-hmac-key=dev-fixture-test-hmac-key-32bytes",
       "app.auth.password-reset.delivery-key=dev-fixture-test-delivery-key-32bytes",
@@ -127,7 +126,7 @@ class DevFixtureIntegrationTest {
   }
 
   @Test
-  @DisplayName("적재한 구매자·판매자가 실제 로그인하고 Gateway 검증을 통과해 상품·주소·샘플 주문을 조회한다")
+  @DisplayName("적재한 구매자·판매자가 실제 로그인하고 Gateway 검증을 통과해 상품·주소·DB 주문을 조회한다")
   void logsInAndQueriesSeededData() throws Exception {
     loader.load(PASSWORD);
 
@@ -157,7 +156,14 @@ class DevFixtureIntegrationTest {
     JsonNode page = get("/api/buyers/me/addresses", id(1));
     assertThat(page.get("totalElements").asInt()).isEqualTo(23);
     assertThat(page.get("items").get(0).get("addressLine1").asText()).isEqualTo("가상시 테스트구 샘플로 1");
-    assertThat(get("/api/orders", id(1)).get("totalElements").asInt()).isEqualTo(10);
+    JsonNode orderPage = get("/api/orders", id(1));
+    assertThat(orderPage.get("totalElements").asInt()).isEqualTo(2);
+    assertThat(orderPage.path("items").findValuesAsText("id"))
+        .containsExactlyInAnyOrder(
+            fixtureId("request-order-1").toString(), fixtureId("request-order-2").toString());
+    for (JsonNode order : orderPage.path("items")) {
+      assertThat(get("/api/orders/" + order.path("id").asText(), id(1))).isEqualTo(order);
+    }
     assertThat(
             jdbc.queryForObject(
                 "SELECT available_qty FROM commerce.product_inventory WHERE product_id=?",

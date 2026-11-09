@@ -1,7 +1,7 @@
 package com.commercesettle.commerce.presentation.dto;
 
-import com.commercesettle.commerce.application.dto.CreateOrderCommand.ExternalMethod;
 import com.commercesettle.commerce.application.dto.RegularOrderCommand;
+import com.commercesettle.commerce.application.dto.RegularOrderCommand.ExternalMethod;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Max;

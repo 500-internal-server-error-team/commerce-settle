@@ -64,7 +64,6 @@ python3 scripts/init_env.py
 python3 scripts/sync_redis_run_id.py
 APP_DEV_FIXTURES_ENABLED=true APP_DEV_FIXTURE_SCENARIOS_ENABLED=true \
 SETTLEMENT_DAILY_BATCH_ENABLED=false SETTLEMENT_PAYOUT_WORKER_ENABLED=false \
-APP_ORDER_STUB_ENABLED=false \
 docker compose up -d --build --wait --wait-timeout 300
 ```
 
@@ -114,11 +113,11 @@ docker compose exec postgres psql -U postgres -d finance_mock -c \
 
 조회용 주문 사본에는 실제 재고 예약·Outbox가 없습니다. 주문부터 금융 결과까지 시험할 때는 `POST /api/orders`로 새 주문을 생성합니다.
 
-메모리 주문 예제는 [주문 API stub](#주문-api-stub)이며 DB fixture·금융 데이터와 별개입니다. 부하 시험용 대량 데이터도 별도로 준비합니다.
+부하 시험용 대량 데이터는 별도로 준비합니다.
 
 ## 일반 주문 API
 
-`APP_ORDER_STUB_ENABLED`의 기본값 false에서는 실제 DB의 `POST /api/orders`, `GET /api/orders`, `GET /api/orders/{orderId}`를 제공합니다. 개발 fixture를 켜고 구매자 A로 로그인하면 초기 DB 주문과 새 주문을 조회할 수 있습니다. 같은 인스턴스에서 메모리 stub과 DB API를 함께 켜지는 않습니다.
+주문 API는 실제 DB의 `POST /api/orders`, `GET /api/orders`, `GET /api/orders/{orderId}`를 제공합니다. 개발 fixture를 켜고 구매자 A로 로그인하면 초기 DB 주문과 새 주문을 조회할 수 있습니다.
 
 요청 필드·필수값은 [OrderCreate 명세](openapi.json), 쿠폰·이벤트 조합과 권한은 [API 사용 흐름](api.md#주문환불-사용-순서)을 따릅니다. 본인 `addressId`와 조회한 상품/이벤트 버전·총액을 보내며 마일리지 확인·예약은 Payment가 맡습니다. 주문 접수는 잔액 확보나 결제 승인을 보장하지 않습니다.
 
@@ -138,7 +137,7 @@ Outbox Relay는 `app.outbox.enabled=false`가 기본입니다. 전용 시험 인
 
 ## 신규 주문 접수 제한
 
-DB 주문의 신규 접수와 새 결제 회차에는 기본으로 gate를 적용합니다. 기동 시 닫히며 `APP_ORDER_ADMISSION_PROMETHEUS_URL`(기본 `http://prometheus:9090`)에서 필수 관측을 읽고 모든 재개 기준을 60초 연속 충족해야 엽니다. `APP_ORDER_ADMISSION_PAUSED=true`로 설정해 앱을 재기동하면 운영자가 접수를 중단할 수 있습니다. 해제 후에도 재개 검사를 다시 거칩니다. 조회·취소·환불·기존 업무 배출은 계속됩니다. 메모리 주문 stub은 금융 접수 경로가 아닙니다.
+DB 주문의 신규 접수와 새 결제 회차에는 기본으로 gate를 적용합니다. 기동 시 닫히며 `APP_ORDER_ADMISSION_PROMETHEUS_URL`(기본 `http://prometheus:9090`)에서 필수 관측을 읽고 모든 재개 기준을 60초 연속 충족해야 엽니다. `APP_ORDER_ADMISSION_PAUSED=true`로 설정해 앱을 재기동하면 운영자가 접수를 중단할 수 있습니다. 해제 후에도 재개 검사를 다시 거칩니다. 조회·취소·환불·기존 업무 배출은 계속됩니다.
 
 전용 단일 실행기가 Commerce DB 관측과 Prometheus instant query를 15초 간격으로 수행합니다. DB 쿼리는 2초, HTTP는 전체 5초·응답 2 MiB 상한이며 요청 트랜잭션에서 원격 조회하지 않습니다. 수집 실패·지표 누락·오래된 원본 시각이면 닫습니다. `commerce_order_admission_open`은 열림 1/닫힘 0이며, Commerce의 두 금융 대기열 값과 원본 수집 시각을 `/actuator/prometheus`로 제공합니다. 상세 metric·필수 대상·임계값은 [접수 정책](policies.md#신규-접수-제한과-재개)을 따릅니다.
 
@@ -256,20 +255,6 @@ Payment·Settlement notice를 받으려면 `APP_NOTIFICATIONS_CONSUMER_ENABLED=t
 `retention_checks`·`retention_history`에서 결과와 재조회 시각을 확인합니다. 주소는 되돌릴 수 없는 마스킹이며 삭제된 알림 본문도 복구하지 않습니다. `HELD`는 보호 조건 유지, `FAILED`는 해당 대상 롤백입니다. 로그에는 대상 ID·종류·예외 종류만 남기며 본문·주소·보류 사유는 출력하지 않습니다. 정책과 제외 범위는 [보존과 삭제](policies.md#보존과-삭제)를 따릅니다.
 
 `./gradlew :commerce:test --tests '*RetentionIntegrationTest'`로 보존 기한·보류·경합·원자 삭제·재실행을 검사합니다. `scripts/smoke_retention.py`는 CI 전용 `commerce-settle-ci` 프로젝트에서 Commerce→Settlement 조회·삭제·미종결 보호·원천 배치 보존을 검사합니다. 일반 로컬·운영 프로젝트에서 실행하거나 사용자 DB를 초기화하지 않습니다.
-
-## 주문 API stub
-
-주문 데이터만 메모리로 처리하는 HTTP 학습용으로 `APP_ORDER_STUB_ENABLED=true`를 사용합니다(기본 false). Compose 실행에는 [처음 실행](#처음-실행)의 DB·Kafka·Redis 인프라가 필요합니다. 메모리 주문은 재시작하면 사라지며 DB·재고·마일리지·결제·이벤트·쿠폰·자동 전이와 연결되지 않습니다. 입력은 실행 인스턴스의 `/v3/api-docs`를 따르며 정식 DB 주문과 다릅니다.
-
-```bash
-./gradlew :commerce:bootJar
-docker compose build commerce
-docker compose run --rm --no-deps -p 127.0.0.1:18080:8080 -e APP_ORDER_STUB_ENABLED=true commerce
-```
-
-위 인스턴스는 전경에서 실행합니다. 별도 터미널의 `./gradlew :commerce:test --tests '*OrderStubServiceTest' --tests '*OrderStubHttpIntegrationTest'`은 관련 자동 구성을 제외한 시험이며 인스턴스 기동과 구분합니다.
-
-직접 호출에는 `.env`의 `COMMERCE_GATEWAY_CREDENTIAL`과 로컬 시험용 구매자 신원 헤더가 필요합니다. [HTTP 예제](../commerce/src/test/java/com/commercesettle/commerce/presentation/controller/OrderStubHttpIntegrationTest.java)는 같은 입력·재요청·충돌·타인 조회를 보여 줍니다. 이 경로의 통과는 실제 주문·금융 흐름 검증이 아닙니다.
 
 ## 시간대
 

@@ -21,7 +21,6 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import java.net.URI;
 import java.util.UUID;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -85,10 +84,6 @@ import org.springframework.web.bind.annotation.RestController;
 })
 @RestController
 @Tag(name = "Order workflow", description = "주문·배송·취소/반품 처리. 금융 성공은 Payment 결과로만 반영한다.")
-@ConditionalOnProperty(
-    name = "app.order-stub.enabled",
-    havingValue = "false",
-    matchIfMissing = true)
 public class OrderWorkflowController {
   private final OrderWorkflowService orders;
   private final OrderRefundService refunds;

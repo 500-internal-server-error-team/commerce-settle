@@ -140,9 +140,6 @@ app:
   dev-fixtures:
     enabled: ${APP_DEV_FIXTURES_ENABLED:false}
     password: ${DEV_FIXTURE_PASSWORD:}
-  order-stub:
-    enabled: ${APP_ORDER_STUB_ENABLED:false}
-    seed: ${APP_ORDER_STUB_SEED:67}
   coupons:
     # 기한이 지난 미사용 쿠폰 만료. docs/architecture.md#정기-작업과-비동기-실행
     expiry-scheduler-enabled: true

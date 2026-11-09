@@ -10,13 +10,17 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.networknt.schema.InputFormat;
+import com.networknt.schema.Schema;
 import com.networknt.schema.SchemaLocation;
 import com.networknt.schema.SchemaRegistry;
 import com.networknt.schema.SpecificationVersion;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -27,6 +31,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -48,13 +53,16 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {
       "management.server.port=0",
-      "management.tracing.enabled=false",
+      "management.tracing.enabled=true",
+      "management.zipkin.tracing.export.enabled=false",
+      "management.tracing.sampling.probability=1.0",
       "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
       "app.auth.rate-limit.identifier-hmac-key=regular-order-api-test-hmac-key-32bytes",
       "app.auth.password-reset.delivery-key=regular-order-api-test-delivery-key-32bytes",
       "app.address.encryption-key=regular-order-api-test-address-key-32bytes",
       "app.internal-auth.senders.gateway.current=" + OrderIntegrationTest.GATEWAY_CREDENTIAL
     })
+@AutoConfigureObservability(metrics = false)
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class OrderIntegrationTest {
@@ -75,6 +83,11 @@ class OrderIntegrationTest {
   @Autowired OrderRepository orders;
   @Autowired AddressCipher cipher;
   @Autowired PlatformTransactionManager transactions;
+
+  private JsonNode canonicalApi;
+  private JsonNode generatedApi;
+  private SchemaRegistry canonicalSchemas;
+  private SchemaRegistry schemas;
 
   @Test
   @DisplayName("접수 중단 중에도 기존 멱등 결과와 본문 충돌을 우선하고 거절 키는 재사용한다")
@@ -382,7 +395,7 @@ class OrderIntegrationTest {
 
   @Test
   @DisplayName("타인 조회는 404이고 목록은 본인 자료만 같은 시각의 ID 역순으로 페이지한다")
-  void scopesAndPaginatesDbReads() {
+  void scopesAndPaginatesDbReads() throws Exception {
     var f = fixture(4);
     var ids =
         java.util.stream.IntStream.range(0, 3)
@@ -392,6 +405,7 @@ class OrderIntegrationTest {
     jdbc.update(
         "update commerce.orders set created_at='2026-01-01T00:00:00Z' where buyer_id=?", f.buyer());
     var page = get(f.buyer(), "/api/orders?size=2").getBody();
+    matches("OrderPage", page);
     assertThat(page.path("totalElements").asInt()).isEqualTo(3);
     assertThat(page.path("totalPages").asInt()).isEqualTo(2);
     assertThat(page.path("items").get(0).path("id").asText()).isEqualTo(ids.get(0));
@@ -554,6 +568,261 @@ class OrderIntegrationTest {
     assertThat(schema.path("additionalProperties").asBoolean(true)).isFalse();
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"Order", "OrderPage", "OrderCreate", "Problem", "FieldError"})
+  @DisplayName("DB 주문 런타임 명세의 입력·응답 스키마가 정식 계약을 보존한다")
+  void generatedSchemasPreserveCanonicalContracts(String name) throws Exception {
+    schema(name);
+    canonicalSchema(name);
+    JsonNode expected = canonicalApi.path("components").path("schemas").path(name);
+    JsonNode actual = generatedApi.path("components").path("schemas").path(name);
+
+    assertThat(actual.path("properties").properties().stream().map(Map.Entry::getKey).toList())
+        .containsExactlyInAnyOrderElementsOf(
+            expected.path("properties").properties().stream().map(Map.Entry::getKey).toList());
+    assertThat(elements(actual.path("required"))).isEqualTo(elements(expected.path("required")));
+    assertThat(actual.get("additionalProperties")).isEqualTo(expected.get("additionalProperties"));
+    assertThat(schemaTypes(actual)).isEqualTo(schemaTypes(expected));
+    for (var property : expected.path("properties").properties()) {
+      String field = property.getKey();
+      JsonNode declared = actual.path("properties").path(field);
+      assertThat(schemaTypes(declared))
+          .as(name + "." + field + " type")
+          .isEqualTo(schemaTypes(property.getValue()));
+      JsonNode expectedValue = nonNullSchema(property.getValue());
+      JsonNode actualValue = nonNullSchema(declared);
+      for (String keyword :
+          List.of("minimum", "maximum", "minLength", "maxLength", "pattern", "items")) {
+        assertThat(actualValue.get(keyword))
+            .as(name + "." + field + "." + keyword)
+            .isEqualTo(expectedValue.get(keyword));
+      }
+      if (expectedValue.has("format")) {
+        assertThat(actualValue.get("format"))
+            .as(name + "." + field + ".format")
+            .isEqualTo(expectedValue.get("format"));
+      }
+      Set<JsonNode> expectedValues = elements(expectedValue.path("enum"));
+      Set<JsonNode> actualValues = elements(actualValue.path("enum"));
+      actualValues.remove(mapper.getNodeFactory().nullNode());
+      assertThat(actualValues).as(name + "." + field + " enum").isEqualTo(expectedValues);
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"/api/orders,post", "/api/orders,get", "/api/orders/{orderId},get"})
+  @DisplayName("DB 주문 API의 응답 코드·본문·헤더가 정식 명세와 일치한다")
+  void operationsPreserveCanonicalResponsesAndHeaders(String path, String method) throws Exception {
+    schema("Order");
+    canonicalSchema("Order");
+    assertOperation(path, method, generatedApi.path("paths").path(path).path(method));
+  }
+
+  private JsonNode resolveComponent(JsonNode api, JsonNode value, String kind) {
+    if (!value.has("$ref")) {
+      return value;
+    }
+    String ref = value.path("$ref").asText();
+    assertThat(ref).startsWith("#/components/" + kind + "/");
+    JsonNode resolved = api.at(ref.substring(1));
+    assertThat(resolved.isMissingNode()).as(ref).isFalse();
+    return resolved;
+  }
+
+  private void assertOperation(String path, String method, JsonNode actual) {
+    JsonNode expected = canonicalApi.path("paths").path(path).path(method);
+    assertThat(actual.path("operationId")).isEqualTo(expected.path("operationId"));
+    Set<String> codes = new HashSet<>();
+    expected.path("responses").fieldNames().forEachRemaining(codes::add);
+    // 프레임워크의 405/406 및 예상하지 못한 500도 같은 ProblemDetail 계약이다.
+    codes.add("default");
+    assertThat(actual.path("responses").properties().stream().map(Map.Entry::getKey).toList())
+        .containsExactlyInAnyOrderElementsOf(codes);
+    for (String code : codes) {
+      JsonNode response =
+          resolveComponent(generatedApi, actual.path("responses").path(code), "responses");
+      JsonNode contract =
+          resolveComponent(
+              canonicalApi,
+              expected.path("responses").path(code.equals("default") ? "400" : code),
+              "responses");
+      assertThat(response.path("content").properties().stream().map(Map.Entry::getKey).toList())
+          .as(method + " " + path + " " + code)
+          .containsExactlyInAnyOrderElementsOf(
+              contract.path("content").properties().stream().map(Map.Entry::getKey).toList());
+      for (var media : contract.path("content").properties()) {
+        assertThat(response.path("content").path(media.getKey()).path("schema"))
+            .isEqualTo(media.getValue().path("schema"));
+      }
+      assertThat(response.path("headers").properties().stream().map(Map.Entry::getKey).toList())
+          .containsExactlyInAnyOrderElementsOf(
+              contract.path("headers").properties().stream().map(Map.Entry::getKey).toList());
+      for (var header : contract.path("headers").properties()) {
+        assertThat(response.path("headers").path(header.getKey()).path("schema"))
+            .as(code + " " + header.getKey())
+            .isEqualTo(header.getValue().path("schema"));
+      }
+    }
+    if (method.equals("post")) {
+      assertThat(
+              actual
+                  .path("responses")
+                  .path("201")
+                  .path("headers")
+                  .path("Location")
+                  .path("required")
+                  .asBoolean())
+          .isTrue();
+      assertThat(
+              actual
+                  .path("responses")
+                  .path("503")
+                  .path("headers")
+                  .path("Retry-After")
+                  .path("required")
+                  .asBoolean())
+          .isFalse();
+      assertThat(
+              actual
+                  .path("responses")
+                  .path("503")
+                  .path("headers")
+                  .path("Retry-After")
+                  .path("description")
+                  .asText())
+          .isEqualTo(
+              expected
+                  .path("responses")
+                  .path("503")
+                  .path("headers")
+                  .path("Retry-After")
+                  .path("description")
+                  .asText());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"/api/orders,post", "/api/orders,get", "/api/orders/{orderId},get"})
+  @DisplayName("DB 주문 API의 파라미터 필수 여부·범위가 정식 명세와 일치한다")
+  void operationsPreserveCanonicalParameterContracts(String path, String method) throws Exception {
+    schema("Order");
+    canonicalSchema("Order");
+    JsonNode actual = generatedApi.path("paths").path(path).path(method);
+    for (JsonNode reference :
+        canonicalApi.path("paths").path(path).path(method).path("parameters")) {
+      JsonNode expected = resolveComponent(canonicalApi, reference, "parameters");
+      JsonNode parameter =
+          java.util.stream.StreamSupport.stream(actual.path("parameters").spliterator(), false)
+              .map(value -> resolveComponent(generatedApi, value, "parameters"))
+              .filter(
+                  value ->
+                      value.path("name").equals(expected.path("name"))
+                          && value.path("in").equals(expected.path("in")))
+              .findFirst()
+              .orElseThrow();
+      assertThat(parameter).isNotNull();
+      assertThat(parameter.path("required").asBoolean())
+          .isEqualTo(expected.path("required").asBoolean());
+      for (var keyword : expected.path("schema").properties()) {
+        assertThat(parameter.path("schema").get(keyword.getKey()))
+            .as(expected.path("name") + "." + keyword.getKey())
+            .isEqualTo(keyword.getValue());
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {0, 100, 101})
+  @DisplayName("DB 주문의 알 수 없는 필드 오류는 필드명 길이 계약을 지킨다")
+  void unknownFieldErrorsRespectFieldNameBounds(int length) throws Exception {
+    var f = fixture(1);
+    String field = "f".repeat(length);
+    var response = post(f.buyer(), key(), body(f).put(field, 1));
+
+    problem(response, 400, "COMMON_VALIDATION_FAILED");
+    matches("Problem", response.getBody());
+    assertThat(response.getBody().path("errors").get(0).path("field").asText())
+        .isEqualTo(length == 100 ? field : "request");
+  }
+
+  @Test
+  @DisplayName("실제 주문 오류는 수신 추적 ID를 보존하고 명세에 없는 메서드는 거절한다")
+  void problemCarriesInboundTraceAndRejectsUndeclaredMethods() throws Exception {
+    var headers = new HttpHeaders();
+    String traceId = "0123456789abcdef0123456789abcdef";
+    headers.set("traceparent", "00-" + traceId + "-0123456789abcdef-01");
+    var response =
+        http.exchange("/api/orders", HttpMethod.GET, new HttpEntity<>(headers), JsonNode.class);
+
+    problem(response, 401, "COMMON_AUTHENTICATION_REQUIRED");
+    assertThat(response.getBody().path("traceId").asText()).isEqualTo(traceId);
+    matches("Problem", response.getBody());
+    var unsupported =
+        http.exchange(
+            "/api/orders",
+            HttpMethod.PUT,
+            new HttpEntity<>(headers(UUID.randomUUID())),
+            JsonNode.class);
+    problem(unsupported, 404, "COMMON_RESOURCE_NOT_FOUND");
+    matches("Problem", unsupported.getBody());
+  }
+
+  private Set<JsonNode> elements(JsonNode values) {
+    Set<JsonNode> result = new HashSet<>();
+    values.forEach(result::add);
+    return result;
+  }
+
+  private Set<String> schemaTypes(JsonNode definition) {
+    Set<String> result = new HashSet<>();
+    JsonNode type = definition.path("type");
+    if (type.isArray()) {
+      type.forEach(value -> result.add(value.asText()));
+    } else if (type.isTextual()) {
+      result.add(type.asText());
+    }
+    for (String union : List.of("anyOf", "oneOf")) {
+      definition.path(union).forEach(value -> result.addAll(schemaTypes(value)));
+    }
+    return result;
+  }
+
+  private JsonNode nonNullSchema(JsonNode definition) {
+    for (JsonNode option : definition.path("anyOf")) {
+      if (!option.path("type").asText().equals("null")) {
+        return option;
+      }
+    }
+    return definition;
+  }
+
+  private Schema canonicalSchema(String name) throws Exception {
+    if (canonicalSchemas == null) {
+      try (var input = getClass().getResourceAsStream("/contracts/openapi.json")) {
+        canonicalApi = mapper.readTree(input);
+      }
+      canonicalSchemas =
+          SchemaRegistry.withDefaultDialect(
+              SpecificationVersion.DRAFT_2020_12,
+              builder ->
+                  builder.schemas(Map.of("urn:commerce:canonical", canonicalApi.toString())));
+    }
+    return canonicalSchemas.getSchema(
+        SchemaLocation.of("urn:commerce:canonical#/components/schemas/" + name));
+  }
+
+  private Schema schema(String name) {
+    if (schemas == null) {
+      generatedApi = http.getForObject("/v3/api-docs", JsonNode.class);
+      assertThat(generatedApi.path("openapi").asText()).startsWith("3.1.");
+      schemas =
+          SchemaRegistry.withDefaultDialect(
+              SpecificationVersion.DRAFT_2020_12,
+              builder -> builder.schemas(Map.of("urn:commerce:orders", generatedApi.toString())));
+    }
+    return schemas.getSchema(SchemaLocation.of("urn:commerce:orders#/components/schemas/" + name));
+  }
+
   private Fixture fixture(long stock) {
     UUID buyer = buyer();
     UUID address = addresses.register(buyer, key(), SHIPPING, true).id();
@@ -612,18 +881,33 @@ class OrderIntegrationTest {
   private static void problem(ResponseEntity<JsonNode> response, int status, String code) {
     assertThat(response.getStatusCode().value()).isEqualTo(status);
     assertThat(response.getBody().path("code").asText()).isEqualTo(code);
+    assertThat(
+            response
+                .getHeaders()
+                .getContentType()
+                .isCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+        .isTrue();
+    assertThat(response.getBody().path("status").asInt()).isEqualTo(status);
+    assertThat(response.getBody().path("instance").asText()).isNotBlank();
+    assertThat(response.getBody().path("traceId").asText()).isNotBlank();
   }
 
   private void matches(String name, JsonNode node) throws Exception {
-    var canonical = mapper.readTree(getClass().getResourceAsStream("/contracts/openapi.json"));
-    var root = mapper.createObjectNode();
-    root.set("components", canonical.path("components"));
-    root.put("$ref", "#/components/schemas/" + name);
-    var registry = SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_2020_12);
-    var schema =
-        registry.getSchema(
-            SchemaLocation.of("urn:test:order:" + name), root.toString(), InputFormat.JSON);
-    assertThat(schema.validate(node.toString(), InputFormat.JSON)).isEmpty();
+    var contracts = new java.util.ArrayList<Schema>();
+    contracts.add(canonicalSchema(name));
+    if (Set.of("Order", "OrderPage", "OrderCreate", "Problem", "FieldError").contains(name)) {
+      contracts.add(schema(name));
+    }
+    for (Schema contract : contracts) {
+      assertThat(
+              contract.validate(
+                  node.toString(),
+                  InputFormat.JSON,
+                  context ->
+                      context.executionConfig(config -> config.formatAssertionsEnabled(true))))
+          .as(name)
+          .isEmpty();
+    }
   }
 
   private long count(String table, String field, UUID id) {

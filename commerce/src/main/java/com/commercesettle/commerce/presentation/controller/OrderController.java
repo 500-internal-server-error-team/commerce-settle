@@ -20,7 +20,6 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import java.net.URI;
 import java.util.UUID;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -85,10 +84,6 @@ import org.springframework.web.bind.annotation.RestController;
 })
 @RestController
 @RequestMapping("/api/orders")
-@ConditionalOnProperty(
-    name = "app.order-stub.enabled",
-    havingValue = "false",
-    matchIfMissing = true)
 public class OrderController {
   private final OrderService orders;
 
