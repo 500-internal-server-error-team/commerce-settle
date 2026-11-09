@@ -34,16 +34,14 @@ class AdmissionRunnerTest(unittest.TestCase):
             with patch.object(test_admission.tempfile, "mkdtemp", return_value=str(owned)), patch.object(
                 test_admission.subprocess, "run", side_effect=run
             ), patch.object(test_admission.subprocess, "check_output", return_value=""), patch.dict(
-                os.environ, {"COMPOSE_PROFILES": "observability,tools", "APP_ORDER_STUB_ENABLED": "true", "ALERTMANAGER_PORT": "9093"}
+                os.environ, {"COMPOSE_PROFILES": "observability,tools", "ALERTMANAGER_PORT": "9093"}
             ), test_admission.stack():
                 pass
             start = next(call for call in calls if call[2] is not None)
             environment = start[1]
             self.assertEqual(environment["COMPOSE_PROFILES"], "")
-            self.assertEqual(environment["APP_ORDER_STUB_ENABLED"], "false")
             for name in ["GATEWAY_PORT", "ZIPKIN_PORT", "PROMETHEUS_PORT", "ALERTMANAGER_PORT"]:
                 self.assertEqual(environment[name], "0")
-            self.assertEqual(start[2]["services"]["commerce"]["environment"]["APP_ORDER_STUB_ENABLED"], "false")
             self.assertTrue(any("--rmi" in command and "local" in command for command, *_args in calls))
             self.assertTrue(any("--profile" in command and "*" in command and "down" in command for command, *_args in calls))
             self.assertFalse(owned.exists())

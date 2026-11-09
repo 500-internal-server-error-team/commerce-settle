@@ -59,7 +59,7 @@ def stack(prefix="cs-admission-", *, memory_storage=False, commerce_outbox=True)
         shutil.copyfile(ROOT / ".env.example", directory / ".env.example")
         initialize(directory)
         overrides = {"services": {
-            "commerce": {"environment": {"APP_OUTBOX_ENABLED": str(commerce_outbox).lower(), "APP_ORDER_STUB_ENABLED": "false",
+            "commerce": {"environment": {"APP_OUTBOX_ENABLED": str(commerce_outbox).lower(),
                 "APP_KAFKA_PAYMENT_ACCEPTED_ENABLED": "false", "APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED": "false"}},
             "payment-worker": {"environment": {"APP_OUTBOX_ENABLED": "false", "APP_KAFKA_ORDER_PAYMENT_REQUESTED_ENABLED": "false",
                 "APP_PAYMENT_REQUEST_PROCESSOR_ENABLED": "false"}},
@@ -78,7 +78,7 @@ def stack(prefix="cs-admission-", *, memory_storage=False, commerce_outbox=True)
                 environment.pop(line.split("=", 1)[0], None)
         for name in ["GATEWAY_PORT", "PROMETHEUS_PORT", "ZIPKIN_PORT", "ALERTMANAGER_PORT"]:
             environment[name] = "0"
-        environment.update({"COMPOSE_PROFILES": "", "APP_ORDER_STUB_ENABLED": "false"})
+        environment["COMPOSE_PROFILES"] = ""
         attempted = True
         environment["AUTH_REDIS_RUN_ID"] = PLACEHOLDER
         compose("up", "-d", "--wait", "redis")

@@ -6,7 +6,6 @@ import com.commercesettle.commerce.application.exception.AuthenticationFailedExc
 import com.commercesettle.commerce.application.exception.AuthenticationUnavailableException;
 import com.commercesettle.commerce.application.exception.IdempotencyConflictException;
 import com.commercesettle.commerce.application.exception.OrderRequestException;
-import com.commercesettle.commerce.application.exception.OrderStubException;
 import com.commercesettle.commerce.domain.exception.AccountNotFoundException;
 import com.commercesettle.commerce.domain.exception.BuyerAddressNotFoundException;
 import com.commercesettle.commerce.domain.exception.CouponCampaignConflictException;
@@ -115,14 +114,6 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
     return switch (e.kind()) {
       case NOT_FOUND -> respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, request);
       case INVALID_REQUEST -> invalid(List.of(error(e.field(), e.reason())), request);
-    };
-  }
-
-  @ExceptionHandler(OrderStubException.class)
-  ResponseEntity<Object> orderStubFailure(OrderStubException e, WebRequest request) {
-    return switch (e.kind()) {
-      case NOT_FOUND -> respond(ErrorCode.COMMON_RESOURCE_NOT_FOUND, request);
-      case INVALID_REQUEST -> invalid(List.of(error(e.field(), "입력값의 조합을 확인해 주세요.")), request);
     };
   }
 
