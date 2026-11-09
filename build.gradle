@@ -17,6 +17,9 @@ subprojects {
     apply plugin: 'com.diffplug.spotless'
     apply plugin: 'checkstyle'
 
+    // CVE-2025-48924 수정본이자 Swagger가 요청하는 버전.
+    ext['commons-lang3.version'] = '3.20.0'
+
     group = 'com.commercesettle'
     version = '0.0.1-SNAPSHOT'
 
