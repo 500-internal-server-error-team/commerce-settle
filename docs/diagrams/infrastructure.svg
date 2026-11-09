@@ -1,7 +1,37 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1440" height="984" viewBox="0 0 1440 984" role="img" aria-labelledby="title desc" data-scope="ecs-ec2">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1440" height="1256" viewBox="0 0 1440 1256" role="img" aria-labelledby="title desc" data-scope="ecs-ec2">
 <title id="title">통합 인프라 구조도 · ECS 클러스터 1개와 EC2 2대</title>
-<desc id="desc">ECS 클러스터 하나에 앱용 EC2와 공유 인프라용 EC2를 둔다. 앱용에는 Gateway, Commerce, Payment API, Payment Worker, Settlement, Finance Mock을 독립 컨테이너로 배치한다. 브라우저와 k6의 외부 진입 및 업무 서비스 간 HTTP API 호출에는 HTTPS를 사용한다. Gateway의 공개 라우팅은 Commerce, Payment API, Settlement에 한정한다. 인프라용에는 PostgreSQL의 서비스별 DB 네 개, Redis, Kafka와 관측·운영 도구를 둔다. Payment API와 Worker는 payment DB를 공유하며 Outbox와 Inbox는 각 소유 서비스 DB에 둔다. 컨테이너 로그는 CloudWatch Logs로 수집한다. Commerce는 기본 모의 알림을 처리하며 선택적 본인 시연에서 외부 카카오톡 메시지 API를 호출한다. 이 경로는 고객 대상 실제 알림톡과 구분한다.</desc>
+<desc id="desc">GitHub Actions에서 검증하고, 목표 CD에서 ARM64 이미지를 ECR에 저장한 뒤 ECS 서비스를 갱신한다. EC2가 ECR에서 앱 이미지를 받는다. AWS 배포와 CD는 미구현이다. ECS 클러스터 하나에 앱용 EC2와 공유 인프라용 EC2를 둔다. 앱용에는 Gateway, Commerce, Payment API, Payment Worker, Settlement, Finance Mock을 독립 컨테이너로 배치한다. 브라우저와 k6의 외부 진입 및 업무 서비스 간 HTTP API 호출에는 HTTPS를 사용한다. Gateway의 공개 라우팅은 Commerce, Payment API, Settlement에 한정한다. 인프라용에는 PostgreSQL의 서비스별 DB 네 개, Redis, Kafka와 관측·운영 도구를 둔다. Payment API와 Worker는 payment DB를 공유하며 Outbox와 Inbox는 각 소유 서비스 DB에 둔다. 컨테이너 로그는 CloudWatch Logs로 수집한다. Commerce는 기본 모의 알림을 처리하며 선택적 본인 시연에서 외부 카카오톡 메시지 API를 호출한다. 이 경로는 고객 대상 실제 알림톡과 구분한다.</desc>
 <defs xmlns="http://www.w3.org/2000/svg">
+<symbol xmlns="http://www.w3.org/2000/svg" id="logo-aws-ec2" viewBox="0 0 64 64"><g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g fill="#ED7100">
+            <rect x="0" y="0" width="64" height="64" />
+        </g>
+        <path d="M22,41 L41,41 L41,23 L22,23 L22,41 Z M43,23 L46,23 L46,25 L43,25 L43,27 L46,27 L46,29 L43,29 L43,31 L46,31 L46,33 L43,33 L43,36 L46,36 L46,38 L43,38 L43,40 L46,40 L46,42 L42.863,42 C42.608,42.587 42.023,43 41.344,43 L41,43 L41,46 L39,46 L39,43 L37,43 L37,46 L35,46 L35,43 L33,43 L33,46 L31,46 L31,43 L29,43 L29,46 L27,46 L27,43 L24,43 L24,46 L22,46 L22,43 L21.656,43 C20.977,43 20.392,42.587 20.137,42 L18,42 L18,40 L20,40 L20,38 L18,38 L18,36 L20,36 L20,33 L18,33 L18,31 L20,31 L20,29 L18,29 L18,27 L20,27 L20,25 L18,25 L18,23 L20,23 L20,22.656 C20,21.743 20.743,21 21.656,21 L22,21 L22,18 L24,18 L24,21 L27,21 L27,18 L29,18 L29,21 L31,21 L31,18 L33,18 L33,21 L35,21 L35,18 L37,18 L37,21 L39,21 L39,18 L41,18 L41,21 L41.344,21 C42.257,21 43,21.743 43,22.656 L43,23 Z M32,52 L12,52 L12,32 L16,32 L16,30 L11.843,30 C10.826,30 10,30.827 10,31.843 L10,52.157 C10,53.173 10.826,54 11.843,54 L32.157,54 C33.174,54 34,53.173 34,52.157 L34,48 L32,48 L32,52 Z M54,11.843 L54,32.157 C54,33.173 53.174,34 52.157,34 L48,34 L48,32 L52,32 L52,12 L32,12 L32,16 L30,16 L30,11.843 C30,10.827 30.826,10 31.843,10 L52.157,10 C53.174,10 54,10.827 54,11.843 L54,11.843 Z" fill="#FFFFFF" />
+    </g>
+</symbol>
+<symbol xmlns="http://www.w3.org/2000/svg" id="logo-aws-ecs" viewBox="0 0 64 64"><g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g fill="#ED7100">
+            <rect x="0" y="0" width="64" height="64" />
+        </g>
+        <path d="M50,36.3822466 L44,33.3822885 L44,25.0004058 C44,24.6374109 43.803,24.3024156 43.485,24.1264181 L35,19.412484 L35,12.7495773 L50,21.5724538 L50,36.3822466 Z M51.507,20.1384739 L34.507,10.1386138 C34.199,9.95761637 33.815,9.95461641 33.504,10.1326139 C33.192,10.3106114 33,10.6416068 33,11.0006018 L33,20.0004758 C33,20.3634707 33.197,20.6984661 33.515,20.8744636 L42,25.5883976 L42,34.0002799 C42,34.3792746 42.214,34.7252697 42.553,34.8952674 L50.553,38.8952114 C50.694,38.9652104 50.847,39.0002099 51,39.0002099 C51.183,39.0002099 51.365,38.9502106 51.525,38.851212 C51.82,38.6682146 52,38.3472191 52,38.0002239 L52,21.0004618 C52,20.6464668 51.812,20.3184714 51.507,20.1384739 L51.507,20.1384739 Z M32,51.8280304 L15,41.4391758 L15,21.5544541 L29,12.8045765 L29,19.4464836 L21.47,24.1524177 C21.178,24.3354152 21,24.6554107 21,25.0004058 L21,38.0002239 C21,38.351219 21.185,38.6772144 21.485,38.8572119 L31.485,44.857128 C31.789,45.0401254 32.167,45.0481253 32.479,44.8781277 L42.988,39.1462079 L48.035,42.0291675 L32,51.8280304 Z M50.496,41.1321801 L43.496,37.1322361 C43.194,36.9592385 42.825,36.9562385 42.521,37.1222362 L32.023,42.8481561 L23,37.4342318 L23,25.5543981 L30.53,20.848464 C30.822,20.6654665 31,20.345471 31,20.0004758 L31,11.0006018 C31,10.6366069 30.803,10.3026115 30.484,10.125614 C30.168,9.9486165 29.778,9.95961634 29.47,10.1526136 L13.47,20.1524737 C13.178,20.3354711 13,20.6554667 13,21.0004618 L13,42.0001679 C13,42.3481631 13.182,42.6711585 13.479,42.854156 L31.479,53.854002 C31.639,53.9510007 31.819,54 32,54 C32.181,54 32.361,53.9510007 32.521,53.854002 L50.521,42.854156 C50.823,42.6691586 51.005,42.3391632 51.0001004,41.9851681 C50.995,41.6321731 50.803,41.3071776 50.496,41.1321801 L50.496,41.1321801 Z" fill="#FFFFFF" />
+    </g>
+</symbol>
+<symbol xmlns="http://www.w3.org/2000/svg" id="logo-aws-ecr" viewBox="0 0 64 64"><g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g fill="#ED7100">
+            <rect x="0" y="0" width="64" height="64" />
+        </g>
+        <path d="M30.726,29.9221953 C30.279,30.1827125 30,30.6666734 30,31.1847019 L30,51.5341041 L15,42.8578781 L15,23.0114745 L32.172,13.0777519 L47.088,20.4574036 L30.726,29.9221953 Z M49.704,20.42033 C49.704,19.9023015 49.426,19.4203446 48.921,19.1317717 L32.879,11.1960158 C32.433,10.9354986 31.876,10.9344966 31.428,11.1940118 L13.729,21.4333413 C13.28,21.6928565 13,22.1768174 13,22.6968499 L13,43.1725028 C13,43.6905313 13.279,44.1744922 13.728,44.4350094 L29.816,53.7414867 C30.04,53.8717454 30.292,53.9368747 30.545,53.9368747 C30.796,53.9368747 31.047,53.8727473 31.272,53.7424887 C31.721,53.4829735 32,52.9990126 32,52.4789801 L32,31.4993265 L48.978,21.6778267 C49.426,21.4193134 49.704,20.9373565 49.704,20.42033 L49.704,20.42033 Z M50,42.9410432 L37.004,51.5331022 L37.004,44.4099597 L43.603,39.4160446 C43.853,39.2266686 44,38.9300798 44,38.6164571 L44,30.4803034 L50,27.0064062 L50,42.9410432 Z M51.273,24.7990236 C50.825,24.5385063 50.267,24.5375044 49.817,24.7990236 L42.879,28.812993 C42.639,28.9422497 42,29.287936 42,30.0304101 L42,38.1174664 L35.663,42.9129875 C35.255,43.1805187 35.004,43.6414338 35.004,44.1344126 L35.004,52.5461134 C35.004,53.0661459 35.284,53.5501068 35.733,53.809622 C35.951,53.9348707 36.195,54 36.445,54 C36.709,54 36.982,53.9278568 37.239,53.7775584 L51.275,44.4971327 C51.722,44.2376175 52,43.7536566 52,43.2356281 L52,26.0625322 C52,25.5424997 51.721,25.0585388 51.273,24.7990236 L51.273,24.7990236 Z" fill="#FFFFFF" />
+    </g>
+</symbol>
+<symbol xmlns="http://www.w3.org/2000/svg" id="logo-aws-cloudwatch" viewBox="0 0 64 64"><g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g fill="#E7157B">
+            <rect x="0" y="0" width="64" height="64" />
+        </g>
+        <path d="M42.184,39.3811216 C42.184,37.1282698 40.347,35.2954581 38.089,35.2954581 C35.831,35.2954581 33.995,37.1282698 33.995,39.3811216 C33.995,41.6339735 35.831,43.4667852 38.089,43.4667852 C40.347,43.4667852 42.184,41.6339735 42.184,39.3811216 L42.184,39.3811216 Z M44.184,39.3811216 C44.184,42.7344587 41.45,45.4622252 38.089,45.4622252 C34.729,45.4622252 31.995,42.7344587 31.995,39.3811216 C31.995,36.0277846 34.729,33.3000181 38.089,33.3000181 C41.45,33.3000181 44.184,36.0277846 44.184,39.3811216 L44.184,39.3811216 Z M50.743,49.6157337 L45.846,45.2157884 C45.524,45.6398194 45.17,46.0379097 44.785,46.4050706 L49.671,50.8030205 C49.997,51.0953525 50.505,51.0714072 50.802,50.744155 C51.096,50.4179006 51.07,49.9110588 50.743,49.6157337 L50.743,49.6157337 Z M38.089,47.091502 C42.351,47.091502 45.818,43.6324067 45.818,39.3811216 C45.818,35.1298366 42.351,31.6707413 38.089,31.6707413 C33.829,31.6707413 30.362,35.1298366 30.362,39.3811216 C30.362,43.6324067 33.829,47.091502 38.089,47.091502 L38.089,47.091502 Z M52.081,48.1341194 C53.227,49.1667597 53.319,50.9357173 52.288,52.0801021 C51.735,52.6897091 50.971,53 50.205,53 C49.538,53 48.868,52.7655358 48.333,52.2866302 L43.172,47.6412457 C41.691,48.5521641 39.954,49.0869421 38.089,49.0869421 C32.725,49.0869421 28.362,44.7328919 28.362,39.3811216 C28.362,34.0293514 32.725,29.6753012 38.089,29.6753012 C43.454,29.6753012 47.818,34.0293514 47.818,39.3811216 C47.818,40.8447769 47.482,42.2286146 46.897,43.4757646 L52.081,48.1341194 Z M17.697,23.5383254 C17.697,23.9394088 17.72,24.3384968 17.767,24.722619 C17.802,25.0059715 17.713,25.2913194 17.524,25.5048315 C17.375,25.6714508 17.177,25.7831954 16.961,25.8241019 C15.084,26.3079961 12,27.7716514 12,32.1566309 C12,35.4800363 13.836,37.3138458 15.377,38.2676661 C16.049,38.6897017 16.64,38.9052092 17.138,38.9101978 L26.127,38.9101978 L26.127,40.9056378 L17.127,40.9056378 C16.243,40.8966584 15.3,40.577388 14.317,39.9588015 C12.708,38.9640747 10,36.6214281 10,32.1566309 C10,26.8876715 13.526,24.8642953 15.71,24.117003 C15.702,23.924443 15.697,23.7308853 15.697,23.5383254 C15.697,19.1603299 18.673,14.6217015 22.621,12.9784566 C27.232,11.0508615 32.119,12.0066773 35.687,15.5336176 C36.734,16.5672555 37.604,17.8084192 38.285,19.2361566 C39.203,18.5507229 40.304,18.1745825 41.459,18.1745825 C43.874,18.1745825 46.587,19.9684831 47.122,23.8895228 C50.58,24.7216213 54,27.27778 54,32.2174919 C54,35.1078868 52.864,37.4565197 50.713,39.0089721 L49.541,37.3926656 C51.173,36.2143583 52,34.4733368 52,32.2174919 C52,27.2388689 47.811,25.9997007 46.01,25.6983892 C45.743,25.6534918 45.505,25.5018384 45.351,25.2793468 C45.208,25.071821 45.15,24.8184001 45.186,24.5709656 C44.931,21.5319104 43.141,20.1700225 41.459,20.1700225 C40.402,20.1700225 39.409,20.6858438 38.734,21.5857873 C38.514,21.8791169 38.156,22.0297727 37.786,21.9748981 C37.422,21.9210212 37.118,21.6715912 36.993,21.3263801 C36.359,19.5743837 35.446,18.1027466 34.281,16.9513777 C32.851,15.5396039 28.933,12.506535 23.391,14.81925 C20.198,16.1492108 17.697,19.9784603 17.697,23.5383254 L17.697,23.5383254 Z" fill="#FFFFFF" />
+    </g>
+</symbol>
+<symbol xmlns="http://www.w3.org/2000/svg" id="logo-github" viewBox="0 0 24 24" fill="#181717"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" /></symbol>
+<symbol xmlns="http://www.w3.org/2000/svg" id="logo-githubactions" viewBox="0 0 24 24" fill="#2088FF"><path d="M10.984 13.836a.5.5 0 0 1-.353-.146l-.745-.743a.5.5 0 1 1 .706-.708l.392.391 1.181-1.18a.5.5 0 0 1 .708.707l-1.535 1.533a.504.504 0 0 1-.354.146zm9.353-.147l1.534-1.532a.5.5 0 0 0-.707-.707l-1.181 1.18-.392-.391a.5.5 0 1 0-.706.708l.746.743a.497.497 0 0 0 .706-.001zM4.527 7.452l2.557-1.585A1 1 0 0 0 7.09 4.17L4.533 2.56A1 1 0 0 0 3 3.406v3.196a1.001 1.001 0 0 0 1.527.85zm2.03-2.436L4 6.602V3.406l2.557 1.61zM24 12.5c0 1.93-1.57 3.5-3.5 3.5a3.503 3.503 0 0 1-3.46-3h-2.08a3.503 3.503 0 0 1-3.46 3 3.502 3.502 0 0 1-3.46-3h-.558c-.972 0-1.85-.399-2.482-1.042V17c0 1.654 1.346 3 3 3h.04c.244-1.693 1.7-3 3.46-3 1.93 0 3.5 1.57 3.5 3.5S13.43 24 11.5 24a3.502 3.502 0 0 1-3.46-3H8c-2.206 0-4-1.794-4-4V9.899A5.008 5.008 0 0 1 0 5c0-2.757 2.243-5 5-5s5 2.243 5 5a5.005 5.005 0 0 1-4.952 4.998A2.482 2.482 0 0 0 7.482 12h.558c.244-1.693 1.7-3 3.46-3a3.502 3.502 0 0 1 3.46 3h2.08a3.503 3.503 0 0 1 3.46-3c1.93 0 3.5 1.57 3.5 3.5zm-15 8c0 1.378 1.122 2.5 2.5 2.5s2.5-1.122 2.5-2.5-1.122-2.5-2.5-2.5S9 19.122 9 20.5zM5 9c2.206 0 4-1.794 4-4S7.206 1 5 1 1 2.794 1 5s1.794 4 4 4zm9 3.5c0-1.378-1.122-2.5-2.5-2.5S9 11.122 9 12.5s1.122 2.5 2.5 2.5 2.5-1.122 2.5-2.5zm9 0c0-1.378-1.122-2.5-2.5-2.5S18 11.122 18 12.5s1.122 2.5 2.5 2.5 2.5-1.122 2.5-2.5zm-13 8a.5.5 0 1 0 1 0 .5.5 0 0 0-1 0zm2 0a.5.5 0 1 0 1 0 .5.5 0 0 0-1 0zm12 0c0 1.93-1.57 3.5-3.5 3.5a3.503 3.503 0 0 1-3.46-3.002c-.007.001-.013.005-.021.005l-.506.017h-.017a.5.5 0 0 1-.016-.999l.506-.017c.018-.002.035.006.052.007A3.503 3.503 0 0 1 20.5 17c1.93 0 3.5 1.57 3.5 3.5zm-1 0c0-1.378-1.122-2.5-2.5-2.5S18 19.122 18 20.5s1.122 2.5 2.5 2.5 2.5-1.122 2.5-2.5z" /></symbol>
 <symbol id="logo-kakaotalk" viewBox="0 0 24 24">
 <rect width="24" height="24" rx="1.875" fill="#3c1e1e"/>
 <path fill="#fee500" d="M22.125 0H1.875C.8394 0 0 .8394 0 1.875v20.25C0 23.1606.8394 24 1.875 24h20.25C23.1606 24 24 23.1606 24 22.125V1.875C24 .8394 23.1606 0 22.125 0zM12 18.75c-.591 0-1.1697-.0413-1.7317-.1209-.5626.3965-3.813 2.6797-4.1198 2.7225 0 0-.1258.0489-.2328-.0141s-.0876-.2282-.0876-.2282c.0322-.2198.8426-3.0183.992-3.5333-2.7452-1.36-4.5701-3.7686-4.5701-6.5135C2.25 6.8168 6.6152 3.375 12 3.375s9.75 3.4418 9.75 7.6875c0 4.2457-4.3652 7.6875-9.75 7.6875zM8.0496 9.8672h-.8777v3.3417c0 .2963-.2523.5372-.5625.5372s-.5625-.2409-.5625-.5372V9.8672h-.8777c-.3044 0-.552-.2471-.552-.5508s.2477-.5508.552-.5508h2.8804c.3044 0 .552.2471.552.5508s-.2477.5508-.552.5508zm10.9879 2.9566a.558.558 0 0 1 .108.4167.5588.5588 0 0 1-.2183.371.5572.5572 0 0 1-.3383.1135.558.558 0 0 1-.4493-.2236l-1.3192-1.7479-.1952.1952v1.2273a.5635.5635 0 0 1-.5627.5628.563.563 0 0 1-.5625-.5625V9.3281c0-.3102.2523-.5625.5625-.5625s.5625.2523.5625.5625v1.209l1.5694-1.5694c.0807-.0807.1916-.1252.312-.1252.1404 0 .2814.0606.3871.1661.0985.0984.1573.2251.1654.3566.0082.1327-.036.2542-.1241.3425l-1.2818 1.2817 1.3845 1.8344zm-8.3502-3.5023c-.095-.2699-.3829-.5475-.7503-.5557-.3663.0083-.6542.2858-.749.5551l-1.3455 3.5415c-.1708.5305-.0217.7272.1333.7988a.8568.8568 0 0 0 .3576.0776c.2346 0 .4139-.0952.4678-.2481l.2787-.7297 1.7152.0001.2785.7292c.0541.1532.2335.2484.4681.2484a.8601.8601 0 0 0 .3576-.0775c.1551-.0713.3041-.2681.1329-.7999l-1.3449-3.5398zm-1.3116 2.4433l.5618-1.5961.5618 1.5961H9.3757zm5.9056 1.3836c0 .2843-.2418.5156-.5391.5156h-1.8047c-.2973 0-.5391-.2314-.5391-.5156V9.3281c0-.3102.2576-.5625.5742-.5625s.5742.2523.5742.5625v3.3047h1.1953c.2974 0 .5392.2314.5392.5156z"/>
@@ -95,23 +125,54 @@
       <path d="M0 0 8 3 0 6Z" fill="#475569" />
     </marker>
   </defs>
-<rect width="1440" height="984" fill="#ffffff"/>
+<rect width="1440" height="1256" fill="#ffffff"/>
 <text x="32" y="34" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="22" font-weight="600" fill="#1e293b" text-anchor="start" >통합 인프라 구조도</text>
-<text x="32" y="60" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="400" fill="#526176" text-anchor="start" >팀 공용 배포 구조 · ECS on EC2</text>
+<text x="32" y="60" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="400" fill="#526176" text-anchor="start" >팀 공용 배포 구조 · CI/CD · ECS on EC2</text>
+<g id="delivery" aria-label="빌드와 배포">
+<text x="48" y="110" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="12" font-weight="600" fill="#1e293b">빌드·배포</text>
+<g id="github" data-node="true" data-box="48,140,208,64"><rect x="48" y="140" width="208" height="64" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
+<use href="#logo-github" x="64" y="160" width="24" height="24" aria-hidden="true"/>
+<text x="100" y="168" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b">GitHub</text>
+<text x="100" y="188" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176">소스 코드</text>
+</g>
+<g id="github-actions" data-node="true" data-box="328,128,440,96"><rect x="328" y="128" width="440" height="96" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
+<use href="#logo-githubactions" x="344" y="164" width="24" height="24" aria-hidden="true"/>
+<text x="380" y="153" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b">GitHub Actions</text>
+<text x="380" y="175" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="11" font-weight="400" fill="#526176">CI · 테스트·패키징</text>
+<text x="380" y="197" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="11" font-weight="400" fill="#526176">CD · ARM64 이미지 빌드·배포 (예정)</text>
+</g>
+<g id="ecr" data-node="true" data-box="912,140,464,64"><rect x="912" y="140" width="464" height="64" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
+<use href="#logo-aws-ecr" x="928" y="160" width="24" height="24" aria-hidden="true"/>
+<text x="964" y="168" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b">Amazon ECR</text>
+<text x="964" y="188" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176">앱 이미지</text>
+</g>
+<path id="source-ci" data-edge="true" data-source="github" data-target="github-actions" data-flow="delivery" d="M256,172 H328" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow-telemetry)"/>
+<path id="ci-ecr" data-edge="true" data-source="github-actions" data-target="ecr" data-flow="delivery" d="M768,172 H912" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow-telemetry)"/>
+<text x="812" y="162" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176">push</text>
+<path id="cd-ecs" data-edge="true" data-source="github-actions" data-target="ecs-cluster" data-flow="delivery" d="M512,224 V400" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow-telemetry)"/>
+<text x="524" y="380" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176">서비스 갱신</text>
+
+<text x="700" y="380" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176">이미지 pull</text>
+</g>
+<g id="runtime" transform="translate(0 272)">
 <g id="ecs-cluster" data-box="184,128,1224,760" data-zone="true" data-infrastructure="ec2">
 <rect x="184" y="128" width="1224" height="760" rx="6" fill="#ffffff" stroke="#64748b" stroke-width="1.6" />
-<text x="208" y="156" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="600" fill="#1e293b" text-anchor="start" >Amazon ECS Cluster · 1개</text>
+<use href="#logo-aws-ecs" x="208" y="138" width="24" height="24" aria-hidden="true"/>
+<text x="244" y="156" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="600" fill="#1e293b" text-anchor="start" >Amazon ECS Cluster · 1개</text>
 <text x="208" y="180" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="11" font-weight="400" fill="#526176" text-anchor="start" >서비스별 배포 · 재시작 · 확장 관리</text>
 <g id="app-ec2" data-box="240,208,488,604" data-zone="true" data-instance-role="app" data-instance-count="1">
 <rect x="240" y="208" width="488" height="604" rx="6" fill="#ffffff" stroke="#64748b" stroke-width="1.4" />
-<text x="260" y="236" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="600" fill="#1e293b" text-anchor="start" >EC2 ① · 앱 서비스</text>
+<use href="#logo-aws-ec2" x="260" y="218" width="24" height="24" aria-hidden="true"/>
+<text x="296" y="236" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="600" fill="#1e293b" text-anchor="start" >EC2 ① · 앱 서비스</text>
 <text x="260" y="260" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="11" font-weight="400" fill="#526176" text-anchor="start" >Spring Boot 애플리케이션 · 독립 컨테이너 6개</text>
 </g>
 <g id="infra-ec2" data-box="864,208,512,640" data-zone="true" data-instance-role="infra" data-instance-count="1">
 <rect x="864" y="208" width="512" height="640" rx="6" fill="#ffffff" stroke="#64748b" stroke-width="1.4" />
-<text x="884" y="236" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="600" fill="#1e293b" text-anchor="start" >EC2 ② · 공유 인프라</text>
+<use href="#logo-aws-ec2" x="884" y="218" width="24" height="24" aria-hidden="true"/>
+<text x="920" y="236" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="600" fill="#1e293b" text-anchor="start" >EC2 ② · 공유 인프라</text>
 <text x="884" y="260" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="11" font-weight="400" fill="#526176" text-anchor="start" >저장소 · 메시징 · 관측·운영 도구</text>
 </g>
+<path id="ecr-app" data-edge="true" data-source="ecr" data-target="app-ec2" data-flow="delivery" d="M992,-68 V-16 H688 V208" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow-telemetry)"/>
 <path id="browser-gateway" data-protocol="https" data-edge="true" data-source="browser" data-target="gateway" data-flow="http" d="M176,332 H272" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)"/>
 <path id="k6-gateway" data-protocol="https" data-edge="true" data-source="k6" data-target="gateway" data-flow="http" d="M176,432 H224 Q232,432 232,424 V352 Q232,344 240,344 H272" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)"/>
 <path id="gateway-public" data-protocol="https" data-edge="true" data-source="gateway" data-target="business-apps" data-flow="http" d="M484,364 V396" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)"/>
@@ -218,8 +279,8 @@
 <g id="data-volume-collector" data-box="904,632,208,48" data-node="true" >
 <rect x="904" y="632.0" width="208" height="48" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
 <use href="#logo-resource" x="916" y="645.0" width="22" height="22" aria-hidden="true"/>
-<text x="948" y="652.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" >데이터 볼륨 수집</text>
-<text x="948" y="670.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" >디스크 사용량·잔여 공간</text>
+<text x="948" y="652.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" >디스크 관측</text>
+<text x="948" y="670.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" >DB·Kafka 저장 공간</text>
 </g>
 <g id="alertmanager" data-box="1128,752,208,48" data-node="true" >
 <rect x="1128" y="752" width="208" height="48" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
@@ -249,8 +310,9 @@
 </g>
 <g id="cloudwatch" data-box="1040,24,336,68" data-node="true" >
 <rect x="1040" y="24" width="336" height="68" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
-<text x="1056" y="54.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" >CloudWatch Logs</text>
-<text x="1056" y="72.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" >컨테이너 로그 수집</text>
+<use href="#logo-aws-cloudwatch" x="1056" y="46" width="24" height="24" aria-hidden="true"/>
+<text x="1092" y="54.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" >CloudWatch Logs</text>
+<text x="1092" y="72.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" >컨테이너 로그 수집</text>
 </g>
 <g id="slack" data-box="1120,912,232,56" data-node="true" >
 <rect x="1120" y="912" width="232" height="56" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
@@ -278,4 +340,5 @@
 <text x="732" y="944" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" >관측·로그</text>
 <use href="#logo-springbatch" x="880" y="929" width="20" height="20" aria-hidden="true"/>
 <text x="908" y="944" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" >앱 내부 Spring Batch</text>
+</g>
 </svg>

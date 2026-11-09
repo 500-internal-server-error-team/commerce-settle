@@ -32,7 +32,8 @@ GitHub 문서에서 SVG 미리보기를 사용합니다. SVG 자체가 편집 �
 
 기술 로고는 각 제품을 식별하기 위한 문서용 표시이며 해당 상표의 소유권은 각 소유자에게 있습니다. 임의의 PG 회사 로고는 사용하지 않습니다.
 
-- [Simple Icons](https://github.com/simple-icons/simple-icons/tree/90646e4bf7f3b89df6c37e65baf3e7bc759a517c) — CC0. Spring Boot, Apache Kafka, k6, Prometheus, Grafana, Docker, PostgreSQL, Redis, KakaoTalk.
+- [Simple Icons](https://github.com/simple-icons/simple-icons/tree/90646e4bf7f3b89df6c37e65baf3e7bc759a517c) — CC0. Spring Boot, Apache Kafka, k6, Prometheus, Grafana, Docker, PostgreSQL, Redis, KakaoTalk, GitHub, GitHub Actions.
+- [AWS Architecture Icons](https://aws.amazon.com/architecture/icons/) — [2026-07-31 공식 패키지](https://d1.awsstatic.com/onedam/marketing-channels/website/public/shared/architecture-icon-release/Icon-package_07312026.5846e92413caa21490223536cc97f1269e44fa92.zip)의 EC2·ECS·ECR·CloudWatch 서비스 아이콘.
 - [Spring Batch 공식 심볼](https://spring.io/img/projects/spring-batch.svg) — Spring 프로젝트를 식별하는 표시.
 - [OpenZipkin](https://github.com/openzipkin/openzipkin.github.io/blob/master/public/img/logo_svg/zipkin_symbol.svg) — 공식 Zipkin 심볼.
 - [Provectus Kafka UI v0.7.2](https://github.com/provectus/kafka-ui/blob/v0.7.2/documentation/images/kafka-ui-logo.png) — 프로젝트 로고, Apache-2.0 저장소.
