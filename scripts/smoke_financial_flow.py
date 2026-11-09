@@ -452,6 +452,9 @@ def returns(paid_order, request, seller_token, completed, inventory, reservation
     available, reserved, sold = map(int, inventory().split("/"))
     compose("stop", "settlement")
     disposed_refund = returned(disposed_order)
+    # RefundAccepted still reaches Commerce without Settlement and bumps the version; receive after it to avoid a 409.
+    until(lambda: request("GET", "/api/refund-requests/" + disposed_refund)[1]["status"] == "REFUNDING",
+          "return was not linked to the refund")
     receive(disposed_refund, False)
     assert reservation(disposed_order) == "DISPOSED", reservation(disposed_order)
     assert inventory() == f"{available}/{reserved}/{sold - 1}", inventory()
