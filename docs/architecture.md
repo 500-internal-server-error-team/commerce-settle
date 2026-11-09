@@ -283,6 +283,8 @@ Outbox·Inbox·원문 격리·DLT 작업의 저장 관계는 [메시지 데이�
 
 ## 네트워크와 관측
 
+팀 공용 배포에서는 브라우저·k6가 접근하는 외부 진입점과 업무 서비스 간 HTTP API 호출에 TLS를 적용해 HTTPS를 사용합니다. 인증서 검증을 유지하고, 아래 로컬 개발용 HTTP 주소와 구분합니다.
+
 Gateway는 빌드에 포함한 [OpenAPI](openapi.json)의 `/api/` 작업을 HTTP 메서드·경로와 `x-owner-service`로 대조해 커머스·Payment API·Settlement로 전달합니다. 경로 접두사가 같은 판매자 API도 상품·계정은 커머스, 정산·지급 조회는 Settlement로 구분합니다. 명세에 없는 경로·메서드와 `/internal`·`/mock`·관리 경로는 전달하지 않습니다. API 명세는 `/v3/api-docs/commerce|payment|settlement`, Swagger UI는 `/swagger-ui.html`입니다.
 
 백엔드는 컨트롤러 전에 대상별 호출 자격과 허용 발신자를 검사하고, 사용자 작업에는 계정 종류·거래 소유권도 대조합니다. MVC 앱의 자격 판정은 `internal-auth`를 사용하며 설정·교체는 [내부 호출 자격](development.md#내부-호출-자격)을 따릅니다. 내부 HTTP는 평문이므로 로컬 개발 환경에서만 사용합니다. Gateway 자체 오류는 [공통 오류 계약](../CONTRIBUTING.md#오류)으로 응답하고 백엔드 오류는 보존합니다. 전송 계층의 자동 재시도를 끄며 연결 단절을 금융 실패로 확정하지 않습니다.
