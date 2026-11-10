@@ -369,9 +369,15 @@ WORKER_SETTINGS = ("PAYMENT_REQUEST_CONCURRENCY", "PAYMENT_APPROVAL_CONCURRENCY"
 
 
 def worker_settings():
-    """실행 중인 payment-worker에 실제로 들어간 처리 설정. 기동 셸의 변수와 달라도 결과를 잘못 해석하지 않게 한다."""
-    out = compose("exec", "-T", "payment-worker", "env")
+    """실행 중인 payment-worker에 실제로 들어간 처리 설정. 기동 셸의 변수와 달라도 결과를 잘못 해석하지 않게 한다.
+
+    Worker가 죽어 읽을 수 없으면 None을 돌려준다. 실패한 실행도 남은 적체를 요약에 남겨야 하기 때문이다.
+    """
+    out = compose("exec", "-T", "payment-worker", "env", check=False)
     values = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    if not values:
+        print("payment-worker settings unavailable; recording workerSettings as null", file=sys.stderr)
+        return None
     return {name: values.get(name) for name in WORKER_SETTINGS}
 
 
