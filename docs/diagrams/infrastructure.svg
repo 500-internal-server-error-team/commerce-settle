@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1440" height="944" viewBox="0 0 1440 944" role="img" aria-labelledby="title desc" data-scope="ecs-ec2">
 <title id="title">ECS 클러스터와 EC2 2대의 빌드·배포 및 서비스 실행 구조</title>
-<desc id="desc">팀 공용 배포안. GitHub Actions에서 검증하고 ECR에 앱 이미지를 저장한 뒤 ECS 서비스를 갱신한다. 같은 크기의 여섯 앱 카드는 앱 EC2 안의 독립 실행이며 Gateway는 Commerce, Payment API, Settlement에만 HTTPS로 요청을 전달한다. 업무 앱 다섯 실행을 기능 그룹으로 표시하며 Payment Worker의 승인·환불·조회, Payment API의 PG 대조와 Settlement의 지급·대조는 Finance Mock을 호출한다. EC2의 ECS 에이전트가 ECR에 이미지 pull을 요청한다. 데이터 EC2에는 서비스별 DB 네 개를 가진 PostgreSQL, Redis, Kafka와 관측 도구를 둔다. Prometheus가 앱 메트릭을 가져오고 앱은 Zipkin으로 추적을 보내며 로그는 CloudWatch Logs에 수집한다. k6는 팀 PC에서 실행하고 Commerce의 카카오 본인 메시지와 Slack 경보는 선택 연동이다. AWS 배포와 CD는 미구현이다.</desc>
+<desc id="desc">팀 공용 배포안. GitHub Actions에서 검증하고 ECR에 앱 이미지를 저장한 뒤 ECS 서비스를 갱신한다. 같은 크기의 여섯 앱 카드는 앱 EC2 안의 독립 실행이며 Gateway는 Commerce, Payment API, Settlement에 HTTP로 요청을 전달한다. 외부 HTTPS 진입은 배포 목표이며 TLS 종료 위치는 미정이다. 업무 앱 다섯 실행을 기능 그룹으로 표시하며 Payment Worker의 승인·환불·조회, Payment API의 PG 대조와 Settlement의 지급·대조는 Finance Mock을 호출한다. EC2의 ECS 에이전트가 ECR에 이미지 pull을 요청한다. 데이터 EC2에는 서비스별 DB 네 개를 가진 PostgreSQL, Redis, Kafka와 관측 도구를 둔다. Grafana는 Prometheus를 조회하고 Prometheus는 앱과 디스크 수집기의 메트릭을 가져온다. 앱은 Zipkin으로 추적을 보내며 로그는 CloudWatch Logs에 수집한다. k6는 팀 PC에서 실행하고 Commerce의 카카오 본인 메시지와 Slack 경보는 선택 연동이다. AWS 배포와 CD는 미구현이다.</desc>
 <defs xmlns="http://www.w3.org/2000/svg">
 <symbol xmlns="http://www.w3.org/2000/svg" id="logo-aws-ec2" viewBox="0 0 64 64"><g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
         <g fill="#ED7100">
@@ -132,8 +132,7 @@
 <g id="ecs-cluster" data-box="192,144,1224,696" data-zone="true" data-infrastructure="ec2">
 <rect x="192" y="144" width="1224" height="696" rx="6" fill="#ffffff" stroke="#64748b" stroke-width="1.6"/>
 <use href="#logo-aws-ecs" x="216" y="160" width="24" height="24" aria-hidden="true"/>
-<text x="252" y="176" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="600" fill="#1e293b" text-anchor="start">ECS Cluster</text>
-<text x="216" y="196" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="11" font-weight="400" fill="#526176" text-anchor="start">서비스별 배포·재시작·확장</text>
+<text x="252" y="176" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="15" font-weight="600" fill="#1e293b" text-anchor="start">ECS Cluster · 서비스 관리</text>
 </g>
 <g id="app-ec2" data-box="216,208,608,548" data-zone="true" data-instance-role="app" data-instance-count="1">
 <rect x="216" y="208" width="608" height="548" rx="6" fill="#ffffff" stroke="#64748b" stroke-width="1.4"/>
@@ -159,22 +158,24 @@
 <path id="app-ecr-pull" data-edge="true" data-source="app-ec2" data-target="ecr" data-flow="delivery" d="M760,208 V128 Q760,120 768,120 H904 Q912,120 912,112 V100" fill="none" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
 <path id="browser-gateway" data-edge="true" data-source="browser" data-target="gateway" data-flow="api" d="M160,314 H432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
 <path id="k6-gateway" data-edge="true" data-source="k6" data-target="gateway" data-flow="api" d="M160,428 H200 Q208,428 208,420 V346 Q208,338 216,338 H432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
-<path id="gateway-commerce" data-edge="true" data-source="gateway" data-target="commerce" data-flow="api" d="M448,356 V368 Q448,376 440,376 H336 Q328,376 328,384 V432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
-<path id="gateway-payment-api" data-edge="true" data-source="gateway" data-target="payment-api" data-flow="api" d="M520,356 V432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
-<path id="gateway-settlement" data-edge="true" data-source="gateway" data-target="settlement" data-flow="api" d="M592,356 V368 Q592,376 600,376 H704 Q712,376 712,384 V432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
-<path id="payment-worker-finance" data-edge="true" data-source="payment-worker" data-target="finance-mock" data-flow="api" d="M416,626 H624" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
-<path id="payment-api-finance" data-edge="true" data-source="payment-api" data-target="finance-mock" data-flow="api" d="M568,516 V548 Q568,556 576,556 H656 Q664,556 664,564 V584" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
-<path id="settlement-finance" data-edge="true" data-source="settlement" data-target="finance-mock" data-flow="api" d="M744,516 V584" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
+<path id="gateway-commerce" data-edge="true" data-source="gateway" data-target="commerce" data-flow="api" d="M448,356 V368 Q448,376 440,376 H336 Q328,376 328,384 V432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="http"/>
+<path id="gateway-payment-api" data-edge="true" data-source="gateway" data-target="payment-api" data-flow="api" d="M520,356 V432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="http"/>
+<path id="gateway-settlement" data-edge="true" data-source="gateway" data-target="settlement" data-flow="api" d="M592,356 V368 Q592,376 600,376 H704 Q712,376 712,384 V432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="http"/>
+<path id="payment-worker-finance" data-edge="true" data-source="payment-worker" data-target="finance-mock" data-flow="api" d="M416,626 H624" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="http"/>
+<path id="payment-api-finance" data-edge="true" data-source="payment-api" data-target="finance-mock" data-flow="api" d="M568,516 V548 Q568,556 576,556 H656 Q664,556 664,564 V584" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="http"/>
+<path id="settlement-finance" data-edge="true" data-source="settlement" data-target="finance-mock" data-flow="api" d="M744,516 V584" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="http"/>
 <path id="apps-postgres" data-edge="true" data-source="business-apps" data-target="postgres" data-flow="store" d="M808,476 H840 Q848,476 848,468 V322 Q848,314 856,314 H912" fill="none" stroke="#0f766e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-store)" stroke-dasharray="12 4 2 4"/>
 <path id="boot-redis" data-edge="true" data-source="app-ec2" data-target="redis" data-flow="store" d="M824,524 H856 Q864,524 864,516 V422 Q864,414 872,414 H912" fill="none" stroke="#0f766e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-store)" stroke-dasharray="12 4 2 4"/>
 <path id="apps-kafka" data-edge="true" data-source="business-apps" data-target="kafka" data-flow="event" d="M808,626 H872 Q880,626 880,618 V522 Q880,514 888,514 H912" fill="none" stroke="#c56b00" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-event)" stroke-dasharray="8 5" marker-start="url(#arrow-event)"/>
 <path id="commerce-kakao-self" data-edge="true" data-source="commerce" data-target="kakao-self" data-flow="api" d="M240,492 H192 Q184,492 184,500 V536 Q184,544 176,544 H104 Q96,544 96,552 V560" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https" data-optional="true"/>
 <path id="boot-traces" data-edge="true" data-source="app-ec2" data-target="zipkin" data-flow="telemetry" d="M520,756 V768 Q520,776 528,776 H848 Q856,776 856,768 V648 Q856,640 864,640 H912" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
-<path id="prometheus-apps" data-edge="true" data-source="prometheus" data-target="app-ec2" data-flow="telemetry" d="M912,700 H888 Q880,700 880,708 V792 Q880,800 872,800 H480 Q472,800 472,792 V756" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
+<path id="prometheus-apps" data-edge="true" data-source="prometheus" data-target="app-ec2" data-flow="telemetry" d="M1140,724 V792 Q1140,800 1132,800 H480 Q472,800 472,792 V756" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
 <path id="cluster-cloudwatch" data-edge="true" data-source="ecs-cluster" data-target="cloudwatch" data-flow="telemetry" d="M1236,144 V100" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
-<path id="kafka-ui-query" data-edge="true" data-source="kafka-ui" data-target="kafka" data-flow="telemetry" d="M1140,616 V556" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
-<path id="prometheus-alertmanager" data-edge="true" data-source="prometheus" data-target="alertmanager" data-flow="telemetry" d="M1056,700 H1068" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
-<path id="alarms-slack" data-edge="true" data-source="alertmanager" data-target="slack" data-flow="telemetry" d="M1140,724 V864" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
+<path id="kafka-ui-query" data-edge="true" data-source="kafka-ui" data-target="kafka" data-flow="telemetry" d="M1296,616 V556" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
+<path id="grafana-prometheus" data-edge="true" data-source="grafana" data-target="prometheus" data-flow="telemetry" d="M1140,664 V676" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
+<path id="prometheus-disk" data-edge="true" data-source="prometheus" data-target="data-volume-collector" data-flow="telemetry" d="M1068,700 H1056" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
+<path id="prometheus-alertmanager" data-edge="true" data-source="prometheus" data-target="alertmanager" data-flow="telemetry" d="M1212,700 H1224" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
+<path id="alarms-slack" data-edge="true" data-source="alertmanager" data-target="slack" data-flow="telemetry" d="M1296,724 V864" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
 <g id="github" data-box="216,16,176,84" data-node="true">
 <rect x="216" y="16" width="176" height="84" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
 <use href="#logo-github" x="228" y="47.0" width="22" height="22" aria-hidden="true"/>
@@ -205,7 +206,7 @@
 <use href="#logo-springboot" x="444" y="303.0" width="22" height="22" aria-hidden="true"/>
 <text x="476" y="300.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Gateway</text>
 <text x="476" y="320.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">인증·세션 검증</text>
-<text x="476" y="336.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">HTTPS 라우팅</text>
+<text x="476" y="336.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">내부 HTTP 라우팅</text>
 </g>
 <g id="commerce" data-box="240,432,176,84" data-node="true" data-container="commerce">
 <rect x="240" y="432" width="176" height="84" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
@@ -271,35 +272,35 @@
 <text x="956" y="636.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Zipkin</text>
 <text x="956" y="654.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">분산 추적</text>
 </g>
-<g id="kafka-ui" data-box="1068,616,144,48" data-node="true">
-<rect x="1068" y="616" width="144" height="48" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
-<use href="#logo-kafkaui" x="1080" y="629.0" width="22" height="22" aria-hidden="true"/>
-<text x="1112" y="636.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Kafka UI</text>
-<text x="1112" y="654.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">토픽 관리·조회</text>
-</g>
-<g id="grafana" data-box="1224,616,144,48" data-node="true">
+<g id="kafka-ui" data-box="1224,616,144,48" data-node="true">
 <rect x="1224" y="616" width="144" height="48" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
-<use href="#logo-grafana" x="1236" y="629.0" width="22" height="22" aria-hidden="true"/>
-<text x="1268" y="636.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Grafana</text>
-<text x="1268" y="654.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">지표 조회</text>
+<use href="#logo-kafkaui" x="1236" y="629.0" width="22" height="22" aria-hidden="true"/>
+<text x="1268" y="636.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Kafka UI</text>
+<text x="1268" y="654.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">토픽 관리·조회</text>
 </g>
-<g id="prometheus" data-box="912,676,144,48" data-node="true">
-<rect x="912" y="676" width="144" height="48" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
-<use href="#logo-prometheus" x="924" y="689.0" width="22" height="22" aria-hidden="true"/>
-<text x="956" y="696.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Prometheus</text>
-<text x="956" y="714.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">지표 수집·경보</text>
+<g id="grafana" data-box="1068,616,144,48" data-node="true">
+<rect x="1068" y="616" width="144" height="48" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
+<use href="#logo-grafana" x="1080" y="629.0" width="22" height="22" aria-hidden="true"/>
+<text x="1112" y="636.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Grafana</text>
+<text x="1112" y="654.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">지표 조회</text>
 </g>
-<g id="alertmanager" data-box="1068,676,144,48" data-node="true">
+<g id="prometheus" data-box="1068,676,144,48" data-node="true">
 <rect x="1068" y="676" width="144" height="48" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
 <use href="#logo-prometheus" x="1080" y="689.0" width="22" height="22" aria-hidden="true"/>
-<text x="1112" y="696.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Alertmanager</text>
-<text x="1112" y="714.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">경보·복구 통지</text>
+<text x="1112" y="696.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Prometheus</text>
+<text x="1112" y="714.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">지표 수집·경보</text>
 </g>
-<g id="data-volume-collector" data-box="1224,676,144,48" data-node="true">
+<g id="alertmanager" data-box="1224,676,144,48" data-node="true">
 <rect x="1224" y="676" width="144" height="48" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
-<use href="#logo-resource" x="1236" y="689.0" width="22" height="22" aria-hidden="true"/>
-<text x="1268" y="696.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">디스크 관측</text>
-<text x="1268" y="714.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">저장 공간 사용률</text>
+<use href="#logo-prometheus" x="1236" y="689.0" width="22" height="22" aria-hidden="true"/>
+<text x="1268" y="696.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Alertmanager</text>
+<text x="1268" y="714.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">경보·복구 통지</text>
+</g>
+<g id="data-volume-collector" data-box="912,676,144,48" data-node="true">
+<rect x="912" y="676" width="144" height="48" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
+<use href="#logo-resource" x="924" y="689.0" width="22" height="22" aria-hidden="true"/>
+<text x="956" y="696.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">디스크 수집기</text>
+<text x="956" y="714.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">데이터 볼륨 사용률</text>
 </g>
 <g id="browser" data-box="32,282,128,64" data-node="true">
 <rect x="32" y="282" width="128" height="64" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
@@ -318,11 +319,11 @@
 <text x="76" y="588.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">카카오톡</text>
 <text x="76" y="606.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">본인 시연 · 선택</text>
 </g>
-<g id="slack" data-box="1052,864,176,64" data-node="true" data-optional="true">
-<rect x="1052" y="864" width="176" height="64" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
-<use href="#logo-slack" x="1064" y="885.0" width="22" height="22" aria-hidden="true"/>
-<text x="1096" y="892.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Slack</text>
-<text x="1096" y="910.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">경보·복구 통지 · 선택</text>
+<g id="slack" data-box="1208,864,176,64" data-node="true" data-optional="true">
+<rect x="1208" y="864" width="176" height="64" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
+<use href="#logo-slack" x="1220" y="885.0" width="22" height="22" aria-hidden="true"/>
+<text x="1252" y="892.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Slack</text>
+<text x="1252" y="910.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">경보·복구 통지 · 선택</text>
 </g>
 <rect x="784.0" y="34" width="32" height="16" fill="#ffffff"/>
 <text x="800" y="47" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="middle">push</text>
@@ -330,18 +331,8 @@
 <text x="620" y="129" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">배포 요청</text>
 <rect x="768" y="173" width="88" height="16" fill="#ffffff"/>
 <text x="772" y="186" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">이미지 pull 요청</text>
-<rect x="252" y="289" width="44" height="16" fill="#ffffff"/>
-<text x="256" y="302" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">HTTPS</text>
-<rect x="130.0" y="521" width="44" height="16" fill="#ffffff"/>
-<text x="152" y="534" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="middle">HTTPS</text>
-<rect x="856" y="337" width="28" height="16" fill="#ffffff"/>
-<text x="860" y="350" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">JDBC</text>
-<rect x="828" y="487" width="28" height="16" fill="#ffffff"/>
-<text x="852" y="500" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="end">Redis</text>
-<rect x="836" y="569" width="36" height="16" fill="#ffffff"/>
-<text x="868" y="582" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="end">이벤트</text>
-<rect x="1148" y="585" width="60" height="16" fill="#ffffff"/>
-<text x="1152" y="598" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">관리·조회</text>
+<rect x="1304" y="585" width="60" height="16" fill="#ffffff"/>
+<text x="1308" y="598" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">관리·조회</text>
 <rect x="1244" y="113" width="32" height="16" fill="#ffffff"/>
 <text x="1248" y="126" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">로그</text>
 <rect x="732" y="758" width="64" height="12" fill="#ffffff"/>
@@ -354,17 +345,17 @@
 <text x="620" y="545" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="middle">PG 대조</text>
 <rect x="752" y="536" width="48" height="16" fill="#ffffff"/>
 <text x="756" y="549" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">지급·대조</text>
-<g data-legend="flows"><line x1="32" y1="864" x2="1016" y2="864" stroke="#e2e8f0"/>
+<g data-legend="flows"><line x1="32" y1="864" x2="1184" y2="864" stroke="#e2e8f0"/>
 <line data-flow="api" x1="40" x2="80" y1="888" y2="888" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round"/>
-<text x="92" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">업무 API 호출</text>
-<line data-flow="store" x1="240" x2="280" y1="888" y2="888" stroke="#0f766e" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="12 4 2 4"/>
-<text x="292" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">DB·Redis 접근</text>
-<line data-flow="event" x1="440" x2="480" y1="888" y2="888" stroke="#c56b00" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="8 5"/>
-<text x="492" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">Kafka 이벤트</text>
-<line data-flow="telemetry" x1="640" x2="680" y1="888" y2="888" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="1 5"/>
-<text x="692" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">관측·운영</text>
-<line data-flow="delivery" x1="840" x2="880" y1="888" y2="888" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round"/>
-<text x="892" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">빌드·배포</text>
+<text x="92" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">업무 API (외부 HTTPS 목표 · 내부 HTTP)</text>
+<line data-flow="store" x1="320" x2="360" y1="888" y2="888" stroke="#0f766e" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="12 4 2 4"/>
+<text x="372" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">DB·Redis 접근</text>
+<line data-flow="event" x1="520" x2="560" y1="888" y2="888" stroke="#c56b00" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="8 5"/>
+<text x="572" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">Kafka 이벤트</text>
+<line data-flow="telemetry" x1="720" x2="760" y1="888" y2="888" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="1 5"/>
+<text x="772" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">관측·운영</text>
+<line data-flow="delivery" x1="920" x2="960" y1="888" y2="888" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round"/>
+<text x="972" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">빌드·배포</text>
 </g>
 <g data-legend="symbols">
 <use href="#logo-springbatch" x="40" y="904" width="20" height="20" aria-hidden="true"/>
