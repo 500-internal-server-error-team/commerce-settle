@@ -20,16 +20,25 @@ import com.fasterxml.jackson.databind.ObjectReader;
 import java.io.IOException;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 
 /**
- * Commerce 토픽의 결제 요청·미결제 취소 요청·환불 승인·주문 복구 확인을 엄격하게 해석해 Inbox 대기로 넘긴다. 그 밖의 종류와 해석할 수 없는 원문은
- * 격리한다(격리를 끄면 ACK하지 않는다).
+ * Commerce 토픽의 결제 요청·미결제 취소 요청·환불 승인·주문 복구 확인을 엄격하게 해석해 Inbox 대기로 넘긴다. 같은 토픽의 다른 eventType(예:
+ * Settlement가 소비하는 구매확정)은 저장 없이 ACK한다. eventType을 읽을 수 없거나 처리 대상 종류의 계약에 맞지 않는 원문은 격리한다(격리를 끄면
+ * ACK하지 않는다).
  */
 public class OrderPaymentRequestedListener {
+
+  private static final Set<String> HANDLED_EVENT_TYPES =
+      Set.of(
+          "OrderPaymentRequested",
+          "PaymentCancellationRequested",
+          "RefundApproved",
+          "RefundOrderRestored");
 
   private final ObjectReader reader;
   private final ObjectReader cancellationReader;
@@ -84,6 +93,11 @@ public class OrderPaymentRequestedListener {
       acknowledgment.acknowledge();
       return;
     }
+    if (event == null) {
+      // Payment가 처리하지 않는 종류다. 다른 소비 그룹이 처리하므로 저장·격리 없이 넘긴다.
+      acknowledgment.acknowledge();
+      return;
+    }
     Source source = new Source(record.topic(), record.partition(), record.offset(), record.value());
     if (event.payload() instanceof RefundApprovedPayload
         || event.payload() instanceof RefundOrderRestoredPayload) {
@@ -102,17 +116,24 @@ public class OrderPaymentRequestedListener {
     acknowledgment.acknowledge();
   }
 
+  /** 처리 대상이 아닌 eventType이면 null을 돌려준다. eventType을 읽을 수 없으면 해석 실패다. */
   private EventEnvelope<?> decode(ConsumerRecord<String, byte[]> record) {
     try {
       if (!"commerce-settle.commerce.v1".equals(record.topic())) {
         throw new IllegalArgumentException();
       }
       var json = mapper.readTree(record.value());
-      if (json != null
-          && "PaymentCancellationRequested".equals(json.path("eventType").textValue())) {
+      if (json == null || !json.path("eventType").isTextual()) {
+        throw new IllegalArgumentException();
+      }
+      String eventType = json.path("eventType").textValue();
+      if (!HANDLED_EVENT_TYPES.contains(eventType)) {
+        return null;
+      }
+      if ("PaymentCancellationRequested".equals(eventType)) {
         return decodeCancellation(json, record.key());
       }
-      if (json != null && "RefundApproved".equals(json.path("eventType").textValue())) {
+      if ("RefundApproved".equals(eventType)) {
         return decodeRefund(
             json,
             record.key(),
@@ -120,7 +141,7 @@ public class OrderPaymentRequestedListener {
             List.of("requestId", "orderId", "paymentId"),
             List.of("acceptedAt", "approvedAt"));
       }
-      if (json != null && "RefundOrderRestored".equals(json.path("eventType").textValue())) {
+      if ("RefundOrderRestored".equals(eventType)) {
         return decodeRefund(
             json,
             record.key(),
