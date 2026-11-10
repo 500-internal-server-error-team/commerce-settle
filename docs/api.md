@@ -113,6 +113,8 @@ Commerce는 `PaymentAccepted`로 본인 주문의 paymentId만 연결하며 접�
 
 Settlement는 `PaymentConfirmed`·`PurchaseConfirmed`와 아래 환불 SAGA 요청 v1을 수신합니다. 종류·버전·생산자 토픽·key(paymentId)·필드 타입을 검사하며 같은 토픽의 다른 eventType은 저장 없이 ACK합니다. 결제는 최초 원장, 구매확정은 지급 가능 상태로 반영합니다. 선행 결제가 없으면 기다리고, 나중에 결제가 도착하면 그 대기만 재개합니다. 원문 격리·실패·대기 소진·재개는 [Inbox 계약](data-model.md#inbox), 활성화·offset은 [Kafka 실행](development.md#kafka-전달-기반)을 따릅니다. 세 서비스의 실제 연동 확인은 [왕복 smoke](development.md#주문결제정산환불-왕복)에서 다룹니다.
 
+Payment는 commerce 토픽에서 `OrderPaymentRequested`·`PaymentCancellationRequested`·`RefundApproved`·`RefundOrderRestored` v1만 처리합니다. 같은 토픽의 다른 eventType(`PurchaseConfirmed` 등)은 저장·격리 없이 ACK합니다. eventType을 읽을 수 없거나 처리 대상 종류의 버전·key·필드가 계약에 맞지 않으면 [원문 격리](development.md#kafka-전달-기반)를 따릅니다.
+
 ### Settlement 환불 SAGA
 
 Settlement는 환불 요청을 Inbox와 같은 트랜잭션에 반영하고 결과를 자기 Outbox에 저장한 뒤 `commerce-settle.settlement.v1`으로 발행합니다. 결과 이벤트의 key와 aggregateId는 `paymentId`, aggregateVersion은 정산 항목 버전입니다. 결제와 정산 항목은 1:1이라 항목이 생기기 전의 `WAITING`도 뒤의 결과보다 먼저 나갑니다. Relay는 `app.outbox.enabled`(기본 `false`)로 켜며, 꺼져 있어도 결과는 Outbox에 PENDING으로 쌓입니다.

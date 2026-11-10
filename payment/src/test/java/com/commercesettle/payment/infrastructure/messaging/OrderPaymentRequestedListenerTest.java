@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
@@ -12,6 +13,8 @@ import com.commercesettle.payment.application.event.PaymentCancellationRequested
 import com.commercesettle.payment.application.event.RefundApprovedPayload;
 import com.commercesettle.payment.application.event.RefundOrderRestoredPayload;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor;
+import com.commercesettle.payment.application.port.QuarantineStore;
+import com.commercesettle.payment.application.service.QuarantineService;
 import com.commercesettle.payment.infrastructure.config.OrderPaymentRequestedListenerConfiguration;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -43,6 +46,7 @@ class OrderPaymentRequestedListenerTest {
   @Autowired private ObjectMapper mapper;
   @Mock private OrderPaymentRequestAcceptor acceptor;
   @Mock private Acknowledgment acknowledgment;
+  @Mock private QuarantineService quarantine;
 
   @ParameterizedTest
   @ValueSource(strings = {"Z", "+09:00"})
@@ -239,7 +243,8 @@ class OrderPaymentRequestedListenerTest {
         "enumNumber",
         "unknownEnum",
         "unsupportedVersion",
-        "wrongType",
+        "missingType",
+        "numericType",
         "wrongKey",
         "numericTime",
         "missingTime",
@@ -267,7 +272,8 @@ class OrderPaymentRequestedListenerTest {
       case "enumNumber" -> payload.put("status", 0);
       case "unknownEnum" -> payload.put("status", "UNKNOWN");
       case "unsupportedVersion" -> json.put("eventVersion", 2);
-      case "wrongType" -> json.put("eventType", "PaymentConfirmed");
+      case "missingType" -> json.remove("eventType");
+      case "numericType" -> json.put("eventType", 1);
       case "wrongKey" -> key = "different-order";
       case "numericTime" -> json.put("occurredAt", 123);
       case "missingTime" -> json.remove("occurredAt");
@@ -287,6 +293,48 @@ class OrderPaymentRequestedListenerTest {
         .hasMessage("Invalid OrderPaymentRequested record");
 
     verifyNoInteractions(acceptor, acknowledgment);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  @DisplayName("같은 토픽의 구매확정은 격리 설정과 관계없이 저장·격리 없이 ACK한다")
+  void acknowledgesPurchaseConfirmedWithoutHandling(boolean quarantineEnabled) {
+    var listener =
+        new OrderPaymentRequestedListener(
+            mapper, acceptor, quarantineEnabled ? quarantine : null, "payment.v1");
+
+    listener.receive(record(PURCHASE_CONFIRMED_JSON, PAYMENT_ID), acknowledgment);
+
+    verify(acknowledgment).acknowledge();
+    verifyNoInteractions(acceptor, quarantine);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"PaymentConfirmed", "MileageAccrualRequested", " OrderPaymentRequested"})
+  @DisplayName("처리하지 않는 eventType은 본문 형식과 관계없이 저장·격리 없이 ACK한다")
+  void acknowledgesUnsupportedEventType(String eventType) throws Exception {
+    ObjectNode json = (ObjectNode) mapper.readTree(EVENT_JSON);
+    json.put("eventType", eventType);
+    json.remove("payload");
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, quarantine, "payment.v1");
+
+    listener.receive(record(mapper.writeValueAsString(json), KEY), acknowledgment);
+
+    verify(acknowledgment).acknowledge();
+    verifyNoInteractions(acceptor, quarantine);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"{invalid-json", "{}", "{\"eventType\":null}", "[]"})
+  @DisplayName("eventType을 읽을 수 없는 원문은 계속 격리한다")
+  void quarantinesRecordWithoutReadableEventType(String body) {
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, quarantine, "payment.v1");
+
+    listener.receive(record(body, KEY), acknowledgment);
+
+    verify(quarantine).capture(any(QuarantineStore.Source.class));
+    verify(acknowledgment).acknowledge();
+    verifyNoInteractions(acceptor);
   }
 
   @Test
@@ -313,6 +361,18 @@ class OrderPaymentRequestedListenerTest {
   private ConsumerRecord<String, byte[]> record(String body, String key) {
     return new ConsumerRecord<>(TOPIC, 2, 73L, key, body.getBytes(StandardCharsets.UTF_8));
   }
+
+  // Commerce가 key=paymentId로 같은 토픽에 발행하는 구매확정 v1. Settlement가 소비한다.
+  static final String PURCHASE_CONFIRMED_JSON =
+      """
+      {"eventId":"00000000-0000-0000-0000-0000000000a1","eventType":"PurchaseConfirmed",
+       "eventVersion":1,"occurredAt":"2026-01-09T00:00:01Z",
+       "aggregateId":"00000000-0000-0000-0000-000000000001","aggregateVersion":5,
+       "payload":{"paymentId":"00000000-0000-0000-0000-0000000000e1",
+        "orderId":"00000000-0000-0000-0000-000000000001","orderVersion":5,
+        "confirmedAt":"2026-01-09T00:00:01Z","deliveredAt":"2026-01-02T00:00:00Z",
+        "refundDeadlineAt":"2026-01-09T00:00:00Z"}}
+      """;
 
   static final String EVENT_JSON =
 """
