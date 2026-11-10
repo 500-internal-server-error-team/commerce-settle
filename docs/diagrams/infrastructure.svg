@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1440" height="944" viewBox="0 0 1440 944" role="img" aria-labelledby="title desc" data-scope="ecs-ec2">
 <title id="title">ECS 클러스터와 EC2 2대의 빌드·배포 및 서비스 실행 구조</title>
-<desc id="desc">팀 공용 배포안. GitHub Actions에서 검증하고 ECR에 앱 이미지를 저장한 뒤 ECS 서비스를 갱신한다. 같은 크기의 여섯 앱 카드는 앱 EC2 안의 독립 실행이며 Gateway는 Commerce, Payment API, Settlement에만 HTTPS로 요청을 전달한다. 업무 앱 다섯 실행을 기능 그룹으로 표시한다. 데이터 EC2에는 서비스별 DB 네 개를 가진 PostgreSQL, Redis, Kafka와 관측 도구를 둔다. Prometheus가 앱 메트릭을 가져오고 앱은 Zipkin으로 추적을 보내며 로그는 CloudWatch Logs에 수집한다. k6는 팀 PC에서 실행하고 Commerce의 카카오 본인 메시지와 Slack 경보는 선택 연동이다. AWS 배포와 CD는 미구현이다.</desc>
+<desc id="desc">팀 공용 배포안. GitHub Actions에서 검증하고 ECR에 앱 이미지를 저장한 뒤 ECS 서비스를 갱신한다. 같은 크기의 여섯 앱 카드는 앱 EC2 안의 독립 실행이며 Gateway는 Commerce, Payment API, Settlement에만 HTTPS로 요청을 전달한다. 업무 앱 다섯 실행을 기능 그룹으로 표시하며 Payment Worker의 승인·환불·조회, Payment API의 PG 대조와 Settlement의 지급·대조는 Finance Mock을 호출한다. EC2의 ECS 에이전트가 ECR에 이미지 pull을 요청한다. 데이터 EC2에는 서비스별 DB 네 개를 가진 PostgreSQL, Redis, Kafka와 관측 도구를 둔다. Prometheus가 앱 메트릭을 가져오고 앱은 Zipkin으로 추적을 보내며 로그는 CloudWatch Logs에 수집한다. k6는 팀 PC에서 실행하고 Commerce의 카카오 본인 메시지와 Slack 경보는 선택 연동이다. AWS 배포와 CD는 미구현이다.</desc>
 <defs xmlns="http://www.w3.org/2000/svg">
 <symbol xmlns="http://www.w3.org/2000/svg" id="logo-aws-ec2" viewBox="0 0 64 64"><g stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
         <g fill="#ED7100">
@@ -156,12 +156,15 @@
 <path id="source-ci" data-edge="true" data-source="github" data-target="github-actions" data-flow="delivery" d="M392,58 H440" fill="none" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
 <path id="ci-ecr" data-edge="true" data-source="github-actions" data-target="ecr" data-flow="delivery" d="M776,58 H824" fill="none" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
 <path id="cd-ecs" data-edge="true" data-source="github-actions" data-target="ecs-cluster" data-flow="delivery" d="M608,100 V144" fill="none" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
-<path id="ecr-app" data-edge="true" data-source="ecr" data-target="app-ec2" data-flow="delivery" d="M912,100 V112 Q912,120 904,120 H768 Q760,120 760,128 V208" fill="none" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
+<path id="app-ecr-pull" data-edge="true" data-source="app-ec2" data-target="ecr" data-flow="delivery" d="M760,208 V128 Q760,120 768,120 H904 Q912,120 912,112 V100" fill="none" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
 <path id="browser-gateway" data-edge="true" data-source="browser" data-target="gateway" data-flow="api" d="M160,314 H432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
 <path id="k6-gateway" data-edge="true" data-source="k6" data-target="gateway" data-flow="api" d="M160,428 H200 Q208,428 208,420 V346 Q208,338 216,338 H432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
 <path id="gateway-commerce" data-edge="true" data-source="gateway" data-target="commerce" data-flow="api" d="M448,356 V368 Q448,376 440,376 H336 Q328,376 328,384 V432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
 <path id="gateway-payment-api" data-edge="true" data-source="gateway" data-target="payment-api" data-flow="api" d="M520,356 V432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
 <path id="gateway-settlement" data-edge="true" data-source="gateway" data-target="settlement" data-flow="api" d="M592,356 V368 Q592,376 600,376 H704 Q712,376 712,384 V432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
+<path id="payment-worker-finance" data-edge="true" data-source="payment-worker" data-target="finance-mock" data-flow="api" d="M416,626 H624" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
+<path id="payment-api-finance" data-edge="true" data-source="payment-api" data-target="finance-mock" data-flow="api" d="M568,516 V548 Q568,556 576,556 H656 Q664,556 664,564 V584" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
+<path id="settlement-finance" data-edge="true" data-source="settlement" data-target="finance-mock" data-flow="api" d="M744,516 V584" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
 <path id="apps-postgres" data-edge="true" data-source="business-apps" data-target="postgres" data-flow="store" d="M808,476 H840 Q848,476 848,468 V322 Q848,314 856,314 H912" fill="none" stroke="#0f766e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-store)" stroke-dasharray="12 4 2 4"/>
 <path id="boot-redis" data-edge="true" data-source="app-ec2" data-target="redis" data-flow="store" d="M824,524 H856 Q864,524 864,516 V422 Q864,414 872,414 H912" fill="none" stroke="#0f766e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-store)" stroke-dasharray="12 4 2 4"/>
 <path id="apps-kafka" data-edge="true" data-source="business-apps" data-target="kafka" data-flow="event" d="M808,626 H872 Q880,626 880,618 V522 Q880,514 888,514 H912" fill="none" stroke="#c56b00" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-event)" stroke-dasharray="8 5" marker-start="url(#arrow-event)"/>
@@ -227,19 +230,19 @@
 <text x="668" y="496.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">지급 작업 처리</text>
 <use href="#logo-springbatch" x="772" y="440" width="20" height="20" aria-hidden="true"/>
 </g>
-<g id="payment-worker" data-box="336,584,176,84" data-node="true" data-container="payment-worker">
-<rect x="336" y="584" width="176" height="84" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
-<use href="#logo-springboot" x="348" y="615.0" width="22" height="22" aria-hidden="true"/>
-<text x="380" y="612.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Payment Worker</text>
-<text x="380" y="632.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">외부 금융 호출</text>
-<text x="380" y="648.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">비동기 작업 처리</text>
+<g id="payment-worker" data-box="240,584,176,84" data-node="true" data-container="payment-worker">
+<rect x="240" y="584" width="176" height="84" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
+<use href="#logo-springboot" x="252" y="615.0" width="22" height="22" aria-hidden="true"/>
+<text x="284" y="612.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Payment Worker</text>
+<text x="284" y="632.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">외부 금융 호출</text>
+<text x="284" y="648.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">DB 작업 조회·처리</text>
 </g>
-<g id="finance-mock" data-box="528,584,176,84" data-node="true" data-container="finance-mock">
-<rect x="528" y="584" width="176" height="84" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
-<use href="#logo-springboot" x="540" y="615.0" width="22" height="22" aria-hidden="true"/>
-<text x="572" y="612.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Finance Mock</text>
-<text x="572" y="632.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">PG A·B·C · 간편결제</text>
-<text x="572" y="648.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">지급 API 대역</text>
+<g id="finance-mock" data-box="624,584,176,84" data-node="true" data-container="finance-mock">
+<rect x="624" y="584" width="176" height="84" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
+<use href="#logo-springboot" x="636" y="615.0" width="22" height="22" aria-hidden="true"/>
+<text x="668" y="612.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Finance Mock</text>
+<text x="668" y="632.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">PG A·B·C · 간편결제</text>
+<text x="668" y="648.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">지급 API 대역</text>
 </g>
 <g id="postgres" data-box="912,272,456,84" data-node="true" data-container="postgres">
 <rect x="912" y="272" width="456" height="84" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
@@ -324,9 +327,9 @@
 <rect x="784.0" y="34" width="32" height="16" fill="#ffffff"/>
 <text x="800" y="47" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="middle">push</text>
 <rect x="616" y="116" width="64" height="16" fill="#ffffff"/>
-<text x="620" y="129" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">서비스 갱신</text>
-<rect x="768" y="173" width="68" height="16" fill="#ffffff"/>
-<text x="772" y="186" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">이미지 pull</text>
+<text x="620" y="129" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">배포 요청</text>
+<rect x="768" y="173" width="88" height="16" fill="#ffffff"/>
+<text x="772" y="186" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">이미지 pull 요청</text>
 <rect x="252" y="289" width="44" height="16" fill="#ffffff"/>
 <text x="256" y="302" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">HTTPS</text>
 <rect x="130.0" y="521" width="44" height="16" fill="#ffffff"/>
@@ -345,6 +348,12 @@
 <text x="736" y="768" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">추적 전송</text>
 <rect x="568" y="810" width="72" height="16" fill="#ffffff"/>
 <text x="572" y="823" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">메트릭 수집</text>
+<rect x="470" y="602" width="100" height="16" fill="#ffffff"/>
+<text x="520" y="615" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="middle">승인·환불·조회</text>
+<rect x="584" y="532" width="72" height="16" fill="#ffffff"/>
+<text x="620" y="545" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="middle">PG 대조</text>
+<rect x="752" y="536" width="48" height="16" fill="#ffffff"/>
+<text x="756" y="549" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">지급·대조</text>
 <g data-legend="flows"><line x1="32" y1="864" x2="1016" y2="864" stroke="#e2e8f0"/>
 <line data-flow="api" x1="40" x2="80" y1="888" y2="888" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round"/>
 <text x="92" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">업무 API 호출</text>

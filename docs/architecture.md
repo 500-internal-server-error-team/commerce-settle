@@ -30,6 +30,8 @@
 
 ![통합 인프라 구조도](diagrams/infrastructure.svg)
 
+Gateway의 공개 라우팅과 Finance Mock의 주요 호출을 파란 선으로 표시합니다. Payment Worker는 승인·환불·조회, Payment API는 PG 대조, Settlement는 지급·대조를 요청합니다.
+
 ECS는 서비스별 배포·재시작·실행 개수를 관리합니다. 앱 여섯 실행은 앱용 EC2에, PostgreSQL·Redis·Kafka와 관측 도구는 인프라용 EC2에 배치합니다. 역할별 호스트가 한 대이므로 앱 호스트 중단 시 앱 전체, 인프라 호스트 중단 시 공유 저장소·메시징·관측이 함께 영향을 받습니다. 같은 클러스터에 등록해도 다른 역할의 호스트로 자동 대체되는 구성은 아닙니다. [ECS 클러스터](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/clusters.html)와 [배치 제약](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-placement-constraints.html)을 기준으로 설정합니다.
 
 CloudWatch Logs는 두 EC2의 컨테이너 로그를 모으는 관리형 서비스로 사용하며, 수집·보존 기준은 [로그 수집](#로그-수집)을 따릅니다. Prometheus·Grafana는 지표, Zipkin은 추적, Kafka UI는 메시징 운영을 담당합니다. [본인 카카오톡 시연](#본인-카카오톡-시연-어댑터)은 Commerce에서 클러스터 밖의 카카오 메시지 API를 호출하는 선택적 연동이며 별도 EC2를 추가하지 않습니다. DB·Kafka·Redis의 영속 데이터 보존·백업·복구는 ECS의 컨테이너 재시작과 별도로 관리합니다.
@@ -38,7 +40,7 @@ CloudWatch Logs는 두 EC2의 컨테이너 로그를 모으는 관리형 서비�
 
 ### CI/CD와 이미지 배포
 
-현재 GitHub Actions는 테스트·JAR 패키징·Compose 통합 검증을 수행합니다. 목표 CD는 검증한 커밋의 `linux/arm64` 앱 이미지를 빌드해 ECR에 저장하고, 해당 이미지 digest로 ECS Task Definition을 등록한 뒤 앱 서비스를 갱신합니다. EC2의 ECS 에이전트가 이미지를 받아 실행합니다. [GitHub의 ECS 배포 흐름](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/amazon-elastic-container-service)을 기준으로 구성합니다.
+현재 GitHub Actions는 테스트·JAR 패키징·Compose 통합 검증을 수행합니다. 목표 CD는 검증한 커밋의 `linux/arm64` 앱 이미지를 빌드해 ECR에 저장하고, 해당 이미지 digest로 ECS Task Definition을 등록한 뒤 앱 서비스를 갱신합니다. EC2의 ECS 에이전트가 [ECR에 이미지 pull을 요청](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/pull-behavior.html)해 받아 실행합니다. [GitHub의 ECS 배포 흐름](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/amazon-elastic-container-service)을 기준으로 구성합니다.
 
 CD·ECR·AWS 배포는 미구현입니다. 배포 대상 브랜치·실행 조건·IAM 권한과 상태 확인·실패 복구를 정하고 검증해야 합니다. 앱 호스트가 한 대이므로 Task 교체에 필요한 여유 자원·포트와 중단 가능 시간을 확인하며 무중단 배포를 보장하지 않습니다. DB·Kafka·Redis의 변경은 데이터 보존·복구 절차에 따라 별도로 수행합니다. GitHub 호스팅 러너와 ECR은 EC2 2대에 포함되는 추가 호스트가 아닙니다.
 
