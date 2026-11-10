@@ -42,6 +42,11 @@ def command(*parts):
     return " ".join(parts) + "\n"
 
 
+def outcome_counts(metrics):
+    return {name.removeprefix("order_"): int(metrics[name]["count"]) for name in metrics
+            if name.startswith("order_") and "count" in metrics[name] and "{" not in name}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--buyers", type=int, default=60_000)
@@ -52,10 +57,18 @@ def main(argv=None):
     parser.add_argument("--tail-rate", type=int, default=545)
     parser.add_argument("--gauge-rate", type=int, default=0, help="게이지 조회 초당 건수. 0이면 끈다")
     parser.add_argument("--max-vus", type=int, default=1_000)
+    parser.add_argument("--warmup-seconds", type=int, default=0, help="이벤트 공개 전 일반 상품 주문으로 예열하는 시간(초). 0이면 끈다")
+    parser.add_argument("--warmup-rate", type=int, default=50, help="예열 초당 주문 수")
     args = parser.parse_args(argv)
     orders = args.peak_seconds * args.peak_rate + args.tail_seconds * args.tail_rate
     if orders > args.buyers:
         parser.error(f"{orders} orders need at least as many buyers")
+    if args.warmup_seconds < 0 or args.warmup_rate < 0:
+        parser.error("warm-up seconds and rate must be non-negative")
+    # 예열 구매자는 집중 구간 구매자와 따로 둬 집중 구간이 계속 서로 다른 구매자의 첫 주문이 되게 한다.
+    # 초당 주문 수만큼 두면 예열 구매자마다 초당 약 1건이라 구매자 행 잠금끼리 기다리지 않는다.
+    warmup_buyers = args.warmup_rate if args.warmup_seconds and args.warmup_rate else 0
+    prepared = args.buyers + warmup_buyers
 
     work = ROOT / "tests" / "load" / "work" / datetime.now().strftime("event-%Y%m%d-%H%M%S")
     work.mkdir(parents=True)
@@ -90,7 +103,7 @@ def main(argv=None):
         sql(f"""
 INSERT INTO commerce.buyer_accounts (id,email_normalized,password_hash,display_name,status,created_at,updated_at,version)
 SELECT md5('load-buyer-'||g)::uuid, 'load-'||g||'@load.test','test','load','ACTIVE',now(),now(),0
-FROM generate_series(0,{args.buyers - 1}) g;
+FROM generate_series(0,{prepared - 1}) g;
 INSERT INTO commerce.seller_accounts (id,email_normalized,password_hash,display_name,status,payout_account_ref,created_at,updated_at,version)
 VALUES ('{seller}','{seller}@load.test','test','load','ACTIVE','load-account',now(),now(),0);
 INSERT INTO commerce.products (id,seller_id,name,unit_price,status,created_at,updated_at,version) VALUES
@@ -116,7 +129,7 @@ INSERT INTO commerce.product_inventory (id,product_id,available_qty,reserved_qty
 
         stream = []
         seller_token = session(stream, "SELLER", seller)
-        tokens = [session(stream, "BUYER", buyer_id(i)) for i in range(args.buyers)]
+        tokens = [session(stream, "BUYER", buyer_id(i)) for i in range(prepared)]
         compose("exec", "-T", "redis", "sh", "-c", 'REDISCLI_AUTH="$REDIS_PASSWORD" exec redis-cli --pipe',
                 input_text="".join(stream), timeout=600)
         (work / "buyers.json").write_text(json.dumps([[t, None] for t in tokens]))
@@ -125,9 +138,23 @@ INSERT INTO commerce.product_inventory (id,product_id,available_qty,reserved_qty
         k6("seed", SEED_VUS=50)
         addresses = dict(line.split("|") for line in sql(
             "select buyer_id, id from commerce.buyer_addresses where deleted_at is null").splitlines())
-        assert len(addresses) == args.buyers, f"{len(addresses)} of {args.buyers} addresses were created"
+        assert len(addresses) == prepared, f"{len(addresses)} of {prepared} addresses were created"
         (work / "buyers.json").write_text(json.dumps([[t, addresses[buyer_id(i)]] for i, t in enumerate(tokens)]))
-        print(json.dumps({"seeded": args.buyers, "seconds": round(time.monotonic() - started)}), flush=True)
+        print(json.dumps({"seeded": prepared, "seconds": round(time.monotonic() - started)}), flush=True)
+
+        # 이벤트 공개 전에 같은 주문 API를 일반 상품으로 호출해 JIT·연결 풀을 데운다. 이벤트 재고·참여는 건드리지 않고,
+        # 예열 주문도 일반 상품 예약으로 남으므로 아래 일반 상품 재고 보존 검사에 함께 들어간다.
+        warmup = None
+        if warmup_buyers:
+            normal_version = int(sql(f"select version from commerce.products where id='{normal_product}'"))
+            (work / "plan.json").write_text(json.dumps({
+                "normal": {"productId": normal_product, "productVersion": normal_version, "price": NORMAL_PRICE}}))
+            until(gate_open, "order admission did not open", 300)
+            k6("warmup", WARMUP_SECONDS=args.warmup_seconds, WARMUP_RATE=args.warmup_rate, WARMUP_BUYERS=warmup_buyers)
+            warmup_metrics = json.loads((work / "k6-warmup.json").read_text())["metrics"]
+            warmup = {"buyers": warmup_buyers, "outcomes": outcome_counts(warmup_metrics),
+                      "dropped": int(warmup_metrics.get("dropped_iterations", {}).get("count", 0))}
+            print(json.dumps({"warmup": warmup}), flush=True)
 
         # 이미 시작한 기간으로 공개하면 바로 OPEN이 되어 시작 처리 배치를 기다리지 않는다.
         def seller_call(method, path, body=None):
@@ -169,7 +196,7 @@ from pg_stat_activity where datname='commerce'""")
         sampler.start()
         try:
             output = k6("flash", PEAK_SECONDS=args.peak_seconds, PEAK_RATE=args.peak_rate, TAIL_SECONDS=args.tail_seconds,
-                        TAIL_RATE=args.tail_rate, GAUGE_RATE=args.gauge_rate)
+                        TAIL_RATE=args.tail_rate, GAUGE_RATE=args.gauge_rate, WARMUP_BUYERS=warmup_buyers)
         finally:
             stop.set()
             sampler.join()
@@ -178,8 +205,7 @@ from pg_stat_activity where datname='commerce'""")
         latency = {name.split("{", 1)[0].removeprefix("order_").removesuffix("_duration") + "." + name.split("outcome:", 1)[1].rstrip("}"):
                    {key: round(metrics[name][key]) for key in ["p(50)", "p(95)", "p(99)", "max"]}
                    for name in metrics if "{outcome:" in name and metrics[name].get("max")}
-        counters = {name.removeprefix("order_"): int(metrics[name]["count"]) for name in metrics
-                    if name.startswith("order_") and "count" in metrics[name] and "{" not in name}
+        counters = outcome_counts(metrics)
         sold_out_at = next((s[0] for s in samples if s[3] >= args.quota), None)
 
         counts = dict(line.split("|") for line in sql(f"""
@@ -211,6 +237,7 @@ union all select 'normalInventory', available_qty||'/'||reserved_qty||'/'||event
         }
         summary = {
             "input": vars(args) | {"orders": orders},
+            "warmup": warmup,
             "counts": counts, "gauge": gauge, "checks": checks,
             "outcomes": counters, "latencyMs": latency,
             "soldOutAtSeconds": sold_out_at, "dropped": int(metrics.get("dropped_iterations", {}).get("count", 0)),
