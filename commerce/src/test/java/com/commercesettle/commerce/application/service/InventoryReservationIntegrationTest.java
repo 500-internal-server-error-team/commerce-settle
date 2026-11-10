@@ -9,6 +9,8 @@ import com.commercesettle.commerce.domain.exception.InsufficientInventoryExcepti
 import com.commercesettle.commerce.domain.exception.InvalidReservationTransitionException;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.model.InventoryReservation.Outcome;
+import com.commercesettle.commerce.domain.model.Order;
+import com.commercesettle.commerce.domain.model.Product;
 import com.commercesettle.commerce.domain.model.ProductStatus;
 import com.commercesettle.commerce.support.ConcurrentTransactions.HeldTransaction;
 import java.time.Duration;
@@ -61,7 +63,7 @@ class InventoryReservationIntegrationTest {
   void rejectsCallOutsideTransaction() {
     UUID productId = stockedProduct(5);
 
-    assertThatThrownBy(() -> reservations.lockInventoryAndReadProduct(productId))
+    assertThatThrownBy(() -> reservations.createAndReserve(productId, this::newOrder))
         .isInstanceOf(IllegalTransactionStateException.class);
     assertThatThrownBy(
             () -> reservations.reserve(UUID.randomUUID(), productId, 1, UUID.randomUUID(), EXPIRES))
@@ -70,15 +72,85 @@ class InventoryReservationIntegrationTest {
   }
 
   @Test
-  @DisplayName("재고 행을 잠근 뒤 상품을 읽고, 없는 상품은 찾을 수 없다고 거절한다")
-  void locksInventoryAndReadsProduct() {
+  @DisplayName("재고 행을 잠근 뒤 최신 상품으로 주문을 만들고 같은 재고를 예약한다")
+  void createsAndReservesWithLockedProduct() {
     UUID productId = stockedProduct(5);
     UUID missing = UUID.randomUUID();
 
-    assertThat(inOrder(() -> reservations.lockInventoryAndReadProduct(productId).getId()))
-        .isEqualTo(productId);
-    assertThatThrownBy(() -> inOrder(() -> reservations.lockInventoryAndReadProduct(missing)))
+    Order order = inOrder(() -> reservations.createAndReserve(productId, this::newOrder));
+
+    assertThat(order.getProductId()).isEqualTo(productId);
+    assertQuantities(productId, 4, 1, 0);
+    assertThat(reservationStatus(order.getId())).isEqualTo("RESERVED");
+    assertThatThrownBy(() -> inOrder(() -> reservations.createAndReserve(missing, this::newOrder)))
         .isInstanceOf(ProductNotFoundException.class);
+  }
+
+  private Order newOrder(Product product) {
+    return Order.pendingRegular(
+        UUID.randomUUID(),
+        product,
+        1,
+        0,
+        Order.ExternalMethod.CREDIT_CARD,
+        "test-card",
+        67,
+        "weekdays-v1",
+        List.of(),
+        "order-regular-v1",
+        Instant.parse("2026-10-30T01:00:00Z"));
+  }
+
+  @Test
+  @DisplayName("주문 생성이 먼저 재고를 잠그면 판매자 변경은 대기하고 주문 가격 사본을 바꾸지 않는다")
+  void holdsInventoryUntilOrderTransactionCommits() throws Exception {
+    UUID productId = stockedProduct(5);
+    Product product = catalog.onSaleProduct(productId);
+    var created = new java.util.concurrent.atomic.AtomicReference<Order>();
+    String changeKey = key();
+    try (var held =
+        holdTransaction(
+            tx, () -> created.set(reservations.createAndReserve(productId, this::newOrder)))) {
+      assertThatThrownBy(
+              () ->
+                  catalog.change(
+                      product.getSellerId(),
+                      productId,
+                      changeKey,
+                      "새 상품",
+                      20000,
+                      ProductStatus.ON_SALE,
+                      0))
+          .isInstanceOf(PessimisticLockingFailureException.class);
+    }
+
+    var changed =
+        catalog.change(
+            product.getSellerId(), productId, changeKey, "새 상품", 20000, ProductStatus.ON_SALE, 0);
+    assertThat(changed.getUnitPrice()).isEqualTo(20000);
+    assertThat(created.get().getUnitPrice()).isEqualTo(product.getUnitPrice());
+    assertQuantities(productId, 4, 1, 0);
+  }
+
+  @Test
+  @DisplayName("다른 상품의 주문을 반환하는 콜백은 거절하고 재고 예약을 남기지 않는다")
+  void rejectsOrderForAnotherProduct() {
+    UUID productId = stockedProduct(5);
+    Product other =
+        Product.register(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            "다른 상품",
+            10000,
+            ProductStatus.ON_SALE,
+            Instant.parse("2026-10-30T01:00:00Z"));
+
+    assertThatThrownBy(
+            () -> inOrder(() -> reservations.createAndReserve(productId, p -> newOrder(other))))
+        .isInstanceOf(IllegalArgumentException.class);
+
+    assertQuantities(productId, 5, 0, 0);
+    assertThat(count("inventory_reservations where product_id = ?", productId)).isZero();
   }
 
   @Test
