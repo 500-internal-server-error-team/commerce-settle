@@ -4,6 +4,7 @@ import com.commercesettle.payment.application.dto.MileageEntryView;
 import com.commercesettle.payment.application.dto.MileageWalletView;
 import com.commercesettle.payment.application.dto.PageView;
 import com.commercesettle.payment.domain.model.MileageWallet;
+import com.commercesettle.payment.domain.repository.MileageAccrualRepository;
 import com.commercesettle.payment.domain.repository.MileageEntryRepository;
 import com.commercesettle.payment.domain.repository.MileageWalletRepository;
 import java.util.Optional;
@@ -16,18 +17,24 @@ import org.springframework.transaction.annotation.Transactional;
 public class MileageQueryService {
   private final MileageWalletRepository wallets;
   private final MileageEntryRepository entries;
+  private final MileageAccrualRepository accruals;
 
-  public MileageQueryService(MileageWalletRepository wallets, MileageEntryRepository entries) {
+  public MileageQueryService(
+      MileageWalletRepository wallets,
+      MileageEntryRepository entries,
+      MileageAccrualRepository accruals) {
     this.wallets = wallets;
     this.entries = entries;
+    this.accruals = accruals;
   }
 
   @Transactional(readOnly = true)
   public MileageWalletView wallet(UUID buyerId) {
+    long pending = accruals.sumPendingByBuyerId(buyerId);
     return wallets
         .findByBuyerId(buyerId)
-        .map(MileageWalletView::of)
-        .orElse(MileageWalletView.EMPTY);
+        .map(wallet -> MileageWalletView.of(wallet, pending))
+        .orElseGet(() -> MileageWalletView.empty(pending));
   }
 
   @Transactional(readOnly = true)

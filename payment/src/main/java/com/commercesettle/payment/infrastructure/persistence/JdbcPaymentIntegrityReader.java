@@ -119,7 +119,7 @@ public class JdbcPaymentIntegrityReader implements PaymentIntegrityReader {
             "mileageBalance",
             count(
                 """
-      SELECT count(*) FROM payment.mileage_wallets w WHERE w.balance<>coalesce((SELECT sum(CASE e.kind WHEN 'SEED' THEN e.amount WHEN 'DEBIT' THEN -e.amount WHEN 'RESTORE' THEN e.amount ELSE 0 END)
+      SELECT count(*) FROM payment.mileage_wallets w WHERE w.balance<>coalesce((SELECT sum(CASE e.kind WHEN 'SEED' THEN e.amount WHEN 'DEBIT' THEN -e.amount WHEN 'RESTORE' THEN e.amount WHEN 'ACCRUAL' THEN e.amount ELSE 0 END)
        FROM payment.mileage_entries e WHERE e.wallet_id=w.id),0)
       """)),
         Map.entry(
@@ -139,10 +139,28 @@ public class JdbcPaymentIntegrityReader implements PaymentIntegrityReader {
        OR (e.kind IN ('DEBIT','RESTORE') AND (p.id IS NULL OR e.business_ref IS DISTINCT FROM e.payment_id OR e.amount IS DISTINCT FROM p.mileage_amount))
        OR (e.kind='SEED' AND (e.payment_id IS NOT NULL OR e.business_ref IS DISTINCT FROM e.wallet_id))
        OR (e.kind<>'RESTORE' AND e.refund_id IS NOT NULL)
+       OR (e.kind='ACCRUAL' AND (p.id IS NULL OR e.business_ref IS DISTINCT FROM e.payment_id OR NOT EXISTS (
+        SELECT 1 FROM payment.mileage_accruals a WHERE a.payment_id=e.payment_id AND a.status='AVAILABLE'
+         AND a.accrual_amount=e.amount AND a.buyer_id=w.buyer_id)))
        OR (e.kind='RESTORE' AND (r.id IS NULL OR r.payment_id IS DISTINCT FROM e.payment_id
         OR r.mileage_amount<>e.amount OR r.mileage_restored_at IS NULL)) ) + (SELECT count(*) FROM payment.mileage_reservations r
        LEFT JOIN payment.mileage_wallets w ON w.id=r.wallet_id LEFT JOIN payment.payments p ON p.id=r.payment_id
        WHERE w.id IS NULL OR p.id IS NULL OR p.buyer_id<>w.buyer_id)
+      """)),
+        Map.entry(
+            "mileageAccruals",
+            count(
+                """
+      SELECT count(*) FROM payment.mileage_accruals a LEFT JOIN payment.payments p ON p.id=a.payment_id
+      WHERE p.id IS NULL OR p.status<>'CONFIRMED' OR p.order_id<>a.order_id OR p.buyer_id<>a.buyer_id
+       OR p.coupon_amount<>0 OR p.external_amount<>a.base_amount
+       OR (a.status='AVAILABLE' AND ((SELECT count(*) FROM payment.mileage_entries e
+         WHERE e.payment_id=a.payment_id AND e.kind='ACCRUAL' AND e.amount=a.accrual_amount)<>1
+        OR EXISTS (SELECT 1 FROM payment.refunds r WHERE r.payment_id=a.payment_id AND r.status<>'DECLINED')))
+       OR (a.status<>'AVAILABLE' AND EXISTS (SELECT 1 FROM payment.mileage_entries e
+         WHERE e.payment_id=a.payment_id AND e.kind='ACCRUAL'))
+       OR (a.status='CANCELLED' AND NOT EXISTS (SELECT 1 FROM payment.refunds r
+         WHERE r.payment_id=a.payment_id AND r.status='COMPLETED'))
       """)),
         Map.entry(
             "confirmedAttempt",

@@ -114,6 +114,7 @@ class PaymentRequestProcessorTest {
           null,
           null,
           null,
+          null,
           1,
           com.commercesettle.payment.application.port.PaymentProcessingObservation.NOOP);
       this.results = new ArrayDeque<>(List.of(results));

@@ -326,6 +326,7 @@ class RefundAcceptanceIntegrationTest {
     ApplyOrderPaymentRequestService.class,
     PaymentNotices.class,
     RefundEventHandler.class,
+    MileageAccrualEventHandler.class,
     RefundEvents.class,
     RefundSettlementReplyService.class
   })

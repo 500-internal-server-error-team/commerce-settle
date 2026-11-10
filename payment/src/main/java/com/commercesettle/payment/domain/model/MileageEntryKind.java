@@ -5,5 +5,6 @@ public enum MileageEntryKind {
   RESERVE,
   RELEASE,
   DEBIT,
-  RESTORE
+  RESTORE,
+  ACCRUAL
 }

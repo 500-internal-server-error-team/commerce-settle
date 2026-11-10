@@ -109,6 +109,24 @@ public class MileageEntry {
     return entry;
   }
 
+  /** 사용 가능해진 구매 적립을 기록한다. 지갑에 더한 뒤 불러 적립 후 잔액을 남긴다. 업무 키는 원결제 ID라서 결제당 한 번만 기록된다. */
+  public static MileageEntry accrual(MileageWallet wallet, MileageAccrual accrual, Instant now) {
+    Objects.requireNonNull(wallet, "wallet");
+    if (!wallet.getBuyerId().equals(accrual.getBuyerId())) {
+      throw new IllegalArgumentException("다른 구매자의 적립은 기록할 수 없습니다.");
+    }
+    MileageEntry entry = new MileageEntry();
+    entry.id = UUID.randomUUID();
+    entry.walletId = wallet.getId();
+    entry.paymentId = accrual.getPaymentId();
+    entry.kind = MileageEntryKind.ACCRUAL;
+    entry.businessRef = accrual.getPaymentId();
+    entry.amount = accrual.getAccrualAmount();
+    entry.balanceAfter = wallet.getBalance();
+    entry.createdAt = Objects.requireNonNull(now, "now").truncatedTo(ChronoUnit.MICROS);
+    return entry;
+  }
+
   public UUID getId() {
     return id;
   }

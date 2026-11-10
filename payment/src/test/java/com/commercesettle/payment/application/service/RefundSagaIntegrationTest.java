@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.commercesettle.payment.application.dto.RefundWorkerSettings;
 import com.commercesettle.payment.application.event.EventEnvelope;
+import com.commercesettle.payment.application.event.MileageAccrualConfirmedPayload;
+import com.commercesettle.payment.application.event.MileageAccrualScheduledPayload;
 import com.commercesettle.payment.application.event.RefundApprovedPayload;
 import com.commercesettle.payment.application.event.RefundLedgerReversedPayload;
 import com.commercesettle.payment.application.event.RefundOrderRestoredPayload;
@@ -13,6 +15,7 @@ import com.commercesettle.payment.application.event.RefundReservationResultPaylo
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.PaymentGateway.Result;
+import com.commercesettle.payment.application.port.PaymentIntegrityReader;
 import com.commercesettle.payment.application.port.RefundGateway;
 import com.commercesettle.payment.domain.model.MileageWallet;
 import com.commercesettle.payment.domain.model.Payment;
@@ -97,6 +100,7 @@ class RefundSagaIntegrationTest {
   @Autowired private DataSource dataSource;
   @Autowired private Clock clock;
   @Autowired private PlatformTransactionManager manager;
+  @Autowired private PaymentIntegrityReader integrity;
 
   private Connection lockHolder;
 
@@ -111,6 +115,7 @@ class RefundSagaIntegrationTest {
     JdbcTemplate jdbc = jdbc();
     for (String table :
         List.of(
+            "mileage_accruals",
             "mileage_entries",
             "mileage_wallets",
             "payment_jobs",
@@ -554,6 +559,198 @@ class RefundSagaIntegrationTest {
   }
 
   /** 다른 트랜잭션에서 환불 행을 잠그고 정리 때까지 놓지 않는다. */
+  @Test
+  @DisplayName("적립 예정은 잔액을 바꾸지 않고, 확정은 첫 적립이면 0점 지갑을 열어 원결제당 한 번 더하며 재전달은 무변경이다")
+  void accruesMileageOnPurchaseConfirmation() throws Exception {
+    Payment payment = confirmed(new PaymentAmounts(123_456, 0, 0, 0), 0);
+
+    scheduleAccrual(payment, 1_000);
+    assertThat(inboxProcessor.processNext()).isTrue();
+
+    assertThat(accrualStatus(payment)).isEqualTo("PENDING");
+    assertThat(wallets.findByBuyerId(payment.getBuyerId())).isEmpty();
+    assertThat(pendingAccrual(payment)).isEqualTo(1_000);
+
+    var confirmation = accrualConfirmed(UUID.randomUUID(), payment, 1_000);
+    saveWaiting(confirmation);
+    assertThat(inboxProcessor.processNext()).isTrue();
+    assertThat(accrualStatus(payment)).isEqualTo("AVAILABLE");
+    assertThat(walletBalance(payment)).isEqualTo(1_000);
+    assertThat(accrualEntries(payment)).isEqualTo(1);
+    assertThat(pendingAccrual(payment)).isZero();
+
+    // 같은 eventId 재전달은 Inbox가 거르고, 새 eventId의 같은 확정도 잔액을 다시 바꾸지 않는다.
+    saveWaiting(confirmation);
+    confirmAccrual(payment, 1_000);
+    assertThat(inboxProcessor.processNext()).isTrue();
+    assertThat(inboxProcessor.processNext()).isFalse();
+    assertThat(walletBalance(payment)).isEqualTo(1_000);
+    assertThat(accrualEntries(payment)).isEqualTo(1);
+    assertThat(inboxStatuses()).containsOnly("APPLIED");
+    assertThat(integrity.checks()).allSatisfy((name, value) -> assertThat(value).as(name).isZero());
+  }
+
+  @Test
+  @DisplayName("구매확정 전 환불이 완료되면 적립 예정을 취소하고 그 뒤의 확정은 지급하지 않고 확인 대상으로 남긴다")
+  void cancelsPendingAccrualWhenRefundCompletes() throws Exception {
+    Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 2_000), 500);
+    scheduleAccrual(payment, 80);
+    assertThat(inboxProcessor.processNext()).isTrue();
+
+    UUID refundId = runSagaToOrderRestore(payment);
+    assertThat(accrualStatus(payment)).isEqualTo("PENDING");
+    restoreOrder(refundId, payment);
+
+    assertThat(refundStatus()).isEqualTo("COMPLETED");
+    assertThat(accrualStatus(payment)).isEqualTo("CANCELLED");
+    assertThat(walletBalance(payment)).isEqualTo(2_500);
+
+    confirmAccrual(payment, 80);
+    assertThat(inboxProcessor.processNext()).isTrue();
+    assertThat(lastInboxError("MileageAccrualConfirmed")).isEqualTo("MILEAGE_ACCRUAL_CANCELLED");
+    assertThat(walletBalance(payment)).isEqualTo(2_500);
+    assertThat(accrualEntries(payment)).isZero();
+    // 이 fixture는 차감 원장·Outbox 발행을 만들지 않으므로 적립 관련 검사만 본다.
+    assertThat(integrity.checks())
+        .containsEntry("mileageAccruals", 0L)
+        .containsEntry("mileageReferences", 0L);
+  }
+
+  @Test
+  @DisplayName("예정보다 먼저 처리된 확정은 다시 처리할 대기로 남기고, 예정 반영 뒤 재처리에서 사용 가능으로 바꾼다")
+  void retriesConfirmationUntilScheduled() throws Exception {
+    Payment payment = confirmed(new PaymentAmounts(50_000, 0, 0, 0), 0);
+    confirmAccrual(payment, 500);
+    assertThat(inboxProcessor.processNext()).isTrue();
+    assertThat(lastInboxError("MileageAccrualConfirmed"))
+        .isEqualTo("MILEAGE_ACCRUAL_NOT_SCHEDULED");
+    assertThat(inboxStatuses()).containsOnly("WAITING");
+
+    scheduleAccrual(payment, 500);
+    assertThat(inboxProcessor.processNext()).isTrue();
+    jdbc()
+        .update(
+            "UPDATE payment.inbox SET next_run_at = clock_timestamp() WHERE status = 'WAITING'");
+    assertThat(inboxProcessor.processNext()).isTrue();
+
+    assertThat(accrualStatus(payment)).isEqualTo("AVAILABLE");
+    assertThat(walletBalance(payment)).isEqualTo(500);
+  }
+
+  @Test
+  @DisplayName("쿠폰 결제·외부 결제액과 다른 기준액·재계산과 다른 금액의 예정은 기록하지 않고, 같은 결제의 다른 예정은 충돌로 남긴다")
+  void rejectsInvalidOrConflictingSchedules() throws Exception {
+    Payment coupon = confirmed(new PaymentAmounts(10_000, 0, 1_000, 0), 0);
+    saveWaiting(accrualScheduled(coupon, 9_000, 100, 1_000, 90));
+    Payment card = confirmed(new PaymentAmounts(10_000, 0, 0, 0), 0);
+    saveWaiting(accrualScheduled(card, 9_999, 100, 1_000, 99));
+    saveWaiting(accrualScheduled(card, 10_000, 100, 1_000, 101));
+    for (int i = 0; i < 3; i++) assertThat(inboxProcessor.processNext()).isTrue();
+    assertThat(jdbc().queryForObject("SELECT count(*) FROM payment.mileage_accruals", Long.class))
+        .isZero();
+
+    scheduleAccrual(card, 100);
+    saveWaiting(accrualScheduled(card, 10_000, 50, 1_000, 50));
+    assertThat(inboxProcessor.processNext()).isTrue();
+    assertThat(inboxProcessor.processNext()).isTrue();
+
+    assertThat(
+            jdbc()
+                .queryForList(
+                    "SELECT last_error_code FROM payment.inbox WHERE status = 'REVIEW_REQUIRED'"
+                        + " ORDER BY created_at, id",
+                    String.class))
+        .containsExactly(
+            "MILEAGE_ACCRUAL_POLICY_INVALID",
+            "MILEAGE_ACCRUAL_POLICY_INVALID",
+            "MILEAGE_ACCRUAL_POLICY_INVALID",
+            "MILEAGE_ACCRUAL_CONFLICT");
+    assertThat(accrualStatus(card)).isEqualTo("PENDING");
+    assertThat(integrity.checks()).allSatisfy((name, value) -> assertThat(value).as(name).isZero());
+  }
+
+  private void scheduleAccrual(Payment payment, long amount) throws Exception {
+    saveWaiting(
+        accrualScheduled(payment, payment.getAmounts().externalAmount(), 100, 1_000, amount));
+  }
+
+  private EventEnvelope<MileageAccrualScheduledPayload> accrualScheduled(
+      Payment payment, long base, int rate, long cap, long amount) {
+    OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
+    return new EventEnvelope<>(
+        UUID.randomUUID(),
+        "MileageAccrualScheduled",
+        1,
+        now,
+        payment.getOrderId(),
+        2,
+        new MileageAccrualScheduledPayload(
+            payment.getId(),
+            payment.getOrderId(),
+            payment.getBuyerId(),
+            base,
+            rate,
+            cap,
+            amount,
+            "mileage-accrual-v1",
+            now));
+  }
+
+  private void confirmAccrual(Payment payment, long amount) throws Exception {
+    saveWaiting(accrualConfirmed(UUID.randomUUID(), payment, amount));
+  }
+
+  private EventEnvelope<MileageAccrualConfirmedPayload> accrualConfirmed(
+      UUID eventId, Payment payment, long amount) {
+    OffsetDateTime now = clock.instant().atOffset(ZoneOffset.UTC);
+    return new EventEnvelope<>(
+        eventId,
+        "MileageAccrualConfirmed",
+        1,
+        now,
+        payment.getOrderId(),
+        9,
+        new MileageAccrualConfirmedPayload(payment.getId(), payment.getOrderId(), amount, now));
+  }
+
+  private String accrualStatus(Payment payment) {
+    return jdbc()
+        .queryForObject(
+            "SELECT status FROM payment.mileage_accruals WHERE payment_id = ?",
+            String.class,
+            payment.getId());
+  }
+
+  private long accrualEntries(Payment payment) {
+    return jdbc()
+        .queryForObject(
+            "SELECT count(*) FROM payment.mileage_entries WHERE payment_id = ? AND kind = 'ACCRUAL'",
+            Long.class,
+            payment.getId());
+  }
+
+  private long pendingAccrual(Payment payment) {
+    return jdbc()
+        .queryForObject(
+            "SELECT coalesce(sum(accrual_amount), 0) FROM payment.mileage_accruals"
+                + " WHERE buyer_id = ? AND status = 'PENDING'",
+            Long.class,
+            payment.getBuyerId());
+  }
+
+  private List<String> inboxStatuses() {
+    return jdbc().queryForList("SELECT status FROM payment.inbox", String.class);
+  }
+
+  private String lastInboxError(String eventType) {
+    return jdbc()
+        .queryForObject(
+            "SELECT last_error_code FROM payment.inbox WHERE event_type = ?"
+                + " ORDER BY created_at DESC, id DESC LIMIT 1",
+            String.class,
+            eventType);
+  }
+
   private void lockRefundRow() {
     try {
       lockHolder = dataSource.getConnection();
@@ -840,6 +1037,7 @@ class RefundSagaIntegrationTest {
     ApplyOrderPaymentRequestService.class,
     PaymentNotices.class,
     RefundEventHandler.class,
+    MileageAccrualEventHandler.class,
     RefundEvents.class,
     RefundSettlementReplyService.class,
     RefundWorker.class,

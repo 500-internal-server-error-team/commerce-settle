@@ -13,7 +13,7 @@ import java.util.UUID;
 public record MileageEntryResponse(
     @JsonProperty(required = true) UUID id,
     @Schema(nullable = true) @JsonProperty(required = true) UUID paymentId,
-    @Schema(allowableValues = {"SEED", "RESERVE", "RELEASE", "DEBIT", "RESTORE"})
+    @Schema(allowableValues = {"SEED", "RESERVE", "RELEASE", "DEBIT", "RESTORE", "ACCRUAL"})
         @JsonProperty(required = true)
         String kind,
     @Schema(minimum = "0", maximum = "10000000") @JsonProperty(required = true) long amount,

@@ -32,7 +32,7 @@ public class MileageWallet extends AuditableEntity {
     this.reservedAmount = 0;
   }
 
-  /** 시험용 사전 지급 잔액으로 지갑을 연다. */
+  /** 시험용 사전 지급 잔액으로 지갑을 연다. 첫 구매 적립은 0점 지갑을 연 뒤 적립한다. */
   public static MileageWallet open(UUID buyerId, long balance, Instant now) {
     return new MileageWallet(buyerId, balance, now);
   }
@@ -77,6 +77,13 @@ public class MileageWallet extends AuditableEntity {
 
   /** 환불로 원결제의 사용 마일리지를 돌려준다. 예약액은 바뀌지 않는다. */
   public void restore(long amount, Instant now) {
+    requirePositive(amount);
+    balance = Math.addExact(balance, amount);
+    touch(now);
+  }
+
+  /** 구매확정으로 사용 가능해진 구매 적립을 잔액에 더한다. 예약액은 바뀌지 않는다. */
+  public void accrue(long amount, Instant now) {
     requirePositive(amount);
     balance = Math.addExact(balance, amount);
     touch(now);
