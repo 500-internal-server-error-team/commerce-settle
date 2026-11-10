@@ -412,9 +412,16 @@ def cmd_ramp(args):
             try:
                 if stop_event.wait(args.kill_after):
                     return
+                # 재기동은 현재 셸 환경으로 Compose 설정을 다시 계산한다. ramp 때 변수를 다시 지정하지 않아도
+                # 측정 조건이 바뀌지 않도록, 죽이기 전 Worker의 실제 설정을 재기동 환경에 넘긴다.
+                before = worker_settings()
+                fault["workerSettingsBeforeKill"] = before
                 fault["killedAt"] = round(time.monotonic() - origin, 2)
                 compose("kill", "payment-worker", timeout=30)
                 env = compose_env()
+                for name, value in (before or {}).items():
+                    if value is not None:
+                        env["LOAD_" + name] = value
                 env["LOAD_PAYMENT_LISTENER_ENABLED"] = "true"
                 if args.scenario:
                     env["LOAD_PG_SCENARIO"] = args.scenario
