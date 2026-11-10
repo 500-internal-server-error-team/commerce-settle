@@ -32,6 +32,7 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
   private static final List<String> QUEUES =
       List.of("payment.outbox", "payment.inbox", "payment.payment_jobs");
   private static final List<String> OPERATIONS = List.of("payment.unknown");
+  // 미완료 상태를 나열해 상태 인덱스를 탄다. 완료 상태를 <>로 빼면 처리 완료 이력까지 매번 전부 훑는다.
   private static final String SQL =
       """
       SELECT 'payment.outbox' AS name, 'queue' AS kind, count(*) AS records,
@@ -40,7 +41,7 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
        WHEN status = 'RUNNING' AND lease_until <= statement_timestamp() THEN lease_until END))),0)::double precision AS age,
        count(*) FILTER (WHERE status = 'REVIEW_REQUIRED') AS review,
        extract(epoch FROM statement_timestamp())::double precision AS observed
-       FROM payment.outbox WHERE status <> 'PUBLISHED' AND event_type NOT IN ('PaymentNoticeRequested','SettlementNoticeRequested')
+       FROM payment.outbox WHERE status IN ('PENDING','RUNNING','RETRY','REVIEW_REQUIRED') AND event_type NOT IN ('PaymentNoticeRequested','SettlementNoticeRequested')
       UNION ALL
       SELECT 'payment.inbox', 'queue', count(*),
        coalesce(extract(epoch FROM (statement_timestamp() - min(CASE
@@ -48,7 +49,7 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
        WHEN status = 'WAITING' AND next_run_at <= statement_timestamp() THEN next_run_at END))),0)::double precision,
        count(*) FILTER (WHERE status = 'REVIEW_REQUIRED'),
        extract(epoch FROM statement_timestamp())::double precision
-       FROM payment.inbox WHERE consumer = 'payment.v1' AND status <> 'APPLIED'
+       FROM payment.inbox WHERE consumer = 'payment.v1' AND status IN ('RECEIVED','WAITING','REVIEW_REQUIRED')
       UNION ALL
       SELECT 'payment.payment_jobs' AS name, 'queue' AS kind, count(*) AS records,
        coalesce(extract(epoch FROM (statement_timestamp() - min(CASE
@@ -56,7 +57,7 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
        WHEN status = 'RUNNING' AND lease_until <= statement_timestamp() THEN lease_until END))),0)::double precision AS age,
        count(*) FILTER (WHERE status = 'REVIEW_REQUIRED') AS review,
        extract(epoch FROM statement_timestamp())::double precision AS observed
-       FROM payment.payment_jobs WHERE status <> 'DONE'
+       FROM payment.payment_jobs WHERE status IN ('PENDING','RUNNING','RETRY','REVIEW_REQUIRED')
       UNION ALL
       SELECT 'payment.unknown', 'operation', count(*),
        coalesce(extract(epoch FROM (statement_timestamp() - min(updated_at))),0)::double precision,

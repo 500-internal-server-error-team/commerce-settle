@@ -26,6 +26,7 @@ public final class CommerceQueueMetrics implements MultiCollector, AutoCloseable
           "commerce_settle_financial_queue_review_required_records",
           "commerce_settle_financial_operation_age_seconds",
           "commerce_settle_financial_operation_observed_timestamp_seconds");
+  // 미완료 상태를 나열해 상태 인덱스를 탄다. 완료 상태를 <>로 빼면 처리 완료 이력까지 매번 전부 훑는다.
   private static final String SQL =
       """
       SELECT 'commerce.outbox' AS queue, count(*) AS records,
@@ -36,7 +37,7 @@ public final class CommerceQueueMetrics implements MultiCollector, AutoCloseable
         END))), 0)::double precision AS age,
         extract(epoch FROM statement_timestamp())::double precision AS observed,
         count(*) FILTER (WHERE status = 'REVIEW_REQUIRED') AS review
-      FROM commerce.outbox WHERE status <> 'PUBLISHED'
+      FROM commerce.outbox WHERE status IN ('PENDING','RUNNING','RETRY','REVIEW_REQUIRED')
         AND event_type NOT IN ('PaymentNoticeRequested','SettlementNoticeRequested')
       UNION ALL
       SELECT 'commerce.inbox', count(*),
@@ -46,7 +47,7 @@ public final class CommerceQueueMetrics implements MultiCollector, AutoCloseable
         END))), 0)::double precision,
         extract(epoch FROM statement_timestamp())::double precision,
         count(*) FILTER (WHERE status = 'REVIEW_REQUIRED')
-      FROM commerce.inbox WHERE consumer = 'commerce.v1' AND status <> 'APPLIED'
+      FROM commerce.inbox WHERE consumer = 'commerce.v1' AND status IN ('RECEIVED','WAITING','REVIEW_REQUIRED')
       UNION ALL
       SELECT 'commerce.refund', count(*),
         coalesce(extract(epoch FROM (statement_timestamp() - min(accepted_at))),0)::double precision,
