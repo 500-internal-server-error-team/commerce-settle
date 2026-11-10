@@ -113,7 +113,7 @@
       <path d="M10,17 H18" stroke="#64748b" stroke-width="1.4" />
     </symbol>
     <marker id="arrow-delivery" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto-start-reverse" markerUnits="userSpaceOnUse" viewBox="0 0 8 6">
-      <path d="M0 0 8 3 0 6Z" fill="#64748b" />
+      <path d="M0 0 8 3 0 6Z" fill="#a21caf" />
     </marker>
     <marker id="arrow-http" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto-start-reverse" markerUnits="userSpaceOnUse" viewBox="0 0 8 6">
       <path d="M0 0 8 3 0 6Z" fill="#1e3a8a" />
@@ -153,10 +153,10 @@
 <rect x="904" y="572" width="472" height="168" rx="6" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
 <text x="920" y="596" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="11" font-weight="600" fill="#1e293b" text-anchor="start">관측·운영</text>
 </g>
-<path id="source-ci" data-edge="true" data-source="github" data-target="github-actions" data-flow="delivery" d="M392,58 H440" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
-<path id="ci-ecr" data-edge="true" data-source="github-actions" data-target="ecr" data-flow="delivery" d="M776,58 H824" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
-<path id="cd-ecs" data-edge="true" data-source="github-actions" data-target="ecs-cluster" data-flow="delivery" d="M608,100 V144" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
-<path id="ecr-app" data-edge="true" data-source="ecr" data-target="app-ec2" data-flow="delivery" d="M912,100 V112 Q912,120 904,120 H768 Q760,120 760,128 V208" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
+<path id="source-ci" data-edge="true" data-source="github" data-target="github-actions" data-flow="delivery" d="M392,58 H440" fill="none" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
+<path id="ci-ecr" data-edge="true" data-source="github-actions" data-target="ecr" data-flow="delivery" d="M776,58 H824" fill="none" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
+<path id="cd-ecs" data-edge="true" data-source="github-actions" data-target="ecs-cluster" data-flow="delivery" d="M608,100 V144" fill="none" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
+<path id="ecr-app" data-edge="true" data-source="ecr" data-target="app-ec2" data-flow="delivery" d="M912,100 V112 Q912,120 904,120 H768 Q760,120 760,128 V208" fill="none" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
 <path id="browser-gateway" data-edge="true" data-source="browser" data-target="gateway" data-flow="api" d="M160,314 H432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
 <path id="k6-gateway" data-edge="true" data-source="k6" data-target="gateway" data-flow="api" d="M160,428 H200 Q208,428 208,420 V346 Q208,338 216,338 H432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
 <path id="gateway-commerce" data-edge="true" data-source="gateway" data-target="commerce" data-flow="api" d="M448,356 V368 Q448,376 440,376 H336 Q328,376 328,384 V432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
@@ -354,7 +354,7 @@
 <text x="492" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">Kafka 이벤트</text>
 <line data-flow="telemetry" x1="640" x2="680" y1="888" y2="888" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="1 5"/>
 <text x="692" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">관측·운영</text>
-<line data-flow="delivery" x1="840" x2="880" y1="888" y2="888" stroke="#64748b" stroke-width="1.6" stroke-linecap="round"/>
+<line data-flow="delivery" x1="840" x2="880" y1="888" y2="888" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round"/>
 <text x="892" y="892" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">빌드·배포</text>
 </g>
 <g data-legend="symbols">
