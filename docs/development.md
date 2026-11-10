@@ -54,6 +54,115 @@ mkdir -p work/buildx
 export BUILDX_CONFIG="$PWD/work/buildx"
 ```
 
+## 배포용 HTTPS
+
+공개 경로는 **DuckDNS → 기존 앱 EC2의 Caddy → Gateway 내부 HTTP 주소**입니다. [Caddyfile](../infra/caddy/Caddyfile)과 [EC2 Task 템플릿](../infra/caddy/task-definition.json)만 배포에 사용하며, 로컬 `compose.yml`의 HTTP 실행에는 추가하지 않습니다. Caddy와 [Let's Encrypt 인증서](https://letsencrypt.org/about/), [DuckDNS 서브도메인](https://www.duckdns.org/about.jsp)은 무료입니다. EC2·공인 IPv4·디스크·트래픽·로그의 AWS 비용은 별도입니다. ALB나 추가 EC2를 만들지 않습니다.
+
+실제 도메인·AWS 환경은 아직 연결하지 않았습니다. 아래는 적용 절차이며 공인 인증서 발급·운영 TLS 검증 완료를 뜻하지 않습니다. 전체 ECS·ECR·CD 구성은 이 절의 범위에 포함하지 않습니다.
+
+### DuckDNS 준비와 IP 변경
+
+1. 사용하던 계정으로 [DuckDNS](https://www.duckdns.org/)에 로그인하고 사용할 수 있는 서브도메인을 직접 등록합니다. 이름을 확보하기 전에는 예시를 확정값으로 사용하지 않습니다.
+2. 해당 도메인의 IPv4에 **앱 EC2의 현재 공인 IPv4**를 명시해 갱신합니다. 작업 PC의 IP나 데이터·관측 EC2의 IP를 넣지 않습니다. 자동 감지값이 앱 EC2의 IP인지도 확인합니다.
+3. 실제 값을 `PUBLIC_DOMAIN=<확보한-이름>.duckdns.org`와 `APP_PUBLIC_IPV4=<앱-EC2-공인-IPv4>`로 지정한 뒤 아래 결과를 대조합니다. A 레코드가 해당 IPv4와 같아야 합니다. IPv6 경로를 구성하지 않았다면 AAAA가 없어야 하며, 기존 AAAA가 있으면 DuckDNS에서 지우고 다시 확인합니다. 다르면 DNS 캐시 만료·전파 후 재조회하며 인증서 발급을 시작하지 않습니다.
+
+```bash
+dig +short "$PUBLIC_DOMAIN" A
+dig +short "$PUBLIC_DOMAIN" A @1.1.1.1
+dig +short "$PUBLIC_DOMAIN" AAAA
+```
+
+EC2 중지·시작이나 교체로 공인 IP가 달라지면 같은 DuckDNS 항목을 새 앱 공인 IPv4로 수동 갱신하고 위 DNS 검사와 아래 HTTPS 검증을 반복합니다. IP만 바뀌고 도메인이 같으면 Caddy의 도메인·인증서를 바꾸지 않습니다. Gateway의 내부 주소도 바뀌었다면 별도로 Task 환경을 갱신합니다. 상주 DDNS 갱신기·cron·예약 작업은 설치하지 않습니다.
+
+API로 수동 갱신해야 할 때는 [공식 HTTPS API](https://www.duckdns.org/spec.jsp)의 명시적 `domains`·`ip` 값을 사용하고 응답 `OK`와 DNS 결과를 모두 확인합니다. `ip`를 생략하면 호출 위치의 IPv4가 감지되므로 작업 PC에서 생략하지 않습니다. 계정 토큰은 Git·이슈·PR·명령 이력·로그에 남기지 않으며 Caddy에도 전달하지 않습니다. 기본 Caddy 이미지의 HTTP/TLS 검증 방식에는 DuckDNS 토큰이나 DNS 플러그인이 필요하지 않습니다.
+
+### 네트워크와 저장소 준비
+
+적용자는 AWS CLI·jq·Docker·curl·dig와 의도한 AWS 계정을 확인하고, 기존 클러스터·앱 EC2 컨테이너 인스턴스·Gateway 서비스/Task·리전·로그 전송 권한이 있는 실행 역할을 지정합니다. 계정은 `aws sts get-caller-identity`로 확인합니다. **아직 Gateway ECS Task가 없다면 먼저 해당 배포를 준비해야 합니다.** Compose 주소를 대신 넣지 않습니다.
+
+```bash
+aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$GATEWAY_SERVICE"
+aws ecs describe-task-definition --task-definition "$GATEWAY_TASK_DEFINITION" \
+  --query 'taskDefinition.{mode:networkMode,containers:containerDefinitions[*].{name:name,ports:portMappings}}'
+aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "$GATEWAY_TASK_ARN" \
+  --query 'tasks[*].{host:containerInstanceArn,attachments:attachments,containers:containers[*].{name:name,bindings:networkBindings}}'
+aws ecs describe-container-instances --cluster "$ECS_CLUSTER" \
+  --container-instances "$APP_CONTAINER_INSTANCE_ARN" \
+  --query 'containerInstances[*].{ec2:ec2InstanceId,attributes:attributes}'
+```
+
+- Caddy는 `bridge` 모드로 실행합니다. Gateway가 `awsvpc`이면 Task ENI의 사설 IPv4와 업무 포트, `bridge`이면 배치된 EC2의 사설 IPv4와 실제 `hostPort`를 `GATEWAY_UPSTREAM=<IP>:<port>`로 지정합니다. `host` 모드도 EC2의 사설 IPv4와 업무 포트를 사용합니다. Gateway 재생성으로 ENI·포트가 바뀌면 주소를 다시 조회하고 Caddy Task를 갱신합니다.
+- 앱 EC2에만 `workload=app` ECS 속성을 설정하고 Caddy 한 개를 배치합니다. TCP 80/443을 쓰는 기존 프로세스가 없어야 합니다. Caddy의 128 CPU 단위·128 MiB 제한은 시작값이며 실제 부하의 CPU·메모리·OOM을 확인해 조정합니다.
+- 앱 EC2 보안 그룹은 공개 TCP 80/443만 허용합니다. 80은 HTTPS 전환·HTTP 인증서 검증, 443은 HTTPS·TLS 인증서 검증에 사용합니다. IPv6를 제공할 때만 IPv6 DNS·라우팅·보안 그룹도 함께 엽니다. 이 설정은 HTTP/1.1·HTTP/2만 사용하므로 UDP 443은 열지 않습니다.
+- Gateway 업무 포트는 Caddy가 있는 앱 호스트의 사설 통신에만 허용합니다. `awsvpc`는 Gateway Task 보안 그룹에서, `bridge`·`host`는 해당 EC2의 보안 그룹에서 제한합니다. 실제 Caddy 컨테이너에서의 도달 여부를 확인합니다. 업무·DB·Kafka·Redis·9091 관리 포트·2019 Caddy 관리 API를 인터넷에 열지 않습니다. Caddy 관리 API는 설정에서도 끕니다. 운영 접속은 기존 승인된 관리 경로를 사용합니다.
+- Caddy의 외부 DNS 조회와 HTTPS 발급·갱신 통신을 허용하고 Docker Hub 이미지 pull·CloudWatch Logs 전송 경로를 준비합니다. `/ecs/commerce-settle/caddy` 로그 그룹은 기존 로그 정책대로 7일 보존하며 실행 역할·ECS 에이전트의 `awslogs` 권한을 확인합니다.
+- 앱 EC2의 영속 EBS에 `/srv/commerce-settle/caddy/{etc,data,config}`를 준비합니다. `etc`는 읽기 전용 설정, `data`는 인증서·개인키·ACME 계정, `config`는 Caddy 실행 저장소입니다. 소유자만 접근하도록 디렉터리를 보호하고 백업도 비공개로 보관합니다. Task 중지·재생성 때 지우지 않습니다. EC2 교체 시 같은 데이터 디스크를 복구·마운트한 뒤 시작하며, 빈 디렉터리로 자동 대체해 재발급하지 않습니다. Task 템플릿만으로 EBS 생성·마운트·백업이 제공되지는 않습니다.
+
+### 설정과 시작
+
+검증한 저장소 revision의 파일을 앱 EC2에 전달한 뒤 실행합니다. `PUBLIC_DOMAIN`은 위에서 확보·검증한 실제 DuckDNS 도메인 하나이며 스킴·경로를 붙이지 않습니다. `GATEWAY_UPSTREAM`은 위에서 확인한 내부 `IP:port`입니다. 이 값과 `AWS_REGION`, `ECS_EXECUTION_ROLE_ARN`, `ECS_CLUSTER`가 필요합니다. 토큰·서비스 자격은 이 Task에 넣지 않습니다.
+
+```bash
+sudo install -d -m 700 /srv/commerce-settle/caddy/{etc,data,config}
+sudo install -m 600 infra/caddy/Caddyfile /srv/commerce-settle/caddy/etc/Caddyfile
+export PUBLIC_DOMAIN GATEWAY_UPSTREAM AWS_REGION ECS_EXECUTION_ROLE_ARN
+
+jq --arg domain "${PUBLIC_DOMAIN:?}" --arg upstream "${GATEWAY_UPSTREAM:?}" \
+  --arg region "${AWS_REGION:?}" --arg role "${ECS_EXECUTION_ROLE_ARN:?}" '
+  .executionRoleArn = $role |
+  .containerDefinitions[0].environment = [
+    {name:"PUBLIC_DOMAIN",value:$domain}, {name:"GATEWAY_UPSTREAM",value:$upstream}] |
+  .containerDefinitions[0].logConfiguration.options["awslogs-region"] = $region
+' infra/caddy/task-definition.json > /tmp/commerce-settle-caddy-task.json
+
+CADDY_IMAGE=$(jq -r '.containerDefinitions[0].image' infra/caddy/task-definition.json)
+sudo docker run --rm --network none -e PUBLIC_DOMAIN="$PUBLIC_DOMAIN" \
+  -e GATEWAY_UPSTREAM="$GATEWAY_UPSTREAM" \
+  --mount type=bind,src=/srv/commerce-settle/caddy/etc,dst=/etc/caddy,readonly \
+  "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+CADDY_TASK_DEFINITION=$(aws ecs register-task-definition \
+  --cli-input-json file:///tmp/commerce-settle-caddy-task.json \
+  --query taskDefinition.taskDefinitionArn --output text)
+aws ecs create-service --cluster "$ECS_CLUSTER" --service-name commerce-settle-caddy \
+  --task-definition "$CADDY_TASK_DEFINITION" --desired-count 1 --launch-type EC2 \
+  --deployment-configuration maximumPercent=100,minimumHealthyPercent=0
+aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services commerce-settle-caddy
+rm /tmp/commerce-settle-caddy-task.json
+```
+
+Task 환경과 같은 값으로 검사합니다. 설정 검사 통과만으로 DNS·Gateway 연결·공인 인증서 발급의 성공을 판단하지 않습니다.
+
+### 검증·재시작·종료
+
+외부에서 HTTP의 `308`과 같은 경로·쿼리의 HTTPS 전환, HTTPS 인증서의 호스트명·유효기간·신뢰 체인과 Swagger `200`을 확인합니다. `curl -k`로 인증서 검증을 생략하지 않습니다. 인증 API는 기존 시험용 로그인으로 확인하고 관리·내부 경로가 공개되지 않는지도 검사합니다.
+
+```bash
+curl --fail-with-body -I "http://$PUBLIC_DOMAIN/swagger-ui.html"
+curl --fail-with-body -L "https://$PUBLIC_DOMAIN/swagger-ui.html" -o /dev/null
+curl -i "https://$PUBLIC_DOMAIN/actuator/health"
+curl -i "https://$PUBLIC_DOMAIN/internal/health"
+```
+
+Gateway 계약에 따라 뒤 두 경로는 업무·관리 처리에 도달하면 안 됩니다. ECS 안정화만으로 Gateway 장애의 `502`나 인증서 발급 실패를 검출할 수 없으므로 외부 확인과 Caddy의 CloudWatch 로그를 함께 봅니다. 인증서 오류·`502`·Task 중지·OOM이면 DNS·보안 그룹·내부 주소·영속 영역·로그를 확인합니다. 공개 경로에 문제가 있으면 Caddy의 desired count를 0으로 내려 조사합니다.
+
+설정·내부 주소·이미지를 바꾸면 같은 절차로 설정 검사·Task 등록 후 새 Task ARN을 지정합니다. 직전 Task ARN과 설정 revision을 기록하고, 실패하면 해당 Caddyfile과 Task 환경을 되돌려 다시 검증합니다.
+
+```bash
+# 설정 변경 반영. 단순 재시작이면 --task-definition을 생략
+aws ecs update-service --cluster "$ECS_CLUSTER" --service commerce-settle-caddy \
+  --task-definition "$CADDY_TASK_DEFINITION" --force-new-deployment
+aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services commerce-settle-caddy
+
+# 공개 진입점만 중지. 재개는 --desired-count 1
+aws ecs update-service --cluster "$ECS_CLUSTER" --service commerce-settle-caddy --desired-count 0
+aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services commerce-settle-caddy
+```
+
+고정 80/443과 단일 호스트를 쓰므로 구 Task가 멈춘 뒤 새 Task를 띄우며 전환 중 중단 시간이 생깁니다. 재시작·강제 재생성 후 같은 영속 영역의 인증서 유지와 위 HTTPS 검증을 반복합니다. 종료할 때는 Task 중지를 확인하고 인증서를 보존한 채 공개 포트를 닫습니다. EC2를 폐기하면 다른 곳에 재할당될 IP를 계속 가리키지 않도록 DuckDNS의 해당 레코드를 관리 화면에서 해제하고 DNS를 재확인합니다. 공유 EC2·DB·다른 서비스는 이 종료 조작으로 삭제하지 않습니다.
+
+로컬·CI의 `python3 -B scripts/smoke_caddy.py`는 전용 컨테이너·볼륨을 만들고 같은 Caddyfile의 구문, HTTPS 프록시·전달 헤더, HTTP 전환, 상위 서버 장애, 멱등 키가 있는 POST의 연결 중단 시 재전송 없음, 재시작·재생성과 인증서 저장소 유지를 검사한 뒤 삭제합니다. Caddy의 내부 HTTP 연결 재사용을 꺼 전송 계층의 자동 재시도를 막습니다. `localhost`의 내부 CA를 일시적으로 신뢰하는 검증이며 DuckDNS 갱신·공개 ACME·AWS 네트워크 검증을 대신하지 않습니다. 일반 HTTP·업무 경계 회귀는 기존 Compose smoke로 확인합니다.
+
 ## 개발용 DB fixture
 
 로컬과 팀 공용 배포는 모두 시연 환경입니다. Compose는 Gateway·Commerce의 계정 fixture와 Swagger 계정 선택 로그인을 기본으로 켭니다(`COMMERCE_DEV_FIXTURES_ENABLED=true`). 두 서비스는 같은 `DEV_FIXTURE_PASSWORD`를 사용합니다. 계정 적재를 제외하는 격리 시험에서만 `COMMERCE_DEV_FIXTURES_ENABLED=false`로 끕니다. Compose 밖에서 배포할 때도 두 서비스에 `APP_DEV_FIXTURES_ENABLED=true`와 같은 비밀번호를 명시합니다.

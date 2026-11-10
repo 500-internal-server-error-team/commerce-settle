@@ -1,0 +1,45 @@
+{
+  "family": "commerce-settle-caddy",
+  "networkMode": "bridge",
+  "requiresCompatibilities": ["EC2"],
+  "executionRoleArn": "__EXECUTION_ROLE_ARN__",
+  "runtimePlatform": {"cpuArchitecture": "ARM64", "operatingSystemFamily": "LINUX"},
+  "placementConstraints": [{"type": "memberOf", "expression": "attribute:workload == app"}],
+  "containerDefinitions": [
+    {
+      "name": "caddy",
+      "image": "caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee",
+      "essential": true,
+      "cpu": 128,
+      "memory": 128,
+      "command": ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"],
+      "environment": [
+        {"name": "PUBLIC_DOMAIN", "value": "__PUBLIC_DOMAIN__"},
+        {"name": "GATEWAY_UPSTREAM", "value": "__GATEWAY_UPSTREAM__"}
+      ],
+      "portMappings": [
+        {"containerPort": 80, "hostPort": 80, "protocol": "tcp"},
+        {"containerPort": 443, "hostPort": 443, "protocol": "tcp"}
+      ],
+      "mountPoints": [
+        {"sourceVolume": "caddy-config", "containerPath": "/etc/caddy", "readOnly": true},
+        {"sourceVolume": "caddy-data", "containerPath": "/data", "readOnly": false},
+        {"sourceVolume": "caddy-runtime", "containerPath": "/config", "readOnly": false}
+      ],
+      "stopTimeout": 30,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/commerce-settle/caddy",
+          "awslogs-region": "__AWS_REGION__",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ],
+  "volumes": [
+    {"name": "caddy-config", "host": {"sourcePath": "/srv/commerce-settle/caddy/etc"}},
+    {"name": "caddy-data", "host": {"sourcePath": "/srv/commerce-settle/caddy/data"}},
+    {"name": "caddy-runtime", "host": {"sourcePath": "/srv/commerce-settle/caddy/config"}}
+  ]
+}
