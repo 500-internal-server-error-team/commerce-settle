@@ -143,14 +143,12 @@
 </g>
 <g id="app-security-group" data-box="224,248,592,500" data-zone="true" data-boundary="security-group" data-host="app-ec2" data-ingress-from-internet="80,443" data-ingress-from-data-sg="management" data-management-service-port="9091">
 <rect x="224" y="248" width="592" height="500" rx="6" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"/>
-<rect x="236" y="240" width="300" height="16" fill="#ffffff"/>
-<text x="240" y="252" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="11" font-weight="600" fill="#526176">앱 보안 그룹 · 공개 TCP 80/443</text>
+<text x="560" y="232" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="11" font-weight="600" fill="#526176">앱 보안 그룹 · 공개 TCP 80/443</text>
 <text x="240" y="732" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#526176">관리 포트 ← 데이터 SG · Prometheus (앱 9091 기준)</text>
 </g>
 <g id="data-security-group" data-box="896,248,488,500" data-zone="true" data-boundary="security-group" data-host="infra-ec2" data-ingress-from-app-sg="5432,6379,9092,9411">
 <rect x="896" y="248" width="488" height="500" rx="6" fill="none" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 4"/>
-<rect x="908" y="240" width="456" height="16" fill="#ffffff"/>
-<text x="912" y="252" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="600" fill="#526176">데이터 보안 그룹 · 앱 SG → TCP 5432 / 6379 / 9092 / 9411</text>
+<text x="1152" y="232" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="600" fill="#526176">데이터 보안 그룹 · 앱 SG 허용</text>
 </g>
 <g id="business-apps" data-box="232,388,576,320" data-zone="true" data-executions="5">
 <rect x="232" y="388" width="576" height="320" rx="6" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
@@ -166,7 +164,7 @@
 <path id="app-ecr-pull" data-edge="true" data-source="app-ec2" data-target="ecr" data-flow="delivery" d="M760,208 V128 Q760,120 768,120 H904 Q912,120 912,112 V100" fill="none" stroke="#a21caf" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
 <path id="browser-dns" data-edge="true" data-source="browser" data-target="dns" data-flow="dns" data-protocol="dns" d="M96,282 V240" fill="none" stroke="#475569" stroke-width="1.6" stroke-dasharray="4 4" marker-end="url(#arrow-telemetry)"/>
 <path id="browser-caddy" data-edge="true" data-source="browser" data-target="caddy" data-flow="api" d="M160,314 H240" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
-<path id="k6-caddy" data-edge="true" data-source="k6" data-target="caddy" data-flow="api" d="M160,428 H200 Q208,428 208,420 V346 Q208,338 216,338 H240" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
+<path id="k6-caddy" data-edge="true" data-source="k6" data-target="caddy" data-flow="api" d="M160,428 H192 Q200,428 200,420 V380 Q200,372 208,372 H272 Q280,372 280,364 V356" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="https"/>
 <path id="caddy-gateway" data-edge="true" data-source="caddy" data-target="gateway" data-flow="api" d="M384,314 H432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="http"/>
 <path id="gateway-commerce" data-edge="true" data-source="gateway" data-target="commerce" data-flow="api" d="M448,356 V368 Q448,376 440,376 H336 Q328,376 328,384 V432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="http"/>
 <path id="gateway-payment-api" data-edge="true" data-source="gateway" data-target="payment-api" data-flow="api" d="M520,356 V432" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)" data-protocol="http"/>
@@ -349,6 +347,8 @@
 <text x="1252" y="892.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start">Slack</text>
 <text x="1252" y="910.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start">경보·복구 통지 · 선택</text>
 </g>
+<rect x="104" y="250" width="48" height="16" fill="#ffffff"/>
+<text x="108" y="263" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155">IP 조회</text>
 <rect x="388" y="290" width="40" height="16" fill="#ffffff"/>
 <text x="408" y="303" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="middle">HTTP</text>
 <rect x="784.0" y="34" width="32" height="16" fill="#ffffff"/>
