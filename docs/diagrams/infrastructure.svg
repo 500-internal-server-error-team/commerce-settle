@@ -146,7 +146,7 @@
 </g>
 <g id="ecr" data-node="true" data-box="912,140,464,64"><rect x="912" y="140" width="464" height="64" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2"/>
 <use href="#logo-aws-ecr" x="928" y="160" width="24" height="24" aria-hidden="true"/>
-<text x="964" y="168" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b">Amazon ECR</text>
+<text x="964" y="168" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b">ECR</text>
 <text x="964" y="188" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176">앱 이미지</text>
 </g>
 <path id="source-ci" data-edge="true" data-source="github" data-target="github-actions" data-flow="delivery" d="M256,172 H328" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
@@ -161,7 +161,7 @@
 <g id="ecs-cluster" data-box="184,128,1224,760" data-zone="true" data-infrastructure="ec2">
 <rect x="184" y="128" width="1224" height="760" rx="6" fill="#ffffff" stroke="#64748b" stroke-width="1.6" />
 <use href="#logo-aws-ecs" x="208" y="138" width="24" height="24" aria-hidden="true"/>
-<text x="244" y="156" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="600" fill="#1e293b" text-anchor="start" >Amazon ECS Cluster · 1개</text>
+<text x="244" y="156" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="16" font-weight="600" fill="#1e293b" text-anchor="start" >ECS Cluster</text>
 <text x="208" y="180" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="11" font-weight="400" fill="#526176" text-anchor="start" >서비스별 배포 · 재시작 · 확장 관리</text>
 <g id="app-ec2" data-box="240,208,488,604" data-zone="true" data-instance-role="app" data-instance-count="1">
 <rect x="240" y="208" width="488" height="604" rx="6" fill="#ffffff" stroke="#64748b" stroke-width="1.4" />
@@ -178,19 +178,16 @@
 <path id="ecr-app" data-edge="true" data-source="ecr" data-target="app-ec2" data-flow="delivery" d="M992,-68 V-24 Q992,-16 984,-16 H696 Q688,-16 688,-8 V208" fill="none" stroke="#64748b" stroke-width="1.6" stroke-linejoin="round" marker-end="url(#arrow-delivery)"/>
 <path id="browser-gateway" data-protocol="https" data-edge="true" data-source="browser" data-target="gateway" data-flow="api" d="M176,332 H272" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)"/>
 <path id="k6-gateway" data-protocol="https" data-edge="true" data-source="k6" data-target="gateway" data-flow="api" d="M176,432 H224 Q232,432 232,424 V352 Q232,344 240,344 H272" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)"/>
-<path id="gateway-public" data-protocol="https" data-edge="true" data-source="gateway" data-target="business-apps" data-flow="api" d="M484,364 V396" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)"/>
-<path id="apps-postgres" data-edge="true" data-source="business-apps" data-target="postgres" data-flow="store" d="M712,448 H776 Q784,448 784,440 V338 Q784,330 792,330 H888" fill="none" stroke="#0f766e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-store)" stroke-dasharray="12 4 2 4"/>
+<path id="apps-postgres" data-edge="true" data-source="app-ec2" data-target="postgres" data-flow="store" d="M728,448 H776 Q784,448 784,440 V338 Q784,330 792,330 H888" fill="none" stroke="#0f766e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-store)" stroke-dasharray="12 4 2 4"/>
 <path id="boot-redis" data-edge="true" data-source="app-ec2" data-target="redis" data-flow="store" d="M728,500 H808 Q816,500 816,492 V454 Q816,446 824,446 H888" fill="none" stroke="#0f766e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-store)" stroke-dasharray="12 4 2 4"/>
-<path id="apps-kafka" data-edge="true" data-source="business-apps" data-target="kafka" data-flow="event" d="M712,574 H840 Q848,574 848,566 V544 Q848,536 856,536 H888" fill="none" stroke="#c56b00" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-event)" stroke-dasharray="8 5" marker-start="url(#arrow-event)"/>
+<path id="apps-kafka" data-edge="true" data-source="app-ec2" data-target="kafka" data-flow="event" d="M728,574 H840 Q848,574 848,566 V544 Q848,536 856,536 H888" fill="none" stroke="#c56b00" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-event)" stroke-dasharray="8 5" marker-start="url(#arrow-event)"/>
 <path id="cluster-cloudwatch" data-edge="true" data-source="ecs-cluster" data-target="cloudwatch" data-flow="telemetry" d="M1160,128 V92" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
-<g id="gateway" data-box="272,300,424,64" data-node="true" data-container="gateway">
+<g id="gateway" data-box="272,300,424,64" data-node="true" data-container="gateway" data-public-targets="commerce,payment-api,settlement" data-protocol="https">
 <rect x="272" y="300" width="424" height="64" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
 <use href="#logo-springboot" x="284" y="321.0" width="22" height="22" aria-hidden="true"/>
-<text x="316" y="328.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" >API Gateway</text>
-<text x="316" y="346.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" >인증·세션 검증 · 공개 요청 라우팅</text>
+<text x="316" y="328.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="600" fill="#1e293b" text-anchor="start" >Gateway</text>
+<text x="316" y="346.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" >인증·세션 검증 · HTTPS → Commerce·Payment API·Settlement</text>
 </g>
-<g id="business-apps" data-box="256,396,456,316" data-zone="true" data-public-targets="commerce,payment-api,settlement" data-executions="5">
-<rect x="256" y="396" width="456" height="316" rx="6" fill="#ffffff" stroke="#cbd5e1" stroke-width="1" />
 <path id="commerce-kakao-self" data-edge="true" data-source="commerce" data-target="kakao-self" data-flow="api" data-optional="true" data-protocol="https" d="M272,480 H232 Q224,480 224,488 V576 Q224,584 216,584 H112 Q104,584 104,592 V600" fill="none" stroke="#1e3a8a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-http)"/>
 <g id="commerce" data-box="272,416,424,84" data-node="true" data-container="commerce">
 <rect x="272" y="416" width="424" height="84" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
@@ -227,7 +224,7 @@
 <text x="536" y="650.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" >PG A·B·C · 간편결제</text>
 <text x="536" y="666.0" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" >지급 API 대역</text>
 </g>
-</g>
+
 <g id="postgres" data-box="888,272,464,116" data-node="true" data-container="postgres">
 <rect x="888" y="272" width="464" height="116" rx="6" fill="#ffffff" stroke="#7b8ba2" stroke-width="1.2" />
 <use href="#logo-postgresql" x="900" y="319.0" width="22" height="22" aria-hidden="true"/>
@@ -327,8 +324,6 @@
 <path id="alarms-slack" data-edge="true" data-source="alertmanager" data-target="slack" data-flow="telemetry" d="M1232,800 V912" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-telemetry)" stroke-dasharray="1 5"/>
 <text x="1208" y="112" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#526176" text-anchor="start" >컨테이너 로그</text>
 <text x="196" y="316" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start">HTTPS</text>
-<text x="472" y="386" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" fill="#334155" text-anchor="end">HTTPS</text>
-<text x="500" y="386" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start" >공개: Commerce · Payment API · Settlement</text>
 <text x="800" y="318" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start" >JDBC</text>
 <text x="748" y="486" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start" >Redis 접근</text>
 <text x="744" y="598" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" fill="#334155" text-anchor="start" >이벤트</text>
