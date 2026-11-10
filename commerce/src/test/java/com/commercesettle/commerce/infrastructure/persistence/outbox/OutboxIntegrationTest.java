@@ -2,6 +2,7 @@ package com.commercesettle.commerce.infrastructure.persistence.outbox;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 import com.commercesettle.commerce.application.event.EventEnvelope;
 import com.commercesettle.commerce.application.event.OrderPaymentRequestedPayload;
@@ -18,6 +19,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import jakarta.persistence.EntityManagerFactory;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -393,6 +395,65 @@ class OutboxIntegrationTest {
                 byte[].class,
                 exhausted.eventId()))
         .containsExactly(mapper.writeValueAsBytes(exhausted));
+  }
+
+  @Test
+  @DisplayName("발행 완료 행과 대기 행이 쌓여도 선점은 부분 인덱스로 찾고 쌓인 행을 훑지 않는다")
+  void claimsThroughPartialIndexesWhenRowsAccumulate() throws Exception {
+    jdbc.update(
+        """
+        INSERT INTO commerce.outbox(id,event_type,event_version,aggregate_id,aggregate_version,
+            topic,occurred_at,message_key,payload,raw_body,status,attempts,
+            published_partition,published_offset,published_at)
+        SELECT id,'OrderPaymentRequested',1,id,0,'test',ts,id::text,body,
+            convert_to(body::text,'UTF8'),'PUBLISHED',1,0,i,ts
+        FROM (SELECT i,id,ts,jsonb_build_object('eventId',id,'eventType','OrderPaymentRequested',
+                'eventVersion',1,'occurredAt',ts,'aggregateId',id,'aggregateVersion',0,
+                'payload',jsonb_build_object()) AS body
+            FROM (SELECT i,gen_random_uuid() AS id,
+                    timestamptz '2025-01-01'+i*interval '1 millisecond' AS ts
+                FROM generate_series(1,5000) AS i) generated) published
+        ORDER BY i
+        """);
+    var pending = forAnotherOrder(event(UUID.randomUUID(), 0));
+    tx.executeWithoutResult(status -> writer.appendPaymentRequested(pending));
+    // 아직 기한이 오지 않은 대기 행. 시도 한도 검사가 이 행들을 힙에서 하나씩 읽으면 안 된다.
+    jdbc.update(
+        """
+        INSERT INTO commerce.outbox(id,event_type,event_version,aggregate_id,aggregate_version,
+            topic,occurred_at,message_key,payload,raw_body,status,attempts,next_run_at)
+        SELECT id,'OrderPaymentRequested',1,id,0,'test',ts,id::text,body,
+            convert_to(body::text,'UTF8'),'PENDING',0,clock_timestamp()+interval '1 hour'
+        FROM (SELECT i,id,ts,jsonb_build_object('eventId',id,'eventType','OrderPaymentRequested',
+                'eventVersion',1,'occurredAt',ts,'aggregateId',id,'aggregateVersion',0,
+                'payload',jsonb_build_object()) AS body
+            FROM (SELECT i,gen_random_uuid() AS id,
+                    timestamptz '2025-01-02'+i*interval '1 millisecond' AS ts
+                FROM generate_series(1,2000) AS i) generated) waiting
+        ORDER BY i
+        """);
+    jdbc.execute("ANALYZE commerce.outbox");
+    int logStart = POSTGRES.getLogs().length();
+
+    var claimed =
+        tx.execute(
+            status -> {
+              // 이 트랜잭션의 SQL만 실제 실행 계획을 서버 로그에 남긴다.
+              jdbc.execute("LOAD 'auto_explain'");
+              jdbc.execute("SET LOCAL auto_explain.log_min_duration = 0");
+              return service.claim(8, 240000, 10);
+            });
+
+    assertThat(claimed).extracting(OutboxStore.Delivery::id).containsExactly(pending.eventId());
+    await()
+        .atMost(Duration.ofSeconds(5))
+        .untilAsserted(
+            () -> assertThat(POSTGRES.getLogs().substring(logStart)).contains("WITH candidates"));
+    String plans = POSTGRES.getLogs().substring(logStart);
+    assertThat(plans)
+        .contains("Index Scan using outbox_unpublished_attempts on outbox o")
+        .contains("Index Scan using outbox_unpublished on outbox o")
+        .doesNotContain("outbox_sequence_no_key");
   }
 
   @Test

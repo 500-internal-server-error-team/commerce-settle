@@ -344,6 +344,10 @@ CREATE TABLE payment.outbox (
     CHECK ((payload ->> 'occurredAt')::timestamptz = occurred_at)
 );
 CREATE INDEX outbox_due ON payment.outbox(status, next_run_at, lease_until, id);
+-- 발행 대기 행만 sequence_no 순서로 담는다. 발행 완료 행이 쌓여도 선점이 그 행들을 훑지 않게 한다.
+CREATE INDEX outbox_unpublished ON payment.outbox(sequence_no) WHERE status IN ('PENDING', 'RETRY', 'RUNNING');
+-- 시도 한도를 넘은 발행 대기 행을 찾는다. 선점마다 실행되므로 대기 행 전체를 힙에서 읽지 않게 한다.
+CREATE INDEX outbox_unpublished_attempts ON payment.outbox(attempts, sequence_no) WHERE status IN ('PENDING', 'RETRY', 'RUNNING');
 CREATE INDEX outbox_occurred ON payment.outbox(occurred_at, created_at, id);
 CREATE INDEX outbox_aggregate ON payment.outbox(aggregate_id, aggregate_version, sequence_no);
 

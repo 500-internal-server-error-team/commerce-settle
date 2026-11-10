@@ -22,6 +22,8 @@ public class JdbcOutboxStore implements OutboxStore {
 
   @Override
   public List<Delivery> claim(int limit, long leaseMs, int maxAttempts) {
+    // 상태 조건은 outbox_unpublished 부분 인덱스의 술어와 같은 형태로 둔다. 아래 OR 조건만으로는 플래너가
+    // 이 인덱스를 고르지 못해, 적체가 생기면 발행 완료 행까지 담은 sequence_no 인덱스를 처음부터 훑는다(#249).
     applyTransactionLimits();
     var params =
         new MapSqlParameterSource("limit", limit)
@@ -32,6 +34,7 @@ public class JdbcOutboxStore implements OutboxStore {
         WITH exhausted AS (
             SELECT o.id FROM payment.outbox o
             WHERE o.attempts >= :max
+              AND o.status IN ('PENDING','RETRY','RUNNING')
               AND ((o.status IN ('PENDING','RETRY') AND o.next_run_at <= clock_timestamp())
                 OR (o.status='RUNNING' AND o.lease_until <= clock_timestamp()))
             ORDER BY o.sequence_no LIMIT :limit FOR UPDATE OF o SKIP LOCKED
@@ -46,6 +49,7 @@ public class JdbcOutboxStore implements OutboxStore {
         WITH candidates AS (
             SELECT o.id FROM payment.outbox o
             WHERE o.attempts < :max
+              AND o.status IN ('PENDING','RETRY','RUNNING')
               AND ((o.status IN ('PENDING','RETRY') AND o.next_run_at <= clock_timestamp())
                 OR (o.status='RUNNING' AND o.lease_until <= clock_timestamp()))
               AND NOT EXISTS (SELECT 1 FROM payment.outbox prior
