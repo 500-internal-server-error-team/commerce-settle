@@ -300,6 +300,12 @@ public class OrderWorkflowService {
               time(now),
               time(o.getDeliveredAt()),
               time(o.getRefundDeadlineAt())));
+      if (o.getAccrualAmount() > 0)
+        emitOncePerPayment(
+            o,
+            "MileageAccrualConfirmed",
+            new OrderLifecycleEvents.MileageAccrualConfirmed(
+                o.getPaymentId(), id, o.getAccrualAmount(), time(now)));
     }
   }
 
@@ -353,15 +359,28 @@ public class OrderWorkflowService {
   }
 
   void emit(Order order, String type, UUID key, Object payload) {
+    emit(order, UUID.randomUUID(), type, key, payload);
+  }
+
+  /**
+   * 원결제당 한 번만 있어야 하는 이벤트는 종류와 원결제 ID로 eventId를 고정한다. 같은 이벤트를 다시 저장하려 하면 Outbox가 같은 본문만 받아들이고, 수신자는
+   * eventId로 중복을 걸러 낸다.
+   */
+  void emitOncePerPayment(Order order, String type, Object payload) {
+    UUID paymentId = java.util.Objects.requireNonNull(order.getPaymentId(), "paymentId");
+    emit(
+        order,
+        UUID.nameUUIDFromBytes(
+            (type + ":" + paymentId).getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+        type,
+        paymentId,
+        payload);
+  }
+
+  private void emit(Order order, UUID eventId, String type, UUID key, Object payload) {
     outbox.append(
         new EventEnvelope<>(
-            UUID.randomUUID(),
-            type,
-            1,
-            time(clock.instant()),
-            order.getId(),
-            order.getVersion(),
-            payload),
+            eventId, type, 1, time(clock.instant()), order.getId(), order.getVersion(), payload),
         key);
   }
 

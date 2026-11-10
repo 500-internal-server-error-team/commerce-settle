@@ -155,6 +155,22 @@ public class OrderResultService {
               com.commercesettle.commerce.domain.model.Notification.Kind.SALE_COMPLETED,
               event.eventId(),
               o.getPaymentConfirmedAt());
+        if (result == Order.Status.PAID && o.getAccrualAmount() > 0)
+          // 결제 완료 반영과 같은 트랜잭션에서 적립 예정을 보낸다. 잔액에는 구매확정 뒤에만 들어간다.
+          workflow.emitOncePerPayment(
+              o,
+              "MileageAccrualScheduled",
+              new com.commercesettle.commerce.application.event.OrderLifecycleEvents
+                  .MileageAccrualScheduled(
+                  o.getPaymentId(),
+                  o.getId(),
+                  o.getBuyerId(),
+                  o.getAmounts().externalAmount(),
+                  o.getAccrualRateBasisPoints(),
+                  o.getAccrualCap(),
+                  o.getAccrualAmount(),
+                  o.getAccrualPolicyVersion(),
+                  OrderWorkflowService.time(o.getPaymentConfirmedAt())));
         if (result == Order.Status.CANCELLED)
           notifications.order(
               o,

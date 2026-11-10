@@ -73,6 +73,15 @@ public class Order extends AuditableEntity {
   @Column(length = 32)
   private String policyVersion;
 
+  @Column(length = 40)
+  private String accrualPolicyVersion;
+
+  @Column(name = "accrual_rate_bp")
+  private Integer accrualRateBasisPoints;
+
+  private Long accrualCap;
+  private long accrualAmount;
+
   @Version private Long version;
 
   protected Order() {}
@@ -240,6 +249,36 @@ public class Order extends AuditableEntity {
 
   public UUID getBuyerCouponId() {
     return buyerCouponId;
+  }
+
+  /** 주문을 처음 저장하기 전에 구매 적립 정책 사본과 예정액을 고정한다. 금액이 정해진 뒤에만 부르며, 정책 사본은 주문 생성 이후 바꾸지 않는다. */
+  public void fixMileageAccrual(MileageAccrualPolicy policy) {
+    Objects.requireNonNull(policy, "policy");
+    if (version != null || status != Status.PAYMENT_PENDING || accrualPolicyVersion != null) {
+      throw new IllegalStateException("Mileage accrual is fixed at order creation");
+    }
+    accrualPolicyVersion = policy.version();
+    accrualRateBasisPoints = policy.rateBasisPoints();
+    accrualCap = policy.perOrderCap();
+    accrualAmount = policy.amountFor(externalAmount, buyerCouponId != null);
+  }
+
+  /** 주문 생성 때 고정한 적립 정책 버전. 정책을 끈 상태에서 만든 주문이면 null이다. */
+  public String getAccrualPolicyVersion() {
+    return accrualPolicyVersion;
+  }
+
+  public Integer getAccrualRateBasisPoints() {
+    return accrualRateBasisPoints;
+  }
+
+  public Long getAccrualCap() {
+    return accrualCap;
+  }
+
+  /** 구매확정 뒤 사용 가능해질 적립 예정액. 0이면 적립 이벤트를 보내지 않는다. */
+  public long getAccrualAmount() {
+    return accrualAmount;
   }
 
   public void requireVersion(long expected) {

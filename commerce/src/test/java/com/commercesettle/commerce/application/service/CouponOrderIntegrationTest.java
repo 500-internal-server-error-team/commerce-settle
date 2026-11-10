@@ -355,7 +355,10 @@ class CouponOrderIntegrationTest {
 
     assertThat(codes).filteredOn("CREATED"::equals).hasSize(1);
     assertThat(codes).filteredOn("COUPON_NOT_APPLICABLE"::equals).hasSize(4);
-    assertThat(count("buyer_coupons where id = ? and status = 'RESERVED'", coupon)).isEqualTo(1);
+    assertThat(count("buyer_coupons where id = ? and status = 'RESERVED'", coupon))
+        .isEqualTo(1); // 쿠폰 주문은 구매 적립 대상이 아니다. 정책 사본은 남기되 예정액은 0점이다.
+    assertThat(count("orders where buyer_coupon_id = ? and accrual_amount = 0", coupon))
+        .isEqualTo(1);
   }
 
   @Test

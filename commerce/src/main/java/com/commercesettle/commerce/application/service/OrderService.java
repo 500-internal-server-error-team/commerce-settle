@@ -56,6 +56,7 @@ public class OrderService {
   private final EventOrderConcurrencyLimiter eventSlots;
   private final TransactionTemplate transactions;
   private final TransactionTemplate replayReads;
+  private final MileageAccrualSettings accrual;
 
   public OrderService(
       OrderRepository orders,
@@ -71,6 +72,7 @@ public class OrderService {
       OrderAdmissionService admission,
       EventOrderConcurrencyLimiter eventSlots,
       PlatformTransactionManager manager,
+      MileageAccrualSettings accrual,
       @Value("${app.orders.simulation-seed:67}") long seed) {
     this.orders = orders;
     this.accounts = accounts;
@@ -88,6 +90,7 @@ public class OrderService {
     this.transactions = new TransactionTemplate(manager);
     this.replayReads = new TransactionTemplate(manager);
     this.replayReads.setReadOnly(true);
+    this.accrual = accrual;
   }
 
   /**
@@ -270,6 +273,8 @@ public class OrderService {
             account,
             seed,
             now);
+    // 정책 사본과 예정액은 주문 생성 때 고정한다. 이후 정책을 바꿔도 이 주문의 약속은 바뀌지 않는다.
+    accrual.current().ifPresent(order::fixMileageAccrual);
     UUID snapshotId = UUID.randomUUID();
     OrderAddress snapshot =
         OrderAddress.snapshot(
