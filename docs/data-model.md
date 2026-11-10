@@ -296,11 +296,15 @@
 | `closed_at` | `timestamptz?` | 종결 상태 전이 때 고정. 주문 보존 기한의 시작 |
 | `payment_wait_until` | `timestamptz` | — |
 | `policy_version` | `varchar(32)` | — |
+| `accrual_policy_version` | `varchar(40)?` | 주문 생성 때 고정한 구매 적립 정책 버전. 정책을 끈 상태의 주문은 null |
+| `accrual_rate_bp` | `integer?` | 적립률(basis point) 사본 |
+| `accrual_cap` | `bigint?` | 주문당 한도 사본 |
+| `accrual_amount` | `bigint` | 적립 예정액. 기본 0 |
 | `created_at` | `timestamptz` | — |
 | `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** G=unit_price*quantity, D=S+P, B=G-S, T=B-P=E+M; 1<=T<=10000000, S/P>=0이고 최대 하나만 양수, 0<=D<G, 0<=M<=T, E>=0. buyer_coupon_id가 있으면 M=0. 쿠폰의 결제수단·소유권·예산 예약을 함께 검사. 일반 quantity 1..10; event_id가 있으면1. Payment 연결 ID는 알려진 경우 UNIQUE. 상태 전이는 아래 표.
+**제약:** G=unit_price*quantity, D=S+P, B=G-S, T=B-P=E+M; 1<=T<=10000000, S/P>=0이고 최대 하나만 양수, 0<=D<G, 0<=M<=T, E>=0. buyer_coupon_id가 있으면 M=0. 적립 사본은 모두 null이고 accrual_amount=0이거나, 모두 있고(1<=rate_bp<=10000, cap>0) accrual_amount=쿠폰 주문이면 0, 아니면 min(cap, floor(E*rate_bp/10000)). 쿠폰의 결제수단·소유권·예산 예약을 함께 검사. 일반 quantity 1..10; event_id가 있으면1. Payment 연결 ID는 알려진 경우 UNIQUE. 상태 전이는 아래 표.
 
 배송 소요일·seed·달력 사본은 생성 후 불변입니다. 발송/도착 예정 시각은 함께 설정하고 발송 재요청으로 바꾸지 않습니다. 배송완료 시 delivered_at=delivery_due_at, refund_deadline_at=delivered_at+168시간을 함께 저장합니다. 배송 전 deadline은 NULL이며 진행 중 취소·반품·환불은 자동 구매확정을 막습니다. 늦은 배송 작업과 환불 접수도 같은 주문 잠금으로 기한을 검사합니다.
 
@@ -629,9 +633,37 @@
 | `balance_after` | `bigint` | — |
 | `created_at` | `timestamptz` | — |
 
-**제약:** UNIQUE(wallet_id,kind,business_ref). kind=SEED/RESERVE/RELEASE/DEBIT/RESTORE. amount>0. DEBIT/RESTORE는 원결제별 각각 한 번(부분 UNIQUE).
+**제약:** UNIQUE(wallet_id,kind,business_ref). kind=SEED/RESERVE/RELEASE/DEBIT/RESTORE/ACCRUAL. amount>0. DEBIT/RESTORE/ACCRUAL은 원결제별 각각 한 번(부분 UNIQUE). ACCRUAL은 business_ref=payment_id이고 AVAILABLE 적립과 금액이 같다.
 
-**인덱스:** (wallet_id,created_at,id); UNIQUE(payment_id,kind) WHERE kind IN (DEBIT,RESTORE).
+**인덱스:** (wallet_id,created_at,id); UNIQUE(payment_id,kind) WHERE kind IN (DEBIT,RESTORE,ACCRUAL).
+
+### mileage_accruals
+
+소유: `payment`. 원결제의 구매 적립. 정책은 [구매 적립](policies.md#구매-적립)을 따릅니다.
+
+| 컬럼 | 타입 | 비고 |
+| --- | --- | --- |
+| `id` | `uuid` | PK; 서버 생성 |
+| `payment_id` | `uuid` | →payments.id; UNIQUE |
+| `order_id` | `uuid` | Commerce 주문 ID |
+| `buyer_id` | `uuid` | 원결제 구매자 |
+| `base_amount` | `bigint` | 외부 결제액 E |
+| `rate_basis_points` | `integer` | 주문 생성 때 고정한 적립률(bp) |
+| `per_order_cap` | `bigint` | 주문당 한도 |
+| `accrual_amount` | `bigint` | 적립액 |
+| `policy_version` | `varchar(40)` | 정책 버전 |
+| `status` | `varchar(16)` | PENDING/AVAILABLE/CANCELLED |
+| `payment_confirmed_at` | `timestamptz` | 결제 확정 시각 |
+| `purchase_confirmed_at` | `timestamptz?` | 구매확정 시각(AVAILABLE) |
+| `available_at` | `timestamptz?` | 잔액 반영 시각 |
+| `cancelled_at` | `timestamptz?` | 환불 완료로 취소한 시각 |
+| `created_at` | `timestamptz` | — |
+| `updated_at` | `timestamptz` | — |
+| `version` | `bigint` | 낙관적 잠금 |
+
+**제약:** UNIQUE(payment_id). base_amount>0, 1<=rate_basis_points<=10000, per_order_cap>0, accrual_amount=min(per_order_cap, floor(base_amount*rate_basis_points/10000))>0. PENDING은 전이 시각이 모두 null, AVAILABLE은 purchase_confirmed_at·available_at만, CANCELLED는 cancelled_at만 있다. PENDING에서 한 번만 AVAILABLE 또는 CANCELLED로 바뀐다.
+
+**인덱스:** (buyer_id,status).
 
 ### refund_sagas
 
