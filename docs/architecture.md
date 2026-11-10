@@ -46,7 +46,7 @@ CloudWatch Logs는 두 EC2의 컨테이너 로그를 모으는 관리형 서비�
 
 현재 GitHub Actions는 테스트·JAR 패키징·Compose 통합 검증을 수행합니다. 목표 CD는 검증한 커밋의 `linux/arm64` 앱 이미지를 빌드해 ECR에 저장하고, 해당 이미지 digest로 ECS Task Definition을 등록한 뒤 앱 서비스를 갱신합니다. EC2의 ECS 에이전트가 [ECR에 이미지 pull을 요청](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/pull-behavior.html)해 받아 실행합니다. [GitHub의 ECS 배포 흐름](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/amazon-elastic-container-service)을 기준으로 구성합니다.
 
-CD·ECR·AWS 배포는 미구현입니다. 배포 대상 브랜치·실행 조건·IAM 권한과 상태 확인·실패 복구를 정하고 검증해야 합니다. 앱 호스트가 한 대이므로 Task 교체에 필요한 여유 자원·포트와 중단 가능 시간을 확인하며 무중단 배포를 보장하지 않습니다. DB·Kafka·Redis의 변경은 데이터 보존·복구 절차에 따라 별도로 수행합니다. GitHub 호스팅 러너와 ECR은 EC2 2대에 포함되는 추가 호스트가 아닙니다.
+CD·ECR·AWS 배포는 미구현입니다. Caddy의 배포용 Task 템플릿과 [HTTPS 운영 절차](development.md#배포용-https)는 제공하지만 실제 AWS 적용·공인 인증서 발급은 별도 검증이 필요합니다. 배포 대상 브랜치·실행 조건·IAM 권한과 상태 확인·실패 복구를 정하고 검증해야 합니다. 앱 호스트가 한 대이므로 Task 교체에 필요한 여유 자원·포트와 중단 가능 시간을 확인하며 무중단 배포를 보장하지 않습니다. DB·Kafka·Redis의 변경은 데이터 보존·복구 절차에 따라 별도로 수행합니다. GitHub 호스팅 러너와 ECR은 EC2 2대에 포함되는 추가 호스트가 아닙니다.
 
 ### 애플리케이션과 인프라
 
@@ -295,7 +295,9 @@ Outbox·Inbox·원문 격리·DLT 작업의 저장 관계는 [메시지 데이�
 
 ## 네트워크와 관측
 
-외부 진입은 HTTPS를 목표로 하고 Gateway·업무 앱 간 호출은 현재 HTTP 설정을 유지합니다. 그림의 브라우저·k6→Gateway 선은 논리적 진입 경로이며 TLS 종료 지점은 아직 정하지 않았습니다. 인증서·내부 포트 접근 제한은 배포 전에 정하고 검증합니다. 아래 Compose 주소는 로컬 개발용입니다.
+배포 환경의 TLS는 기존 앱 EC2에 배치한 Caddy에서 종료하고, Caddy→Gateway·업무 앱 간 호출은 HTTP를 유지합니다. 그림의 브라우저·k6→Gateway 선은 Caddy를 거치는 논리적 진입 경로입니다. [Caddy Task 템플릿](../infra/caddy/task-definition.json)은 EC2의 `bridge` 모드에서 TCP 80/443만 고정 게시하며, `workload=app` 속성의 컨테이너 인스턴스에 한 개를 배치합니다. 추가 EC2·ALB는 사용하지 않습니다.
+
+Gateway의 ECS Task 정의·네트워크 모드는 아직 저장소에 없습니다. 배포 시 실제 모드를 조회하고 Caddy에서 접근 가능한 Gateway의 내부 주소를 `GATEWAY_UPSTREAM`으로 주입합니다. 다른 Task의 `localhost`나 Compose 서비스 이름을 사용하지 않습니다. 인증서는 앱 EC2의 영속 디스크에 보존하며, 주소·포트 제한·재배치 조건은 [HTTPS 운영 절차](development.md#배포용-https)를 따릅니다. 아래 Compose 주소와 기존 HTTP 실행은 로컬 개발용입니다.
 
 Gateway는 빌드에 포함한 [OpenAPI](openapi.json)의 `/api/` 작업을 HTTP 메서드·경로와 `x-owner-service`로 대조해 커머스·Payment API·Settlement로 전달합니다. 경로 접두사가 같은 판매자 API도 상품·계정은 커머스, 정산·지급 조회는 Settlement로 구분합니다. 명세에 없는 경로·메서드와 `/internal`·`/mock`·관리 경로는 전달하지 않습니다. API 명세는 `/v3/api-docs/commerce|payment|settlement`, Swagger UI는 `/swagger-ui.html`입니다.
 
