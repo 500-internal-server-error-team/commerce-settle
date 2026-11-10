@@ -46,7 +46,7 @@ CloudWatch Logs는 두 EC2의 컨테이너 로그를 모으는 관리형 서비�
 
 현재 GitHub Actions는 테스트·JAR 패키징·Compose 통합 검증을 수행합니다. 목표 CD는 검증한 커밋의 `linux/arm64` 앱 이미지를 빌드해 ECR에 저장하고, 해당 이미지 digest로 ECS Task Definition을 등록한 뒤 앱 서비스를 갱신합니다. EC2의 ECS 에이전트가 [ECR에 이미지 pull을 요청](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/pull-behavior.html)해 받아 실행합니다. [GitHub의 ECS 배포 흐름](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/amazon-elastic-container-service)을 기준으로 구성합니다.
 
-CD·ECR·AWS 배포는 미구현입니다. Caddy의 배포용 Task 템플릿과 [HTTPS 운영 절차](development.md#배포용-https)는 제공하지만 실제 AWS 적용·공인 인증서 발급은 별도 검증이 필요합니다. 배포 대상 브랜치·실행 조건·IAM 권한과 상태 확인·실패 복구를 정하고 검증해야 합니다. 앱 호스트가 한 대이므로 Task 교체에 필요한 여유 자원·포트와 중단 가능 시간을 확인하며 무중단 배포를 보장하지 않습니다. DB·Kafka·Redis의 변경은 데이터 보존·복구 절차에 따라 별도로 수행합니다. GitHub 호스팅 러너와 ECR은 EC2 2대에 포함되는 추가 호스트가 아닙니다.
+`v*` 형식의 Git 태그(예: `v0.1.0`)를 push하고 그 커밋의 모든 검사가 통과하면 CI의 `publish` job이 앱 이미지 다섯 종을 서울 리전(`ap-northeast-2`)의 ECR 리포지토리 하나에 `linux/arm64`로 push합니다. 브랜치 push만으로는 이미지를 만들지 않습니다. 이미지 태그는 `<모듈>-<Git 태그>`이며 `payment` 이미지는 Payment API·Worker가 함께 사용합니다. GitHub OIDC로 맡는 IAM 역할을 저장소 변수 `AWS_ROLE_ARN`에, 리포지토리 이름을 `ECR_REPOSITORY`에 등록합니다. 태그가 섞이므로 ECR 수명 주기 정책은 모듈별 태그 접두사로 나눠 설정합니다. 실제 push는 AWS 설정 후 검증해야 하며, PostgreSQL 이미지 push와 Task Definition 등록·서비스 갱신은 미구현입니다. Caddy의 배포용 Task 템플릿과 [HTTPS 운영 절차](development.md#배포용-https)는 제공하지만 실제 AWS 적용·공인 인증서 발급은 별도 검증이 필요합니다. 배포 대상 브랜치·실행 조건·IAM 권한과 상태 확인·실패 복구를 정하고 검증해야 합니다. 앱 호스트가 한 대이므로 Task 교체에 필요한 여유 자원·포트와 중단 가능 시간을 확인하며 무중단 배포를 보장하지 않습니다. DB·Kafka·Redis의 변경은 데이터 보존·복구 절차에 따라 별도로 수행합니다. GitHub 호스팅 러너와 ECR은 EC2 2대에 포함되는 추가 호스트가 아닙니다.
 
 ### 애플리케이션과 인프라
 
