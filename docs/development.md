@@ -350,6 +350,8 @@ Outbox Relay는 `app.outbox.enabled=false`가 기본입니다. 전용 시험 인
 
 DB 주문의 신규 접수와 새 결제 회차에는 기본으로 gate를 적용합니다. 기동 시 닫히며 `APP_ORDER_ADMISSION_PROMETHEUS_URL`(기본 `http://prometheus:9090`)에서 필수 관측을 읽고 모든 재개 기준을 60초 연속 충족해야 엽니다. `APP_ORDER_ADMISSION_PAUSED=true`로 설정해 앱을 재기동하면 운영자가 접수를 중단할 수 있습니다. 해제 후에도 재개 검사를 다시 거칩니다. 조회·취소·환불·기존 업무 배출은 계속됩니다.
 
+신규 선착순 이벤트 주문의 [이벤트별 동시 실행 상한](policies.md#선착순-상품-이벤트)은 `APP_SALE_EVENT_ORDER_MAX_CONCURRENT`(기본 3)와 `APP_SALE_EVENT_ORDER_MAX_WAIT`(기본 `PT1S`)로 바꿉니다. 인스턴스별 값이며 앱을 재기동해야 반영됩니다.
+
 전용 단일 실행기가 Commerce DB 관측과 Prometheus instant query를 15초 간격으로 수행합니다. DB 쿼리는 2초, HTTP는 전체 5초·응답 2 MiB 상한이며 요청 트랜잭션에서 원격 조회하지 않습니다. 수집 실패·지표 누락·오래된 원본 시각이면 닫습니다. `commerce_order_admission_open`은 열림 1/닫힘 0이며, Commerce의 두 금융 대기열 값과 원본 수집 시각을 `/actuator/prometheus`로 제공합니다. 상세 metric·필수 대상·임계값은 [접수 정책](policies.md#신규-접수-제한과-재개)을 따릅니다.
 
 ### 금융 관측과 접수 복구

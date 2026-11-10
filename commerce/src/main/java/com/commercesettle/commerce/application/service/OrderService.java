@@ -28,10 +28,14 @@ import com.commercesettle.commerce.domain.repository.ProductRepository;
 import java.time.Clock;
 import java.time.ZoneId;
 import java.util.Arrays;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /** 일반 주문 접수. 주문·배송지 사본·재고 예약·멱등 기록·결제 요청을 한 트랜잭션으로 저장한다. */
 @Service
@@ -49,6 +53,9 @@ public class OrderService {
   private final OrderBenefits benefits;
   private final ProductRepository products;
   private final OrderAdmissionService admission;
+  private final EventOrderConcurrencyLimiter eventSlots;
+  private final TransactionTemplate transactions;
+  private final TransactionTemplate replayReads;
 
   public OrderService(
       OrderRepository orders,
@@ -62,6 +69,8 @@ public class OrderService {
       OrderBenefits benefits,
       ProductRepository products,
       OrderAdmissionService admission,
+      EventOrderConcurrencyLimiter eventSlots,
+      PlatformTransactionManager manager,
       @Value("${app.orders.simulation-seed:67}") long seed) {
     this.orders = orders;
     this.accounts = accounts;
@@ -75,10 +84,49 @@ public class OrderService {
     this.benefits = benefits;
     this.products = products;
     this.admission = admission;
+    this.eventSlots = eventSlots;
+    this.transactions = new TransactionTemplate(manager);
+    this.replayReads = new TransactionTemplate(manager);
+    this.replayReads.setReadOnly(true);
   }
 
-  @Transactional
+  /**
+   * 일반 주문은 바로 주문 트랜잭션을 실행한다. 신규 선착순 이벤트 주문은 짧은 읽기 트랜잭션에서 기존 멱등 결과·본문 충돌과 신규 거절(접수 제한·입력·매진/종료)을 먼저
+   * 판정한 뒤, DB 커넥션 없이 이벤트별 동시 실행 슬롯을 받고 주문 트랜잭션을 실행한다. 슬롯은 트랜잭션이 끝난 뒤 반납한다.
+   */
+  @Transactional(propagation = Propagation.NEVER)
   public OrderView create(UUID buyerId, String key, RegularOrderCommand command) {
+    if (command.eventId() == null)
+      return transactions.execute(status -> createInTransaction(buyerId, key, command));
+    var prior = replayReads.execute(status -> precheckEventOrder(buyerId, key, command));
+    if (prior.isPresent()) return prior.get();
+    try (var permit = eventSlots.acquire(command.eventId())) {
+      return transactions.execute(status -> createInTransaction(buyerId, key, command));
+    }
+  }
+
+  /**
+   * 기존 완료 기록이 있으면 그 결과를 돌려주고 새 키는 저장하지 않는다. 신규 요청은 주문 트랜잭션과 같은 순서로 접수 제한·입력·이벤트 마감을 판정해, 거절될 요청이
+   * 슬롯을 기다리지 않게 한다. 슬롯을 받은 뒤 주문 트랜잭션이 모두 다시 판정하며, 같은 키의 동시 신규 요청도 그 멱등 판정이 막는다.
+   */
+  private Optional<OrderView> precheckEventOrder(
+      UUID buyerId, String key, RegularOrderCommand command) {
+    accounts
+        .findById(ActorKind.BUYER, buyerId)
+        .filter(Account::canLogIn)
+        .orElseThrow(AuthenticationFailedException::new);
+    var prior =
+        idempotency.replayPermanent(
+            createRequest(buyerId, key, command),
+            existingId -> OrderView.from(owned(buyerId, existingId)));
+    if (prior.isPresent()) return prior;
+    admission.requireAdmission();
+    validateRegular(command);
+    benefits.requireEventOpen(command.eventId());
+    return Optional.empty();
+  }
+
+  private OrderView createInTransaction(UUID buyerId, String key, RegularOrderCommand command) {
     // 주소록 변경도 같은 구매자 행을 먼저 잠그므로 검사와 사본 생성 사이에 주소가 바뀌지 않는다.
     accounts
         .findLockedById(ActorKind.BUYER, buyerId)
@@ -86,27 +134,32 @@ public class OrderService {
         .orElseThrow(AuthenticationFailedException::new);
     UUID orderId = UUID.randomUUID();
     return idempotency.executePermanent(
-        new IdempotentRequests.Request(
-            "BUYER",
-            buyerId.toString(),
-            "ORDER_CREATE",
-            key,
-            Arrays.asList(
-                command.productId(),
-                command.quantity(),
-                command.eventId(),
-                command.buyerCouponId(),
-                command.mileageAmount(),
-                command.addressId(),
-                command.expectedProductVersion(),
-                command.expectedEventVersion(),
-                command.expectedTotalAmount(),
-                command.externalMethod(),
-                command.methodAccountRef())),
+        createRequest(buyerId, key, command),
         orderId,
         201,
         recordId -> createNew(buyerId, orderId, command),
         existingId -> OrderView.from(owned(buyerId, existingId)));
+  }
+
+  private static IdempotentRequests.Request createRequest(
+      UUID buyerId, String key, RegularOrderCommand command) {
+    return new IdempotentRequests.Request(
+        "BUYER",
+        buyerId.toString(),
+        "ORDER_CREATE",
+        key,
+        Arrays.asList(
+            command.productId(),
+            command.quantity(),
+            command.eventId(),
+            command.buyerCouponId(),
+            command.mileageAmount(),
+            command.addressId(),
+            command.expectedProductVersion(),
+            command.expectedEventVersion(),
+            command.expectedTotalAmount(),
+            command.externalMethod(),
+            command.methodAccountRef()));
   }
 
   private OrderView createNew(UUID buyerId, UUID orderId, RegularOrderCommand command) {

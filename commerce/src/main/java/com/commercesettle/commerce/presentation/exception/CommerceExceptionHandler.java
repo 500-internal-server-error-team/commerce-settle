@@ -285,10 +285,12 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
 
   @ExceptionHandler(
       com.commercesettle.commerce.application.exception.OrderCapacityExceededException.class)
-  ResponseEntity<Object> capacity(WebRequest request) {
+  ResponseEntity<Object> capacity(
+      com.commercesettle.commerce.application.exception.OrderCapacityExceededException e,
+      WebRequest request) {
     ErrorCode code = ErrorCode.COMMON_CAPACITY_EXCEEDED;
     return ResponseEntity.status(code.status())
-        .header(HttpHeaders.RETRY_AFTER, "30")
+        .header(HttpHeaders.RETRY_AFTER, Long.toString(e.retryAfterSeconds()))
         .body(problem(code.status(), code, code.detail(), request));
   }
 
