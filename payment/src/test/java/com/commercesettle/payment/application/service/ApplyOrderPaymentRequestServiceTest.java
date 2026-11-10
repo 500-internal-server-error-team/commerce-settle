@@ -81,6 +81,7 @@ class ApplyOrderPaymentRequestServiceTest {
           entries,
           outbox,
           mock(RefundEventHandler.class),
+          mock(MileageAccrualEventHandler.class),
           mock(PaymentNotices.class),
           TransactionOperations.withoutTransaction(),
           Clock.fixed(NOW, ZoneOffset.UTC),

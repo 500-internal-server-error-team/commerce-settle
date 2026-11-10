@@ -5,10 +5,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
+import com.commercesettle.payment.application.event.MileageAccrualConfirmedPayload;
+import com.commercesettle.payment.application.event.MileageAccrualScheduledPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
 import com.commercesettle.payment.application.event.RefundApprovedPayload;
 import com.commercesettle.payment.application.event.RefundOrderRestoredPayload;
@@ -20,6 +23,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.DisplayName;
@@ -202,6 +206,90 @@ class OrderPaymentRequestedListenerTest {
     assertThatThrownBy(() -> listener.receive(record(withExtraField, PAYMENT_ID), acknowledgment))
         .isInstanceOf(IllegalArgumentException.class);
     verifyNoInteractions(acceptor, acknowledgment);
+  }
+
+  @Test
+  @DisplayName("같은 토픽의 구매 적립 예정·확정은 원결제 ID를 키로 환불·적립 접수에 인계한 뒤 offset을 승인한다")
+  @SuppressWarnings("unchecked")
+  void acceptsMileageAccrualEvents() throws Exception {
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1");
+
+    listener.receive(record(accrualScheduled(PAYMENT_ID, 100), PAYMENT_ID), acknowledgment);
+    listener.receive(record(accrualConfirmed(PAYMENT_ID), PAYMENT_ID), acknowledgment);
+
+    var event = ArgumentCaptor.forClass(EventEnvelope.class);
+    verify(acceptor, times(2)).acceptRefundEvent(event.capture(), any());
+    verify(acknowledgment, times(2)).acknowledge();
+    // 시각은 수신 매퍼가 KST로 읽으므로 같은 순간인지 비교한다.
+    assertThat(event.getAllValues().get(0).payload())
+        .usingRecursiveComparison()
+        .withComparatorForType(TIMELINE, OffsetDateTime.class)
+        .isEqualTo(
+            new MileageAccrualScheduledPayload(
+                UUID.fromString(PAYMENT_ID),
+                UUID.fromString(KEY),
+                UUID.fromString("00000000-0000-0000-0000-00000000000d"),
+                10_000,
+                100,
+                1_000,
+                100,
+                "mileage-accrual-v1",
+                OffsetDateTime.parse("2026-01-02T00:00:00Z")));
+    assertThat(event.getAllValues().get(1).payload())
+        .usingRecursiveComparison()
+        .withComparatorForType(TIMELINE, OffsetDateTime.class)
+        .isEqualTo(
+            new MileageAccrualConfirmedPayload(
+                UUID.fromString(PAYMENT_ID),
+                UUID.fromString(KEY),
+                100,
+                OffsetDateTime.parse("2026-01-10T00:00:00Z")));
+  }
+
+  @Test
+  @DisplayName("키가 원결제 ID와 다르거나 모르는 필드·잘못된 시각이 있는 적립 이벤트는 접수하지 않는다")
+  void rejectsInvalidMileageAccrualEvents() {
+    var listener = new OrderPaymentRequestedListener(mapper, acceptor, null, "payment.v1");
+
+    for (String body :
+        List.of(
+            accrualScheduled(PAYMENT_ID, 100)
+                .replace("\"perOrderCap\":1000", "\"perOrderCap\":1000,\"x\":1"),
+            accrualConfirmed(PAYMENT_ID).replace("2026-01-10T00:00:00Z", "not-a-time"))) {
+      assertThatThrownBy(() -> listener.receive(record(body, PAYMENT_ID), acknowledgment))
+          .isInstanceOf(IllegalArgumentException.class);
+    }
+    assertThatThrownBy(
+            () -> listener.receive(record(accrualConfirmed(PAYMENT_ID), KEY), acknowledgment))
+        .isInstanceOf(IllegalArgumentException.class);
+    verifyNoInteractions(acceptor, acknowledgment);
+  }
+
+  private static final java.util.Comparator<OffsetDateTime> TIMELINE =
+      java.util.Comparator.comparing(OffsetDateTime::toInstant);
+
+  private static String accrualScheduled(String paymentId, long amount) {
+    return """
+        {"eventId":"00000000-0000-0000-0000-00000000000e","eventType":"MileageAccrualScheduled",
+         "eventVersion":1,"occurredAt":"2026-01-02T00:00:01Z",
+         "aggregateId":"%1$s","aggregateVersion":2,
+         "payload":{"paymentId":"%2$s","orderId":"%1$s",
+           "buyerId":"00000000-0000-0000-0000-00000000000d","baseAmount":10000,
+           "rateBasisPoints":100,"perOrderCap":1000,"accrualAmount":%3$d,
+           "accrualPolicyVersion":"mileage-accrual-v1","paymentConfirmedAt":"2026-01-02T00:00:00Z"}}
+        """
+        .formatted(KEY, paymentId, amount);
+  }
+
+  private static String accrualConfirmed(String paymentId) {
+    return """
+        {"eventId":"00000000-0000-0000-0000-00000000000f","eventType":"MileageAccrualConfirmed",
+         "eventVersion":1,"occurredAt":"2026-01-10T00:00:01Z",
+         "aggregateId":"%1$s","aggregateVersion":9,
+         "payload":{"paymentId":"%2$s","orderId":"%1$s","accrualAmount":100,
+           "confirmedAt":"2026-01-10T00:00:00Z"}}
+        """
+        .formatted(KEY, paymentId);
   }
 
   private static String refundApproved(String paymentId) {

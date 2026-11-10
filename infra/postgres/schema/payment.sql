@@ -228,13 +228,47 @@ CREATE TABLE payment.mileage_entries (
     created_at    timestamptz NOT NULL,
 
     CONSTRAINT uk_mileage_entries_wallet_kind_ref UNIQUE (wallet_id, kind, business_ref),
-    CONSTRAINT ck_mileage_entries_kind CHECK (kind IN ('SEED', 'RESERVE', 'RELEASE', 'DEBIT', 'RESTORE')),
+    CONSTRAINT ck_mileage_entries_kind CHECK (kind IN ('SEED', 'RESERVE', 'RELEASE', 'DEBIT', 'RESTORE', 'ACCRUAL')),
     CONSTRAINT ck_mileage_entries_amount CHECK (amount > 0),
     CONSTRAINT ck_mileage_entries_balance_after CHECK (balance_after >= 0)
 );
 CREATE INDEX ix_mileage_entries_wallet_created ON payment.mileage_entries (wallet_id, created_at, id);
 CREATE UNIQUE INDEX uk_mileage_entries_payment_once
-    ON payment.mileage_entries (payment_id, kind) WHERE kind IN ('DEBIT', 'RESTORE');
+    ON payment.mileage_entries (payment_id, kind) WHERE kind IN ('DEBIT', 'RESTORE', 'ACCRUAL');
+
+-- 구매 적립. 결제 완료 반영 때 Commerce가 고정한 정책 사본으로 PENDING을 만들고, 구매확정 때 AVAILABLE로 잔액에 더한다.
+-- 확정 전 환불이 완료되면 CANCELLED다. 결제당 한 건이며 금액은 정책 사본으로 다시 계산한 값과 같아야 한다.
+CREATE TABLE payment.mileage_accruals (
+    id                     uuid        PRIMARY KEY,
+    payment_id             uuid        NOT NULL,
+    order_id               uuid        NOT NULL,
+    buyer_id               uuid        NOT NULL,
+    base_amount            bigint      NOT NULL,
+    rate_basis_points      integer     NOT NULL,
+    per_order_cap          bigint      NOT NULL,
+    accrual_amount         bigint      NOT NULL,
+    policy_version         varchar(40) NOT NULL,
+    status                 varchar(16) NOT NULL,
+    payment_confirmed_at   timestamptz NOT NULL,
+    purchase_confirmed_at  timestamptz,
+    available_at           timestamptz,
+    cancelled_at           timestamptz,
+    created_at             timestamptz NOT NULL,
+    updated_at             timestamptz NOT NULL,
+    version                bigint      NOT NULL,
+
+    CONSTRAINT uk_mileage_accruals_payment UNIQUE (payment_id),
+    CONSTRAINT ck_mileage_accruals_policy CHECK (
+        base_amount > 0 AND rate_basis_points BETWEEN 1 AND 10000 AND per_order_cap > 0
+        AND accrual_amount > 0
+        AND accrual_amount = least(per_order_cap, (base_amount * rate_basis_points) / 10000)),
+    CONSTRAINT ck_mileage_accruals_status CHECK (
+        (status = 'PENDING' AND available_at IS NULL AND cancelled_at IS NULL AND purchase_confirmed_at IS NULL)
+        OR (status = 'AVAILABLE' AND available_at IS NOT NULL AND purchase_confirmed_at IS NOT NULL AND cancelled_at IS NULL)
+        OR (status = 'CANCELLED' AND cancelled_at IS NOT NULL AND available_at IS NULL AND purchase_confirmed_at IS NULL)),
+    CONSTRAINT ck_mileage_accruals_version CHECK (version >= 0)
+);
+CREATE INDEX ix_mileage_accruals_buyer_status ON payment.mileage_accruals (buyer_id, status);
 
 -- 원결제의 전액 환불. 외부 결제액·사용 마일리지는 원결제에서 복사하며 바꾸지 않는다.
 CREATE TABLE payment.refunds (

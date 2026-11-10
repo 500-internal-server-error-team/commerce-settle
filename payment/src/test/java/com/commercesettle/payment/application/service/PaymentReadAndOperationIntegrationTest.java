@@ -277,7 +277,7 @@ class PaymentReadAndOperationIntegrationTest {
     worker.runOnce();
     UUID paymentId = paymentId();
 
-    assertThat(mileage.wallet(BUYER_ID)).isEqualTo(new MileageWalletView(3_000, 0, 3_000, 2));
+    assertThat(mileage.wallet(BUYER_ID)).isEqualTo(new MileageWalletView(3_000, 0, 3_000, 0, 2));
     PageView<MileageEntryView> entries = mileage.entries(BUYER_ID, 0, 1);
     assertThat(entries.totalElements()).isEqualTo(2);
     assertThat(entries.totalPages()).isEqualTo(2);
@@ -287,7 +287,7 @@ class PaymentReadAndOperationIntegrationTest {
         .containsExactlyInAnyOrder(
             tuple(MileageEntryKind.RESERVE, paymentId), tuple(MileageEntryKind.DEBIT, paymentId));
 
-    assertThat(mileage.wallet(OTHER_BUYER)).isEqualTo(MileageWalletView.EMPTY);
+    assertThat(mileage.wallet(OTHER_BUYER)).isEqualTo(MileageWalletView.empty(0));
     assertThat(mileage.entries(OTHER_BUYER, 0, 20).items()).isEmpty();
 
     PageView<PaymentAttemptView> page = attempts.list(BUYER_ID, paymentId, 0, 20);
@@ -941,6 +941,7 @@ class PaymentReadAndOperationIntegrationTest {
     ApplyOrderPaymentRequestService.class,
     PaymentNotices.class,
     RefundEventHandler.class,
+    MileageAccrualEventHandler.class,
     RefundEvents.class,
     RefundSettlementReplyService.class,
     ApprovalWorker.class,

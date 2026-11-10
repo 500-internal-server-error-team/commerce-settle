@@ -1,6 +1,8 @@
 package com.commercesettle.payment.infrastructure.persistence.inbox;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
+import com.commercesettle.payment.application.event.MileageAccrualConfirmedPayload;
+import com.commercesettle.payment.application.event.MileageAccrualScheduledPayload;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
 import com.commercesettle.payment.application.event.RefundApprovedPayload;
@@ -389,6 +391,8 @@ public class JdbcInboxStore implements InboxStore {
           case "PaymentCancellationRequested" -> PaymentCancellationRequestedPayload.class;
           case "RefundApproved" -> RefundApprovedPayload.class;
           case "RefundOrderRestored" -> RefundOrderRestoredPayload.class;
+          case "MileageAccrualScheduled" -> MileageAccrualScheduledPayload.class;
+          case "MileageAccrualConfirmed" -> MileageAccrualConfirmedPayload.class;
           case "RefundReservationResult" -> RefundReservationResultPayload.class;
           case "RefundLedgerReversed" -> RefundLedgerReversedPayload.class;
           case "RefundReservationReleased" -> RefundReservationReleasedPayload.class;

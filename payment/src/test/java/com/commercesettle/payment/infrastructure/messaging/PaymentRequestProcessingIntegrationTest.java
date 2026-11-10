@@ -10,6 +10,7 @@ import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.commercesettle.payment.application.service.ApplyOrderPaymentRequestService;
+import com.commercesettle.payment.application.service.MileageAccrualEventHandler;
 import com.commercesettle.payment.application.service.PaymentNotices;
 import com.commercesettle.payment.application.service.RefundEventHandler;
 import com.commercesettle.payment.application.service.RefundEvents;
@@ -955,6 +956,7 @@ class PaymentRequestProcessingIntegrationTest {
     ApplyOrderPaymentRequestService.class,
     PaymentNotices.class,
     RefundEventHandler.class,
+    MileageAccrualEventHandler.class,
     RefundEvents.class,
     RefundSettlementReplyService.class
   })

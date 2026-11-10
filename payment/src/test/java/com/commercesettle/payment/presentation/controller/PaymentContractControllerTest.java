@@ -126,7 +126,7 @@ class PaymentContractControllerTest {
   @Test
   @DisplayName("구매자는 Gateway를 거쳐 본인 마일리지 잔액·원장과 승인 시도를 조회한다")
   void buyerReadsMileageAndAttempts() throws Exception {
-    given(mileage.wallet(BUYER)).willReturn(new MileageWalletView(5_000, 2_000, 3_000, 4));
+    given(mileage.wallet(BUYER)).willReturn(new MileageWalletView(5_000, 2_000, 3_000, 1_000, 4));
     given(mileage.entries(BUYER, 0, 20))
         .willReturn(
             new PageView<>(
@@ -158,6 +158,7 @@ class PaymentContractControllerTest {
         .andExpect(jsonPath("$.balance").value(5_000))
         .andExpect(jsonPath("$.reservedAmount").value(2_000))
         .andExpect(jsonPath("$.availableAmount").value(3_000))
+        .andExpect(jsonPath("$.pendingAccrualAmount").value(1_000))
         .andExpect(jsonPath("$.version").value(4));
     mvc.perform(asBuyer(get("/api/buyers/me/mileage/entries")))
         .andExpect(status().isOk())

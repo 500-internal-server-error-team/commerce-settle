@@ -13116,6 +13116,12 @@
             "maximum": 10000000,
             "description": "B=G-S: 수수료·정산 기준"
           },
+          "mileageAccrualAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "주문 생성 때 고정한 구매 적립 예정액. 구매확정 뒤 Payment 잔액에 더해지며 쿠폰 주문·정책을 끈 상태의 주문은 0이다."
+          },
           "deliveryBusinessDays": {
             "type": "integer",
             "enum": [
@@ -13186,6 +13192,7 @@
           "sellerCouponAmount",
           "platformCouponAmount",
           "settlementBaseAmount",
+          "mileageAccrualAmount",
           "deliveryBusinessDays",
           "deliveryCalendarVersion",
           "shippedAt",
@@ -13628,6 +13635,12 @@
             "format": "int64",
             "minimum": 0
           },
+          "pendingAccrualAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "구매확정 전 적립 예정 합계. 잔액·가용액에 포함하지 않으며 사용할 수 없다."
+          },
           "version": {
             "type": "integer",
             "format": "int64",
@@ -13638,6 +13651,7 @@
           "balance",
           "reservedAmount",
           "availableAmount",
+          "pendingAccrualAmount",
           "version"
         ]
       },
@@ -13667,7 +13681,8 @@
               "RESERVE",
               "RELEASE",
               "DEBIT",
-              "RESTORE"
+              "RESTORE",
+              "ACCRUAL"
             ]
           },
           "amount": {
@@ -16909,6 +16924,97 @@
         ],
         "description": "seller가 마감 초과·미진행 환불·배송완료를 검증한 확정 사실. deliveredAt+168시간=refundDeadlineAt이며 confirmedAt은 그 이후다."
       },
+      "MileageAccrualScheduledPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "paymentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orderId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "buyerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "baseAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 10000000
+          },
+          "rateBasisPoints": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "perOrderCap": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "accrualAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "accrualPolicyVersion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          },
+          "paymentConfirmedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "paymentId",
+          "orderId",
+          "buyerId",
+          "baseAmount",
+          "rateBasisPoints",
+          "perOrderCap",
+          "accrualAmount",
+          "accrualPolicyVersion",
+          "paymentConfirmedAt"
+        ],
+        "description": "Commerce가 결제 완료(PaymentConfirmed)를 주문에 반영하면서 보낸 구매 적립 예정. 주문 생성 때 고정한 정책 사본이며 accrualAmount=min(perOrderCap, floor(baseAmount×rateBasisPoints/10000))>0, baseAmount는 외부 결제액이다. 쿠폰 주문·0점은 보내지 않는다. eventId는 종류와 paymentId로 고정한다."
+      },
+      "MileageAccrualConfirmedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "paymentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orderId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "accrualAmount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "confirmedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "paymentId",
+          "orderId",
+          "accrualAmount",
+          "confirmedAt"
+        ],
+        "description": "자동 구매확정과 같은 트랜잭션에서 보낸 구매 적립 확정. Payment는 예정을 사용 가능으로 바꾸며 잔액에 더한다. eventId는 종류와 paymentId로 고정한다."
+      },
       "EventEnvelope": {
         "oneOf": [
           {
@@ -17678,6 +17784,88 @@
               },
               "payload": {
                 "$ref": "#/components/schemas/PurchaseConfirmedPayload"
+              }
+            },
+            "required": [
+              "eventId",
+              "eventVersion",
+              "occurredAt",
+              "aggregateId",
+              "aggregateVersion",
+              "eventType",
+              "payload"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "eventId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "eventVersion": {
+                "const": 1
+              },
+              "occurredAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "aggregateId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "aggregateVersion": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "eventType": {
+                "const": "MileageAccrualScheduled"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/MileageAccrualScheduledPayload"
+              }
+            },
+            "required": [
+              "eventId",
+              "eventVersion",
+              "occurredAt",
+              "aggregateId",
+              "aggregateVersion",
+              "eventType",
+              "payload"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "eventId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "eventVersion": {
+                "const": 1
+              },
+              "occurredAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "aggregateId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "aggregateVersion": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "eventType": {
+                "const": "MileageAccrualConfirmed"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/MileageAccrualConfirmedPayload"
               }
             },
             "required": [
@@ -20859,6 +21047,30 @@
       "key": "paymentId",
       "schema": {
         "$ref": "#/components/schemas/PurchaseConfirmedPayload"
+      },
+      "version": 1
+    },
+    {
+      "name": "MileageAccrualScheduled",
+      "producer": "commerce",
+      "consumers": [
+        "payment"
+      ],
+      "key": "paymentId",
+      "schema": {
+        "$ref": "#/components/schemas/MileageAccrualScheduledPayload"
+      },
+      "version": 1
+    },
+    {
+      "name": "MileageAccrualConfirmed",
+      "producer": "commerce",
+      "consumers": [
+        "payment"
+      ],
+      "key": "paymentId",
+      "schema": {
+        "$ref": "#/components/schemas/MileageAccrualConfirmedPayload"
       },
       "version": 1
     },

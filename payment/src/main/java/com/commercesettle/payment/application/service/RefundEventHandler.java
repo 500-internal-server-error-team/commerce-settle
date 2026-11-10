@@ -30,8 +30,8 @@ import org.springframework.stereotype.Component;
 /**
  * 선점한 Commerce 환불 이벤트와 Settlement 환불 응답을 결제 요청 처리기와 같은 트랜잭션에서 반영한다. RefundApproved는 원결제 전액 환불과
  * SAGA를 접수하고 RefundAccepted·RefundReservationRequested를 함께 저장한다. RefundOrderRestored는 주문 복구 확인을 반영해
- * 환불을 끝낸다. Settlement 응답은 {@link RefundSettlementReplyService}가 반영하고, 기다리지 않는 단계·다른 원결제·다른 예약의 응답은
- * 확인 대상으로 남긴다.
+ * 환불을 끝내고 원결제의 구매 적립 예정을 취소한다. Settlement 응답은 {@link RefundSettlementReplyService}가 반영하고, 기다리지 않는
+ * 단계·다른 원결제·다른 예약의 응답은 확인 대상으로 남긴다.
  *
  * <p>같은 취소·반품 요청의 재전달은 기존 환불로 연결하고, 같은 원결제의 다른 요청은 중복 환불이므로 확인 대상으로 남긴다. 아직 확정되지 않은 원결제는 결과가 날 때까지
  * 다시 처리한다.
@@ -57,6 +57,7 @@ public class RefundEventHandler {
   private final RefundSagaRepository sagas;
   private final RefundEvents events;
   private final RefundSettlementReplyService replies;
+  private final MileageAccrualEventHandler accruals;
 
   RefundEventHandler(
       InboxStore inbox,
@@ -64,13 +65,15 @@ public class RefundEventHandler {
       RefundRepository refunds,
       RefundSagaRepository sagas,
       RefundEvents events,
-      RefundSettlementReplyService replies) {
+      RefundSettlementReplyService replies,
+      MileageAccrualEventHandler accruals) {
     this.inbox = inbox;
     this.payments = payments;
     this.refunds = refunds;
     this.sagas = sagas;
     this.events = events;
     this.replies = replies;
+    this.accruals = accruals;
   }
 
   /** 이 처리기가 반영하는 이벤트인지 확인한다. */
@@ -192,6 +195,8 @@ public class RefundEventHandler {
     refund.complete(now);
     sagas.save(saga);
     refunds.save(refund);
+    // 구매확정 전 환불이 끝났다. 아직 잔액에 넣지 않은 적립 예정을 같은 트랜잭션에서 취소한다.
+    accruals.cancelOnRefundCompleted(refund, now);
     inbox.markApplied(claimed.inboxId(), refund.getId(), now);
     LOG.atInfo()
         .addKeyValue("event", "payment.refund")

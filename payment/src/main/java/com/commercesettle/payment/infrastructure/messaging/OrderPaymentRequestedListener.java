@@ -3,6 +3,8 @@ package com.commercesettle.payment.infrastructure.messaging;
 import static com.commercesettle.payment.infrastructure.messaging.StrictEventJson.requireUuid;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
+import com.commercesettle.payment.application.event.MileageAccrualConfirmedPayload;
+import com.commercesettle.payment.application.event.MileageAccrualScheduledPayload;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload.ExternalMethod;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload.Status;
@@ -27,9 +29,9 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 
 /**
- * Commerce 토픽의 결제 요청·미결제 취소 요청·환불 승인·주문 복구 확인을 엄격하게 해석해 Inbox 대기로 넘긴다. 같은 토픽의 다른 eventType(예:
- * Settlement가 소비하는 구매확정)은 저장 없이 ACK한다. eventType을 읽을 수 없거나 처리 대상 종류의 계약에 맞지 않는 원문은 격리한다(격리를 끄면
- * ACK하지 않는다).
+ * Commerce 토픽의 결제 요청·미결제 취소 요청·환불 승인·주문 복구 확인·구매 적립 예정/확정을 엄격하게 해석해 Inbox 대기로 넘긴다. 같은 토픽의 다른
+ * eventType(예: Settlement가 소비하는 구매확정)은 저장 없이 ACK한다. eventType을 읽을 수 없거나 처리 대상 종류의 계약에 맞지 않는 원문은
+ * 격리한다(격리를 끄면 ACK하지 않는다).
  */
 public class OrderPaymentRequestedListener {
 
@@ -38,12 +40,16 @@ public class OrderPaymentRequestedListener {
           "OrderPaymentRequested",
           "PaymentCancellationRequested",
           "RefundApproved",
-          "RefundOrderRestored");
+          "RefundOrderRestored",
+          "MileageAccrualScheduled",
+          "MileageAccrualConfirmed");
 
   private final ObjectReader reader;
   private final ObjectReader cancellationReader;
   private final ObjectReader refundApprovedReader;
   private final ObjectReader refundOrderRestoredReader;
+  private final ObjectReader accrualScheduledReader;
+  private final ObjectReader accrualConfirmedReader;
   private final ObjectMapper mapper;
   private final OrderPaymentRequestAcceptor acceptor;
   private final QuarantineService quarantine;
@@ -64,6 +70,12 @@ public class OrderPaymentRequestedListener {
         this.mapper.readerFor(new TypeReference<EventEnvelope<RefundApprovedPayload>>() {});
     this.refundOrderRestoredReader =
         this.mapper.readerFor(new TypeReference<EventEnvelope<RefundOrderRestoredPayload>>() {});
+    this.accrualScheduledReader =
+        this.mapper.readerFor(
+            new TypeReference<EventEnvelope<MileageAccrualScheduledPayload>>() {});
+    this.accrualConfirmedReader =
+        this.mapper.readerFor(
+            new TypeReference<EventEnvelope<MileageAccrualConfirmedPayload>>() {});
     this.acceptor = acceptor;
     this.quarantine = quarantine;
     this.consumer = consumer;
@@ -100,7 +112,9 @@ public class OrderPaymentRequestedListener {
     }
     Source source = new Source(record.topic(), record.partition(), record.offset(), record.value());
     if (event.payload() instanceof RefundApprovedPayload
-        || event.payload() instanceof RefundOrderRestoredPayload) {
+        || event.payload() instanceof RefundOrderRestoredPayload
+        || event.payload() instanceof MileageAccrualScheduledPayload
+        || event.payload() instanceof MileageAccrualConfirmedPayload) {
       acceptor.acceptRefundEvent(event, source);
     } else if (event.payload() instanceof PaymentCancellationRequestedPayload) {
       @SuppressWarnings("unchecked")
@@ -148,6 +162,22 @@ public class OrderPaymentRequestedListener {
             refundOrderRestoredReader,
             List.of("refundId", "paymentId", "orderId"),
             List.of());
+      }
+      if ("MileageAccrualScheduled".equals(eventType)) {
+        return decodeRefund(
+            json,
+            record.key(),
+            accrualScheduledReader,
+            List.of("paymentId", "orderId", "buyerId"),
+            List.of("paymentConfirmedAt"));
+      }
+      if ("MileageAccrualConfirmed".equals(eventType)) {
+        return decodeRefund(
+            json,
+            record.key(),
+            accrualConfirmedReader,
+            List.of("paymentId", "orderId"),
+            List.of("confirmedAt"));
       }
       if (json == null
           || !json.path("occurredAt").isTextual()
@@ -201,7 +231,7 @@ public class OrderPaymentRequestedListener {
     return event;
   }
 
-  /** 환불 이벤트는 원결제 ID를 Kafka key로 쓴다. 집계는 Commerce 주문이므로 집계 ID는 형식만 검사한다. */
+  /** 환불·적립 이벤트는 원결제 ID를 Kafka key로 쓴다. 집계는 Commerce 주문이므로 집계 ID는 형식만 검사한다. */
   private EventEnvelope<?> decodeRefund(
       JsonNode json, String key, ObjectReader reader, List<String> uuids, List<String> times)
       throws IOException {
@@ -223,9 +253,13 @@ public class OrderPaymentRequestedListener {
     }
     EventEnvelope<?> event = reader.readValue(json);
     UUID paymentId =
-        event.payload() instanceof RefundApprovedPayload approved
-            ? approved.paymentId()
-            : ((RefundOrderRestoredPayload) event.payload()).paymentId();
+        switch (event.payload()) {
+          case RefundApprovedPayload approved -> approved.paymentId();
+          case RefundOrderRestoredPayload restored -> restored.paymentId();
+          case MileageAccrualScheduledPayload scheduled -> scheduled.paymentId();
+          case MileageAccrualConfirmedPayload confirmed -> confirmed.paymentId();
+          default -> throw new IllegalArgumentException();
+        };
     if (event.eventVersion() != 1 || !paymentId.toString().equals(key)) {
       throw new IllegalArgumentException();
     }

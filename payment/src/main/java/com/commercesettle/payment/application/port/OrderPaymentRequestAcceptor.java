@@ -13,7 +13,8 @@ public interface OrderPaymentRequestAcceptor {
   void acceptCancellation(EventEnvelope<PaymentCancellationRequestedPayload> event, Source source);
 
   /**
-   * Commerce의 환불 승인·주문 복구 확인(RefundApproved·RefundOrderRestored)과 Settlement의 환불 응답
+   * Commerce의 환불 승인·주문 복구 확인(RefundApproved·RefundOrderRestored), 구매 적립 예정·확정
+   * (MileageAccrualScheduled·MileageAccrualConfirmed)과 Settlement의 환불 응답
    * (RefundReservationResult·RefundLedgerReversed·RefundReservationReleased)의 원본과 처리 대기 작업을 저장·커밋한
    * 뒤 반환한다.
    */

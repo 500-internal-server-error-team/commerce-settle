@@ -665,6 +665,7 @@ class ApprovalWorkerIntegrationTest {
     ApplyOrderPaymentRequestService.class,
     PaymentNotices.class,
     RefundEventHandler.class,
+    MileageAccrualEventHandler.class,
     RefundEvents.class,
     RefundSettlementReplyService.class,
     ApprovalWorker.class,
