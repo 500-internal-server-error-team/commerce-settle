@@ -3,6 +3,7 @@
 .env
 .env.*
 .idea
+.ssh
 **/src
 **/build/classes
 **/build/reports
