@@ -84,9 +84,11 @@ LOAD_OPERATOR_CREDENTIAL="$(cat "$LOAD_WORK_DIR/operator.credential")" \
 ./gradlew assemble
 python3 -B tests/load/event_load.py --buyers 6000 --peak-rate 600 --tail-rate 100 --tail-seconds 25   # 축소 단계
 python3 -B tests/load/event_load.py                                                                    # 60,000명, 첫 5초 6,000/s
+python3 -B tests/load/event_load.py --warmup-seconds 30 --warmup-rate 50                               # 이벤트 공개 전 예열
 ```
 
 - 구매자·판매자·상품은 SQL, 세션은 Redis에 직접 넣고, 주소는 주소 ID로 암호화되므로 [event_flash.js](event_flash.js)의 `seed`가 실제 API로 등록합니다.
+- `--warmup-seconds`를 주면 이벤트 공개 전에 `--warmup-rate`(기본 50)/s로 일반 상품을 주문해 같은 주문 경로의 JIT·연결 풀을 데웁니다. 예열 구매자는 초당 주문 수만큼 따로 만들어 집중 구간 구매자와 겹치지 않으며, 예열 결과는 `summary.json`의 `warmup`에, 예열 주문은 일반 상품 재고 보존 검사에 함께 들어갑니다. 기본값 0은 예열하지 않습니다.
 - 이벤트는 이미 시작한 기간으로 공개해 바로 `OPEN`으로 만듭니다. 구매자마다 주문을 한 번 보내며 10명 중 1명은 일반 상품을 주문합니다.
 - k6는 결과를 `created`·`sold_out`(`INVENTORY_INSUFFICIENT`)·`admission_closed`(`EVENT_ADMISSION_CLOSED`)·`capacity`(접수 gate 503)·`conflict`·`client_error`·`server_error`·`timeout`으로 나눕니다. 의도한 매진 거절은 결함으로 세지 않습니다.
 - 시험 중 1초마다 Commerce DB의 잠금 대기·활성 세션 수와 이벤트의 예약+판매 수를 표본 추출해, 수량이 처음 다 찬 시각(`soldOutAtSeconds`)을 남깁니다.

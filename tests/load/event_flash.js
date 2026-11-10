@@ -1,5 +1,6 @@
 // 선착순 이벤트 집중 부하. event_load.py가 시험 스택·구매자·세션·이벤트를 준비하고 이 스크립트를 실행한다.
 //   MODE=seed  구매자마다 주소를 하나씩 API로 등록한다(주소는 주소 ID로 암호화되므로 SQL로 복제할 수 없다).
+//   MODE=warmup 이벤트 공개 전 WARMUP_SECONDS 동안 WARMUP_RATE로 예열 구매자(buyers.json 끝 WARMUP_BUYERS명)가 일반 상품을 주문한다.
 //   MODE=flash 첫 PEAK_SECONDS 동안 PEAK_RATE, 이후 TAIL_RATE로 서로 다른 구매자의 주문을 한 번씩 보낸다.
 import http from 'k6/http';
 import exec from 'k6/execution';
@@ -24,8 +25,12 @@ const tailSeconds = integer('TAIL_SECONDS', '0');
 const tailRate = integer('TAIL_RATE', '0');
 const gaugeRate = integer('GAUGE_RATE', '0');
 const maxVUs = integer('MAX_VUS', '1000');
+const warmupSeconds = integer('WARMUP_SECONDS', '0');
+const warmupRate = integer('WARMUP_RATE', '0');
+const warmupBuyers = integer('WARMUP_BUYERS', '0');
+const flashBuyers = buyers.length - warmupBuyers;
 const peakCount = peakSeconds * peakRate;
-if (peakCount + tailSeconds * tailRate > buyers.length) throw new Error('more orders than prepared buyers');
+if (peakCount + tailSeconds * tailRate > flashBuyers) throw new Error('more orders than prepared buyers');
 
 const outcomes = {};
 for (const name of ['created', 'sold_out', 'admission_closed', 'capacity', 'conflict', 'client_error', 'server_error', 'timeout']) {
@@ -46,6 +51,9 @@ if (mode === 'seed') {
   scenarios.seed = {
     executor: 'shared-iterations', vus: integer('SEED_VUS', '50'), iterations: buyers.length, maxDuration: '30m', exec: 'seed',
   };
+} else if (mode === 'warmup') {
+  if (!warmupSeconds || !warmupRate || !warmupBuyers) throw new Error('warm-up needs WARMUP_SECONDS, WARMUP_RATE and WARMUP_BUYERS');
+  scenarios.warmup = arrival(warmupRate, warmupSeconds, '0s', 'warmup');
 } else {
   if (peakRate) scenarios.peak = arrival(peakRate, peakSeconds, '0s', 'peak');
   if (tailRate && tailSeconds) scenarios.tail = arrival(tailRate, tailSeconds, `${peakSeconds}s`, 'tail');
@@ -95,10 +103,9 @@ function classify(response) {
   return 'client_error';
 }
 
-function order(index) {
+// 집중 구간에서는 10명 중 1명이 일반 상품, 나머지는 이벤트 상품을 주문한다.
+function order(index, normal = index % 10 === 9) {
   const [token, addressId] = buyers[index];
-  // 10명 중 1명은 일반 상품, 나머지는 이벤트 상품을 주문한다.
-  const normal = index % 10 === 9;
   const target = normal ? plan.normal : plan.event;
   const body = {
     productId: target.productId, quantity: 1, eventId: normal ? null : plan.event.eventId, buyerCouponId: null,
@@ -114,6 +121,10 @@ function order(index) {
   if (outcome === 'client_error' || outcome === 'conflict' || outcome === 'server_error') {
     console.warn(`order ${kind} ${response.status} ${code(response)}`);
   }
+}
+
+export function warmup() {
+  order(flashBuyers + (exec.scenario.iterationInTest % warmupBuyers), true);
 }
 
 export function peak() {
