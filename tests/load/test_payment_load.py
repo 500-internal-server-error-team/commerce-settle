@@ -200,7 +200,7 @@ class RestartRegressionTest(unittest.TestCase):
                 patch.object(load, "snapshot", return_value=sample), \
                 patch.object(load, "compose", side_effect=compose), \
                 patch.object(load, "compose_env", return_value={}), \
-                contextlib.redirect_stdout(io.StringIO()):
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             event.return_value.wait.return_value = False
             clock.monotonic.side_effect = range(100)
             load.cmd_ramp(args)
@@ -405,7 +405,7 @@ class WorkerSettingsTest(unittest.TestCase):
         env = "DB_PASSWORD=secret\nPAYMENT_REQUEST_CONCURRENCY=6\nPAYMENT_DB_POOL_SIZE=20\n"
         with patch.object(load, "compose", return_value=env) as compose:
             settings = load.worker_settings()
-        compose.assert_called_once_with("exec", "-T", "payment-worker", "env")
+        compose.assert_called_once_with("exec", "-T", "payment-worker", "env", check=False)
         self.assertEqual(settings, {"PAYMENT_REQUEST_CONCURRENCY": "6",
                                     "PAYMENT_APPROVAL_CONCURRENCY": None,
                                     "PAYMENT_DB_POOL_SIZE": "20"})
@@ -415,6 +415,12 @@ class WorkerSettingsTest(unittest.TestCase):
         with patch.object(load, "worker_settings", return_value=settings):
             summary = RestartRegressionTest().ramp()
         self.assertEqual(summary["workerSettings"], settings)
+
+    def test_summary_is_still_written_when_worker_cannot_be_read(self):
+        # Worker가 죽으면 check=False인 exec는 실패해도 예외 없이 빈 출력을 돌려준다.
+        summary = RestartRegressionTest().ramp()
+        self.assertIsNone(summary["workerSettings"])
+        self.assertIn("final", summary)
 
 
 if __name__ == "__main__":
