@@ -163,7 +163,7 @@ class ReplayNormalTest(unittest.TestCase):
 
 
 class RestartRegressionTest(unittest.TestCase):
-    def ramp(self, fail_on=None, skip_restart=False, stages="100:60"):
+    def ramp(self, fail_on=None, skip_restart=False, stages="100:60", worker_env="", calls=None):
         class InlineThread:
             def __init__(self, target, daemon=False):
                 self.target = target
@@ -184,9 +184,11 @@ class RestartRegressionTest(unittest.TestCase):
                 pass
 
         def compose(*args, **kwargs):
+            if calls is not None:
+                calls.append((args, kwargs))
             if args[0] == fail_on:
                 raise SystemExit(f"{fail_on} failed")
-            return ""
+            return worker_env if args[0] == "exec" else ""
 
         sample = {k: 0 for k in ("received", "confirmed", "declined", "unfinished", "waiting",
                                   "kafkaLag", "outboxPending", "jobsReview", "inboxReview")}
@@ -415,6 +417,21 @@ class WorkerSettingsTest(unittest.TestCase):
         with patch.object(load, "worker_settings", return_value=settings):
             summary = RestartRegressionTest().ramp()
         self.assertEqual(summary["workerSettings"], settings)
+
+    def test_restart_keeps_custom_settings_of_the_running_worker(self):
+        # enable 때만 9·6·30을 지정하고 ramp 셸에는 변수가 없는 상황(compose_env는 {}).
+        worker_env = ("DB_PASSWORD=secret\nPAYMENT_REQUEST_CONCURRENCY=9\n"
+                      "PAYMENT_APPROVAL_CONCURRENCY=6\nPAYMENT_DB_POOL_SIZE=30\n")
+        calls = []
+        summary = RestartRegressionTest().ramp(worker_env=worker_env, calls=calls)
+        names = [args[0] for args, _ in calls]
+        self.assertLess(names.index("exec"), names.index("kill"))
+        up_env = next(kwargs["env"] for args, kwargs in calls if args[0] == "up")
+        self.assertEqual(up_env["LOAD_PAYMENT_REQUEST_CONCURRENCY"], "9")
+        self.assertEqual(up_env["LOAD_PAYMENT_APPROVAL_CONCURRENCY"], "6")
+        self.assertEqual(up_env["LOAD_PAYMENT_DB_POOL_SIZE"], "30")
+        self.assertNotIn("LOAD_DB_PASSWORD", up_env)
+        self.assertEqual(summary["fault"]["workerSettingsBeforeKill"], summary["workerSettings"])
 
     def test_summary_is_still_written_when_worker_cannot_be_read(self):
         # Worker가 죽으면 check=False인 exec는 실패해도 예외 없이 빈 출력을 돌려준다.
