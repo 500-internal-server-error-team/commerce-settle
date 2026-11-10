@@ -32,11 +32,13 @@
 
 ![통합 인프라 구조도](diagrams/infrastructure.svg)
 
-Gateway의 공개 라우팅과 Finance Mock의 주요 호출을 파란 선으로 표시합니다. Payment Worker는 승인·환불·조회, Payment API는 PG 대조, Settlement는 지급·대조를 요청합니다.
+통합도는 공개 진입·배포 위치·공유 자원·금융 대역·관측 의존성을 보여줍니다. Gateway의 공개 라우팅과 Finance Mock의 주요 호출을 파란 API 선으로 표시합니다. Payment Worker는 승인·환불·조회, Payment API는 PG 대조, Settlement는 지급·대조를 요청합니다.
+
+‘업무 앱’은 Gateway 이외 다섯 실행의 DB·Kafka 연결을 묶어 표현한 기능 그룹입니다. 주문 요청·결제 결과·정산 반영의 주요 이벤트 연계는 Kafka 연결로 요약합니다. 대조·환불 확인 등의 업무별 HTTP 조회는 [업무 흐름](design.md#6-핵심-업무-흐름)과 [API 명세](api.md)를 따릅니다.
 
 ECS는 서비스별 배포·재시작·실행 개수를 관리합니다. 앱 여섯 실행은 앱용 EC2에, PostgreSQL·Redis·Kafka와 관측 도구는 인프라용 EC2에 배치합니다. 역할별 호스트가 한 대이므로 앱 호스트 중단 시 앱 전체, 인프라 호스트 중단 시 공유 저장소·메시징·관측이 함께 영향을 받습니다. 같은 클러스터에 등록해도 다른 역할의 호스트로 자동 대체되는 구성은 아닙니다. [ECS 클러스터](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/clusters.html)와 [배치 제약](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-placement-constraints.html)을 기준으로 설정합니다.
 
-CloudWatch Logs는 두 EC2의 컨테이너 로그를 모으는 관리형 서비스로 사용하며, 수집·보존 기준은 [로그 수집](#로그-수집)을 따릅니다. Prometheus·Grafana는 지표, Zipkin은 추적, Kafka UI는 메시징 운영을 담당합니다. [본인 카카오톡 시연](#본인-카카오톡-시연-어댑터)은 Commerce에서 클러스터 밖의 카카오 메시지 API를 호출하는 선택적 연동이며 별도 EC2를 추가하지 않습니다. DB·Kafka·Redis의 영속 데이터 보존·백업·복구는 ECS의 컨테이너 재시작과 별도로 관리합니다.
+CloudWatch Logs는 두 EC2의 컨테이너 로그를 모으는 관리형 서비스로 사용하며, 수집·보존 기준은 [로그 수집](#로그-수집)을 따릅니다. Grafana는 Prometheus를 조회하고 Prometheus는 앱과 디스크 수집기의 메트릭을 가져옵니다. 디스크 수집기는 PostgreSQL·Kafka 데이터 볼륨의 파일시스템 사용률을 측정합니다. Zipkin은 추적, Kafka UI는 메시징 운영을 담당합니다. [본인 카카오톡 시연](#본인-카카오톡-시연-어댑터)은 Commerce에서 클러스터 밖의 카카오 메시지 API를 호출하는 선택적 연동이며 별도 EC2를 추가하지 않습니다. DB·Kafka·Redis의 영속 데이터 보존·백업·복구는 ECS의 컨테이너 재시작과 별도로 관리합니다.
 
 아래 실행·연결·포트·프로필 설명과 세부 도식은 현재 Compose 설정을 기준으로 합니다. AWS 배포 설정은 아직 적용하지 않았습니다.
 
@@ -293,11 +295,11 @@ Outbox·Inbox·원문 격리·DLT 작업의 저장 관계는 [메시지 데이�
 
 ## 네트워크와 관측
 
-팀 공용 배포에서는 브라우저·k6가 접근하는 외부 진입점과 업무 서비스 간 HTTP API 호출에 TLS를 적용해 HTTPS를 사용합니다. 인증서 검증을 유지하고, 아래 로컬 개발용 HTTP 주소와 구분합니다.
+외부 진입은 HTTPS를 목표로 하고 Gateway·업무 앱 간 호출은 현재 HTTP 설정을 유지합니다. 그림의 브라우저·k6→Gateway 선은 논리적 진입 경로이며 TLS 종료 지점은 아직 정하지 않았습니다. 인증서·내부 포트 접근 제한은 배포 전에 정하고 검증합니다. 아래 Compose 주소는 로컬 개발용입니다.
 
 Gateway는 빌드에 포함한 [OpenAPI](openapi.json)의 `/api/` 작업을 HTTP 메서드·경로와 `x-owner-service`로 대조해 커머스·Payment API·Settlement로 전달합니다. 경로 접두사가 같은 판매자 API도 상품·계정은 커머스, 정산·지급 조회는 Settlement로 구분합니다. 명세에 없는 경로·메서드와 `/internal`·`/mock`·관리 경로는 전달하지 않습니다. API 명세는 `/v3/api-docs/commerce|payment|settlement`, Swagger UI는 `/swagger-ui.html`입니다.
 
-백엔드는 컨트롤러 전에 대상별 호출 자격과 허용 발신자를 검사하고, 사용자 작업에는 계정 종류·거래 소유권도 대조합니다. MVC 앱의 자격 판정은 `internal-auth`를 사용하며 설정·교체는 [내부 호출 자격](development.md#내부-호출-자격)을 따릅니다. 내부 HTTP는 평문이므로 로컬 개발 환경에서만 사용합니다. Gateway 자체 오류는 [공통 오류 계약](../CONTRIBUTING.md#오류)으로 응답하고 백엔드 오류는 보존합니다. 전송 계층의 자동 재시도를 끄며 연결 단절을 금융 실패로 확정하지 않습니다.
+백엔드는 컨트롤러 전에 대상별 호출 자격과 허용 발신자를 검사하고, 사용자 작업에는 계정 종류·거래 소유권도 대조합니다. MVC 앱의 자격 판정은 `internal-auth`를 사용하며 설정·교체는 [내부 호출 자격](development.md#내부-호출-자격)을 따릅니다. 내부 HTTP는 평문이므로 공용 배포에서 내부 포트를 외부에 공개하지 않고 네트워크 접근을 제한합니다. Gateway 자체 오류는 [공통 오류 계약](../CONTRIBUTING.md#오류)으로 응답하고 백엔드 오류는 보존합니다. 전송 계층의 자동 재시도를 끄며 연결 단절을 금융 실패로 확정하지 않습니다.
 
 `v3`는 Springdoc의 OpenAPI 3 문서 경로이며 서비스 API의 세 번째 버전을 뜻하지 않습니다.
 
