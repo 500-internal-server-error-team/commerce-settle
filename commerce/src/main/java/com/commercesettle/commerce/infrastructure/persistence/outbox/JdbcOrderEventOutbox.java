@@ -52,7 +52,9 @@ public class JdbcOrderEventOutbox implements OrderEventOutbox {
                 "PaymentCancellationRequested",
                 "RefundApproved",
                 "RefundOrderRestored",
-                "PurchaseConfirmed")
+                "PurchaseConfirmed",
+                "MileageAccrualScheduled",
+                "MileageAccrualConfirmed")
             .contains(event.eventType())) throw new IllegalArgumentException("Invalid order event");
     byte[] body;
     try {

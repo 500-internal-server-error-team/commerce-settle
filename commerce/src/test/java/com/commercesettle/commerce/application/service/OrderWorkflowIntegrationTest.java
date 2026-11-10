@@ -287,6 +287,8 @@ class OrderWorkflowIntegrationTest {
         .isZero();
     var order = create(f);
     var id = uuid(order, "id");
+    // 쿠폰 없는 10,000원 카드 주문: 외부 결제액의 1%(100점)를 주문 생성 때 고정한다.
+    assertThat(order.path("mileageAccrualAmount").asLong()).isEqualTo(100);
     var context = internal("/internal/orders/" + id + "/payment-context", PAYMENT, null, 200);
     matches("PaymentContext", context);
     internal("/internal/orders/" + id + "/payment-context", GATEWAY, null, 403);
@@ -295,6 +297,18 @@ class OrderWorkflowIntegrationTest {
     var paid = buyer(f, id);
     assertThat(paid.path("status").asText()).isEqualTo("PAID");
     assertStock(f, 1, 0, 1);
+    var scheduled = accrualEvent(id, "MileageAccrualScheduled");
+    matches("MileageAccrualScheduledPayload", scheduled.required("payload"));
+    assertThat(scheduled.path("payload").path("baseAmount").asLong()).isEqualTo(10_000);
+    assertThat(scheduled.path("payload").path("accrualAmount").asLong()).isEqualTo(100);
+    assertThat(scheduled.path("payload").path("accrualPolicyVersion").asText())
+        .isEqualTo("mileage-accrual-v1");
+    assertThat(scheduled.path("eventId").asText())
+        .isEqualTo(
+            UUID.nameUUIDFromBytes(
+                    ("MileageAccrualScheduled:" + paid.path("paymentId").asText())
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .toString());
     var seller = seller(f, id);
     matches("SellerOrder", seller);
     assertThat(seller.path("deliveryAddress").path("recipient").asText()).isEqualTo("시험 수령인");
@@ -341,6 +355,14 @@ class OrderWorkflowIntegrationTest {
                 "select count(*) from commerce.outbox where aggregate_id=? and event_type='PurchaseConfirmed'",
                 id))
         .isEqualTo(1);
+    var accrued = accrualEvent(id, "MileageAccrualConfirmed");
+    matches("MileageAccrualConfirmedPayload", accrued.required("payload"));
+    assertThat(accrued.path("payload").path("accrualAmount").asLong()).isEqualTo(100);
+    assertThat(
+            number(
+                "select count(*) from commerce.outbox where aggregate_id=? and event_type like 'MileageAccrual%'",
+                id))
+        .isEqualTo(2);
     for (String kind :
         List.of("SALE_COMPLETED", "SHIPMENT_STARTED", "SHIPMENT_DELIVERED", "PURCHASE_CONFIRMED"))
       assertThat(
@@ -1500,6 +1522,19 @@ class OrderWorkflowIntegrationTest {
         .put("expectedTotalAmount", 10000)
         .put("externalMethod", "CREDIT_CARD")
         .put("methodAccountRef", "test-card");
+  }
+
+  /** 주문의 구매 적립 이벤트 한 건. 원결제 ID를 메시지 키로 쓴다. */
+  private JsonNode accrualEvent(UUID orderId, String type) throws Exception {
+    var row =
+        jdbc.queryForMap(
+            "select payload::text as body, message_key from commerce.outbox where aggregate_id=? and event_type=?",
+            orderId,
+            type);
+    var event = mapper.readTree((String) row.get("body"));
+    assertThat(row.get("message_key").toString())
+        .isEqualTo(event.path("payload").path("paymentId").asText());
+    return event;
   }
 
   private JsonNode create(Fixture f) {

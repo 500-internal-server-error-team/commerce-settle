@@ -149,6 +149,12 @@ app:
     grade-scheduler-enabled: true
     # 실행자 잠금을 잡았는데도 이보다 오래 갱신이 없는 진행 중 실행은 강제 종료 잔류로 보고 정리 뒤 재시작
     grade-stale-after: PT10M
+  mileage-accrual:
+    # 새 주문에 고정할 구매 적립 정책. 초기 정책값은 외부 결제액의 1%(100bp, 버림)·주문당 1,000점이다. docs/policies.md#마일리지와-외부-대역
+    enabled: ${APP_MILEAGE_ACCRUAL_ENABLED:true}
+    policy-version: mileage-accrual-v1
+    rate-basis-points: 100
+    per-order-cap: 1000
   sale-events:
     # 이벤트 시작·종료 처리. docs/architecture.md#정기-작업과-비동기-실행
     scheduler-enabled: true

@@ -29,6 +29,11 @@ public record OrderResponse(
         long platformCouponAmount,
     @Schema(minimum = "0", maximum = "10000000") @JsonProperty(required = true)
         long settlementBaseAmount,
+    @Schema(
+            minimum = "0",
+            description = "주문 생성 때 고정한 구매 적립 예정액. 구매확정 뒤 Payment 잔액에 더해지며 쿠폰 주문은 0이다.")
+        @JsonProperty(required = true)
+        long mileageAccrualAmount,
     @Schema(nullable = true) @JsonProperty(required = true) UUID eventId,
     @Schema(nullable = true) @JsonProperty(required = true) UUID paymentId,
     @Schema(
@@ -81,6 +86,7 @@ public record OrderResponse(
         o.sellerCouponAmount(),
         o.platformCouponAmount(),
         o.settlementBaseAmount(),
+        o.mileageAccrualAmount(),
         o.eventId(),
         o.paymentId(),
         o.status(),

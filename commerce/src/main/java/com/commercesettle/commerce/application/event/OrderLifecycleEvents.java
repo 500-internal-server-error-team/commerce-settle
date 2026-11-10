@@ -21,6 +21,22 @@ public final class OrderLifecycleEvents {
   public record RefundOrderRestored(
       UUID refundId, UUID paymentId, UUID orderId, long orderVersion) {}
 
+  /** 결제 완료를 반영하면서 보내는 구매 적립 예정. 주문 생성 때 고정한 정책 사본과 예정액이다. */
+  public record MileageAccrualScheduled(
+      UUID paymentId,
+      UUID orderId,
+      UUID buyerId,
+      long baseAmount,
+      int rateBasisPoints,
+      long perOrderCap,
+      long accrualAmount,
+      String accrualPolicyVersion,
+      OffsetDateTime paymentConfirmedAt) {}
+
+  /** 자동 구매확정과 함께 보내는 구매 적립 확정. Payment가 예정을 사용 가능으로 바꾼다. */
+  public record MileageAccrualConfirmed(
+      UUID paymentId, UUID orderId, long accrualAmount, OffsetDateTime confirmedAt) {}
+
   public record PurchaseConfirmed(
       UUID paymentId,
       UUID orderId,
