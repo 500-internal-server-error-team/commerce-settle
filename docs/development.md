@@ -54,6 +54,34 @@ mkdir -p work/buildx
 export BUILDX_CONFIG="$PWD/work/buildx"
 ```
 
+## EC2 SSH 접속
+
+접속 대상은 `.env.example`의 앱·데이터 호스트를 기준으로 `.env`에 준비합니다. 사용자명은 각 EC2의 AMI·접속 안내에서 확인해 `APP_SSH_USER`·`DATA_SSH_USER`에 입력합니다. 호스트 값은 제공받은 접속 주소이며 실제 AWS 계정·서버와 키의 대응은 별도로 확인해야 합니다. 이 설정이 ECS 이름이나 배포 리전을 정하지는 않습니다.
+
+개인키는 로컬 `.ssh/commerce-key.pem`에만 두며 `.ssh`는 디렉터리 `0700`, 키는 `0400`으로 유지합니다. Git과 Docker 빌드 컨텍스트에서 이 디렉터리를 제외합니다. 키 내용은 `.env`·문서·이슈·PR에 넣지 않습니다. 키 파일이 없으면 사용자가 지정한 원본을 확인하며 새 키를 생성하거나 다른 키로 대체하지 않습니다.
+
+저장소 루트에서 다음 명령을 사용합니다. `app`을 `data`로 바꾸면 데이터·관측 서버를 선택합니다. `.env`에는 공백이 있는 cron 값도 있으므로 셸의 `source`로 실행하지 않고 필요한 설정만 읽습니다. SSH 사용자명·키가 준비되지 않으면 접속 전에 중단합니다.
+
+```bash
+python3 -c '
+from pathlib import Path
+import stat
+import subprocess
+import sys
+
+target = {"app": "APP", "data": "DATA"}[sys.argv[1]]
+settings = dict(line.split("=", 1) for line in Path(".env").read_text().splitlines()
+                if "=" in line and not line.startswith("#"))
+host, user = settings[target + "_SSH_HOST"], settings[target + "_SSH_USER"]
+key = Path(settings["SSH_KEY_PATH"])
+if not host or not user or not key.is_file() or stat.S_IMODE(key.stat().st_mode) != 0o400:
+    raise SystemExit("SSH 호스트·사용자명과 개인키 파일·0400 권한을 확인하세요.")
+subprocess.run(["ssh", "-o", "IdentitiesOnly=yes", "-i", str(key), "--", f"{user}@{host}"], check=True)
+' app
+```
+
+최초 접속의 호스트 키 지문은 신뢰할 수 있는 서버 접속 안내와 대조합니다. 키를 교체·이동할 때도 Git·Docker 제외와 권한을 먼저 확인하고 `SSH_KEY_PATH`를 갱신합니다. 접속을 마치면 `exit`로 SSH 세션만 종료하며 로컬 키와 서버는 보존합니다. 이 절은 접속 설정이며 실제 SSH 성공이나 AWS 배포 완료를 뜻하지 않습니다.
+
 ## 배포용 HTTPS
 
 공개 경로는 **DuckDNS → 기존 앱 EC2의 Caddy → Gateway 내부 HTTP 주소**입니다. [Caddyfile](../infra/caddy/Caddyfile)과 [EC2 Task 템플릿](../infra/caddy/task-definition.json)만 배포에 사용하며, 로컬 `compose.yml`의 HTTP 실행에는 추가하지 않습니다. Caddy와 [Let's Encrypt 인증서](https://letsencrypt.org/about/), [DuckDNS 서브도메인](https://www.duckdns.org/about.jsp)은 무료입니다. EC2·공인 IPv4·디스크·트래픽·로그의 AWS 비용은 별도입니다. ALB나 추가 EC2를 만들지 않습니다.
