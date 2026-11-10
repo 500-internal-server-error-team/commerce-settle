@@ -27,11 +27,12 @@ public class JdbcOutboxStore implements OutboxStore {
         new MapSqlParameterSource("limit", limit)
             .addValue("lease", leaseMs)
             .addValue("max", maxAttempts);
+    // 첫 상태 조건은 미발행 부분 인덱스의 조건과 같은 모양이어야 한다. 그래야 발행 완료 이력을 훑지 않는다.
     jdbc.update(
         """
         WITH exhausted AS (
             SELECT o.id FROM payment.outbox o
-            WHERE o.attempts >= :max
+            WHERE o.status IN ('PENDING','RUNNING','RETRY') AND o.attempts >= :max
               AND ((o.status IN ('PENDING','RETRY') AND o.next_run_at <= clock_timestamp())
                 OR (o.status='RUNNING' AND o.lease_until <= clock_timestamp()))
             ORDER BY o.sequence_no LIMIT :limit FOR UPDATE OF o SKIP LOCKED
@@ -45,7 +46,7 @@ public class JdbcOutboxStore implements OutboxStore {
         """
         WITH candidates AS (
             SELECT o.id FROM payment.outbox o
-            WHERE o.attempts < :max
+            WHERE o.status IN ('PENDING','RUNNING','RETRY') AND o.attempts < :max
               AND ((o.status IN ('PENDING','RETRY') AND o.next_run_at <= clock_timestamp())
                 OR (o.status='RUNNING' AND o.lease_until <= clock_timestamp()))
               AND NOT EXISTS (SELECT 1 FROM payment.outbox prior

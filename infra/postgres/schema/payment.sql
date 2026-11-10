@@ -344,6 +344,9 @@ CREATE TABLE payment.outbox (
     CHECK ((payload ->> 'occurredAt')::timestamptz = occurred_at)
 );
 CREATE INDEX outbox_due ON payment.outbox(status, next_run_at, lease_until, id);
+-- 발행기 선점은 미발행 행만 sequence_no 순서로 본다. 발행 완료 이력이 늘어도 선점 비용이 커지지 않게 한다.
+CREATE INDEX outbox_unpublished ON payment.outbox(sequence_no) WHERE status IN ('PENDING','RUNNING','RETRY');
+CREATE INDEX outbox_unpublished_attempts ON payment.outbox(attempts, sequence_no) WHERE status IN ('PENDING','RUNNING','RETRY');
 CREATE INDEX outbox_occurred ON payment.outbox(occurred_at, created_at, id);
 CREATE INDEX outbox_aggregate ON payment.outbox(aggregate_id, aggregate_version, sequence_no);
 
