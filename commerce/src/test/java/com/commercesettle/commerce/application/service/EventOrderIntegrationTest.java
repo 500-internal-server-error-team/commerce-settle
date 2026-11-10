@@ -19,6 +19,9 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.DisplayName;
@@ -31,6 +34,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -47,6 +51,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "management.server.port=0",
       "management.tracing.enabled=false",
       "app.sale-events.scheduler-enabled=false",
+      // 포화 시험이 슬롯 대기 상한을 기다리는 시간을 줄인다. Retry-After는 올림해 1초다.
+      "app.sale-events.order-max-wait=PT0.2S",
       "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
       "app.auth.rate-limit.identifier-hmac-key=event-order-test-hmac-key-32bytes-long",
       "app.auth.password-reset.delivery-key=event-order-test-delivery-key-32bytes",
@@ -75,6 +81,7 @@ class EventOrderIntegrationTest {
   @Autowired PaymentAcceptedService accepted;
   @Autowired CouponService coupons;
   @Autowired TransactionTemplate tx;
+  @Autowired EventOrderConcurrencyLimiter eventSlots;
   @MockitoBean OrderAdmissionService admission;
 
   @Test
@@ -386,6 +393,110 @@ class EventOrderIntegrationTest {
   }
 
   /** 결제 확정·발송한 주문의 반품을 승인하고 원환불을 연결한 요청 ID를 돌려준다. */
+  @Test
+  @DisplayName(
+      "이벤트 슬롯이 모두 차 있어도 완료된 같은 키·본문은 기존 주문을, 다른 본문은 충돌을 돌려주고 신규 주문만 부작용 없이 503과 Retry-After 1로 거절한다")
+  void limitsOnlyNewEventOrdersWhileSlotsAreFull() {
+    Sale sale = openSale(3);
+    Buyer first = buyer();
+    String key = key();
+    JsonNode created = actor("BUYER", first.id(), "/api/orders", order(sale, first), 201, key);
+    Buyer late = buyer();
+    String lateKey = key();
+    Long orders = jdbc.queryForObject("select count(*) from commerce.orders", Long.class);
+    Long records =
+        jdbc.queryForObject("select count(*) from commerce.idempotency_records", Long.class);
+
+    ResponseEntity<JsonNode> rejected;
+    try (var a = eventSlots.acquire(sale.eventId());
+        var b = eventSlots.acquire(sale.eventId());
+        var c = eventSlots.acquire(sale.eventId())) {
+      JsonNode replayed = actor("BUYER", first.id(), "/api/orders", order(sale, first), 201, key);
+      assertThat(replayed.path("id").asText()).isEqualTo(created.path("id").asText());
+      JsonNode conflict =
+          actor(
+              "BUYER",
+              first.id(),
+              "/api/orders",
+              order(sale, first).put("methodAccountRef", "other-card"),
+              409,
+              key);
+      assertThat(conflict.path("code").asText()).isEqualTo("COMMON_IDEMPOTENCY_CONFLICT");
+      rejected = post(late, lateKey, order(sale, late));
+    }
+
+    assertThat(rejected.getStatusCode().value()).isEqualTo(503);
+    assertThat(rejected.getBody().path("code").asText()).isEqualTo("COMMON_CAPACITY_EXCEEDED");
+    assertThat(rejected.getHeaders().getFirst("Retry-After")).isEqualTo("1");
+    assertThat(jdbc.queryForObject("select count(*) from commerce.orders", Long.class))
+        .isEqualTo(orders);
+    assertThat(jdbc.queryForObject("select count(*) from commerce.idempotency_records", Long.class))
+        .isEqualTo(records);
+    assertSlots(sale, 0, 1);
+
+    JsonNode retried = actor("BUYER", late.id(), "/api/orders", order(sale, late), 201, lateKey);
+    assertThat(retried.path("eventId").asText()).isEqualTo(sale.eventId().toString());
+    assertSlots(sale, 0, 2);
+  }
+
+  @Test
+  @DisplayName("슬롯이 차 있어도 매진된 이벤트의 신규 주문은 슬롯을 기다리지 않고 EVENT_ADMISSION_CLOSED로 거절한다")
+  void rejectsSoldOutWithoutWaitingForSlot() {
+    Sale sale = openSale(1);
+    order(sale, buyer(), 201);
+
+    try (var held = eventSlots.acquire(sale.eventId());
+        var more = eventSlots.acquire(sale.eventId());
+        var full = eventSlots.acquire(sale.eventId())) {
+      assertThat(order(sale, buyer(), 409).path("code").asText())
+          .isEqualTo("EVENT_ADMISSION_CLOSED");
+    }
+    assertSlots(sale, 0, 1);
+  }
+
+  @Test
+  @DisplayName("같은 키의 동시 신규 이벤트 주문은 슬롯을 거쳐도 주문·참여를 한 건만 만든다")
+  void concurrentSameKeyEventOrderCreatesOnce() throws Exception {
+    Sale sale = openSale(3);
+    Buyer buyer = buyer();
+    String key = key();
+    CountDownLatch start = new CountDownLatch(1);
+    try (var pool = Executors.newFixedThreadPool(2)) {
+      var futures =
+          java.util.stream.IntStream.range(0, 2)
+              .mapToObj(
+                  i ->
+                      pool.submit(
+                          () -> {
+                            start.await();
+                            return post(buyer, key, order(sale, buyer));
+                          }))
+              .toList();
+      start.countDown();
+      for (var future : futures) {
+        assertThat(future.get(15, TimeUnit.SECONDS).getStatusCode().value()).isIn(201, 409);
+      }
+    }
+
+    assertThat(post(buyer, key, order(sale, buyer)).getStatusCode().value()).isEqualTo(201);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from commerce.orders where buyer_id = ?", Long.class, buyer.id()))
+        .isEqualTo(1);
+    assertSlots(sale, 0, 1);
+  }
+
+  private ResponseEntity<JsonNode> post(Buyer buyer, String key, ObjectNode body) {
+    HttpHeaders headers = new HttpHeaders();
+    headers.setBearerAuth(GATEWAY);
+    headers.setContentType(MediaType.APPLICATION_JSON);
+    headers.set("X-Authenticated-Actor-Kind", "BUYER");
+    headers.set("X-Authenticated-Actor-Id", buyer.id().toString());
+    headers.set("Idempotency-Key", key);
+    return http.exchange(
+        "/api/orders", HttpMethod.POST, new HttpEntity<>(body, headers), JsonNode.class);
+  }
+
   private UUID approvedReturn(Sale sale, Buyer buyer, JsonNode order) throws Exception {
     UUID id = uuid(order, "id");
     UUID payment = confirm(order);

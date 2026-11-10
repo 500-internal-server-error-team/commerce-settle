@@ -1,6 +1,7 @@
 package com.commercesettle.commerce.infrastructure.config;
 
 import com.commercesettle.commerce.application.port.AdmissionMetrics;
+import com.commercesettle.commerce.application.service.EventOrderConcurrencyLimiter;
 import com.commercesettle.commerce.application.service.OrderAdmissionService;
 import com.commercesettle.commerce.domain.model.OrderAdmissionState;
 import com.commercesettle.commerce.domain.model.OrderAdmissionState.Key;
@@ -13,6 +14,7 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.Executors;
@@ -67,6 +69,13 @@ public class OrderAdmissionConfiguration {
     Gauge.builder("commerce.order.admission.open", service, s -> s.isOpen() ? 1 : 0)
         .register(registry);
     return service;
+  }
+
+  @Bean
+  EventOrderConcurrencyLimiter eventOrderConcurrencyLimiter(
+      @Value("${app.sale-events.order-max-concurrent:3}") int maxConcurrent,
+      @Value("${app.sale-events.order-max-wait:PT1S}") Duration maxWait) {
+    return new EventOrderConcurrencyLimiter(maxConcurrent, maxWait);
   }
 
   @Bean

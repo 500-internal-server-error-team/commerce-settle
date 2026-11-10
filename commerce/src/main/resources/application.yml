@@ -156,6 +156,10 @@ app:
     batch-size: 100
     # 공개 게이지 조회의 인스턴스 메모리 캐시 TTL. 0이면 캐시하지 않는다. docs/policies.md#선착순-상품-이벤트
     gauge-cache-ttl: PT1S
+    # 신규 이벤트 주문의 이벤트별 동시 실행 상한(인스턴스별)과 슬롯 대기 상한. 초과는 503 + Retry-After(대기 상한 올림 초)
+    # docs/policies.md#선착순-상품-이벤트
+    order-max-concurrent: ${APP_SALE_EVENT_ORDER_MAX_CONCURRENT:3}
+    order-max-wait: ${APP_SALE_EVENT_ORDER_MAX_WAIT:PT1S}
   outbox:
     enabled: ${APP_OUTBOX_ENABLED:false}
     recovery-interval-ms: 1000
