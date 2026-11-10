@@ -82,6 +82,78 @@ subprocess.run(["ssh", "-o", "IdentitiesOnly=yes", "-i", str(key), "--", f"{user
 
 최초 접속의 호스트 키 지문은 신뢰할 수 있는 서버 접속 안내와 대조합니다. 키를 교체·이동할 때도 Git·Docker 제외와 권한을 먼저 확인하고 `SSH_KEY_PATH`를 갱신합니다. 접속을 마치면 `exit`로 SSH 세션만 종료하며 로컬 키와 서버는 보존합니다. 이 절은 접속 설정이며 실제 SSH 성공이나 AWS 배포 완료를 뜻하지 않습니다.
 
+## ECS EC2 데이터 서비스
+
+PostgreSQL·Redis·Kafka는 `commerce-cluster`의 데이터 EC2 한 대에 각각 ECS Service로 배치합니다. [생성 도구](../scripts/render_ecs_data.py)는 기존 `compose.yml`의 이미지·명령·ACL·초기화·상태 검사를 재사용하며 AWS를 변경하지 않습니다. 일반 Compose 기동과 AWS Task 기동을 같은 호스트에서 병행하지 않습니다.
+
+서울 환경은 앱 EBS 30GiB·데이터 EBS 100GiB의 gp3를 사용합니다. 앱 보안 그룹은 TCP 80/443을 공개하고 데이터의 TCP 5432/6379/9092는 앱 보안 그룹만 허용합니다. 기존 SSH 경로는 별도로 유지합니다. 설정 파일을 바꾸는 것만으로 EBS·파일시스템·보안 그룹이 변경되지는 않습니다.
+
+### 준비
+
+적용자는 AWS CLI·jq·Docker Compose v2와 검증한 저장소 revision을 준비합니다. 먼저 `aws sts get-caller-identity`의 계정과 `AWS_REGION=ap-northeast-2`를 확인합니다. 아래 변수의 컨테이너 인스턴스 ARN이 실제 데이터 EC2를 가리키는지 조회하고, 해당 인스턴스에만 `workload=data` 속성을 지정합니다. 앱 호스트에는 지정하지 않습니다.
+
+```bash
+aws ecs describe-container-instances --cluster "$ECS_CLUSTER" \
+  --container-instances "$DATA_CONTAINER_INSTANCE_ARN" \
+  --query 'containerInstances[*].{ec2:ec2InstanceId,connected:agentConnected,attributes:attributes}'
+aws ecs put-attributes --cluster "$ECS_CLUSTER" --attributes \
+  "name=workload,value=data,targetType=container-instance,targetId=$DATA_CONTAINER_INSTANCE_ARN"
+```
+
+`DATA_PRIVATE_IPV4`는 데이터 EC2의 사설 IPv4입니다. 자동 공인 IPv4는 중지·시작 시 바뀔 수 있으므로 SSH 접속 전에 다시 확인합니다. 앱의 `DB_URL`은 `jdbc:postgresql://<사설-IP>:5432/<소유-DB>`, Redis 호스트는 같은 사설 IP, Kafka는 `<사설-IP>:9092`로 지정합니다. Kafka의 광고 주소도 이 IP를 사용하며 `postgres`·`redis`·`kafka`라는 로컬 Compose 이름을 AWS 앱에 넣지 않습니다. Kafka controller 9093은 호스트에 공개하지 않습니다.
+
+비밀번호는 Parameter Store의 **SecureString**에 동일한 환경변수 이름으로 준비합니다. `SSM_PARAMETER_ARN_PREFIX`는 `arn:aws:ssm:<리전>:<계정>:parameter/commerce-settle/data/` 형식이며 마지막 `/`가 필요합니다. PostgreSQL의 `POSTGRES_PASSWORD`와 서비스별 `COMMERCE_DB_PASSWORD`·`PAYMENT_DB_PASSWORD`·`SETTLEMENT_DB_PASSWORD`·`FINANCE_MOCK_DB_PASSWORD`, Redis의 `REDIS_PASSWORD`와 Gateway·Commerce·Payment·Settlement·Finance Mock의 `<서비스>_REDIS_PASSWORD`를 사용합니다. 앱에도 각자 소유한 계정·비밀번호를 연결합니다. 로컬 `.env`의 값을 복사하거나 비밀번호를 명령 이력·Task JSON·Git·PR에 넣지 않습니다.
+
+`ECS_EXECUTION_ROLE_ARN`은 EC2의 `ecsInstanceRole`과 구분되는 **Task 실행 역할**입니다. `ecs-tasks.amazonaws.com` 신뢰와 위 파라미터의 `ssm:GetParameters`, 사용자 관리 KMS 키를 썼다면 그 키의 `kms:Decrypt`를 필요한 ARN에만 허용합니다. [SSM 주입](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-ssm-paramstore.html)은 Task 시작 시 수행되므로 값 변경 후 새 Task가 필요합니다. 기존 DB·Redis 사용자 비밀번호를 바꾸는 작업은 별도이며, 파라미터 변경으로 기존 PostgreSQL 계정 비밀번호가 바뀌지는 않습니다.
+
+세 로그 그룹 `/ecs/commerce-settle/{postgres,redis,kafka}`를 만들고 보존 기간을 7일로 지정합니다. 로그 전송 역할에 해당 그룹의 `logs:CreateLogStream`·`logs:PutLogEvents` 권한이 필요합니다. EC2 에이전트의 `awslogs` 지원과 실행 역할 사용 시 `ECS_ENABLE_AWSLOGS_EXECUTIONROLE_OVERRIDE=true` 설정도 확인합니다. 데이터 호스트에서 이미지 저장소·SSM·KMS·CloudWatch에 도달할 수 있어야 합니다. 필요한 역할·파라미터·로그 권한 없이 서비스를 생성하지 않습니다.
+
+데이터 EC2에서 검증한 revision의 초기 SQL과 스크립트를 배치합니다. `/srv/commerce-settle`이 의도한 영속 EBS 파일시스템에 있는지 `findmnt -T /srv`와 `df -h /srv`로 먼저 확인합니다. **최초 신규 설치에만** 아래를 사용하고, 기존 파일·데이터·Task가 있으면 기존 revision·백업·적용 절차를 확인한 뒤 진행합니다. 볼륨을 포맷하거나 기존 내용을 지우지 않습니다.
+
+```bash
+sudo install -d -m 755 /srv/commerce-settle/{postgres,redis,kafka}
+sudo install -d -m 700 /srv/commerce-settle/postgres/data
+sudo install -d -m 755 /srv/commerce-settle/postgres/schema
+sudo install -m 644 infra/postgres/01-init.sh /srv/commerce-settle/postgres/01-init.sh
+sudo install -m 644 infra/postgres/schema/*.sql /srv/commerce-settle/postgres/schema/
+sudo install -d -m 700 -o 999 -g 999 /srv/commerce-settle/redis/data
+sudo install -d -m 700 -o 1000 -g 1000 /srv/commerce-settle/kafka/data
+```
+
+PostgreSQL 18은 `/var/lib/postgresql` 부모 경로를 영속화하고, 초기화·스키마 파일은 읽기 전용으로 연결합니다. 빈 볼륨에서만 기존 [DB 초기화](migrations.md#최초-배포와-기존-데이터-변경)를 실행합니다. 네 서비스의 DB·계정·권한은 분리하며 기존 데이터의 스키마 업그레이드는 이 도구가 수행하지 않습니다. Redis는 AOF와 기존 ACL·128MiB `noeviction` 정책을 유지합니다. Kafka는 단일 broker/controller이며 복제본은 없습니다. 이미지의 실행 UID/GID가 바뀌면 디렉터리 소유권도 재검토합니다.
+
+### 생성·기동·검증
+
+운영자 PC에서 AWS 계정·리전·실행 역할·SSM prefix·데이터 사설 IP를 지정해 서비스별 Task JSON을 생성합니다. JSON에는 비밀번호 원문이 아닌 ARN 참조만 들어갑니다. ECS EC2의 기존 systemd cgroup driver를 유지하도록 Task 전체 CPU·메모리 제한을 넣지 않고 컨테이너 메모리 제한을 사용합니다. PostgreSQL 512MiB·Redis 256MiB·Kafka 1GiB는 기존 개발 설정의 시작값이며 OOM·지연을 측정해 조정합니다.
+
+```bash
+export AWS_REGION ECS_CLUSTER ECS_EXECUTION_ROLE_ARN SSM_PARAMETER_ARN_PREFIX DATA_PRIVATE_IPV4
+TASK_DIR=$(mktemp -d)
+for service in postgres redis kafka; do
+  python3 -B scripts/render_ecs_data.py "$service" --region "${AWS_REGION:?}" \
+    --execution-role "${ECS_EXECUTION_ROLE_ARN:?}" \
+    --parameter-prefix "${SSM_PARAMETER_ARN_PREFIX:?}" \
+    --data-private-ip "${DATA_PRIVATE_IPV4:?}" > "$TASK_DIR/$service.json"
+  task_arn=$(aws ecs register-task-definition --cli-input-json "file://$TASK_DIR/$service.json" \
+    --query taskDefinition.taskDefinitionArn --output text)
+  aws ecs create-service --cluster "${ECS_CLUSTER:?}" --service-name "commerce-settle-$service" \
+    --task-definition "$task_arn" --desired-count 1 --launch-type EC2 \
+    --deployment-configuration maximumPercent=100,minimumHealthyPercent=0
+done
+aws ecs wait services-stable --cluster "$ECS_CLUSTER" \
+  --services commerce-settle-postgres commerce-settle-redis commerce-settle-kafka
+rm -r "$TASK_DIR"
+unset TASK_DIR
+```
+
+이 명령은 최초 서비스 생성용입니다. 중간 실패 시 먼저 `describe-services`·`describe-tasks`와 로그를 조회하며 서비스·DB를 삭제하고 다시 시작하지 않습니다. 임시 JSON 폴더는 확인을 마친 뒤 해당 경로만 정리합니다. 재배포는 직전 Task ARN·설정 revision을 보존하고 `update-service --task-definition <새-ARN> --force-new-deployment`로 수행합니다. 고정 포트와 영속 디렉터리를 공유하므로 구 Task를 먼저 멈추며 전환 중 중단 시간이 있습니다. 세 서비스 모두 desired count 1을 유지합니다.
+
+ECS 안정화 후 앱 호스트에서 세 사설 포트 도달 여부, 서비스별 DB 접속 성공·다른 DB 접속 거절, Redis의 서비스별 ACL, Kafka metadata의 사설 광고 주소와 실제 생산·소비를 확인합니다. 자격 원문을 출력하지 않고 소유 서비스의 권한으로 검사합니다. 앱을 시작하기 전에 기존 [Kafka 전달 기반](#kafka-전달-기반)의 토픽·초기 소비 위치를 준비하고, Redis 재기동 뒤에는 [세션 복구](#redis-세션-검증과-복구)의 `run_id`와 인증 세대도 승인해야 합니다. 로컬 Compose 전용 명령은 AWS 클러스터를 변경하지 않으므로 해당 Task의 실제 접속 경로로 수행합니다.
+
+재기동·Task 재생성 뒤 같은 PostgreSQL 행·Redis AOF·Kafka 메시지가 유지되는지 확인합니다. 중지는 각 서비스의 `update-service --desired-count 0`이며 재개는 1입니다. ECS가 멈춘 것을 확인하고 데이터 디렉터리는 보존합니다. EC2 교체 시 같은 데이터 디스크·초기화 파일·권한을 복구한 뒤 시작합니다. 이 배치는 호스트 장애를 견디는 HA나 자동 백업을 제공하지 않습니다.
+
+1000TPS를 15분 유지하면 요청은 90만 건입니다. 디스크 사용량은 요청당 DB·인덱스·WAL·Kafka 메시지·로그와 보존량에 따라 달라집니다. **시험 전 여유 30% 이상**을 확인하고 200→400→1000TPS 단계마다 실제 증가량·CPU·메모리·I/O·오류·적체를 측정합니다. 100GiB 확장이나 Task 기동 성공을 목표 처리량 달성으로 판단하지 않습니다.
+
 ## 배포용 HTTPS
 
 공개 경로는 **DuckDNS → 기존 앱 EC2의 Caddy → Gateway 내부 HTTP 주소**입니다. [Caddyfile](../infra/caddy/Caddyfile)과 [EC2 Task 템플릿](../infra/caddy/task-definition.json)만 배포에 사용하며, 로컬 `compose.yml`의 HTTP 실행에는 추가하지 않습니다. Caddy와 [Let's Encrypt 인증서](https://letsencrypt.org/about/), [DuckDNS 서브도메인](https://www.duckdns.org/about.jsp)은 무료입니다. EC2·공인 IPv4·디스크·트래픽·로그의 AWS 비용은 별도입니다. ALB나 추가 EC2를 만들지 않습니다.

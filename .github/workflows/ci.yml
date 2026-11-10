@@ -52,6 +52,7 @@ jobs:
         run: |
           python3 scripts/test_init_env.py
           python3 -B scripts/test_compose.py
+          python3 -B scripts/test_render_ecs_data.py
           python3 -B scripts/smoke_caddy.py
           python3 scripts/test_sync_redis_run_id.py
           python3 scripts/test_pr_body.py
