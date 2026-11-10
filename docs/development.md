@@ -112,7 +112,7 @@ aws ecs put-attributes --cluster "$ECS_CLUSTER" --attributes \
 
 ```bash
 sudo install -d -m 755 /srv/commerce-settle/{postgres,redis,kafka}
-sudo install -d -m 700 /srv/commerce-settle/postgres/data
+sudo install -d -m 700 -o 999 -g 999 /srv/commerce-settle/postgres/data
 sudo install -d -m 755 /srv/commerce-settle/postgres/schema
 sudo install -m 644 infra/postgres/01-init.sh /srv/commerce-settle/postgres/01-init.sh
 sudo install -m 644 infra/postgres/schema/*.sql /srv/commerce-settle/postgres/schema/
