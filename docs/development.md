@@ -56,7 +56,7 @@ export BUILDX_CONFIG="$PWD/work/buildx"
 
 ## EC2 SSH 접속
 
-접속 대상은 `.env.example`의 앱·데이터 호스트를 기준으로 `.env`에 준비합니다. 사용자명은 각 EC2의 AMI·접속 안내에서 확인해 `APP_SSH_USER`·`DATA_SSH_USER`에 입력합니다. 호스트 값은 제공받은 접속 주소이며 실제 AWS 계정·서버와 키의 대응은 별도로 확인해야 합니다. 이 설정이 ECS 이름이나 배포 리전을 정하지는 않습니다.
+`.env.example`의 앱·데이터 SSH 접속 항목은 비워 둡니다. 실제 호스트는 Git에서 제외된 `.env`의 `APP_SSH_HOST`·`DATA_SSH_HOST`에만 입력합니다. 사용자명도 각 EC2의 AMI·접속 안내에서 확인해 `APP_SSH_USER`·`DATA_SSH_USER`에 입력합니다. 실제 AWS 계정·서버와 키의 대응은 별도로 확인해야 합니다. 이 설정이 ECS 이름이나 배포 리전을 정하지는 않습니다.
 
 개인키는 로컬 `.ssh/commerce-key.pem`에만 두며 `.ssh`는 디렉터리 `0700`, 키는 `0400`으로 유지합니다. Git과 Docker 빌드 컨텍스트에서 이 디렉터리를 제외합니다. 키 내용은 `.env`·문서·이슈·PR에 넣지 않습니다. 키 파일이 없으면 사용자가 지정한 원본을 확인하며 새 키를 생성하거나 다른 키로 대체하지 않습니다.
 
