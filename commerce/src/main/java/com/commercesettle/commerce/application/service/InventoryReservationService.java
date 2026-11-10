@@ -10,6 +10,7 @@ import com.commercesettle.commerce.domain.model.InventoryOperation;
 import com.commercesettle.commerce.domain.model.InventoryReservation;
 import com.commercesettle.commerce.domain.model.InventoryReservation.Outcome;
 import com.commercesettle.commerce.domain.model.InventoryReservation.Result;
+import com.commercesettle.commerce.domain.model.Order;
 import com.commercesettle.commerce.domain.model.Product;
 import com.commercesettle.commerce.domain.model.ProductInventory;
 import com.commercesettle.commerce.domain.model.SaleEvent;
@@ -24,6 +25,7 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -67,12 +69,25 @@ public class InventoryReservationService {
   }
 
   /**
-   * product_inventory 행을 배타 잠금한 뒤 상품을 읽는다. 잠금은 호출자의 커밋·롤백까지 유지된다. 판매 가능 여부·가격·버전 검증은 주문 응용 서비스가 맡고
-   * 반환된 상품은 변경하지 않는다. 상품이 없으면 {@link ProductNotFoundException}으로 거절한다.
+   * 재고 행을 잠근 뒤 최신 상품으로 주문을 생성하고 같은 재고로 예약한다. 콜백은 상품 조건을 검사하고 주문·주소·혜택을 저장한다. 잠근 재고는 이 메서드 안에 두며,
+   * 실패하면 호출자의 주문 트랜잭션 전체를 롤백한다.
    */
-  public Product lockInventoryAndReadProduct(UUID productId) {
-    lockInventory(productId);
-    return products.findById(productId).orElseThrow(() -> new ProductNotFoundException(productId));
+  public Order createAndReserve(UUID productId, Function<Product, Order> createOrder) {
+    ProductInventory inventory = lockInventory(productId);
+    Product product =
+        products.findById(productId).orElseThrow(() -> new ProductNotFoundException(productId));
+    Order order = createOrder.apply(product);
+    if (!productId.equals(order.getProductId()) || order.getEventId() != null) {
+      throw new IllegalArgumentException(
+          "reservation requires a regular order for the locked product");
+    }
+    reserve(
+        order.getId(),
+        inventory,
+        order.getQuantity(),
+        order.getPaymentCycleId(),
+        order.getPaymentWaitUntil());
+    return order;
   }
 
   /**
@@ -81,7 +96,12 @@ public class InventoryReservationService {
    */
   public Outcome reserve(
       UUID orderId, UUID productId, int quantity, UUID cycleId, Instant expiresAt) {
-    ProductInventory inventory = lockInventory(productId);
+    return reserve(orderId, lockInventory(productId), quantity, cycleId, expiresAt);
+  }
+
+  private Outcome reserve(
+      UUID orderId, ProductInventory inventory, int quantity, UUID cycleId, Instant expiresAt) {
+    UUID productId = inventory.getProductId();
     Optional<InventoryReservation> existing = reservations.findByOrderId(orderId);
     if (existing.isPresent()) {
       if (!existing.get().isSameReservation(productId, quantity, cycleId)) {

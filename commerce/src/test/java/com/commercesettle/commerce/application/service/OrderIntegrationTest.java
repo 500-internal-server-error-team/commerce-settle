@@ -1,11 +1,13 @@
 package com.commercesettle.commerce.application.service;
 
+import static com.commercesettle.commerce.support.ConcurrentTransactions.holdTransaction;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.commercesettle.commerce.application.port.AddressCipher;
 import com.commercesettle.commerce.domain.model.ProductStatus;
 import com.commercesettle.commerce.domain.model.ShippingAddress;
 import com.commercesettle.commerce.domain.repository.OrderRepository;
+import com.commercesettle.commerce.support.JdbcExecutionRecorder;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -27,14 +29,18 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -55,6 +61,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "management.server.port=0",
       "management.tracing.enabled=true",
       "management.zipkin.tracing.export.enabled=false",
+      "spring.kafka.admin.auto-create=false",
+      "app.coupons.expiry-scheduler-enabled=false",
+      "app.coupons.grade-scheduler-enabled=false",
+      "app.sale-events.scheduler-enabled=false",
       "management.tracing.sampling.probability=1.0",
       "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
       "app.auth.rate-limit.identifier-hmac-key=regular-order-api-test-hmac-key-32bytes",
@@ -65,15 +75,19 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @AutoConfigureObservability(metrics = false)
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@Import(OrderIntegrationTest.SqlRecording.class)
 class OrderIntegrationTest {
   @MockitoBean OrderAdmissionService admission;
+  @MockitoBean com.commercesettle.commerce.infrastructure.cache.RedisRunIdAuthGate authGate;
   static final String GATEWAY_CREDENTIAL = "test-gateway-credential-0123456789abcdef0123";
   private static final ShippingAddress SHIPPING =
       new ShippingAddress("시험 수령인", "000-0000-0000", "00001", "가상시 시험로 1", "101호");
 
   @Container @ServiceConnection
   static final PostgreSQLContainer<?> POSTGRES =
-      new PostgreSQLContainer<>("postgres:18.3").withInitScript("db/commerce.sql");
+      new PostgreSQLContainer<>("postgres:18.3")
+          .withCommand("postgres", "-c", "shared_preload_libraries=pg_stat_statements")
+          .withInitScript("db/commerce.sql");
 
   @Autowired TestRestTemplate http;
   @Autowired JdbcTemplate jdbc;
@@ -83,6 +97,205 @@ class OrderIntegrationTest {
   @Autowired OrderRepository orders;
   @Autowired AddressCipher cipher;
   @Autowired PlatformTransactionManager transactions;
+  @Autowired JdbcExecutionRecorder sql;
+
+  @TestConfiguration(proxyBeanMethods = false)
+  static class SqlRecording {
+    @Bean
+    static JdbcExecutionRecorder jdbcExecutionRecorder() {
+      return new JdbcExecutionRecorder();
+    }
+  }
+
+  @Test
+  @DisplayName("신규 일반 주문은 재고를 한 번 잠그고 멱등 재요청은 다시 예약하지 않는다")
+  void locksInventoryOncePerNewOrder() {
+    var f = fixture(2);
+    String idempotencyKey = key();
+
+    var created = sql.measure(() -> post(f.buyer(), idempotencyKey, body(f)));
+    var replay = sql.measure(() -> post(f.buyer(), idempotencyKey, body(f)));
+    var conflict = sql.measure(() -> post(f.buyer(), idempotencyKey, body(f).put("quantity", 2)));
+
+    System.out.printf(
+        "ORDER_QUERY_COUNTS new=%d inventoryLocks=%d timeoutSettings=%d replay=%d conflict=%d%n",
+        created.executions().size(),
+        created.inventoryLocks(),
+        created.timeoutSettings(),
+        replay.executions().size(),
+        conflict.executions().size());
+    assertThat(created.result().getStatusCode().value()).isEqualTo(201);
+    assertThat(replay.result().getBody()).isEqualTo(created.result().getBody());
+    problem(conflict.result(), 409, "COMMON_IDEMPOTENCY_CONFLICT");
+    assertThat(created.inventoryLocks()).isEqualTo(1);
+    assertThat(created.timeoutSettings()).isLessThanOrEqualTo(5);
+    assertThat(created.executions()).hasSizeLessThanOrEqualTo(21);
+    assertThat(replay.executions()).hasSizeLessThanOrEqualTo(4);
+    assertThat(conflict.executions()).hasSizeLessThanOrEqualTo(3);
+    assertThat(replay.inventoryLocks()).isZero();
+    assertThat(conflict.inventoryLocks()).isZero();
+    assertInventory(f.product(), 1, 1);
+    assertThat(count("inventory_reservations", "product_id", f.product())).isEqualTo(1);
+  }
+
+  @Test
+  @EnabledIfEnvironmentVariable(named = "ORDER_QUERY_BENCHMARK", matches = "true")
+  @DisplayName("동일한 일반 주문 입력으로 SQL·연결 대기·HTTP 지연을 계측한다")
+  void measuresOrderQueryCost() throws Exception {
+    jdbc.execute("create extension if not exists pg_stat_statements");
+    var distributed = new java.util.ArrayList<Fixture>();
+    for (int i = 0; i < 20; i++) distributed.add(queryFixture(i, 100));
+    var shared = queryFixture(20, 1000);
+    var contended =
+        distributed.stream()
+            .map(f -> new Fixture(f.buyer(), f.address(), shared.seller(), shared.product()))
+            .toList();
+    runOrders(distributed, 100, 4, "warm-distributed");
+    runOrders(contended, 100, 4, "warm-shared");
+    for (var distribution :
+        List.of(Map.entry("distributed", distributed), Map.entry("one-product", contended))) {
+      jdbc.execute("select pg_stat_statements_reset()");
+      var waits = new java.util.concurrent.atomic.AtomicInteger();
+      var polls = new java.util.concurrent.atomic.AtomicInteger();
+      var sampling = new java.util.concurrent.atomic.AtomicBoolean(true);
+      try (var observer =
+              java.sql.DriverManager.getConnection(
+                  POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+          var statement = observer.createStatement();
+          var sampler = Executors.newSingleThreadExecutor()) {
+        var observation =
+            sampler.submit(
+                () -> {
+                  while (sampling.get()) {
+                    try (var rows =
+                        statement.executeQuery(
+                            "select count(*) from pg_stat_activity where datname=current_database()"
+                                + " and wait_event_type='Lock'")) {
+                      rows.next();
+                      waits.addAndGet(rows.getInt(1));
+                      polls.incrementAndGet();
+                    } catch (java.sql.SQLException error) {
+                      throw new IllegalStateException(error);
+                    }
+                    java.util.concurrent.locks.LockSupport.parkNanos(10_000_000);
+                  }
+                });
+        JdbcExecutionRecorder.Sample<List<Long>> sample;
+        try {
+          sample =
+              sql.measure(() -> runOrders(distribution.getValue(), 400, 4, distribution.getKey()));
+        } finally {
+          sampling.set(false);
+        }
+        observation.get(5, TimeUnit.SECONDS);
+        var database =
+            jdbc.queryForMap(
+                "select sum(calls) as calls,sum(total_exec_time) as execution_ms from pg_stat_statements"
+                    + " where dbid=(select oid from pg_database where datname=current_database())"
+                    + " and query not like '%pg_stat_%' and query not in ('BEGIN','COMMIT')");
+        var result = new java.util.LinkedHashMap<String, Object>();
+        result.put("distribution", distribution.getKey());
+        result.put("requests", sample.result().size());
+        result.put("clients", 4);
+        result.put("wallMs", sample.nanos() / 1e6);
+        result.put("httpMs", percentiles(sample.result()));
+        result.put("acquireMs", percentiles(sample.acquisitions()));
+        result.put("jdbcExecutions", sample.executions().size());
+        result.put(
+            "jdbcMs",
+            sample.executions().stream().mapToLong(JdbcExecutionRecorder.Execution::nanos).sum()
+                / 1e6);
+        result.put("inventoryLocks", sample.inventoryLocks());
+        result.put("timeoutSettings", sample.timeoutSettings());
+        result.put("database", database);
+        result.put("lockWaitBackendSamples", waits.get());
+        result.put("lockPolls", polls.get());
+        result.put("postgresImage", POSTGRES.getContainerInfo().getImageId());
+        System.out.println("ORDER_QUERY_BENCHMARK " + mapper.writeValueAsString(result));
+      }
+    }
+    for (var f : distributed) assertInventory(f.product(), 75, 25);
+    assertInventory(shared.product(), 500, 500);
+  }
+
+  private Fixture queryFixture(int index, int stock) {
+    UUID buyer = queryId("buyer", index);
+    UUID address = queryId("address", index);
+    UUID seller = queryId("seller", index);
+    UUID product = queryId("product", index);
+    var sealed = cipher.seal(address, SHIPPING);
+    jdbc.update(
+        "insert into commerce.buyer_accounts (id,email_normalized,password_hash,display_name,status,created_at,updated_at,version) values (?,?,'hash','구매자','ACTIVE',now(),now(),0)",
+        buyer,
+        buyer + "@example.test");
+    jdbc.update(
+        "insert into commerce.buyer_addresses (id,buyer_id,recipient_ciphertext,phone_ciphertext,address_ciphertext,is_default,created_at,updated_at) values (?,?,?,?,?,true,now(),now())",
+        address,
+        buyer,
+        sealed.recipient(),
+        sealed.phone(),
+        sealed.address());
+    jdbc.update(
+        "insert into commerce.products (id,seller_id,name,unit_price,status,created_at,updated_at) values (?,?,'쿼리 비교 상품',10000,'ON_SALE',now(),now())",
+        product,
+        seller);
+    jdbc.update(
+        "insert into commerce.product_inventory (id,product_id,available_qty,reserved_qty,event_allocated_qty,sold_qty,created_at,updated_at) values (?,?,?,0,0,0,now(),now())",
+        queryId("inventory", index),
+        product,
+        stock);
+    return new Fixture(buyer, address, seller, product);
+  }
+
+  private static UUID queryId(String kind, int index) {
+    return UUID.nameUUIDFromBytes(
+        ("order-query:" + kind + ":" + index).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+  }
+
+  private List<Long> runOrders(List<Fixture> fixtures, int requests, int clients, String phase) {
+    try (var pool = Executors.newFixedThreadPool(clients)) {
+      var ready = new CountDownLatch(clients);
+      var start = new CountDownLatch(1);
+      var futures = new java.util.ArrayList<java.util.concurrent.Future<List<Long>>>();
+      for (int lane = 0; lane < clients; lane++) {
+        int offset = lane;
+        futures.add(
+            pool.submit(
+                () -> {
+                  ready.countDown();
+                  if (!start.await(10, TimeUnit.SECONDS))
+                    throw new IllegalStateException("start timed out");
+                  var times = new java.util.ArrayList<Long>();
+                  for (int i = offset; i < requests; i += clients) {
+                    var f = fixtures.get(i % fixtures.size());
+                    long began = System.nanoTime();
+                    assertThat(
+                            post(f.buyer(), "query-" + phase + "-" + i, body(f))
+                                .getStatusCode()
+                                .value())
+                        .isEqualTo(201);
+                    times.add(System.nanoTime() - began);
+                  }
+                  return times;
+                }));
+      }
+      if (!ready.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("clients not ready");
+      start.countDown();
+      var times = new java.util.ArrayList<Long>();
+      for (var future : futures) times.addAll(future.get(90, TimeUnit.SECONDS));
+      return times;
+    } catch (Exception error) {
+      throw new IllegalStateException(error);
+    }
+  }
+
+  private static Map<String, Double> percentiles(List<Long> nanos) {
+    var sorted = nanos.stream().sorted().toList();
+    return Map.of(
+        "p50", sorted.get((int) Math.ceil(sorted.size() * .50) - 1) / 1e6,
+        "p95", sorted.get((int) Math.ceil(sorted.size() * .95) - 1) / 1e6,
+        "p99", sorted.get((int) Math.ceil(sorted.size() * .99) - 1) / 1e6);
+  }
 
   private JsonNode canonicalApi;
   private JsonNode generatedApi;
@@ -162,6 +375,34 @@ class OrderIntegrationTest {
       }
     }
     assertThat(post(f.buyer(), key, body(f)).getStatusCode().value()).isEqualTo(201);
+    assertInventory(f.product(), 1, 1);
+  }
+
+  @Test
+  @DisplayName("상품 변경의 재고 잠금이 풀리면 새 가격·버전을 검사하고 이전 견적은 거절한다")
+  void readsLatestProductAfterSellerChange() throws Exception {
+    var f = fixture(2);
+    String requestKey = key();
+    var tx = new TransactionTemplate(transactions);
+    try (var held =
+        holdTransaction(
+            tx,
+            () ->
+                catalog.change(
+                    f.seller(), f.product(), key(), "변경 상품", 12000, ProductStatus.ON_SALE, 0))) {
+      problem(post(f.buyer(), requestKey, body(f)), 503, "COMMON_TEMPORARILY_UNAVAILABLE");
+    }
+
+    problem(post(f.buyer(), requestKey, body(f)), 409, "COMMON_VERSION_CONFLICT");
+    assertInventory(f.product(), 2, 0);
+    assertThat(count("orders", "buyer_id", f.buyer())).isZero();
+    var accepted =
+        post(
+            f.buyer(),
+            requestKey,
+            body(f).put("expectedProductVersion", 1).put("expectedTotalAmount", 12000));
+    assertThat(accepted.getStatusCode().value()).isEqualTo(201);
+    assertThat(accepted.getBody().path("grossAmount").asLong()).isEqualTo(12000);
     assertInventory(f.product(), 1, 1);
   }
 

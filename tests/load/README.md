@@ -1,4 +1,4 @@
-# 결제 부하·장애·복구 시험
+# 주문·결제 부하·장애·복구 시험
 
 [#133](https://github.com/500-internal-server-error-team/commerce-settle/issues/133)의 결제 처리량, PG 장애, Worker 재시작 뒤 정합성을 측정합니다. 지표 정의는 [검증 지표와 완료 기준](../../docs/design.md#검증-지표와-완료-기준)를 따릅니다.
 
@@ -78,3 +78,20 @@ LOAD_OPERATOR_CREDENTIAL="$(cat "$LOAD_WORK_DIR/operator.credential")" \
 ## 실측 기록
 
 2026-11-03의 [시험 환경·단계별 수치·병목 분석·장애 복구 관측 원문](https://github.com/500-internal-server-error-team/commerce-settle/blob/7a3affbd34cde810951d21e35aefcb4aa557dafc/tests/load/README.md#시험-환경)을 보존합니다. 당시 60초 단계 시험의 관측이며, 15분 지속 가능 TPS 판정을 대신하지 않습니다.
+
+## 일반 주문 쿼리 비교
+
+일반 주문의 SQL 비용은 별도 PostgreSQL Testcontainer와 Commerce HTTP 서버로 비교합니다. Java 21에서 실행하며 기존 Compose 환경이나 볼륨을 사용하지 않습니다.
+
+```bash
+ORDER_QUERY_BENCHMARK=true ./gradlew --no-daemon :commerce:test --rerun-tasks \
+  --tests '*OrderIntegrationTest.measuresOrderQueryCost'
+```
+
+구매자·주소·상품 ID와 요청 본문·멱등키를 고정합니다. 구매자 20명/상품 20개 분산과 구매자 20명/상품 1개 집중 순서로 각각 100건 워밍업 후 400건을 동시 클라이언트 4개가 보냅니다. 쿠폰·이벤트·마일리지는 없고, 상품은 10,000원·수량 1개입니다. 모든 응답의 201과 최종 가용·예약 수량을 검사합니다. 기준선과 후보를 같은 JDK·PostgreSQL 이미지·JVM/DB 자원·부하 발생기·주변 스택 조건에서 반복 실행하고, revision과 이미지 ID를 함께 기록합니다.
+
+결과는 `commerce/build/test-results/test/TEST-…OrderIntegrationTest.xml`의 `ORDER_QUERY_BENCHMARK` JSON입니다. `jdbcExecutions`는 JDBC 직접 설정문과 JPA SQL의 실행 호출 수이며 `commit`·`rollback` 같은 연결 제어와 드라이버 내부 SQL은 제외합니다. 네트워크 왕복·패킷 수가 아닙니다. `jdbcMs`는 클라이언트에서 잰 SQL 실행 호출 시간의 합으로 네트워크·서버 대기를 포함하고, PostgreSQL `execution_ms`는 `pg_stat_statements`의 서버 실행 시간 합입니다. 서버 집계에는 계측용 설정·연결 확인문이 포함될 수 있습니다.
+
+`httpMs`·`acquireMs`는 각각 HTTP 왕복과 연결 획득 시간의 p50/p95/p99(ms)입니다. `lockWaitBackendSamples`는 10ms 간격 조회마다 관측한 잠금 대기 backend 수의 합이며 대기 시간이나 고유 거래 수가 아닙니다. 표본 사이의 짧은 대기는 놓칠 수 있습니다. 동시 클라이언트가 응답 후 다음 요청을 보내는 시험이므로 목표 도착률 200회/초 검증이나 Gateway·금융 후속 처리 성능으로 해석하지 않습니다.
+
+SQL 중복 방지 회귀는 환경 변수 없이 기본 테스트의 `locksInventoryOncePerNewOrder`가 검사합니다. 성능 비교 기록과 채택 근거는 [#246](https://github.com/500-internal-server-error-team/commerce-settle/issues/246)에 남깁니다.

@@ -15,9 +15,11 @@ import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.exception.VersionConflictException;
 import com.commercesettle.commerce.domain.model.Account;
 import com.commercesettle.commerce.domain.model.ActorKind;
+import com.commercesettle.commerce.domain.model.BuyerAddress;
 import com.commercesettle.commerce.domain.model.Order;
 import com.commercesettle.commerce.domain.model.OrderAddress;
 import com.commercesettle.commerce.domain.model.OrderAmounts;
+import com.commercesettle.commerce.domain.model.Product;
 import com.commercesettle.commerce.domain.repository.AccountRepository;
 import com.commercesettle.commerce.domain.repository.BuyerAddressRepository;
 import com.commercesettle.commerce.domain.repository.OrderRepository;
@@ -115,13 +117,29 @@ public class OrderService {
             .findById(command.addressId())
             .filter(a -> !a.isDeleted() && a.isOwnedBy(buyerId))
             .orElseThrow(() -> new BuyerAddressNotFoundException(command.addressId()));
-    // 상품은 이 트랜잭션에서 처음 읽는다. 상품 변경도 재고 행을 먼저 잠근다.
-    var product =
+    Order saved =
         command.eventId() == null
-            ? inventory.lockInventoryAndReadProduct(command.productId())
-            : products
-                .findById(command.productId())
-                .orElseThrow(() -> new ProductNotFoundException(command.productId()));
+            ? inventory.createAndReserve(
+                command.productId(),
+                product -> createOrder(buyerId, orderId, command, address, product))
+            : createOrder(
+                buyerId,
+                orderId,
+                command,
+                address,
+                products
+                    .findById(command.productId())
+                    .orElseThrow(() -> new ProductNotFoundException(command.productId())));
+    appendPaymentRequest(saved);
+    return OrderView.from(saved);
+  }
+
+  private Order createOrder(
+      UUID buyerId,
+      UUID orderId,
+      RegularOrderCommand command,
+      BuyerAddress address,
+      Product product) {
     if (!product.isPubliclyVisible()) {
       throw new ProductNotFoundException(command.productId());
     }
@@ -206,21 +224,18 @@ public class OrderService {
             now);
     Order saved = orders.save(order, snapshot);
     benefits.reserve(saved, command.expectedEventVersion(), now);
-    if (saved.getEventId() == null)
-      inventory.reserve(
-          orderId,
-          product.getId(),
-          command.quantity(),
-          order.getPaymentCycleId(),
-          order.getPaymentWaitUntil());
+    return saved;
+  }
+
+  private void appendPaymentRequest(Order saved) {
     var amounts = saved.getAmounts();
     var payload =
         new OrderPaymentRequestedPayload(
-            orderId,
-            buyerId,
+            saved.getId(),
+            saved.getBuyerId(),
             saved.getSellerId(),
             saved.getPaymentCycleId(),
-            product.getId(),
+            saved.getProductId(),
             saved.getVersion(),
             OrderPaymentRequestedPayload.Status.PAYMENT_PENDING,
             saved.getPolicyVersion(),
@@ -229,7 +244,7 @@ public class OrderService {
                 ? null
                 : OrderPaymentRequestedPayload.ExternalMethod.valueOf(
                     saved.getExternalMethod().name()),
-            account,
+            saved.getMethodAccountRef(),
             amounts.grossAmount(),
             amounts.couponAmount(),
             amounts.totalAmount(),
@@ -244,10 +259,9 @@ public class OrderService {
             "OrderPaymentRequested",
             1,
             saved.getCreatedAt().atZone(SEOUL).toOffsetDateTime(),
-            orderId,
+            saved.getId(),
             saved.getVersion(),
             payload));
-    return OrderView.from(saved);
   }
 
   @Transactional(readOnly = true)
