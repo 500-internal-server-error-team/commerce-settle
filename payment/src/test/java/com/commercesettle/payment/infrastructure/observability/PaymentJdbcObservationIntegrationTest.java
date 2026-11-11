@@ -162,15 +162,23 @@ class PaymentJdbcObservationIntegrationTest {
 
                 assertThatThrownBy(
                         () ->
-                            observations.observe(
-                                Stage.INBOX_APPLY,
-                                () ->
-                                    transaction.executeWithoutResult(
-                                        status ->
-                                            jdbc.update(
-                                                "INSERT INTO observation_test VALUES (?, ?)",
-                                                3,
-                                                "private-failing-row-containing-account"))))
+                            io.micrometer.observation.Observation.createNotStarted(
+                                    "http.server.requests", registry)
+                                .observe(
+                                    () ->
+                                        io.micrometer.observation.Observation.createNotStarted(
+                                                "spring.kafka.listener", registry)
+                                            .observe(
+                                                () ->
+                                                    observations.observe(
+                                                        Stage.INBOX_APPLY,
+                                                        () ->
+                                                            transaction.executeWithoutResult(
+                                                                status ->
+                                                                    jdbc.update(
+                                                                        "INSERT INTO observation_test VALUES (?, ?)",
+                                                                        3,
+                                                                        "private-failing-row-containing-account"))))))
                     .isInstanceOf(DataIntegrityViolationException.class)
                     .hasMessageContaining("private-failing-row-containing-account");
                 assertThat(
@@ -183,7 +191,9 @@ class PaymentJdbcObservationIntegrationTest {
                             .mapToLong(io.micrometer.core.instrument.Timer::count)
                             .sum())
                     .isEqualTo(3);
-                assertThat(exporter.spans).isNotEmpty();
+                assertThat(exporter.spans)
+                    .extracting(SpanData::getName)
+                    .contains("http.server.requests", "spring.kafka.listener");
                 assertThat(exporter.spans)
                     .anySatisfy(
                         span ->
