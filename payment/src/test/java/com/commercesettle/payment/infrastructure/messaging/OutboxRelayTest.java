@@ -11,12 +11,17 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.commercesettle.observability.AsyncObservation;
 import com.commercesettle.payment.application.port.OutboxStore.Delivery;
 import com.commercesettle.payment.application.port.OutboxStore.Publication;
+import com.commercesettle.payment.application.port.OutboxStore.Published;
 import com.commercesettle.payment.application.service.OutboxDeliveryService;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -61,11 +66,11 @@ class OutboxRelayTest {
     verifyNoInteractions(service, template);
     coordinator.remove().run();
     work.remove().run();
-    verify(service, never()).markPublished(any(), any());
+    verify(service, never()).markPublished(any());
     firstReply.complete(result(first, 73));
-    verify(service, never()).markPublished(any(), any());
+    verify(service, never()).markPublished(any());
     work.remove().run();
-    verify(service).markPublished(first, new Publication("topic", 2, 73));
+    verify(service).markPublished(List.of(new Published(first, new Publication("topic", 2, 73))));
     coordinator.remove().run();
     work.remove().run();
     secondReply.complete(result(second, 74));
@@ -73,7 +78,7 @@ class OutboxRelayTest {
     coordinator.remove().run();
 
     verify(template, times(2)).send("topic", "key", new byte[] {1, 2, 3});
-    verify(service).markPublished(second, new Publication("topic", 2, 74));
+    verify(service).markPublished(List.of(new Published(second, new Publication("topic", 2, 74))));
     verify(service, times(3)).claim(1, 240000, 10);
     assertThat(coordinator).isEmpty();
     assertThat(work).isEmpty();
@@ -204,7 +209,7 @@ class OutboxRelayTest {
     coordinator.remove().run();
 
     verify(service).markFailed(delivery, 10);
-    verify(service, never()).markPublished(any(), any());
+    verify(service, never()).markPublished(any());
     verify(service, times(2)).claim(1, 240000, 10);
   }
 
@@ -225,7 +230,7 @@ class OutboxRelayTest {
     coordinator.remove().run();
 
     verify(service).markFailed(delivery, 10);
-    verify(service, never()).markPublished(any(), any());
+    verify(service, never()).markPublished(any());
   }
 
   @Test
@@ -235,8 +240,7 @@ class OutboxRelayTest {
     var reply = new CompletableFuture<SendResult<String, byte[]>>();
     when(service.claim(1, 240000, 10)).thenReturn(List.of(delivery), List.of());
     when(template.send(anyString(), anyString(), any(byte[].class))).thenReturn(reply);
-    when(service.markPublished(any(), any()))
-        .thenThrow(new IllegalStateException("database unavailable"));
+    when(service.markPublished(any())).thenThrow(new IllegalStateException("database unavailable"));
     var relay = relay();
 
     relay.wakeUp();
@@ -265,6 +269,130 @@ class OutboxRelayTest {
 
     verify(service).claim(1, 240000, 10);
     assertThat(coordinator).isEmpty();
+  }
+
+  @Test
+  @DisplayName("저장 작업이 돌기 전에 끝난 전송 결과는 한 트랜잭션에 함께 저장한다")
+  void persistsResultsCompletedBeforeFlushAsOneBatch() {
+    var first = delivery();
+    var second = delivery();
+    var firstReply = new CompletableFuture<SendResult<String, byte[]>>();
+    var secondReply = new CompletableFuture<SendResult<String, byte[]>>();
+    when(service.claim(2, 240000, 10)).thenReturn(List.of(first, second), List.of());
+    when(template.send(anyString(), anyString(), any(byte[].class)))
+        .thenReturn(firstReply, secondReply);
+    when(service.markPublished(any())).thenReturn(Set.of(first.id(), second.id()));
+    var relay = new OutboxRelay(service, template, 2, 240000, 10, coordinator::add, work::add);
+
+    relay.wakeUp();
+    coordinator.remove().run();
+    work.remove().run();
+    work.remove().run();
+    firstReply.complete(result(first, 73));
+    secondReply.complete(result(second, 74));
+    assertThat(work).hasSize(1);
+    work.remove().run();
+    coordinator.remove().run();
+
+    verify(service)
+        .markPublished(
+            List.of(
+                new Published(first, new Publication("topic", 2, 73)),
+                new Published(second, new Publication("topic", 2, 74))));
+    verify(service, times(2)).claim(2, 240000, 10);
+    assertThat(work).isEmpty();
+  }
+
+  @Test
+  @DisplayName("함께 저장한 결과도 이벤트마다 자기 전송 구간을 부모로 결과 구간을 열고 저장 뒤 닫는다")
+  void keepsResultTracePerEventInBatch() {
+    var first = delivery();
+    var second = delivery();
+    var firstReply = new CompletableFuture<SendResult<String, byte[]>>();
+    var secondReply = new CompletableFuture<SendResult<String, byte[]>>();
+    when(service.claim(2, 240000, 10)).thenReturn(List.of(first, second), List.of());
+    when(template.send(anyString(), anyString(), any(byte[].class)))
+        .thenReturn(firstReply, secondReply);
+    var trace = new ArrayList<String>();
+    var parents = new ArrayDeque<>(List.of("send-1", "send-2"));
+    when(service.markPublished(any()))
+        .thenAnswer(
+            invocation -> {
+              trace.add("persist");
+              return Set.of(first.id(), second.id());
+            });
+    AsyncObservation observations =
+        new AsyncObservation() {
+          @Override
+          public String capture() {
+            return parents.remove();
+          }
+
+          @Override
+          public Scope start(
+              String operation, String parent, Map<String, String> ids, Timing timing) {
+            if (!operation.equals("payment.outbox.result")) {
+              return Scope.NOOP;
+            }
+            trace.add("open " + parent + " " + ids.get("event.id"));
+            return () -> trace.add("close " + parent);
+          }
+        };
+    var relay =
+        new OutboxRelay(
+            service, template, 2, 240000, 10, coordinator::add, work::add, observations);
+
+    relay.wakeUp();
+    coordinator.remove().run();
+    work.remove().run();
+    work.remove().run();
+    firstReply.complete(result(first, 73));
+    secondReply.complete(result(second, 74));
+    work.remove().run();
+
+    assertThat(trace)
+        .containsExactly(
+            "open send-1 " + first.id(),
+            "open send-2 " + second.id(),
+            "persist",
+            "close send-2",
+            "close send-1");
+  }
+
+  @Test
+  @DisplayName("저장 작업을 맡길 실행기가 멈추면 결과를 버리고 새 선점을 멈춘다")
+  void stopsClaimingWhenFlushCannotBeScheduled() {
+    var delivery = delivery();
+    var reply = new CompletableFuture<SendResult<String, byte[]>>();
+    when(service.claim(1, 240000, 10)).thenReturn(List.of(delivery));
+    when(template.send(anyString(), anyString(), any(byte[].class))).thenReturn(reply);
+    var reject = new AtomicBoolean(false);
+    var relay =
+        new OutboxRelay(
+            service,
+            template,
+            1,
+            240000,
+            10,
+            coordinator::add,
+            task -> {
+              if (reject.get()) {
+                throw new RejectedExecutionException("stopped");
+              }
+              work.add(task);
+            });
+
+    relay.wakeUp();
+    coordinator.remove().run();
+    work.remove().run();
+    reject.set(true);
+    reply.complete(result(delivery, 73));
+    relay.recover();
+
+    verify(service, never()).markPublished(any());
+    verify(service).claim(1, 240000, 10);
+    assertThat(coordinator).isEmpty();
+    assertThat(work).isEmpty();
   }
 
   private OutboxRelay relay() {

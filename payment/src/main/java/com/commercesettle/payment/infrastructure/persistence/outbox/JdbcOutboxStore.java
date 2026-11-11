@@ -2,9 +2,12 @@ package com.commercesettle.payment.infrastructure.persistence.outbox;
 
 import com.commercesettle.observability.AsyncObservation.Timing;
 import com.commercesettle.payment.application.port.OutboxStore;
-import com.commercesettle.payment.application.port.OutboxStore.Publication;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -84,22 +87,47 @@ public class JdbcOutboxStore implements OutboxStore {
   }
 
   @Override
-  public boolean markPublished(Delivery delivery, Publication publication) {
+  public Set<UUID> markPublished(List<Published> results) {
     applyTransactionLimits();
-    if (!lockCurrentDelivery(delivery)) {
-      return false;
-    }
-    return jdbc.update(
+    var params =
+        new MapSqlParameterSource("ids", array(results, r -> r.delivery().id()))
+            .addValue("versions", array(results, r -> r.delivery().version()))
+            .addValue("partitions", array(results, r -> r.publication().partition()))
+            .addValue("offsets", array(results, r -> r.publication().offset()));
+    // 여러 처리기가 같은 행들을 다른 순서로 잠그지 않게 id 순서로 먼저 잠근다. 잠금 대기 중 임대가 만료될 수 있어
+    // 시각 조건은 잠금을 얻은 다음 UPDATE에서 검사한다.
+    jdbc.queryForList(
+        """
+        SELECT o.id FROM payment.outbox o
+        JOIN unnest(CAST(:ids AS uuid[]), CAST(:versions AS bigint[])) AS r(id, version)
+          ON o.id = r.id AND o.version = r.version
+        WHERE o.status='RUNNING'
+        ORDER BY o.id FOR UPDATE OF o
+        """,
+        params);
+    return new HashSet<>(
+        jdbc.queryForList(
             """
-            UPDATE payment.outbox SET status='PUBLISHED',published_partition=:partition,
-                published_offset=:offset,published_at=clock_timestamp(),lease_until=NULL,
-                updated_at=clock_timestamp(),version=version+1
-            WHERE id=:id AND version=:version AND status='RUNNING' AND lease_until > clock_timestamp()
+            UPDATE payment.outbox o SET status='PUBLISHED',published_partition=r.partition,
+                published_offset=r.position,published_at=clock_timestamp(),lease_until=NULL,
+                updated_at=clock_timestamp(),version=o.version+1
+            FROM unnest(CAST(:ids AS uuid[]), CAST(:versions AS bigint[]),
+                CAST(:partitions AS integer[]), CAST(:offsets AS bigint[]))
+                AS r(id, version, partition, position)
+            WHERE o.id=r.id AND o.version=r.version AND o.status='RUNNING'
+              AND o.lease_until > clock_timestamp()
+            RETURNING o.id
             """,
-            position(delivery)
-                .addValue("partition", publication.partition())
-                .addValue("offset", publication.offset()))
-        == 1;
+            params,
+            UUID.class));
+  }
+
+  /** 값 목록을 PostgreSQL 배열 리터럴로 만든다. 숫자와 UUID만 넣으므로 따옴표가 필요 없다. */
+  private static String array(List<Published> results, Function<Published, Object> value) {
+    return results.stream()
+        .map(value)
+        .map(String::valueOf)
+        .collect(Collectors.joining(",", "{", "}"));
   }
 
   @Override

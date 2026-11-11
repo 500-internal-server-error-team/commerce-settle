@@ -224,14 +224,13 @@ class OutboxRelayIntegrationTest {
               doAnswer(
                       invocation -> {
                         try {
-                          return service.markPublished(
-                              invocation.getArgument(0), invocation.getArgument(1));
+                          return service.markPublished(invocation.getArgument(0));
                         } finally {
                           attempted.countDown();
                         }
                       })
                   .when(observed)
-                  .markPublished(any(), any());
+                  .markPublished(any());
               jdbc.execute(
                   "ALTER TABLE payment.outbox ADD CONSTRAINT test_reject_publication CHECK(status"
                       + " <> 'PUBLISHED') NOT VALID");
