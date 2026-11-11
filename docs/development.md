@@ -154,6 +154,112 @@ ECS 안정화 후 앱 호스트에서 세 사설 포트 도달 여부, 서비스
 
 1000TPS를 15분 유지하면 요청은 90만 건입니다. 디스크 사용량은 요청당 DB·인덱스·WAL·Kafka 메시지·로그와 보존량에 따라 달라집니다. **시험 전 여유 30% 이상**을 확인하고 200→400→1000TPS 단계마다 실제 증가량·CPU·메모리·I/O·오류·적체를 측정합니다. 100GiB 확장이나 Task 기동 성공을 목표 처리량 달성으로 판단하지 않습니다.
 
+## ECS EC2 앱과 태그 배포
+
+`v0.1.0`처럼 버전 태그를 push하면 CI가 이미지 다섯 종을 ECR에 게시하고 앱 서비스 여섯 개를 갱신합니다. 배포는 현재 `main` 커밋의 태그만 허용하며, 실행끼리는 직렬화하고 진행 중 배포를 새 태그로 취소하지 않습니다. 오래 걸린 이전 CI가 새 릴리스를 덮지 않도록 배포 job 시작 시 `main`을 다시 대조합니다.
+
+최초 준비는 [실행 정의 생성기](../scripts/render_ecs_apps.py), 이후 배포는 [배포 도구](../scripts/deploy_ecs_apps.py)가 담당합니다. 생성기는 Compose의 기본 환경·역할·건강 검사를 재사용하고 비밀값 대신 SSM ARN을 출력합니다. 자동 배포는 기존 Task Definition의 앱 이미지 digest만 바꿔 새 revision으로 등록하며, 환경·자격 참조·포트·사이드카·사용자 태그를 보존합니다. DB·Kafka·Redis·관측 도구·Caddy는 갱신하지 않습니다.
+
+### 최초 앱 준비
+
+앱은 `workload=app`인 기존 EC2에서 `bridge` 모드로 실행합니다. 컨테이너의 업무·관리 포트는 `8080/9091`이며 호스트 포트는 다음과 같습니다.
+
+| 앱·ECS 서비스 접미사 | 업무 hostPort | 관리 hostPort |
+| --- | --- | --- |
+| gateway | 8080 | 9091 |
+| commerce | 8081 | 9092 |
+| payment-api | 8082 | 9093 |
+| payment-worker | 8083 | 9094 |
+| settlement | 8084 | 9095 |
+| finance-mock | 8085 | 9096 |
+
+서비스·Task family 이름은 `commerce-settle-<접미사>`입니다. 앱 간 요청은 앱 EC2의 사설 IP와 고정 업무 포트를 사용합니다. Caddy의 `GATEWAY_UPSTREAM`은 같은 사설 IP의 `8080`입니다. Task가 바뀌어도 주소는 유지되지만 EC2의 사설 IP가 바뀌면 모든 관련 Task 환경과 Caddy를 갱신해야 합니다.
+
+앱 보안 그룹의 `8080–8085`는 앱 측 사설 통신에, `9091–9096`은 데이터 보안 그룹의 메트릭 수집에만 허용합니다. 데이터의 `5432/6379/9092/9411`과 Commerce가 조회하는 Prometheus `9090`은 앱 보안 그룹만 허용합니다. 공개 진입은 Caddy의 `80/443`을 유지합니다. 실제 EC2·포트 도달 여부를 확인하며 Compose 이름이나 루프백 주소를 다른 호스트에 사용하지 않습니다.
+
+생성 Task의 메모리는 앱마다 512MiB입니다. 앱 전체·Caddy·ECS 에이전트·운영체제의 CPU·메모리 여유를 확인하고 실측에 따라 조정합니다. Task 전체 CPU·메모리 제한은 넣지 않으며 기존 EC2의 cgroup driver를 바꾸지 않습니다. 로그 그룹 `/ecs/commerce-settle/<접미사>` 여섯 개와 7일 보존, 실행 역할의 ECR pull·SSM·KMS·로그 전송 권한을 준비합니다. 호스트 속성·실행 역할·에이전트 조건은 [데이터 서비스](#ecs-ec2-데이터-서비스)와 [HTTPS 네트워크 준비](#네트워크와-저장소-준비)를 함께 확인합니다.
+
+SSM의 `SecureString`은 `APP_SSM_PARAMETER_ARN_PREFIX=arn:aws:ssm:<리전>:<계정>:parameter/commerce-settle/app/` 아래에 준비합니다. DB·Redis 자격은 데이터 서비스와 같아야 합니다. Gateway·Commerce의 `AUTH_SESSION_EPOCH`·`AUTH_REDIS_RUN_ID`는 같은 승인값을 쓰며 임의 생성하거나 오래된 값을 재사용하지 않습니다. 필요한 ARN 전체는 생성 JSON의 `secrets`에서 확인합니다.
+
+Payment API의 `payment-api/SPRING_APPLICATION_JSON` 파라미터에는 Settlement 발신 자격을 포함한 아래 JSON을 저장합니다. `current`는 Settlement의 `PAYMENT_SETTLEMENT_CREDENTIAL`과 같아야 합니다. 예시의 자리표시자나 실제 비밀값을 Git·명령 이력·PR에 넣지 않습니다.
+
+```json
+{"app":{"internal-auth":{"senders":{"[service:settlement]":{"current":"<승인한 자격>"}}}}}
+```
+
+생성기는 Compose의 기본 활성화 값을 유지합니다. Kafka 토픽·DB·Redis 인증 세대를 준비한 뒤 outbox·배치·시연 계정 등의 환경을 검토하고 최초 기동을 검증합니다. 기본 시연 계정이 활성인 Gateway·Commerce에는 SSM의 `DEV_FIXTURE_PASSWORD`도 필요합니다. 이전 자격이 기본 빈 값인 `*_PREVIOUS` 항목은 생략하며 자격 회전 때 Task의 `secrets`에 명시적으로 추가합니다. 이후 이미지 배포는 이 설정을 보존합니다.
+
+최초 태그의 같은 Actions 실행에서 `release-image-*` artifact의 JSON 다섯 개를 한 `IMAGES_DIR`에 모읍니다. 앱이 아직 없으면 첫 `deploy` job은 서비스 사전 검사에서 멈추므로, 게시된 이미지를 사용해 아래 준비를 마친 뒤 실패한 배포 job만 재실행합니다. ECR 업로드 성공을 앱 배포 성공으로 보지 않습니다.
+
+```bash
+set -euo pipefail
+export AWS_REGION ECS_CLUSTER ECS_EXECUTION_ROLE_ARN APP_SSM_PARAMETER_ARN_PREFIX
+export APP_PRIVATE_IPV4 DATA_PRIVATE_IPV4 IMAGES_DIR
+TASK_DIR=$(mktemp -d)
+for service in gateway commerce payment-api payment-worker settlement finance-mock; do
+  module=$service
+  case $service in payment-*) module=payment ;; esac
+  image=$(jq -r '.image' "$IMAGES_DIR/$module.json")
+  python3 -B scripts/render_ecs_apps.py "$service" --image "$image" \
+    --region "${AWS_REGION:?}" --execution-role "${ECS_EXECUTION_ROLE_ARN:?}" \
+    --parameter-prefix "${APP_SSM_PARAMETER_ARN_PREFIX:?}" \
+    --app-private-ip "${APP_PRIVATE_IPV4:?}" --data-private-ip "${DATA_PRIVATE_IPV4:?}" \
+    > "$TASK_DIR/$service.json"
+done
+jq -r '.containerDefinitions[].secrets[].valueFrom' "$TASK_DIR"/*.json | sort -u
+```
+
+AWS 계정·리전과 모든 SSM 값·로그·네트워크·업무 활성화 설정을 확인한 뒤에만 서비스 생성을 수행합니다. 기존 서비스가 있으면 먼저 현재 실행 정의를 조회하며 삭제·재생성하지 않습니다.
+
+```bash
+set -euo pipefail
+aws sts get-caller-identity
+for service in finance-mock commerce payment-api payment-worker settlement gateway; do
+  task_arn=$(aws ecs register-task-definition --cli-input-json "file://$TASK_DIR/$service.json" \
+    --query taskDefinition.taskDefinitionArn --output text)
+  aws ecs create-service --cluster "${ECS_CLUSTER:?}" \
+    --service-name "commerce-settle-$service" --task-definition "$task_arn" \
+    --desired-count 1 --launch-type EC2 \
+    --deployment-configuration 'maximumPercent=100,minimumHealthyPercent=0,deploymentCircuitBreaker={enable=true,rollback=true}'
+  aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "commerce-settle-$service"
+done
+rm -r "$TASK_DIR"
+unset TASK_DIR
+```
+
+빈 앱 최초 배포에는 직전 정상 revision이 없습니다. 실패 시 해당 서비스와 로그를 확인하고 같은 준비를 수정해 이어가며, 기존 데이터나 전체 서비스를 지우지 않습니다. Caddy·DNS·인증서는 [HTTPS 절차](#배포용-https)로 연결한 뒤 실제 로그인·주문·결제·정산을 시연 계정으로 확인합니다.
+
+### 태그 배포 설정과 실패 복구
+
+GitHub 저장소 변수는 다음과 같습니다. AWS 연결 정보이며 비밀번호나 장기 Access Key를 등록하지 않습니다.
+
+| 변수 | 값 |
+| --- | --- |
+| `AWS_ROLE_ARN` | GitHub OIDC가 맡는 배포 역할 |
+| `ECR_REPOSITORY` | 앱 이미지 다섯 종을 저장하는 리포지토리 |
+| `ECS_CLUSTER` | 최초 준비를 마친 앱 ECS 클러스터 이름 |
+| `PUBLIC_BASE_URL` | 공개 앱의 `https://<도메인>` |
+
+OIDC 신뢰는 해당 저장소의 `refs/tags/v*`와 `sts.amazonaws.com` audience에 한정합니다. 배포 역할은 기존 ECR 권한 외에 앱 서비스의 `ecs:DescribeServices`·`ecs:UpdateService`, 앱 실행 정의의 `ecs:DescribeTaskDefinition`·`ecs:ListTagsForResource`·`ecs:RegisterTaskDefinition`·등록 시 `ecs:TagResource`, 해당 실행·Task 역할에 대한 `iam:PassRole`이 필요합니다. 등록 API의 리소스 제약 한계를 확인하고 서비스·실행 정의 family·전달 역할을 이 앱 범위로 제한합니다. 서비스 최초 생성 권한은 CI 역할에 추가하지 않습니다.
+
+배포 도구는 같은 태그·커밋의 이미지 다섯 개, AWS 계정·리전, 앱 서비스 여섯 개의 정상 상태를 먼저 확인합니다. 모든 새 revision을 등록한 뒤 Finance Mock → Commerce → Payment API → Worker → Settlement → Gateway 순서로 교체합니다. 각 서비스의 `services-stable`과 요청한 revision의 완료를 함께 확인하며 자동 롤백된 상태를 성공으로 오인하지 않습니다. 마지막으로 TLS 검증을 켠 공개 HTTPS에서 Commerce·Payment·Settlement의 OpenAPI 응답을 확인합니다. 이는 연결 검사이며 실제 금융 업무 검증을 대신하지 않습니다.
+
+첫 AWS 변경 전에 `ecs-rollback-<태그>-<시도>` artifact로 직전 Task ARN과 릴리스 정보를 7일 보관합니다. 업로드가 성공해야 배포를 시작하며 저장한 파일의 SHA·릴리스와 현재 서비스 revision을 다시 대조합니다. 변경 뒤의 `ecs-deployment-<태그>-<시도>` artifact는 새 ARN·시도·복구 결과를 추가합니다. 두 기록 모두 자격이나 Task 환경 원문을 담지 않습니다.
+
+실패하면 이번 실행이 갱신을 시도한 앱을 역순으로 되돌립니다. 조회 시 다른 revision을 감지한 서비스는 변경하지 않습니다. 다만 ECS의 조회와 갱신은 원자적이지 않아 조회 직후의 수동 변경까지 막지는 못합니다. **CI 배포가 시작되면 완료·복구까지 콘솔·CLI 수동 갱신을 중단합니다.** CI의 동시 실행 제한이 수동 AWS 작업을 잠그지는 않습니다.
+
+`rollback_errors`에 남은 서비스는 현재 revision·로그를 대조해 적용자가 복구합니다. 강제 종료로 결과 artifact가 없더라도 사전에 보관한 `rollback-plan.json`의 `previous`를 사용합니다. 이 값은 시작 상태이므로 실제 변경된 서비스는 현재 AWS 상태로 확인합니다. 결과 기록이 없으면 현재 Task Definition의 이미지와 계획의 digest를 대조해 이번 실행의 변경인지 확인합니다. 수동 복구도 AWS 계정·리전·클러스터와 현재/직전/이번 등록 revision을 대조한 뒤 수행합니다. SSM 값·DB migration의 복구는 별도입니다.
+
+```bash
+jq '.status, .previous' work/rollback-plan.json
+service=commerce-settle-commerce
+task_arn=$(jq -r '.previous.commerce' work/rollback-plan.json)
+aws ecs update-service --cluster "$ECS_CLUSTER" --service "$service" --task-definition "$task_arn"
+aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$service"
+```
+
+서비스별 전환 중 서로 다른 버전이 공존할 수 있으므로 API·이벤트 호환성을 유지합니다. 고정 포트의 구 Task를 먼저 멈추므로 중단 시간이 있으며 무중단 배포를 보장하지 않습니다. 실제 AWS의 역할·SSM·기동·재배포·실패 복구를 확인하기 전에는 자동 배포의 운영 검증 완료로 판단하지 않습니다.
+
 ## 배포용 HTTPS
 
 공개 경로는 **DuckDNS → 기존 앱 EC2의 Caddy → Gateway 내부 HTTP 주소**입니다. [Caddyfile](../infra/caddy/Caddyfile)과 [EC2 Task 템플릿](../infra/caddy/task-definition.json)만 배포에 사용하며, 로컬 `compose.yml`의 HTTP 실행에는 추가하지 않습니다. Caddy와 [Let's Encrypt 인증서](https://letsencrypt.org/about/), [DuckDNS 서브도메인](https://www.duckdns.org/about.jsp)은 무료입니다. EC2·공인 IPv4·디스크·트래픽·로그의 AWS 비용은 별도입니다. ALB나 추가 EC2를 만들지 않습니다.

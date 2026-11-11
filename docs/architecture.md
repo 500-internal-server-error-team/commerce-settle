@@ -53,18 +53,21 @@ CloudWatch Logs는 두 EC2의 컨테이너 로그를 모으는 관리형 서비�
 | 데이터 | 앱 측 보안 그룹 | 9092 | Kafka 클라이언트 |
 | 데이터 | 앱 측 보안 그룹 | 9411 | Zipkin의 추적 수신 |
 | 데이터 | 앱 측 보안 그룹 | 3000, 9090, 8081 | Caddy의 Grafana·Prometheus·Kafka UI 프록시 |
+| 데이터 | 앱 측 보안 그룹 | 9090 | Commerce의 Prometheus 기반 주문 진입 판단 |
 
 표는 서비스 수신 포트 기준입니다. ECS `awsvpc`는 Task ENI의 보안 그룹·포트를, `bridge`·`host`는 EC2의 실제 노출 포트를 확인해 허용합니다. 여러 앱의 관리 포트를 서로 다른 `hostPort`로 매핑하면 그 포트들을 데이터 측에만 허용합니다. 허용 출처도 실제 송신 ENI에 연결된 보안 그룹을 참조하며 앱 EC2의 공인 IP를 사용하지 않습니다. [AWS의 보안 그룹 참조 규칙](https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html#security-group-referencing)을 따릅니다.
 
 DB·메시징·관리·관측 포트는 인터넷에 공개하지 않습니다. 팀원은 앱 EC2의 Caddy가 제공하는 도구별 HTTPS 주소로 접속합니다. Grafana는 자체 로그인, Prometheus·Zipkin·Kafka UI는 Caddy의 Basic 인증으로 보호합니다. Zipkin의 공개 프록시는 조회만 허용하고 앱의 추적 수집은 사설 9411을 유지합니다. 주소·인증·배포·복구는 [모니터링 HTTPS 접속](development.md#모니터링-https-접속)을 따릅니다. 실제 보안 그룹 ID·규칙과 포트 매핑은 배포 환경에서 대조합니다.
 
-아래 실행·연결·포트·프로필 설명과 세부 도식은 현재 Compose 설정을 기준으로 합니다. 앱의 ECS 실행 정의와 서비스 갱신은 아직 이 저장소에 구현하지 않았습니다.
+아래 실행·연결·포트·프로필 설명과 세부 도식은 현재 Compose 설정을 기준으로 합니다. ECS 앱의 초기 실행 정의 생성과 태그 배포는 [앱 배포 절차](development.md#ecs-ec2-앱과-태그-배포)를 따릅니다.
 
 ### CI/CD와 이미지 배포
 
-현재 GitHub Actions는 테스트·JAR 패키징·Compose 통합 검증을 수행합니다. 목표 CD는 검증한 커밋의 `linux/arm64` 앱 이미지를 빌드해 ECR에 저장하고, 해당 이미지 digest로 ECS Task Definition을 등록한 뒤 앱 서비스를 갱신합니다. EC2의 ECS 에이전트가 [ECR에 이미지 pull을 요청](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/pull-behavior.html)해 받아 실행합니다. [GitHub의 ECS 배포 흐름](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/amazon-elastic-container-service)을 기준으로 구성합니다.
+GitHub Actions는 테스트·JAR 패키징·Compose 통합 검증을 통과한 `v*` 태그의 앱 이미지 다섯 종을 서울 리전(`ap-northeast-2`)의 ECR에 `linux/arm64`로 저장합니다. 이미지 태그는 `<모듈>-<Git 태그>`이며 Payment API·Worker는 같은 `payment` 이미지를 사용합니다. 브랜치 push는 이미지를 게시하지 않습니다.
 
-`v*` 형식의 Git 태그(예: `v0.1.0`)를 push하고 그 커밋의 모든 검사가 통과하면 CI의 `publish` job이 앱 이미지 다섯 종을 서울 리전(`ap-northeast-2`)의 ECR 리포지토리 하나에 `linux/arm64`로 push합니다. 브랜치 push만으로는 이미지를 만들지 않습니다. 이미지 태그는 `<모듈>-<Git 태그>`이며 `payment` 이미지는 Payment API·Worker가 함께 사용합니다. GitHub OIDC로 맡는 IAM 역할을 저장소 변수 `AWS_ROLE_ARN`에, 리포지토리 이름을 `ECR_REPOSITORY`에 등록합니다. 태그가 섞이므로 ECR 수명 주기 정책은 모듈별 태그 접두사로 나눠 설정합니다. 실제 push는 AWS 설정 후 검증해야 하며, PostgreSQL 이미지 push와 Task Definition 등록·서비스 갱신은 미구현입니다. Caddy의 배포용 Task 템플릿과 [HTTPS 운영 절차](development.md#배포용-https)는 제공하지만 실제 AWS 적용·공인 인증서 발급은 별도 검증이 필요합니다. 배포 대상 브랜치·실행 조건·IAM 권한과 상태 확인·실패 복구를 정하고 검증해야 합니다. 앱 호스트가 한 대이므로 Task 교체에 필요한 여유 자원·포트와 중단 가능 시간을 확인하며 무중단 배포를 보장하지 않습니다. DB·Kafka·Redis의 변경은 데이터 보존·복구 절차에 따라 별도로 수행합니다. GitHub 호스팅 러너와 ECR은 EC2 2대에 포함되는 추가 호스트가 아닙니다.
+이미지가 모두 게시되면 현재 `main` 커밋을 가리키는 태그만 ECS 앱 서비스를 순차 갱신합니다. 같은 릴리스의 digest를 기존 Task Definition에 넣어 환경·자격·포트를 보존하며, ECS 안정화 뒤 실제 실행 정의와 공개 HTTPS의 서비스별 OpenAPI 응답을 확인합니다. 실패하면 이번 실행이 갱신을 시도한 서비스를 직전 실행 정의로 복구합니다. 서비스 간 전환은 원자적이지 않으며 앱 호스트 한 대의 고정 포트를 교체하므로 중단 시간이 있습니다. EC2의 ECS 에이전트가 [ECR에서 이미지를 가져와](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/pull-behavior.html) 실행합니다.
+
+최초 앱·SSM·IAM·HTTPS 연결과 실제 AWS 배포 검증은 별도로 수행해야 합니다. GitHub 변수·서비스 이름·허용 포트·배포 기록·실패 복구는 [앱 배포 절차](development.md#ecs-ec2-앱과-태그-배포)가 기준입니다. DB·Kafka·Redis·관측 도구·Caddy는 앱 태그 배포에 포함하지 않습니다. ECR 수명 주기 정책은 모듈별 접두사로 구분합니다. GitHub 호스팅 러너와 ECR은 EC2 2대에 포함되는 추가 호스트가 아닙니다.
 
 ### 애플리케이션과 인프라
 
