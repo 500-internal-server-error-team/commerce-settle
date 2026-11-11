@@ -21,6 +21,7 @@ import com.commercesettle.payment.domain.model.PaymentAttempt;
 import com.commercesettle.payment.domain.repository.MileageWalletRepository;
 import com.commercesettle.payment.domain.repository.PaymentAttemptRepository;
 import com.commercesettle.payment.domain.repository.PaymentRepository;
+import com.commercesettle.payment.support.PaymentObservationsTestConfiguration;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -835,6 +836,7 @@ class RefundSagaIntegrationTest {
       useDefaultFilters = false,
       includeFilters = @ComponentScan.Filter(Repository.class))
   @Import({
+    PaymentObservationsTestConfiguration.class,
     ApplyOrderPaymentRequestService.class,
     PaymentNotices.class,
     RefundEventHandler.class,

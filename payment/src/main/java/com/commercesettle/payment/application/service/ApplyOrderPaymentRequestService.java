@@ -9,6 +9,9 @@ import com.commercesettle.payment.application.event.PaymentConfirmedPayload;
 import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
+import com.commercesettle.payment.application.port.PaymentProcessingObservation;
+import com.commercesettle.payment.application.port.PaymentProcessingObservation.Queue;
+import com.commercesettle.payment.application.port.PaymentProcessingObservation.Stage;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.commercesettle.payment.domain.exception.InvalidPaymentAmountException;
 import com.commercesettle.payment.domain.model.MileageEntry;
@@ -76,6 +79,7 @@ public class ApplyOrderPaymentRequestService {
   private final TransactionOperations transactions;
   private final Clock clock;
   private final Duration lease;
+  private final PaymentProcessingObservation observations;
 
   public ApplyOrderPaymentRequestService(
       InboxStore inbox,
@@ -89,7 +93,8 @@ public class ApplyOrderPaymentRequestService {
       PaymentNotices notices,
       TransactionOperations transactions,
       Clock clock,
-      @Value("${app.payment-request-processor.lease-ms:30000}") long leaseMs) {
+      @Value("${app.payment-request-processor.lease-ms:30000}") long leaseMs,
+      PaymentProcessingObservation observations) {
     if (leaseMs <= 0) {
       throw new IllegalArgumentException("Invalid payment request lease");
     }
@@ -105,6 +110,7 @@ public class ApplyOrderPaymentRequestService {
     this.transactions = transactions;
     this.clock = clock;
     this.lease = Duration.ofMillis(leaseMs);
+    this.observations = observations;
   }
 
   /**
@@ -122,7 +128,13 @@ public class ApplyOrderPaymentRequestService {
   }
 
   private boolean processClaimed(Function<Instant, Optional<InboxClaim>> claim) {
-    Optional<InboxClaim> next = transactions.execute(status -> claim.apply(clock.instant()));
+    return observations.observe(Stage.INBOX_PROCESS, () -> processObserved(claim));
+  }
+
+  private boolean processObserved(Function<Instant, Optional<InboxClaim>> claim) {
+    Optional<InboxClaim> next =
+        observations.observe(
+            Stage.INBOX_CLAIM, () -> transactions.execute(status -> claim.apply(clock.instant())));
     if (next == null || next.isEmpty()) {
       return false;
     }
@@ -130,21 +142,27 @@ public class ApplyOrderPaymentRequestService {
       // 선점 트랜잭션에서 이미 확인 대상으로 넘기고 커밋했다. 처리 1건으로 센다.
       return true;
     }
+    observations.identify("event.id", claimed.event().eventId());
+    observations.identify("inbox.id", claimed.inboxId());
+    observations.queueWait(Queue.INBOX, claimed.registeredAt(), claimed.attempts());
     try {
-      transactions.executeWithoutResult(
-          status -> {
-            inbox.lockOrder(claimed.lockKey());
-            if (!inbox.lockClaimed(claimed.inboxId(), claimed.version())) {
-              // 취소 처리에서 이미 완료했거나 다른 처리기가 다시 선점했다. 기존 결과를 덮어쓰지 않는다.
-              LOG.atDebug()
-                  .addKeyValue("event", "payment.accept")
-                  .addKeyValue("inboxId", claimed.inboxId())
-                  .addKeyValue("result", "SKIPPED")
-                  .log("Payment request already handled or lease lost");
-              return;
-            }
-            process(Optional.of(claimed), clock.instant());
-          });
+      observations.observe(
+          Stage.INBOX_APPLY,
+          () ->
+              transactions.executeWithoutResult(
+                  status -> {
+                    inbox.lockOrder(claimed.lockKey());
+                    if (!inbox.lockClaimed(claimed.inboxId(), claimed.version())) {
+                      // 취소 처리에서 이미 완료했거나 다른 처리기가 다시 선점했다. 기존 결과를 덮어쓰지 않는다.
+                      LOG.atDebug()
+                          .addKeyValue("event", "payment.accept")
+                          .addKeyValue("inboxId", claimed.inboxId())
+                          .addKeyValue("result", "SKIPPED")
+                          .log("Payment request already handled or lease lost");
+                      return;
+                    }
+                    process(Optional.of(claimed), clock.instant());
+                  }));
     } catch (RuntimeException exception) {
       recordFailure(claimed, exception);
     }
@@ -163,10 +181,17 @@ public class ApplyOrderPaymentRequestService {
     Boolean recorded;
     try {
       recorded =
-          transactions.execute(
-              status ->
-                  inbox.recordFailure(
-                      claimed.inboxId(), claimed.version(), PROCESSING_FAILED, retry, now));
+          observations.observe(
+              Stage.INBOX_FAILURE,
+              () ->
+                  transactions.execute(
+                      status ->
+                          inbox.recordFailure(
+                              claimed.inboxId(),
+                              claimed.version(),
+                              PROCESSING_FAILED,
+                              retry,
+                              now)));
     } catch (RuntimeException recordFailure) {
       // 기록 실패만 올라가면 처리 실패의 원인을 잃으므로 함께 싣는다.
       recordFailure.addSuppressed(cause);
@@ -214,6 +239,7 @@ public class ApplyOrderPaymentRequestService {
 
     Optional<Payment> existing = payments.findByOrderId(payload.orderId());
     if (existing.isPresent()) {
+      observations.identify("payment.id", existing.get().getId());
       if (!isSameRequest(existing.get(), payload, amounts.get())) {
         return review(claimed.get(), "PAYMENT_REQUEST_ORDER_CONFLICT", now);
       }
@@ -226,6 +252,7 @@ public class ApplyOrderPaymentRequestService {
     if (earlyCancellation.isPresent()) {
       // 취소가 먼저 처리됐다. 늦은 결제 요청으로 결제를 살리지 않고 취소 상태로 만든다. 승인 작업·마일리지 예약은 만들지 않는다.
       Payment payment = payments.save(newPayment(payload, amounts.get(), now));
+      observations.identify("payment.id", payment.getId());
       payment.cancel(now);
       appendAccepted(payment, payload, now);
       appendCancellationResult(
@@ -246,6 +273,7 @@ public class ApplyOrderPaymentRequestService {
     }
 
     Payment payment = createPayment(payload, amounts.get(), now);
+    observations.identify("payment.id", payment.getId());
     if (mileage > 0) {
       reserveMileage(wallet.get(), payment, now);
     }

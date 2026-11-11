@@ -60,7 +60,7 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
                 AND ((status IN ('PENDING', 'RETRY') AND next_run_at <= clock_timestamp())
                   OR (status = 'RUNNING' AND lease_until < clock_timestamp()))
               ORDER BY next_run_at, id LIMIT 1 FOR UPDATE SKIP LOCKED)
-            RETURNING id, payment_id, business_key, lease_token, attempts
+            RETURNING id, payment_id, business_key, lease_token, attempts, created_at
             """,
             new MapSqlParameterSource()
                 .addValue("operation", operation.name())
@@ -73,7 +73,8 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
                     rs.getObject("payment_id", UUID.class),
                     rs.getObject("business_key", UUID.class),
                     rs.getObject("lease_token", UUID.class),
-                    rs.getInt("attempts")))
+                    rs.getInt("attempts"),
+                    rs.getTimestamp("created_at").toInstant()))
         .stream()
         .findFirst();
   }

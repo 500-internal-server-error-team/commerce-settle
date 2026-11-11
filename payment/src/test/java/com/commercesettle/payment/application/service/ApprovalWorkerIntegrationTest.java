@@ -11,6 +11,7 @@ import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.S
 import com.commercesettle.payment.application.port.PaymentGateway;
 import com.commercesettle.payment.application.port.PaymentGateway.ApprovalRequest;
 import com.commercesettle.payment.application.port.PaymentGateway.Result;
+import com.commercesettle.payment.support.PaymentObservationsTestConfiguration;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -660,6 +661,7 @@ class ApprovalWorkerIntegrationTest {
       useDefaultFilters = false,
       includeFilters = @ComponentScan.Filter(Repository.class))
   @Import({
+    PaymentObservationsTestConfiguration.class,
     ApplyOrderPaymentRequestService.class,
     PaymentNotices.class,
     RefundEventHandler.class,

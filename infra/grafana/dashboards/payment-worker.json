@@ -1,0 +1,286 @@
+{
+  "uid": "commerce-settle-payment-worker",
+  "title": "commerce-settle / Payment Worker",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "timezone": "Asia/Seoul",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "첫 선점 대기 · 평균",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (queue) (rate(payment_queue_wait_seconds_sum{application=\"payment\",role=\"worker\"}[2m])) / sum by (queue) (rate(payment_queue_wait_seconds_count{application=\"payment\",role=\"worker\"}[2m]))",
+          "legendFormat": "{{queue}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "첫 선점 대기 · p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le,queue) (rate(payment_queue_wait_seconds_bucket{application=\"payment\",role=\"worker\"}[2m])))",
+          "legendFormat": "{{queue}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "처리 단계 · 평균 · 트랜잭션은 커밋·롤백 포함",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (stage) (rate(payment_processing_seconds_sum{application=\"payment\",role=\"worker\"}[2m])) / sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[2m]))",
+          "legendFormat": "{{stage}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "처리 단계 · p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(payment_processing_seconds_bucket{application=\"payment\",role=\"worker\"}[2m])))",
+          "legendFormat": "{{stage}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "SQL 실행 · 단계별 평균",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (stage) (rate(jdbc_query_seconds_sum{application=\"payment\",role=\"worker\"}[2m])) / sum by (stage) (rate(jdbc_query_seconds_count{application=\"payment\",role=\"worker\"}[2m]))",
+          "legendFormat": "{{stage}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "SQL 실행 · 단계별 p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(jdbc_query_seconds_bucket{application=\"payment\",role=\"worker\"}[2m])))",
+          "legendFormat": "{{stage}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "단계 실행 횟수 / 초",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[2m]))",
+          "legendFormat": "{{stage}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "단계 예외 / 초",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (stage,error) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\",error!=\"none\"}[2m]))",
+          "legendFormat": "{{stage}} {{error}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "미완료 Inbox·결제 작업 (승인·환불)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "financial:queue_value{queue=~\"payment.inbox|payment.payment_jobs\"}",
+          "legendFormat": "{{queue}}"
+        }
+      ],
+      "description": "기존 금융 관측 recording rule로 최신 유효 표본만 사용한다. 관측 실패·오래된 표본은 No data로 남긴다. 결제 작업은 승인·환불의 PENDING/RUNNING/RETRY/REVIEW_REQUIRED를 포함한다."
+    },
+    {
+      "id": 10,
+      "title": "실행 가능 Inbox·결제 작업의 도래 지연",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "financial:due_queue_value{queue=~\"payment.inbox|payment.payment_jobs\"}",
+          "legendFormat": "{{queue}}"
+        }
+      ],
+      "description": "최신 유효 표본의 도래한 WAITING/PENDING/RETRY와 임대가 만료된 RUNNING 기준. 관측 실패는 No data이며 전체 미완료 작업의 나이와 다르다."
+    }
+  ]
+}

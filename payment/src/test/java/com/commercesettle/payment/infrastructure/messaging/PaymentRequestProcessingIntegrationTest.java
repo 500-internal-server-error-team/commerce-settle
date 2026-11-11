@@ -14,6 +14,7 @@ import com.commercesettle.payment.application.service.PaymentNotices;
 import com.commercesettle.payment.application.service.RefundEventHandler;
 import com.commercesettle.payment.application.service.RefundEvents;
 import com.commercesettle.payment.application.service.RefundSettlementReplyService;
+import com.commercesettle.payment.support.PaymentObservationsTestConfiguration;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -950,6 +951,7 @@ class PaymentRequestProcessingIntegrationTest {
       useDefaultFilters = false,
       includeFilters = @ComponentScan.Filter(Repository.class))
   @Import({
+    PaymentObservationsTestConfiguration.class,
     ApplyOrderPaymentRequestService.class,
     PaymentNotices.class,
     RefundEventHandler.class,

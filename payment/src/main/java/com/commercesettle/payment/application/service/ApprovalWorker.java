@@ -3,6 +3,9 @@ package com.commercesettle.payment.application.service;
 import com.commercesettle.payment.application.dto.ApprovalWorkerSettings;
 import com.commercesettle.payment.application.port.PaymentGateway;
 import com.commercesettle.payment.application.port.PaymentGateway.Result;
+import com.commercesettle.payment.application.port.PaymentProcessingObservation;
+import com.commercesettle.payment.application.port.PaymentProcessingObservation.Queue;
+import com.commercesettle.payment.application.port.PaymentProcessingObservation.Stage;
 import com.commercesettle.payment.application.service.ApprovalResultRecorder.ApprovalLeaseLostException;
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository;
@@ -26,33 +29,48 @@ public class ApprovalWorker {
   private final ApprovalResultRecorder recorder;
   private final PaymentGateway gateway;
   private final ApprovalWorkerSettings settings;
+  private final PaymentProcessingObservation observations;
   private final String owner = "payment-" + UUID.randomUUID();
 
   ApprovalWorker(
       PaymentJobRepository jobs,
       ApprovalResultRecorder recorder,
       PaymentGateway gateway,
-      ApprovalWorkerSettings settings) {
+      ApprovalWorkerSettings settings,
+      PaymentProcessingObservation observations) {
     this.jobs = jobs;
     this.recorder = recorder;
     this.gateway = gateway;
     this.settings = settings;
+    this.observations = observations;
   }
 
   /** 도래한 작업이 없으면 false를 돌려준다. */
   public boolean runOnce() {
+    return observations.observe(Stage.APPROVAL_PROCESS, this::processObserved);
+  }
+
+  private boolean processObserved() {
     Optional<LeasedJob> leased =
-        jobs.leaseNext(PaymentJobOperation.APPROVE, owner, settings.leaseDuration());
+        observations.observe(
+            Stage.APPROVAL_LEASE,
+            () -> jobs.leaseNext(PaymentJobOperation.APPROVE, owner, settings.leaseDuration()));
     if (leased.isEmpty()) {
       return false;
     }
     LeasedJob job = leased.get();
-    Optional<ApprovalResultRecorder.Prepared> prepared = recorder.prepare(job);
+    observations.identify("job.id", job.jobId());
+    observations.identify("payment.id", job.paymentId());
+    observations.queueWait(Queue.APPROVAL, job.registeredAt(), job.attempts());
+    Optional<ApprovalResultRecorder.Prepared> prepared =
+        observations.observe(Stage.APPROVAL_PREPARE, () -> recorder.prepare(job));
     if (prepared.isEmpty()) {
       return true;
     }
     // 준비 트랜잭션 커밋까지 걸린 시간만큼 임대가 줄었으므로 외부 호출 직전에 남은 임대를 다시 확인한다.
-    if (!jobs.holdsLease(job.jobId(), job.leaseToken(), settings.httpTimeout())) {
+    if (!observations.observe(
+        Stage.APPROVAL_LEASE_CHECK,
+        () -> jobs.holdsLease(job.jobId(), job.leaseToken(), settings.httpTimeout()))) {
       LOG.atWarn()
           .addKeyValue("event", "payment.approval")
           .addKeyValue("paymentId", job.paymentId())
@@ -61,9 +79,9 @@ public class ApprovalWorker {
           .log("Approval was not called because the lease was lost");
       return true;
     }
-    Result result = call(job, prepared.get());
+    Result result = observations.observe(Stage.APPROVAL_GATEWAY, () -> call(job, prepared.get()));
     try {
-      recorder.record(job, result);
+      observations.observe(Stage.APPROVAL_RECORD, () -> recorder.record(job, result));
       LOG.atLevel(
               result instanceof Result.Succeeded || result instanceof Result.Declined
                   ? Level.INFO

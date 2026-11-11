@@ -33,6 +33,7 @@ import com.commercesettle.payment.domain.exception.VersionConflictException;
 import com.commercesettle.payment.domain.model.MileageEntryKind;
 import com.commercesettle.payment.domain.model.PaymentAttemptStatus;
 import com.commercesettle.payment.domain.model.PaymentJobStatus;
+import com.commercesettle.payment.support.PaymentObservationsTestConfiguration;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -936,6 +937,7 @@ class PaymentReadAndOperationIntegrationTest {
       useDefaultFilters = false,
       includeFilters = @ComponentScan.Filter(Repository.class))
   @Import({
+    PaymentObservationsTestConfiguration.class,
     ApplyOrderPaymentRequestService.class,
     PaymentNotices.class,
     RefundEventHandler.class,
