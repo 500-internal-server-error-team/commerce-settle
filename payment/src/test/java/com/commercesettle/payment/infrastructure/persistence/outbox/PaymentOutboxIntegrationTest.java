@@ -2,9 +2,11 @@ package com.commercesettle.payment.infrastructure.persistence.outbox;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
+import com.commercesettle.payment.application.port.OutboxStore.Delivery;
 import com.commercesettle.payment.application.port.OutboxStore.Publication;
 import com.commercesettle.payment.application.port.OutboxStore.Published;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
@@ -13,10 +15,18 @@ import com.commercesettle.payment.infrastructure.messaging.OutboxAppended;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import javax.sql.DataSource;
@@ -28,6 +38,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -67,6 +78,7 @@ class PaymentOutboxIntegrationTest {
   @Autowired private PlatformTransactionManager manager;
   @Autowired private AtomicInteger appended;
   @Autowired private OutboxDeliveryService delivery;
+  @Autowired private DataSource dataSource;
 
   @BeforeEach
   void reset() {
@@ -205,6 +217,146 @@ class PaymentOutboxIntegrationTest {
                 reclaimed.id(),
                 expired.id()))
         .containsExactly("RUNNING", "RUNNING");
+  }
+
+  @Test
+  @DisplayName("배치 중 한 행의 잠금 대기가 끝나면 배치 전체를 롤백한다")
+  void rollsBackWholeBatchAfterBoundedLockWait() throws Exception {
+    var claimed = claimTwo();
+    var batch = published(claimed);
+
+    try (var executor = Executors.newSingleThreadExecutor();
+        var holder = dataSource.getConnection()) {
+      try {
+        lockRow(holder, claimed.get(1).id());
+        var result = executor.submit(() -> delivery.markPublished(batch));
+
+        assertLockTimeout(result);
+        for (var row : claimed) {
+          assertThat(
+                  jdbc.queryForMap(
+                      "SELECT status,version,published_offset FROM payment.outbox WHERE id=?",
+                      row.id()))
+              .containsEntry("status", "RUNNING")
+              .containsEntry("version", row.version())
+              .containsEntry("published_offset", null);
+        }
+      } finally {
+        holder.rollback();
+      }
+    }
+    assertThat(delivery.markPublished(batch))
+        .containsExactlyInAnyOrder(claimed.get(0).id(), claimed.get(1).id());
+  }
+
+  @Test
+  @DisplayName("행 잠금을 기다리는 동안 임대가 끝난 행만 빼고 나머지 결과를 저장한다")
+  void skipsLeaseExpiredWhileWaitingForRowLock() throws Exception {
+    var claimed = claimTwo();
+    var current = claimed.get(0);
+    var expiring = claimed.get(1);
+    var callerPid = new CompletableFuture<Integer>();
+    var start = new CompletableFuture<Void>();
+
+    try (var executor = Executors.newSingleThreadExecutor();
+        var holder = dataSource.getConnection()) {
+      try {
+        var result =
+            executor.submit(
+                () ->
+                    new TransactionTemplate(manager)
+                        .execute(
+                            status -> {
+                              callerPid.complete(
+                                  jdbc.queryForObject("SELECT pg_backend_pid()", Integer.class));
+                              start.orTimeout(5, TimeUnit.SECONDS).join();
+                              return delivery.markPublished(published(claimed));
+                            }));
+        int pid = callerPid.get(5, TimeUnit.SECONDS);
+        jdbc.update(
+            "UPDATE payment.outbox SET lease_until=clock_timestamp()+interval '500 milliseconds'"
+                + " WHERE id=?",
+            expiring.id());
+        lockRow(holder, expiring.id());
+        start.complete(null);
+        await()
+            .atMost(Duration.ofSeconds(2))
+            .pollInterval(Duration.ofMillis(10))
+            .until(
+                () ->
+                    jdbc.queryForObject(
+                        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid=? AND"
+                            + " wait_event_type='Lock')",
+                        Boolean.class,
+                        pid));
+        await()
+            .atMost(Duration.ofSeconds(2))
+            .pollInterval(Duration.ofMillis(10))
+            .until(
+                () ->
+                    jdbc.queryForObject(
+                        "SELECT lease_until <= clock_timestamp() FROM payment.outbox WHERE id=?",
+                        Boolean.class,
+                        expiring.id()));
+        holder.rollback();
+
+        assertThat(result.get(5, TimeUnit.SECONDS)).containsExactly(current.id());
+        assertThat(
+                jdbc.queryForObject(
+                    "SELECT status FROM payment.outbox WHERE id=?", String.class, current.id()))
+            .isEqualTo("PUBLISHED");
+        assertThat(
+                jdbc.queryForMap(
+                    "SELECT status,version,published_offset FROM payment.outbox WHERE id=?",
+                    expiring.id()))
+            .containsEntry("status", "RUNNING")
+            .containsEntry("version", expiring.version())
+            .containsEntry("published_offset", null);
+      } finally {
+        start.complete(null);
+        holder.rollback();
+      }
+    }
+  }
+
+  private List<Delivery> claimTwo() {
+    for (int i = 0; i < 2; i++) {
+      inTransaction(
+          () -> outbox.appendPaymentAccepted(event(UUID.randomUUID(), UUID.randomUUID(), 3)));
+    }
+    var claimed = delivery.claim(10, 240000, 10);
+    assertThat(claimed).hasSize(2);
+    return claimed;
+  }
+
+  private static List<Published> published(List<Delivery> deliveries) {
+    return deliveries.stream()
+        .map(d -> new Published(d, new Publication(d.topic(), 0, deliveries.indexOf(d))))
+        .toList();
+  }
+
+  private static void lockRow(Connection connection, UUID id) throws SQLException {
+    connection.setAutoCommit(false);
+    try (var statement =
+        connection.prepareStatement("SELECT id FROM payment.outbox WHERE id=? FOR UPDATE")) {
+      statement.setObject(1, id);
+      statement.execute();
+    }
+  }
+
+  private static void assertLockTimeout(Future<?> result) {
+    assertThatThrownBy(() -> result.get(5, TimeUnit.SECONDS))
+        .isInstanceOf(ExecutionException.class)
+        .hasCauseInstanceOf(DataAccessException.class)
+        .satisfies(
+            exception -> {
+              Throwable cause = exception;
+              while (cause.getCause() != null) {
+                cause = cause.getCause();
+              }
+              assertThat(cause).isInstanceOf(SQLException.class);
+              assertThat(((SQLException) cause).getSQLState()).isEqualTo("55P03");
+            });
   }
 
   private <T> T inTransaction(Supplier<T> action) {
