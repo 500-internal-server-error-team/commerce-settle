@@ -242,7 +242,7 @@ GitHub 저장소 변수는 다음과 같습니다. AWS 연결 정보이며 비�
 
 OIDC 신뢰는 해당 저장소의 `refs/tags/v*`와 `sts.amazonaws.com` audience에 한정합니다. 배포 역할은 기존 ECR 권한 외에 앱 서비스의 `ecs:DescribeServices`·`ecs:UpdateService`, 앱 실행 정의의 `ecs:DescribeTaskDefinition`·`ecs:ListTagsForResource`·`ecs:RegisterTaskDefinition`·등록 시 `ecs:TagResource`, 해당 실행·Task 역할에 대한 `iam:PassRole`이 필요합니다. 등록 API의 리소스 제약 한계를 확인하고 서비스·실행 정의 family·전달 역할을 이 앱 범위로 제한합니다. 서비스 최초 생성 권한은 CI 역할에 추가하지 않습니다.
 
-배포 도구는 같은 태그·커밋의 이미지 다섯 개, AWS 계정·리전, 앱 서비스 여섯 개의 정상 상태를 먼저 확인합니다. 모든 새 revision을 등록한 뒤 Finance Mock → Commerce → Payment API → Worker → Settlement → Gateway 순서로 교체합니다. 각 서비스의 `services-stable`과 요청한 revision의 완료를 함께 확인하며 자동 롤백된 상태를 성공으로 오인하지 않습니다. 마지막으로 TLS 검증을 켠 공개 HTTPS에서 Commerce·Payment·Settlement의 OpenAPI 응답을 확인합니다. 이는 연결 검사이며 실제 금융 업무 검증을 대신하지 않습니다.
+배포 도구는 같은 태그·커밋의 이미지 다섯 개, AWS 계정·리전, 앱 서비스 여섯 개의 정상 상태를 먼저 확인합니다. 이전 Task Definition도 `ACTIVE`여야 합니다. 기존 Task가 실행 중이어도 `INACTIVE` 실행 정의로는 되돌릴 수 없습니다. 모든 새 revision을 등록한 뒤 Finance Mock → Commerce → Payment API → Worker → Settlement → Gateway 순서로 교체합니다. 각 서비스의 `services-stable`과 요청한 revision의 완료를 함께 확인하며 자동 롤백된 상태를 성공으로 오인하지 않습니다. 마지막으로 TLS 검증을 켠 공개 HTTPS에서 Commerce·Payment·Settlement의 OpenAPI 응답을 확인합니다. 이는 연결 검사이며 실제 금융 업무 검증을 대신하지 않습니다.
 
 첫 AWS 변경 전에 `ecs-rollback-<태그>-<시도>` artifact로 직전 Task ARN과 릴리스 정보를 7일 보관합니다. 업로드가 성공해야 배포를 시작하며 저장한 파일의 SHA·릴리스와 현재 서비스 revision을 다시 대조합니다. 변경 뒤의 `ecs-deployment-<태그>-<시도>` artifact는 새 ARN·시도·복구 결과를 추가합니다. 두 기록 모두 자격이나 Task 환경 원문을 담지 않습니다.
 

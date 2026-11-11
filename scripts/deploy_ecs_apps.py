@@ -122,6 +122,8 @@ def prepare(aws, cluster, images, region):
         response = aws("ecs", "describe-task-definition", "--task-definition", old,
                        "--include", "TAGS")
         task = response["taskDefinition"]
+        if task.get("status") != "ACTIVE":
+            raise RuntimeError("previous task definition must be ACTIVE for rollback")
         if (task.get("family") != service_name(name) or task.get("networkMode") != "bridge"
                 or "EC2" not in task.get("requiresCompatibilities", [])
                 or task.get("runtimePlatform", {}).get("cpuArchitecture") != "ARM64"):

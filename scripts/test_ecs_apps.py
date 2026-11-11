@@ -87,7 +87,8 @@ class FakeAws:
                                  for name in names]}
         if operation == "describe-task-definition":
             definition = copy.deepcopy(self.tasks[arguments[1]])
-            definition.update(taskDefinitionArn=arguments[1], revision=1, status="ACTIVE")
+            definition.update(taskDefinitionArn=arguments[1], revision=1)
+            definition.setdefault("status", "ACTIVE")
             return {"taskDefinition": definition, "tags": [
                 {"key": "owner", "value": "apps"}, {"key": "AWS:managed", "value": "system"},
             ]}
@@ -191,6 +192,15 @@ class DeployTest(unittest.TestCase):
         aws = FakeAws()
         aws.services["settlement"]["runningCount"] = 0
         with self.assertRaises(RuntimeError):
+            self.run_deploy(aws)
+        self.assertFalse(any(call[0] in ("register-task-definition", "update-service")
+                             for call in aws.calls))
+
+    def test_running_service_with_inactive_rollback_definition_stops_before_any_write(self):
+        aws = FakeAws()
+        arn = aws.services["settlement"]["taskDefinition"]
+        aws.tasks[arn]["status"] = "INACTIVE"
+        with self.assertRaisesRegex(RuntimeError, "must be ACTIVE for rollback"):
             self.run_deploy(aws)
         self.assertFalse(any(call[0] in ("register-task-definition", "update-service")
                              for call in aws.calls))
