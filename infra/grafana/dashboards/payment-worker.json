@@ -2,7 +2,7 @@
   "uid": "commerce-settle-payment-worker",
   "title": "commerce-settle / Financial processing",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "15s",
   "timezone": "Asia/Seoul",
   "time": {
@@ -735,6 +735,359 @@
         }
       ],
       "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 23,
+      "title": "일배치 최근 회차 상태 · 송금 완료와 별도",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 88,
+        "w": 12,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "값 없음 · 수집 상태 확인",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "미실행 · 재기동 후 미관측",
+                  "color": "gray",
+                  "index": 0
+                },
+                "1": {
+                  "text": "실행 중",
+                  "color": "blue",
+                  "index": 1
+                },
+                "2": {
+                  "text": "COMPLETED · 지급 생성 완료",
+                  "color": "green",
+                  "index": 2
+                },
+                "3": {
+                  "text": "COMPLETED_WITH_SKIPS · 확인 필요",
+                  "color": "orange",
+                  "index": 3
+                },
+                "4": {
+                  "text": "FAILED / ABANDONED",
+                  "color": "red",
+                  "index": 4
+                },
+                "5": {
+                  "text": "STOPPED",
+                  "color": "orange",
+                  "index": 5
+                },
+                "6": {
+                  "text": "UNKNOWN · 확인 필요",
+                  "color": "red",
+                  "index": 6
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "((settlement_batch_last_state{application=\"settlement\",batch_job_name=\"dailySettlementJob\"} and on (job,instance) (up == 1)) and (time() - timestamp(settlement_batch_last_state{application=\"settlement\",batch_job_name=\"dailySettlementJob\"}) <= 45)) and on (job,instance) (settlement_batch_observer_ready{application=\"settlement\",batch_job_name=\"dailySettlementJob\"} == 1)",
+          "legendFormat": "{{instance}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value"
+      },
+      "description": "이 프로세스가 관측한 가장 최근 Job입니다. 재기동 후 0은 미관측이며 과거 성공을 뜻하지 않습니다. COMPLETED는 지급 예약/작업 생성 완료이고 송금 성공은 payout 상태·대기열에서 별도 확인합니다. ID·날짜는 Batch DB와 trace에서 확인합니다."
+    },
+    {
+      "id": 24,
+      "title": "일배치 수집 연결",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 88,
+        "w": 12,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "값 없음 · 수집 상태 확인",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "등록 실패",
+                  "color": "red",
+                  "index": 0
+                },
+                "1": {
+                  "text": "수집 연결됨",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(settlement_batch_observer_ready{application=\"settlement\",batch_job_name=\"dailySettlementJob\"} and on (job,instance) (up == 1)) and (time() - timestamp(settlement_batch_observer_ready{application=\"settlement\",batch_job_name=\"dailySettlementJob\"}) <= 45)",
+          "legendFormat": "{{instance}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value"
+      },
+      "description": "1은 최근 45초 이내 정상 scrape와 보강 지표 등록을 뜻합니다. 0/빈 값은 정상 실행 0건과 다릅니다. 이 값만으로 Job 성공을 판정하지 않습니다."
+    },
+    {
+      "id": 25,
+      "title": "일배치 최근 종료 회차 소요 시간",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 95,
+        "w": 12,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "값 없음 · 수집 상태 확인"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "((settlement_batch_last_duration_seconds{application=\"settlement\",batch_job_name=\"dailySettlementJob\"} and on (job,instance) (up == 1)) and (time() - timestamp(settlement_batch_last_duration_seconds{application=\"settlement\",batch_job_name=\"dailySettlementJob\"}) <= 45)) and on (job,instance) (settlement_batch_observer_ready{application=\"settlement\",batch_job_name=\"dailySettlementJob\"} == 1)",
+          "legendFormat": "{{instance}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value"
+      },
+      "description": "현재 프로세스의 최근 회차가 종료된 경우만 표시합니다. 실행 중·재기동 후 미실행은 NaN이며 과거 값이나 0으로 채우지 않습니다. 실패·스킵 여부는 상태 패널과 함께 확인합니다."
+    },
+    {
+      "id": 26,
+      "title": "일배치 최근 시작 시각",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 95,
+        "w": 12,
+        "h": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dateTimeAsIso",
+          "noValue": "값 없음 · 수집 상태 확인"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(((settlement_batch_last_started_seconds{application=\"settlement\",batch_job_name=\"dailySettlementJob\"} and on (job,instance) (up == 1)) and (time() - timestamp(settlement_batch_last_started_seconds{application=\"settlement\",batch_job_name=\"dailySettlementJob\"}) <= 45)) and on (job,instance) (settlement_batch_observer_ready{application=\"settlement\",batch_job_name=\"dailySettlementJob\"} == 1) > 0) * 1000",
+          "legendFormat": "{{instance}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value"
+      },
+      "description": "프로세스 재기동 전 이력은 Batch DB 기록과 Prometheus의 이전 구간에서 확인합니다."
+    },
+    {
+      "id": 27,
+      "title": "일배치 최근 Step 진행량 · 판매자 수",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 102,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "수집 없음"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "((settlement_batch_step_items{application=\"settlement\",batch_job_name=\"dailySettlementJob\"} and on (job,instance) (up == 1)) and (time() - timestamp(settlement_batch_step_items{application=\"settlement\",batch_job_name=\"dailySettlementJob\"}) <= 45)) and on (job,instance) (settlement_batch_observer_ready{application=\"settlement\",batch_job_name=\"dailySettlementJob\"} == 1)",
+          "legendFormat": "현재 {{instance}} {{kind}}"
+        },
+        {
+          "refId": "B",
+          "expr": "settlement_batch_step_items{application=\"settlement\",batch_job_name=\"dailySettlementJob\"} offset $comparison_offset",
+          "legendFormat": "이전 ($comparison_offset) {{instance}} {{kind}}"
+        }
+      ],
+      "description": "chunk 커밋 및 Step 종료 시의 누적 read/written/skipped 판매자 수입니다. 주문 수·송금 완료 수가 아니며 새 회차·프로세스 재기동 때 초기화됩니다."
+    },
+    {
+      "id": 28,
+      "title": "일배치 실행 중 경과 · 장기 실행 확인",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 102,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "수집 없음"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "spring_batch_job_active_seconds_max{application=\"settlement\",spring_batch_job_active_name=\"dailySettlementJob\"} and on (job,instance) (up == 1)",
+          "legendFormat": "Job {{instance}}"
+        },
+        {
+          "refId": "B",
+          "expr": "spring_batch_step_active_seconds_max{application=\"settlement\",spring_batch_step_job_name=\"dailySettlementJob\",spring_batch_step_name=\"settleSellers\"} and on (job,instance) (up == 1)",
+          "legendFormat": "Step {{instance}}"
+        }
+      ],
+      "description": "Spring Batch 기존 active LongTaskTimer를 사용합니다. 실행 중인 가장 오래된 회차의 경과이며 종료 시 0입니다. 완료 Timer는 실행 중 작업을 포함하지 않으므로 함께 확인합니다."
+    },
+    {
+      "id": 29,
+      "title": "일배치 종료 결과 · 선택 구간 실행 수",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 110,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "수집 없음"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (spring_batch_job_status) (increase(spring_batch_job_seconds_count{application=\"settlement\",spring_batch_job_name=\"dailySettlementJob\"}[$__range]))",
+          "legendFormat": "{{spring_batch_job_status}}"
+        }
+      ],
+      "description": "기존 Job Timer의 ExitStatus를 구분합니다. COMPLETED_WITH_SKIPS와 FAILED를 합쳐 성공으로 표시하지 않습니다. increase는 scrape 간 근사치이며 최초 표본 이전 실행은 세지 못할 수 있습니다. 정확한 회차는 Batch DB 기록을 확인합니다."
+    },
+    {
+      "id": 30,
+      "title": "일배치 Step 종료 평균 · 결과별",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 110,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "수집 없음"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (spring_batch_step_status) (increase(spring_batch_step_seconds_sum{application=\"settlement\",spring_batch_step_job_name=\"dailySettlementJob\",spring_batch_step_name=\"settleSellers\"}[$__range])) / sum by (spring_batch_step_status) (increase(spring_batch_step_seconds_count{application=\"settlement\",spring_batch_step_job_name=\"dailySettlementJob\",spring_batch_step_name=\"settleSellers\"}[$__range]))",
+          "legendFormat": "{{spring_batch_step_status}}"
+        }
+      ],
+      "description": "기존 Step Timer의 선택 구간 종료 평균입니다. 드문 일배치의 p95/p99를 충분한 표본 없이 만들지 않습니다. 최근 회차 시간·실행 중 경과·개별 trace를 함께 확인합니다."
     }
   ],
   "templating": {

@@ -683,7 +683,7 @@ Grafana의 `commerce-settle / Runtime overview` 대시보드와 Prometheus 데�
 | --- | --- |
 | `payment_queue_wait_seconds` (`queue=inbox`, `approval`) | 현재 대기 회차의 등록·변경 시각부터 첫 선점 완료까지. 재시도·임대 회수는 중복 집계하지 않습니다. |
 | `payment_processing_seconds` (`stage=inbox.*`, `approval.*`, `refund.*`) | 선점·업무 반영·실패 기록 또는 임대·준비·임대 확인·외부 호출·결과 반영 단계. 트랜잭션 프록시가 반환될 때 커밋·롤백까지 측정합니다. 빈 폴링도 포함하므로 완료 TPS가 아닙니다. |
-| `async_work_seconds` (`operation`) | 저장한 문맥으로 복원한 Inbox·Outbox·승인·환불·지급의 한 번의 실행. 빈 폴링은 제외하며 재시도는 별도 실행입니다. Settlement Inbox는 트랜잭션 완료까지, Outbox는 전송과 결과 콜백을 각각 측정합니다. |
+| `async_work_seconds` (`operation`) | 저장한 문맥으로 복원한 Inbox·Outbox·승인·환불·지급·일배치 판매자 처리의 한 번의 실행. 빈 폴링은 제외하며 재시도는 별도 실행입니다. Settlement Inbox는 트랜잭션 완료까지, Outbox는 전송과 결과 콜백을 각각 측정합니다. |
 | `async_stage_seconds` (`stage`) | 지급의 준비·외부 호출·결과 반영. 기존 Payment 단계 지표와 별개입니다. |
 | `async_queue_wait_seconds` (`queue`, `kind`) | `initial`: 현재 대기 회차부터 선점까지, `retry`: 실패 기록부터 재선점까지, `lease-recovery`: 이전 임대 만료부터 회수까지. 기존 실행 시간은 재시도 대기에 더하지 않습니다. |
 | `async_queue_backoff_seconds` | 실패 기록부터 다음 실행 가능 시각까지의 계획된 재시도 대기입니다. |
@@ -692,9 +692,9 @@ Grafana의 `commerce-settle / Runtime overview` 대시보드와 Prometheus 데�
 
 Timer의 `_count`·`_sum`·`_bucket`은 Trace 샘플링과 별도로 수집합니다. `process`·하위 단계·SQL은 시간이 겹치므로 합산하지 않습니다. 음수 대기 표본은 제외하며 서버 시각 동기화가 필요합니다. Histogram의 p95/p99는 버킷 근사값이며, 대기 Timer의 유한 버킷 상한은 5분입니다. 그보다 긴 대기는 count·sum과 기존 도래 지연 gauge·개별 trace로 함께 확인합니다. 기존 행의 추적 부모는 NULL이고, 과거 재시도 종류를 판단할 수 없으면 `kind=unknown`으로 실행 가능 시각 이후만 측정합니다. 수동 재처리는 원래 trace 부모를 유지하지만 새 대기 회차의 변경 시각부터 셉니다.
 
-W3C `traceparent`는 Outbox·Inbox·금융 Job의 첫 저장 때 업무 원문과 분리해 저장하고, 실행기·콜백·재시작 뒤에 복원합니다. 같은 eventId 재전달은 원문 bytes·해시·최초 부모를 바꾸지 않습니다. Zipkin에서 `commerce.outbox.send` → Kafka → `payment.inbox.process` → `payment.approval.process`/`payment.refund.process` → Outbox·Commerce/Settlement Inbox를 같은 traceId로 따라갑니다. 판매자 승인처럼 별도 사용자가 새로 내리는 명령은 새 HTTP trace이며, 반품 환불은 실제 SAGA를 시작하는 판매자 승인 요청에서 추적합니다. 지급도 배치·지급 Job을 만든 문맥에서 시작하므로 주문과 별도 trace일 수 있습니다. 관련 거래는 Trace의 업무 ID로 대조합니다. `.wait` span은 실행 span과 저장 부모를 공유하는 형제이며 메서드 실행 시간에 더하지 않습니다. `event.id`·`inbox.id`·`job.id`·금융 ID는 Trace에만 기록하며 metric label로 사용하지 않습니다.
+W3C `traceparent`는 Outbox·Inbox·금융 Job의 첫 저장 때 업무 원문과 분리해 저장하고, 실행기·콜백·재시작 뒤에 복원합니다. 같은 eventId 재전달은 원문 bytes·해시·최초 부모를 바꾸지 않습니다. Zipkin에서 `commerce.outbox.send` → Kafka → `payment.inbox.process` → `payment.approval.process`/`payment.refund.process` → Outbox·Commerce/Settlement Inbox를 같은 traceId로 따라갑니다. 판매자 승인처럼 별도 사용자가 새로 내리는 명령은 새 HTTP trace이며, 반품 환불은 실제 SAGA를 시작하는 판매자 승인 요청에서 추적합니다. 지급도 배치·지급 Job을 만든 문맥에서 시작하므로 주문과 별도 trace일 수 있습니다. 관련 거래는 Trace의 업무 ID로 대조합니다. `.wait` span은 실행 span과 저장 부모를 공유하는 형제이며 메서드 실행 시간에 더하지 않습니다. `event.id`·`inbox.id`·`job.id`·`seller.id`·금융 ID는 Trace에만 기록하며 metric label로 사용하지 않습니다.
 
-JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업은 비활성화합니다. 예외는 오류 종류만 남기는 `ObservationFailure`로 정제하며 SQL 오류가 상위 HTTP·Kafka span에 전파돼도 원문을 내보내지 않습니다. 원래 예외·롤백·재시도 동작과 framework 지표의 오류 분류는 유지합니다. 샘플링 기본값은 10%이고 Zipkin은 메모리에 최대 10,000개 span을 보관합니다. 재시작·보관 한도·비샘플 요청의 과거 trace를 복구하거나 모든 알림·운영 작업을 계측하지는 않습니다. `python3 -B scripts/smoke_financial_flow.py`는 선택한 요청에 sampled W3C 부모를 보내 실제 승인·환불·재시작 경로의 traceId·부모 연결을 금융 정합성과 함께 검사합니다. 지급 실행기 연결은 `PayoutTracingTest`, 저장 어댑터의 중복·재시작·기존 DB 업그레이드는 `DurableTraceIntegrationTest`로 별도 확인합니다.
+JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업은 비활성화합니다. 예외는 오류 종류만 남기는 `ObservationFailure`로 정제하며 SQL 오류가 상위 HTTP·Kafka span에 전파돼도 원문을 내보내지 않습니다. 원래 예외·롤백·재시도 동작과 framework 지표의 오류 분류는 유지합니다. 샘플링 기본값은 10%이고 Zipkin은 메모리에 최대 10,000개 span을 보관합니다. 재시작·보관 한도·비샘플 요청의 과거 trace를 복구하거나 모든 알림·운영 작업을 계측하지는 않습니다. 강제 종료 시 아직 export하지 못한 span과 진행 중이던 span은 유실될 수 있습니다. 저장 부모 복원은 같은 traceId로 후속 작업을 연결하며 유실된 span 자체를 복원하지는 않습니다. 강제 종료 smoke는 외부 성공·로컬 미반영을 유지한 채 완료된 선행 부모가 수집된 것을 먼저 확인하고, 재시작한 실행이 DB에 저장된 부모를 실제로 복원하는지 대조합니다. `python3 -B scripts/smoke_financial_flow.py`는 선택한 요청에 sampled W3C 부모를 보내 실제 승인·환불·재시작 경로의 traceId·부모 연결을 금융 정합성과 함께 검사합니다. 일배치 Job→Step→판매자→저장된 지급 부모→실제 지급 Worker의 연결과 상태·진행량의 실제 Prometheus HTTP 응답은 `DailySettlementObservabilityIntegrationTest`(외부 지급 호출은 대역), 실행기 문맥 복원은 `PayoutTracingTest`, 저장 어댑터의 중복·재시작·기존 DB 업그레이드는 `DurableTraceIntegrationTest`로 별도 확인합니다.
 
 #### 병목 개선 전후 비교
 
@@ -860,6 +860,23 @@ Payment API와 Worker는 같은 `payment` 모듈로 빌드합니다. Gradle 모�
 강제 종료로 STARTED가 남으면 실행자 잠금을 얻은 뒤 Job·Step의 마지막 갱신이 `settlement.daily-batch.stale-after`(기본 10분)보다 오래된 경우에만 FAILED로 정리하고 같은 날짜로 한 번 재시작합니다. 확인할 수 없으면 정리하지 않으며 일시적인 조회·잠금 오류는 재확인합니다. 다음 날짜를 임의로 성공 처리하거나 새 날짜로 실패 회차를 덮어쓰지 않습니다.
 
 판매자별 대상·합계·지급·작업은 한 트랜잭션에 저장하고 커머스 컨텍스트 HTTP 대기 중에는 DB 연결을 점유하지 않습니다. 재시작은 seller ID 순으로 미선점 PAYABLE 항목만 다시 처리해 완료한 판매자를 중복 지급하지 않습니다. 판매자별 검증·잠금 경합은 그 판매자를 건너뛰고 DB 자원 오류·공통 컨텍스트 조회 장애는 Step을 실패시켜 복구 후 재개합니다.
+
+#### 일배치 상태와 지급 완료 구분
+
+같은 `Financial processing` 대시보드에서 일배치의 최근 회차·처리량·스킵·실패·장기 실행을 확인합니다. Spring Batch의 기존 Job/Step Timer·active LongTaskTimer·item read/chunk write 지표를 재사용하고, 최근 회차 상태·진행량만 보완합니다. `COMPLETED`는 판매자별 지급 예약·지급 작업 생성이 끝났다는 뜻입니다. 실제 송금은 `payouts.status=SUCCEEDED`와 지급 Worker·대기열·Trace로 별도 확인합니다. `COMPLETED_WITH_SKIPS`는 확인이 필요한 상태로 표시하며 실패·중단·실행 중을 정상 완료에 합치지 않습니다.
+
+| 지표 | 확인할 값 |
+| --- | --- |
+| `spring_batch_job_seconds` / `spring_batch_step_seconds` | 종료한 회차의 시간·횟수. `spring_batch_job_status` / `spring_batch_step_status`는 `COMPLETED_WITH_SKIPS`·`FAILED`를 구분합니다. |
+| `spring_batch_job_active_seconds_max` / `spring_batch_step_active_seconds_max` | 실행 중인 가장 오래된 Job/Step의 경과. 종료 Timer에 아직 없는 장기 실행을 확인합니다. |
+| `settlement_batch_observer_ready` | 보강 지표 등록 성공 여부. 대시보드는 최근 45초 이내 scrape·`up=1`을 함께 확인하고 수집 없음을 정상 0건으로 채우지 않습니다. |
+| `settlement_batch_last_state` | 0=재기동 후 미관측, 1=실행 중, 2=완료, 3=스킵 포함 완료, 4=실패/폐기, 5=중단, 6=알 수 없음. |
+| `settlement_batch_last_started_seconds` / `settlement_batch_last_ended_seconds` / `settlement_batch_last_duration_seconds` | 최근 회차의 시작·종료 epoch 초와 소요 초. 실행 중·미실행 duration은 NaN입니다. |
+| `settlement_batch_step_items{kind="read\|written\|skipped"}` | 최근 회차의 판매자 읽기·쓰기·스킵 수. chunk 커밋·Step 종료 시 갱신하며 주문 수·송금 완료 수가 아닙니다. |
+
+보강 gauge는 현재 프로세스가 관측한 최근 실행만 보관하고 재기동하면 초기화됩니다. 이전 회차·실행 날짜·정확한 수량은 `settlement.batch_job_execution`·`batch_step_execution` 및 업무 기록에서 확인합니다. 드문 일배치의 회차 하나를 짧은 `rate`나 불충분한 p95/p99로 판단하지 말고 절대 시간 구간·최근 소요 시간·동일 규모의 완료 회차를 비교합니다. 메트릭에는 고정 Job/Step 이름·상태·종류만 쓰고 실행 ID·날짜·판매자 ID는 넣지 않습니다.
+
+Zipkin에서 `daily-settlement-job`→`settle-sellers`→`settlement.batch.seller`와 대상 조회 SQL·판매자 트랜잭션을 확인하고, 첫 저장한 `payout_jobs.trace_parent`를 통해 다른 실행기의 `settlement.payout.process`→준비·대역 호출·결과 반영으로 이어집니다. 판매자 처리는 `seller.id`, 금융 작업은 `payout.id`·`job.id`로 대조합니다. JDBC의 `stage=settleSellers`는 Step의 대상 조회, `stage=settlement.batch.seller`는 판매자 처리 중 SQL을 구분합니다. 스케줄러에서 시작한 배치는 주문 HTTP와 별도 trace이며 기본 10% 샘플링·Zipkin 보관 한도도 같습니다.
 
 ### Kafka 전달 기반
 

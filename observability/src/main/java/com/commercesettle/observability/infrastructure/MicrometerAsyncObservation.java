@@ -56,7 +56,10 @@ public final class MicrometerAsyncObservation implements AsyncObservation {
       ObservationView parent = context.getParentObservation();
       while (parent != null) {
         KeyValue stage = parent.getContextView().getLowCardinalityKeyValue("stage");
-        if (stage != null) return context.addLowCardinalityKeyValue(stage);
+        if (stage == null)
+          stage = parent.getContextView().getLowCardinalityKeyValue("spring.batch.step.name");
+        if (stage != null)
+          return context.addLowCardinalityKeyValue(KeyValue.of("stage", stage.getValue()));
         KeyValue operation = parent.getContextView().getLowCardinalityKeyValue("operation");
         if (operation != null)
           return context.addLowCardinalityKeyValue(KeyValue.of("stage", operation.getValue()));
