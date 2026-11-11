@@ -52,10 +52,11 @@ CloudWatch Logs는 두 EC2의 컨테이너 로그를 모으는 관리형 서비�
 | 데이터 | 앱 측 보안 그룹 | 6379 | Redis |
 | 데이터 | 앱 측 보안 그룹 | 9092 | Kafka 클라이언트 |
 | 데이터 | 앱 측 보안 그룹 | 9411 | Zipkin의 추적 수신 |
+| 데이터 | 앱 측 보안 그룹 | 3000, 9090, 8081 | Caddy의 Grafana·Prometheus·Kafka UI 프록시 |
 
 표는 서비스 수신 포트 기준입니다. ECS `awsvpc`는 Task ENI의 보안 그룹·포트를, `bridge`·`host`는 EC2의 실제 노출 포트를 확인해 허용합니다. 여러 앱의 관리 포트를 서로 다른 `hostPort`로 매핑하면 그 포트들을 데이터 측에만 허용합니다. 허용 출처도 실제 송신 ENI에 연결된 보안 그룹을 참조하며 앱 EC2의 공인 IP를 사용하지 않습니다. [AWS의 보안 그룹 참조 규칙](https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html#security-group-referencing)을 따릅니다.
 
-DB·메시징·관리·관측 포트는 인터넷에 공개하지 않습니다. Grafana·Kafka UI 등의 운영 접속은 승인된 관리 경로를 사용합니다. 실제 보안 그룹 ID·규칙과 포트 매핑은 배포 환경에서 대조합니다.
+DB·메시징·관리·관측 포트는 인터넷에 공개하지 않습니다. 팀원은 앱 EC2의 Caddy가 제공하는 도구별 HTTPS 주소로 접속합니다. Grafana는 자체 로그인, Prometheus·Zipkin·Kafka UI는 Caddy의 Basic 인증으로 보호합니다. Zipkin의 공개 프록시는 조회만 허용하고 앱의 추적 수집은 사설 9411을 유지합니다. 주소·인증·배포·복구는 [모니터링 HTTPS 접속](development.md#모니터링-https-접속)을 따릅니다. 실제 보안 그룹 ID·규칙과 포트 매핑은 배포 환경에서 대조합니다.
 
 아래 실행·연결·포트·프로필 설명과 세부 도식은 현재 Compose 설정을 기준으로 합니다. 앱의 ECS 실행 정의와 서비스 갱신은 아직 이 저장소에 구현하지 않았습니다.
 

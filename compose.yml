@@ -382,11 +382,13 @@ services:
     networks: [backend]
 
   kafka-ui:
-    image: provectuslabs/kafka-ui:v0.7.2
+    image: ghcr.io/kafbat/kafka-ui:v1.5.0@sha256:7cda86a33344160309fdb65146332e4da65db81a945614f2fe32e210803f6fd1
     profiles: [observability]
     environment:
       KAFKA_CLUSTERS_0_NAME: commerce-settle-local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_READONLY: 'true'
+      DYNAMIC_CONFIG_ENABLED: 'false'
     ports:
       - 127.0.0.1:${KAFKA_UI_PORT:-8081}:8080
     depends_on:

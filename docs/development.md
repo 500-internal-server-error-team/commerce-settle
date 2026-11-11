@@ -263,6 +263,69 @@ aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services commerce-settle
 
 로컬·CI의 `python3 -B scripts/smoke_caddy.py`는 전용 컨테이너·볼륨을 만들고 같은 Caddyfile의 구문, HTTPS 프록시·전달 헤더, HTTP 전환, 상위 서버 장애, 멱등 키가 있는 POST의 연결 중단 시 재전송 없음, 재시작·재생성과 인증서 저장소 유지를 검사한 뒤 삭제합니다. Caddy의 내부 HTTP 연결 재사용을 꺼 전송 계층의 자동 재시도를 막습니다. `localhost`의 내부 CA를 일시적으로 신뢰하는 검증이며 DuckDNS 갱신·공개 ACME·AWS 네트워크 검증을 대신하지 않습니다. 일반 HTTP·업무 경계 회귀는 기존 Compose smoke로 확인합니다.
 
+### 모니터링 HTTPS 접속
+
+팀 공용 환경은 SSH 터널 없이 도구별 HTTPS 주소로 접속합니다. 기존 `PUBLIC_DOMAIN`의 하위 도메인을 앱 EC2의 고정 공인 IP로 해석되게 하고, Caddy가 각 이름의 인증서를 발급·갱신하도록 설정합니다. 아래는 설정 후 사용할 주소이며 로컬 접속 표와 구분합니다.
+
+| 도구 | 주소 | 인증 |
+| --- | --- | --- |
+| Grafana | `https://grafana.<PUBLIC_DOMAIN>/` | 기존 Grafana 계정, 팀원은 Viewer 권한 |
+| Prometheus | `https://prometheus.<PUBLIC_DOMAIN>/` | Caddy Basic 인증 |
+| Zipkin | `https://zipkin.<PUBLIC_DOMAIN>/zipkin/` | Caddy Basic 인증 |
+| Kafka UI | `https://kafka.<PUBLIC_DOMAIN>/` | Caddy Basic 인증, 읽기 전용 |
+
+DuckDNS를 사용할 때도 각 하위 이름의 DNS 응답을 실제 확인합니다. DNS가 이미 같은 앱 IP를 가리키면 새 레코드를 만들지 않습니다. data EC2의 자동 공인 IP는 사용하지 않고 `DATA_PRIVATE_IP`로 연결하므로 data 중지·시작에 따른 공인 IP 변경의 영향을 받지 않습니다. 인스턴스를 교체해 사설 IP가 바뀌면 Kafka의 advertised listener와 클라이언트·프록시 설정을 함께 갱신합니다.
+
+기본 [Caddyfile](../infra/caddy/Caddyfile)은 `/etc/caddy/monitoring/*.caddy`가 있을 때만 관측 프록시를 불러옵니다. [모니터링 설정](../infra/caddy/monitoring.Caddyfile)을 앱 EC2의 `/srv/commerce-settle/caddy/etc/monitoring/tools.caddy`에 설치합니다. 기존 `/data`·`/config` 인증서 영역은 보존합니다. Caddy Task에 다음 값을 추가합니다.
+
+- 환경 변수 `DATA_PRIVATE_IP`, `MONITORING_USER`와 기존 `PUBLIC_DOMAIN`·`GATEWAY_UPSTREAM`.
+- 비밀번호 해시를 저장한 SSM SecureString의 ARN을 `secrets`의 `MONITORING_PASSWORD_HASH`에 연결합니다. 실행 역할에는 해당 파라미터 읽기 권한이 필요합니다. 해시는 `caddy hash-password`로 만들며 평문 비밀번호·해시·생성용 payload를 Git이나 로그에 남기지 않습니다.
+
+Grafana의 기존 관리자·SSM 비밀번호와 데이터 볼륨은 유지하고 `GF_SERVER_ROOT_URL=https://grafana.<PUBLIC_DOMAIN>/`을 지정합니다. Prometheus는 기존 보존·수집 옵션을 유지한 채 `--web.external-url=https://prometheus.<PUBLIC_DOMAIN>/`을 추가할 수 있습니다. 도구마다 별도 호스트명을 사용하므로 하위 경로 재작성은 필요 없습니다. Caddy 인증 헤더는 관측 도구에 전달하지 않으며, Grafana의 자체 API 인증 헤더는 유지합니다.
+
+data 보안 그룹은 app 보안 그룹에서 오는 TCP 3000·9090·9411·8081만 관측 프록시에 허용합니다. 실제 기존 규칙을 조회한 뒤 부족한 포트만 추가하고 인터넷 출처는 넣지 않습니다. Grafana·Prometheus의 공개 경로와 raw 포트의 직접 접근은 별도로 검사합니다. Alertmanager와 storage metrics는 이 네 도구의 공개 접속 범위에 포함하지 않습니다.
+
+#### Kafka UI의 ECS 실행
+
+[Kafka UI Task 템플릿](../infra/kafka-ui/task-definition.json)은 data 배치·ARM64·`bridge` 모드의 한 Task입니다. 호스트 8081을 컨테이너 8080에 연결하며 별도 데이터 볼륨은 사용하지 않습니다. 초기 자원은 CPU 256 단위·메모리 예약 512MiB·상한 1GiB이며 실제 사용량·OOM을 확인해 조정합니다. 이미지 digest는 Compose와 같습니다.
+
+`ECS_EXECUTION_ROLE_ARN`, `AWS_REGION`, `DATA_PRIVATE_IP`, `ECS_CLUSTER`를 기존 배포 값으로 준비하고, `/ecs/commerce-settle/kafka-ui` 로그 그룹과 7일 보존·로그 전송 권한을 확인합니다.
+
+```bash
+jq --arg role "${ECS_EXECUTION_ROLE_ARN:?}" --arg region "${AWS_REGION:?}" \
+  --arg bootstrap "${DATA_PRIVATE_IP:?}:9092" '
+  .executionRoleArn = $role |
+  .containerDefinitions[0].logConfiguration.options["awslogs-region"] = $region |
+  (.containerDefinitions[0].environment[] |
+    select(.name == "KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS").value) = $bootstrap
+' infra/kafka-ui/task-definition.json > /tmp/commerce-settle-kafka-ui-task.json
+
+KAFKA_UI_TASK_DEFINITION=$(aws ecs register-task-definition \
+  --cli-input-json file:///tmp/commerce-settle-kafka-ui-task.json \
+  --query taskDefinition.taskDefinitionArn --output text)
+aws ecs create-service --cluster "$ECS_CLUSTER" --service-name commerce-settle-kafka-ui \
+  --task-definition "$KAFKA_UI_TASK_DEFINITION" --desired-count 1 --launch-type EC2 \
+  --deployment-configuration maximumPercent=100,minimumHealthyPercent=0
+aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services commerce-settle-kafka-ui
+rm /tmp/commerce-settle-kafka-ui-task.json
+```
+
+이미 있는 서비스는 `create-service` 대신 `update-service`로 갱신합니다.
+
+Kafka UI는 `readOnly=true`이며 동적 연결 설정은 끕니다. 토픽·파티션·업무/DLT 메시지와 Consumer 그룹 지연을 조회하고 발행·삭제·설정·offset 변경을 금지합니다. Kafka 인증·ACL이 있는 환경에서는 기존 인증 방식과 전용 읽기 권한을 사용합니다. 인증·authorizer가 없는 `PLAINTEXT` 구성에서는 UI가 변경을 막는 수준이며 브로커 권한 제한은 아닙니다. 엄격한 분리에는 앱을 포함한 인증·ACL 도입이 필요합니다.
+
+#### 적용 확인과 되돌리기
+
+Caddy를 같은 고정 포트의 새 Task로 교체할 때는 `maximumPercent=100,minimumHealthyPercent=0`을 사용합니다. 관리 API가 꺼져 있으므로 Task 교체 중 짧은 진입점 중단이 생깁니다. 설정을 먼저 검증하고, 이전 Task revision과 설정의 정확한 복원 경로를 확인한 뒤 교체합니다.
+
+- 각 HTTPS 인증서의 호스트명·신뢰 체인, 인증 전 차단과 인증 후 화면·API·정적 파일·깊은 링크를 확인합니다. Grafana는 로그인 화면 전환, 나머지 도구는 인증 없는 요청의 `401`을 확인합니다.
+- 기존 Swagger·Grafana 대시보드와 실제 AWS 추적·Kafka 토픽·그룹 지연을 조회합니다. Kafka UI의 쓰기 API가 거절되고 기존 금융 그룹의 offset이 바뀌지 않는지 확인합니다.
+- 공개 Zipkin의 span 수집 POST는 `405`, 앱의 사설 수집 경로는 정상인지 확인합니다. Prometheus의 관리·수명주기 API는 활성화하지 않습니다.
+- Caddy·Kafka UI 재기동 후 같은 주소·인증·설정을 확인합니다. 실패하면 변경한 서비스만 이전 Task revision·설정으로 되돌리고, 데이터·인증서·토픽·그룹은 삭제하지 않습니다.
+- 사용한 Task JSON·전송용 파일·임시 검증 자원을 제거합니다. 운영 중인 ECS 서비스·영속 데이터·사용자 SSH 터널은 유지합니다.
+
+`python3 -B scripts/smoke_caddy.py`는 격리한 도구 대역으로 인증·호스트별 라우팅·헤더 제거·Zipkin 수집 차단과 재기동을 확인합니다. 실제 AWS 로그인·Kafka 연결·공인 인증서·보안 그룹 검증은 별도로 수행합니다.
+
 ## 개발용 DB fixture
 
 로컬과 팀 공용 배포는 모두 시연 환경입니다. Compose는 Gateway·Commerce의 계정 fixture와 Swagger 계정 선택 로그인을 기본으로 켭니다(`COMMERCE_DEV_FIXTURES_ENABLED=true`). 두 서비스는 같은 `DEV_FIXTURE_PASSWORD`를 사용합니다. 계정 적재를 제외하는 격리 시험에서만 `COMMERCE_DEV_FIXTURES_ENABLED=false`로 끕니다. Compose 밖에서 배포할 때도 두 서비스에 `APP_DEV_FIXTURES_ENABLED=true`와 같은 비밀번호를 명시합니다.

@@ -1,0 +1,45 @@
+(monitoring_auth) {
+	basic_auth {
+		{$MONITORING_USER} {$MONITORING_PASSWORD_HASH}
+	}
+}
+
+(monitoring_proxy) {
+	reverse_proxy {$DATA_PRIVATE_IP}:{args[0]} {
+		header_up -Authorization
+		header_up -Forwarded
+		transport http {
+			keepalive off
+		}
+	}
+}
+
+grafana.{$PUBLIC_DOMAIN} {
+	reverse_proxy {$DATA_PRIVATE_IP}:3000 {
+		header_up -Forwarded
+		transport http {
+			keepalive off
+		}
+	}
+}
+
+prometheus.{$PUBLIC_DOMAIN} {
+	import monitoring_auth
+	import monitoring_proxy 9090
+}
+
+zipkin.{$PUBLIC_DOMAIN} {
+	import monitoring_auth
+	@query method GET HEAD
+	handle @query {
+		import monitoring_proxy 9411
+	}
+	handle {
+		respond "Trace ingestion is available only on the private collector." 405
+	}
+}
+
+kafka.{$PUBLIC_DOMAIN} {
+	import monitoring_auth
+	import monitoring_proxy 8081
+}
