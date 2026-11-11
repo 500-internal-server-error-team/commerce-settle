@@ -31,13 +31,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WORK = Path(os.environ.get("LOAD_WORK_DIR", ROOT / "tests" / "load" / "work")).resolve()
 PROJECT = os.environ.get("LOAD_PROJECT", "commerce-settle-load")
+# 결제 부하 overlay 뒤에 시험용 자원 한도 overlay를 붙인다.
+COMPOSE_FILES = [ROOT / "compose.yml", ROOT / "tests" / "load" / "compose.load.yml",
+                 ROOT / "tests" / "load" / "compose.load-resources.yml"]
 TOPIC = "commerce-settle.commerce.v1"
 GROUP = "payment.v1"
 REDIS_PLACEHOLDER = "0" * 40
 SELLER = "00000000-0000-4000-8000-0000000005e1"
 PRODUCT = "00000000-0000-4000-8000-0000000005a1"
 BUYER_POOL = 200
-WALLET_BALANCE = 100_000_000
+# 구매자·결제수단·금액이 모두 주입 순번으로 정해져 구매자마다 같은 수단·금액(최대 59,000원)만 받는다.
+# 전액 마일리지·간편결제 구매자가 P2 전 구간(약 184만 건)과 15분 지속을 한 스택에서 받아도 남도록 넉넉히 둔다.
+WALLET_BALANCE = 10_000_000_000
 PROVIDERS = ("PG_A", "PG_B", "PG_C", "EASY_PAY")
 # 이름 → (승인 지연 ms 최소·최대, 확정 거절률, 응답 유실률, 조회 실패율)
 SCENARIOS = {
@@ -66,10 +71,13 @@ def compose_env():
     return env
 
 
+def compose_file_options():
+    return [option for path in COMPOSE_FILES for option in ("-f", str(path))]
+
+
 def compose(*args, input_text=None, check=True, capture=True, env=None, timeout=None):
     command = [
-        "docker", "compose", "-p", PROJECT,
-        "-f", str(ROOT / "compose.yml"), "-f", str(ROOT / "tests" / "load" / "compose.load.yml"),
+        "docker", "compose", "-p", PROJECT, *compose_file_options(),
         *args,
     ]
     result = subprocess.run(
@@ -245,8 +253,7 @@ def parse_stages(text):
 def produce(stages, mix, directory, offset, marks, stop_file=None, stop_event=None):
     """단계별 도착률로 요청을 넣는다. 각 단계의 시작·끝 시각을 marks에 남긴다."""
     producer = subprocess.Popen(
-        ["docker", "compose", "-p", PROJECT, "-f", str(ROOT / "compose.yml"),
-         "-f", str(ROOT / "tests" / "load" / "compose.load.yml"),
+        ["docker", "compose", "-p", PROJECT, *compose_file_options(),
          "exec", "-T", "kafka", "/opt/kafka/bin/kafka-console-producer.sh",
          "--bootstrap-server", "kafka:9092", "--topic", TOPIC,
          "--reader-property", "parse.key=true", "--reader-property", "key.separator=\t",

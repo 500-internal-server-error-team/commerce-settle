@@ -1,0 +1,49 @@
+# 부하 시험 전용 자원 overlay. 공용 compose.yml의 기본 한도(16GB Mac 기준)를 시험 호스트(OrbStack 24GiB)에 맞게 올린다.
+# payment_load.py와 event_load.py가 자동으로 함께 읽는다. 직접 띄울 때는 다른 overlay 뒤에 붙인다.
+#   docker compose -p commerce-settle-load -f compose.yml -f tests/load/compose.load.yml -f tests/load/compose.load-resources.yml up -d
+# 한도 합계 ≈ 21.5GiB를 넘기지 않는다. 늘릴 때는 다른 컨테이너를 줄여 재배분한다.
+services:
+  # 앱 JVM heap은 MaxRAMPercentage=65로 한도에 비례한다.
+  payment-worker:
+    mem_limit: 2g
+  finance-mock:
+    mem_limit: 1536m
+  settlement:
+    mem_limit: 1536m
+  payment-api:
+    mem_limit: 1g
+  commerce:
+    mem_limit: 1g
+  gateway:
+    mem_limit: 1g
+
+  postgres:
+    command: [postgres, -c, timezone=Asia/Seoul, -c, log_timezone=Asia/Seoul, -c, shared_buffers=1GB]
+    mem_limit: 4g
+    # 병렬 쿼리의 동적 공유 메모리(/dev/shm). 기본 64MiB로는 대량 집계에서 부족할 수 있다.
+    shm_size: 256m
+  kafka:
+    environment:
+      KAFKA_HEAP_OPTS: -Xms1g -Xmx1g
+    mem_limit: 3g
+  redis:
+    # 데이터 상한은 compose.yml의 --maxmemory 128mb(noeviction)가 그대로 적용된다. 이 한도는 프로세스 여유분이다.
+    mem_limit: 512m
+  zipkin:
+    environment:
+      JAVA_OPTS: -Xms64m -Xmx384m
+    mem_limit: 768m
+  prometheus:
+    mem_limit: 1g
+  data-storage-metrics:
+    mem_limit: 64m
+
+  grafana:
+    mem_limit: 512m
+  kafka-ui:
+    mem_limit: 512m
+  alertmanager:
+    mem_limit: 128m
+
+  k6:
+    mem_limit: 3g

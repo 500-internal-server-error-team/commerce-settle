@@ -59,7 +59,7 @@ def main(argv=None):
 
     work = ROOT / "tests" / "load" / "work" / datetime.now().strftime("event-%Y%m%d-%H%M%S")
     work.mkdir(parents=True)
-    with stack("cs-event-load-") as compose:
+    with stack("cs-event-load-", compose_files=[Path(__file__).with_name("compose.load-resources.yml")]) as compose:
         def sql(statement):
             return compose("exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "commerce", "-v", "ON_ERROR_STOP=1",
                            "-Atq", input_text=statement, timeout=600).strip()

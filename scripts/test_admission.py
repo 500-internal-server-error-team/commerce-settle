@@ -39,14 +39,15 @@ def until(action, description, seconds=180):
 
 
 @contextmanager
-def stack(prefix="cs-admission-", *, memory_storage=False, commerce_outbox=True):
+def stack(prefix="cs-admission-", *, memory_storage=False, commerce_outbox=True, compose_files=()):
     project = prefix + secrets.token_hex(5)
     directory = Path(tempfile.mkdtemp(prefix=project + "-"))
     settings = directory / "override.json"
     environment = {key: value for key, value in os.environ.items() if not key.startswith("COMPOSE_")}
     attempted = False
     command = ["docker", "compose", "--project-name", project, "--env-file", str(directory / ".env"),
-               "-f", str(ROOT / "compose.yml"), "-f", str(settings)]
+               "-f", str(ROOT / "compose.yml"), *(option for path in compose_files for option in ("-f", str(path))),
+               "-f", str(settings)]
 
     def compose(*args, input_text=None, timeout=90):
         result = subprocess.run(command + list(args), cwd=ROOT, env=environment,
