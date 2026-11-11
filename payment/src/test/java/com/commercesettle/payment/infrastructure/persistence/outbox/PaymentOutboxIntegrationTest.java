@@ -5,7 +5,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
+import com.commercesettle.payment.application.port.OutboxStore.Publication;
+import com.commercesettle.payment.application.port.OutboxStore.Published;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
+import com.commercesettle.payment.application.service.OutboxDeliveryService;
 import com.commercesettle.payment.infrastructure.messaging.OutboxAppended;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -63,6 +66,7 @@ class PaymentOutboxIntegrationTest {
   @Autowired private JdbcTemplate jdbc;
   @Autowired private PlatformTransactionManager manager;
   @Autowired private AtomicInteger appended;
+  @Autowired private OutboxDeliveryService delivery;
 
   @BeforeEach
   void reset() {
@@ -158,19 +162,69 @@ class PaymentOutboxIntegrationTest {
     assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.outbox", Long.class)).isZero();
   }
 
+  @Test
+  @DisplayName("여러 발행 결과를 한 번에 저장하되 임대·버전이 맞는 행만 PUBLISHED로 바꾼다")
+  void marksOnlyCurrentLeasesPublishedInOneBatch() {
+    var payments = List.of(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID());
+    for (var payment : payments) {
+      inTransaction(() -> outbox.appendPaymentAccepted(event(UUID.randomUUID(), payment, 3)));
+    }
+    var claimed = delivery.claim(10, 240000, 10);
+    assertThat(claimed).hasSize(3);
+    var current = claimed.get(0);
+    var reclaimed = claimed.get(1);
+    var expired = claimed.get(2);
+    // 다른 발행기가 다시 선점한 행과 임대가 끝난 행은 이 결과로 덮어쓰지 않는다.
+    jdbc.update("UPDATE payment.outbox SET version=version+1 WHERE id=?", reclaimed.id());
+    jdbc.update(
+        "UPDATE payment.outbox SET lease_until=clock_timestamp()-interval '1 second' WHERE id=?",
+        expired.id());
+
+    var updated =
+        delivery.markPublished(
+            List.of(
+                new Published(current, new Publication(current.topic(), 1, 10)),
+                new Published(reclaimed, new Publication(reclaimed.topic(), 1, 11)),
+                new Published(expired, new Publication(expired.topic(), 1, 12))));
+
+    assertThat(updated).containsExactly(current.id());
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT status,published_partition,published_offset,version,lease_until"
+                    + " FROM payment.outbox WHERE id=?",
+                current.id()))
+        .containsEntry("status", "PUBLISHED")
+        .containsEntry("published_partition", 1)
+        .containsEntry("published_offset", 10L)
+        .containsEntry("version", current.version() + 1)
+        .containsEntry("lease_until", null);
+    assertThat(
+            jdbc.queryForList(
+                "SELECT status FROM payment.outbox WHERE id IN (?,?) AND published_offset IS NULL",
+                String.class,
+                reclaimed.id(),
+                expired.id()))
+        .containsExactly("RUNNING", "RUNNING");
+  }
+
   private <T> T inTransaction(Supplier<T> action) {
     return new TransactionTemplate(manager).execute(status -> action.get());
   }
 
   private static EventEnvelope<PaymentAcceptedPayload> event(UUID eventId, long orderVersion) {
+    return event(eventId, PAYMENT_ID, orderVersion);
+  }
+
+  private static EventEnvelope<PaymentAcceptedPayload> event(
+      UUID eventId, UUID paymentId, long orderVersion) {
     return new EventEnvelope<>(
         eventId,
         "PaymentAccepted",
         1,
         OCCURRED_AT,
-        PAYMENT_ID,
+        paymentId,
         0,
-        new PaymentAcceptedPayload(PAYMENT_ID, ORDER_ID, orderVersion, CYCLE_ID));
+        new PaymentAcceptedPayload(paymentId, ORDER_ID, orderVersion, CYCLE_ID));
   }
 
   @Configuration
@@ -210,6 +264,11 @@ class PaymentOutboxIntegrationTest {
     @Bean
     AtomicInteger appended() {
       return new AtomicInteger();
+    }
+
+    @Bean
+    OutboxDeliveryService delivery(NamedParameterJdbcTemplate jdbc) {
+      return new OutboxDeliveryService(new JdbcOutboxStore(jdbc));
     }
 
     @Bean

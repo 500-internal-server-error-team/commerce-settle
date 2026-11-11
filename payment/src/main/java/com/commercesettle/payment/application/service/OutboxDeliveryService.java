@@ -2,8 +2,10 @@ package com.commercesettle.payment.application.service;
 
 import com.commercesettle.payment.application.port.OutboxStore;
 import com.commercesettle.payment.application.port.OutboxStore.Delivery;
-import com.commercesettle.payment.application.port.OutboxStore.Publication;
+import com.commercesettle.payment.application.port.OutboxStore.Published;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,14 +25,21 @@ public class OutboxDeliveryService {
     return store.claim(limit, leaseMs, maxAttempts);
   }
 
+  /** 여러 발행 결과를 한 트랜잭션에 저장한다. 결제 1건이 이벤트마다 쓰기 커밋을 따로 만들지 않게 한다(#250). */
   @Transactional
-  public boolean markPublished(Delivery delivery, Publication publication) {
-    if (!delivery.topic().equals(publication.topic())
-        || publication.partition() < 0
-        || publication.offset() < 0) {
-      throw new IllegalArgumentException("Invalid outbox publication position");
+  public Set<UUID> markPublished(List<Published> results) {
+    if (results.isEmpty() || results.size() > 100) {
+      throw new IllegalArgumentException("Invalid outbox publication batch size");
     }
-    return store.markPublished(delivery, publication);
+    for (Published result : results) {
+      var publication = result.publication();
+      if (!result.delivery().topic().equals(publication.topic())
+          || publication.partition() < 0
+          || publication.offset() < 0) {
+        throw new IllegalArgumentException("Invalid outbox publication position");
+      }
+    }
+    return store.markPublished(results);
   }
 
   @Transactional

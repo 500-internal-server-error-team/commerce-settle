@@ -289,8 +289,12 @@ class DurableTraceIntegrationTest {
             assertThat(row.body()).containsExactly(original);
             assertThat(row.timing().attempts()).isEqualTo(1);
             assertThat(row.timing().previousStatus()).isEqualTo("PENDING");
-            assertThat(store.markPublished(row, new OutboxStore.Publication(row.topic(), 0, 42)))
-                .isTrue();
+            assertThat(
+                    store.markPublished(
+                        List.of(
+                            new OutboxStore.Published(
+                                row, new OutboxStore.Publication(row.topic(), 0, 42)))))
+                .containsExactly(eventId);
           });
       verifiesLegacyUpgrade(restarted.getBean(JdbcTemplate.class));
     }
