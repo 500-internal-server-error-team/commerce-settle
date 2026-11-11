@@ -3,8 +3,10 @@ package com.commercesettle.commerce.infrastructure.messaging;
 import com.commercesettle.commerce.application.port.OutboxStore.Delivery;
 import com.commercesettle.commerce.application.port.OutboxStore.Publication;
 import com.commercesettle.commerce.application.service.OutboxDeliveryService;
+import com.commercesettle.observability.AsyncObservation;
 import jakarta.annotation.PreDestroy;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -24,6 +26,7 @@ public class OutboxRelay {
   private final OutboxDeliveryService service;
   private final KafkaTemplate<String, byte[]> template;
   private final Executor executor;
+  private final AsyncObservation observations;
   private final Executor coordinator;
   private final AtomicBoolean requested = new AtomicBoolean();
   private final AtomicBoolean scheduled = new AtomicBoolean();
@@ -41,6 +44,26 @@ public class OutboxRelay {
       int maxAttempts,
       Executor coordinator,
       Executor executor) {
+    this(
+        service,
+        template,
+        maxInFlight,
+        leaseMs,
+        maxAttempts,
+        coordinator,
+        executor,
+        AsyncObservation.NOOP);
+  }
+
+  public OutboxRelay(
+      OutboxDeliveryService service,
+      KafkaTemplate<String, byte[]> template,
+      int maxInFlight,
+      long leaseMs,
+      int maxAttempts,
+      Executor coordinator,
+      Executor executor,
+      AsyncObservation observations) {
     if (maxInFlight < 1 || leaseMs <= 0 || maxAttempts < 1 || maxAttempts > 10) {
       throw new IllegalArgumentException("Invalid outbox relay limits");
     }
@@ -51,6 +74,7 @@ public class OutboxRelay {
     this.maxInFlight = maxInFlight;
     this.leaseMs = leaseMs;
     this.maxAttempts = maxAttempts;
+    this.observations = observations;
   }
 
   @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -130,6 +154,16 @@ public class OutboxRelay {
   }
 
   private void send(Delivery delivery) {
+    observations.run(
+        "commerce.outbox.send",
+        delivery.traceParent(),
+        Map.of("event.id", delivery.id().toString()),
+        delivery.timing(),
+        () -> sendObserved(delivery));
+  }
+
+  private void sendObserved(Delivery delivery) {
+    String parent = observations.capture();
     try {
       // claim 커밋 후 원문을 전송하고 완료 콜백에서는 결과 작업만 예약한다.
       template
@@ -137,7 +171,14 @@ public class OutboxRelay {
           .whenComplete(
               (result, failure) -> {
                 try {
-                  executor.execute(() -> persistResult(delivery, result, failure));
+                  executor.execute(
+                      () ->
+                          observations.run(
+                              "commerce.outbox.result",
+                              parent,
+                              Map.of("event.id", delivery.id().toString()),
+                              null,
+                              () -> persistResult(delivery, result, failure)));
                 } catch (RejectedExecutionException exception) {
                   rejected(delivery);
                 }

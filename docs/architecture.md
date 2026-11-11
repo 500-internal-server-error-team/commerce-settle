@@ -344,7 +344,7 @@ Redis는 내부 네트워크에서 앱별 ACL 사용자로 연결합니다. AOF�
 
 로그인 세션은 Redis를 원본으로 사용하며 [세션 정책](policies.md#인증공통-api-기준)을 따릅니다. 고정 만료는 expiresAt과 TTL을 함께 검사하고 메모리 초과·인증 가드 누락·저장소 오류를 우회하지 않습니다. 세션 세대와 승인한 Redis 실행 식별자는 Gateway·커머스에 동일하게 배포할 인증 설정입니다. 세션 세대는 `AUTH_SESSION_EPOCH`, 실행 식별자는 `AUTH_REDIS_RUN_ID`로 Gateway·커머스에 적용합니다. 두 서비스는 연결한 Redis의 run_id가 승인값과 같을 때만 사용자 인증 게이트를 열고, 연 뒤 연결이 끊기거나 run_id가 다르면 재기동 전까지 닫습니다. Redis 재접속 뒤에는 AOF 복원만으로 인증을 재개하지 않고 [복구 절차](development.md#redis-세션-검증과-복구)를 거칩니다.
 
-Zipkin은 Micrometer·OpenTelemetry의 HTTP 추적을 수집합니다. 샘플링 기본값은 10%이며 환경 변수로 조정합니다. smoke는 sampled `traceparent`로 Gateway CLIENT→Commerce SERVER의 부모 관계를 확인합니다. Kafka 추적의 전달·재시도 경계는 [Kafka 전달 기반](development.md#kafka-전달-기반)을 따릅니다. 개발용 메모리 저장소는 최대 10,000개 span을 보관하며 재시작하면 추적이 사라집니다.
+Zipkin은 Micrometer·OpenTelemetry의 HTTP·Kafka·JDBC와 금융 비동기 작업을 수집합니다. 공통 `observability` 모듈은 업무 타입 없이 W3C 부모의 저장·복원, 대기·실행 계측과 예외 정제만 담당합니다. 각 서비스는 자기 Outbox·Inbox·금융 Job의 별도 nullable 메타데이터를 소유하며 원문 Envelope·해시와 분리합니다. 저장 부모를 스레드마다 복원해 콜백·재시도·재기동 뒤에도 연결하고, 트랜잭션 종료 때 scope를 닫습니다. 지급은 배치 문맥에서 시작하므로 개별 주문 trace와 다를 수 있습니다. 샘플링 기본값 10%와 개발용 메모리 10,000개 span 보관 한도는 유지하며 재시작하면 추적이 사라집니다. 측정 경계·비교 조건·검증 범위는 [금융 처리 시간과 비동기 추적](development.md#금융-처리-시간과-비동기-추적), Kafka 전달은 [Kafka 전달 기반](development.md#kafka-전달-기반)을 따릅니다.
 
 k6는 `tools` 프로필에서 명령으로 실행합니다. 기본 스크립트는 Gateway의 Commerce 명세 조회만 검증합니다. 결제 완료 TPS는 별도 업무 시나리오로 측정합니다. 부하 발생기를 서버와 같은 호스트에서 실행하면 자원을 공유하므로 측정 환경에 명시해야 합니다.
 

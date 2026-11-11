@@ -689,6 +689,7 @@
 | 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
+| `trace_parent` | `varchar(55)?` | Commerce·Payment·Settlement의 W3C v00 부모. 첫 저장 때만 설정하는 관측 메타데이터; 업무 원문·멱등성·상태 판정에 사용하지 않음 |
 | `payment_id` | `uuid` | →payments.id |
 | `refund_id` | `uuid?` | →refunds.id |
 | `operation` | `varchar(32)` | — |
@@ -859,6 +860,7 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 | 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
+| `trace_parent` | `varchar(55)?` | Commerce·Payment·Settlement의 W3C v00 부모. 첫 저장 때만 설정하는 관측 메타데이터; 업무 원문·멱등성·상태 판정에 사용하지 않음 |
 | `payout_id` | `uuid` | →payouts.id |
 | `business_key` | `uuid` | — |
 | `status` | `varchar(24)` | — |
@@ -1176,6 +1178,7 @@ Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보�
 | 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
+| `trace_parent` | `varchar(55)?` | Commerce·Payment·Settlement의 W3C v00 부모. 첫 저장 때만 설정하는 관측 메타데이터; 업무 원문·멱등성·상태 판정에 사용하지 않음 |
 | `sequence_no` | `bigint` | DB identity; 같은 집계 버전 안의 저장 순번 |
 | `event_type` | `varchar(80)` | — |
 | `event_version` | `integer` | — |
@@ -1212,6 +1215,7 @@ Commerce는 추가로 전체 행의 (aggregate_id,aggregate_version,sequence_no)
 | 컬럼 | 타입 | 비고 |
 | --- | --- | --- |
 | `id` | `uuid` | PK; 서버 생성 |
+| `trace_parent` | `varchar(55)?` | Commerce·Payment·Settlement의 W3C v00 부모. 첫 저장 때만 설정하는 관측 메타데이터; 업무 원문·멱등성·상태 판정에 사용하지 않음 |
 | `consumer` | `varchar(100)` | — |
 | `event_id` | `uuid` | — |
 | `event_type` | `varchar(80)` | — |
@@ -1247,6 +1251,10 @@ Settlement의 `result_ref`는 정산 항목 ID입니다. 선행 결제가 없는
 Commerce의 `result_ref`는 주문 ID입니다. 주문 연결·결과 반영과 Inbox 완료를 원자 저장하고 충돌 원문·사유·최초 출처를 보존합니다. 회차·버전·결제 ID 검사는 [결제 접수 결과 수신](development.md#결제-접수-결과-수신)을 따릅니다.
 
 **인덱스:** 공통 (status,created_at,id), 세 서비스 WAITING의 (consumer,next_run_at,id). Payment는 결과 참조 조회의 `(consumer,result_ref,created_at,id)` 부분 인덱스와 주문·회차 조회의 `(consumer,aggregate_id,paymentCycleId,created_at,id)` 표현식 인덱스를 사용합니다. Settlement는 `RefundReservationRequested`의 `(consumer,payload의 refundId uuid,created_at,id)` 부분 인덱스를 추가합니다.
+
+Payment Inbox의 nullable `observation_state varchar(16)`는 최초 NULL, 선점 커밋 시 CLAIMED, 실패 후 재시도 예약 시 RETRY입니다. WAITING의 `next_run_at`가 임대 만료와 재시도 시각을 함께 표현하므로 대기 종류만 구분하며 업무 상태·선점 조건·버전 검사는 기존 필드를 사용합니다. 기존 시도 행의 NULL은 미확인 종류로 남깁니다. 다른 서비스에는 추가하지 않습니다.
+
+추적 부모는 첫 INSERT 때 현재 문맥만 저장하고, 중복 수신·재시도·운영 재처리가 원문·해시·최초 부모를 덮어쓰지 않습니다. 부모가 없거나 형식이 잘못된 기존 행도 업무 처리는 진행합니다. 기존 DB의 추가 순서와 복구는 [DB 적용 절차](migrations.md#기존-db의-추적-컬럼-추가)를 따릅니다.
 
 ### inbox_rejudgement_runs · inbox_rejudgement_targets · inbox_rejudgement_attempts
 

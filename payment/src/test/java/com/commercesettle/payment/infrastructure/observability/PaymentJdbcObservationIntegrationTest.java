@@ -3,6 +3,7 @@ package com.commercesettle.payment.infrastructure.observability;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.commercesettle.observability.infrastructure.AsyncObservationAutoConfiguration;
 import com.commercesettle.payment.application.port.PaymentProcessingObservation.Stage;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.MockClock;
@@ -82,7 +83,8 @@ class PaymentJdbcObservationIntegrationTest {
                   MetricsAutoConfiguration.class,
                   ObservationAutoConfiguration.class,
                   MicrometerTracingAutoConfiguration.class,
-                  DataSourceObservationAutoConfiguration.class))
+                  DataSourceObservationAutoConfiguration.class,
+                  AsyncObservationAutoConfiguration.class))
           .withUserConfiguration(PaymentProcessingObservations.class)
           .withBean(MeterRegistry.class, () -> meters)
           .withBean(Clock.class, Clock::systemUTC)

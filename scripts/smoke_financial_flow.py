@@ -35,6 +35,36 @@ def verify():
 
         base = endpoint("gateway", 8080)
         prometheus = endpoint("prometheus", 9090)
+        zipkin = endpoint("zipkin", 9411)
+        order_traces, refund_traces = {}, {}
+
+        def trace_headers(trace_id):
+            return {"traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"}
+
+        def observed_trace(trace_id, required, services):
+            def collected():
+                try:
+                    with urlopen(zipkin + "/api/v2/trace/" + trace_id, timeout=5) as response:
+                        spans = json.load(response)
+                except HTTPError as error:
+                    if error.code == 404:
+                        return None
+                    raise
+                names = {span.get("name") for span in spans}
+                sources = {span.get("localEndpoint", {}).get("serviceName") for span in spans}
+                ids = {span["id"] for span in spans}
+                work = [span for span in spans if span.get("name") in required]
+                if not required <= names or not services <= sources:
+                    return None
+                # Every selected durable-work parent is an actual exported span, not a new root.
+                if any(span.get("parentId") not in ids for span in work):
+                    return None
+                assert all(span["traceId"] == trace_id for span in spans)
+                return spans
+            spans = until(collected, "missing sampled async trace boundaries: " + ",".join(sorted(required)), 60)
+            print(json.dumps({"traceId": trace_id, "spanCount": len(spans),
+                              "asyncBoundaries": sorted(required)}), flush=True)
+            return spans
 
         def gate_open():
             with urlopen(prometheus + "/api/v1/query?" + urlencode({"query": "commerce_order_admission_open"}), timeout=5) as response:
@@ -132,7 +162,12 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
         seller_token = session("SELLER", seller)
 
         def request(method, path, body=None, actor_token=None):
-            return gateway_json(base, method, path, body, actor_token or token, {"Idempotency-Key": str(uuid.uuid4())})
+            trace_id = uuid.uuid4().hex
+            result = gateway_json(base, method, path, body, actor_token or token,
+                                  {"Idempotency-Key": str(uuid.uuid4()), **trace_headers(trace_id)})
+            if method == "POST" and path.startswith("/api/orders/") and path.endswith("/refund-requests") and result[0] == 201:
+                refund_traces[path.split("/")[3]] = trace_id
+            return result
 
         status, address = request("POST", "/api/buyers/me/addresses", {
             "recipient": "test", "phone": "010-0000-0000", "postalCode": "00000",
@@ -146,12 +181,14 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
                 "expectedTotalAmount": PRICE, "externalMethod": method if mileage < PRICE else None,
                 "methodAccountRef": account if mileage < PRICE else None}
             key = str(uuid.uuid4())
+            trace_id = uuid.uuid4().hex
+            headers = {"Idempotency-Key": key, **trace_headers(trace_id)}
 
             def create_when_admitted():
                 if recover_admission and not gate_open():
                     return None
                 # The scraped gauge can lag an admission transition. Retry only this explicit rejection with the same key.
-                status, result = gateway_json(base, "POST", "/api/orders", body, token, {"Idempotency-Key": key})
+                status, result = gateway_json(base, "POST", "/api/orders", body, token, headers)
                 if recover_admission and status == 503 and result.get("code") == "COMMON_CAPACITY_EXCEEDED":
                     return None
                 assert status == 201, (status, result)
@@ -163,6 +200,14 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
             payment = sql("commerce", f"select payment_id from commerce.orders where id='{order['id']}'")
             until(lambda: sql("settlement", f"select count(*) from settlement.settlement_items where payment_id='{payment}'") == "1",
                   "Settlement did not create the item from PaymentConfirmed")
+            order_traces[order["id"]] = trace_id
+            required = {"commerce.outbox.send", "payment.inbox.process", "payment.outbox.send",
+                        "commerce.inbox.accepted", "commerce.inbox.result"}
+            services = {"gateway", "commerce", "payment", "settlement"}
+            if mileage < PRICE:
+                required.add("payment.approval.process")
+                services.add("finance-mock")
+            observed_trace(trace_id, required, services)
             return order["id"], payment
 
         def cancel(order_id):
@@ -216,6 +261,13 @@ where r.business_key='{refund_key}'::uuid
 and r.operation='REFUND' and a.operation='APPROVE' and r.status='SUCCEEDED'
 and r.amount={int(external)} and r.amount=a.amount and r.provider_id=a.provider_id
 and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amount)""") == "1"
+            spans = observed_trace(refund_traces[order_id],
+                                   {"commerce.outbox.send", "payment.inbox.process", "payment.refund.process",
+                                    "payment.outbox.send", "settlement.outbox.send", "commerce.inbox.result"},
+                                   {"gateway", "commerce", "payment", "settlement"} | ({"finance-mock"} if int(external) else set()))
+            if int(sql("payment", f"select attempts from payment.payment_jobs where refund_id='{refund_id}'")) > 1:
+                assert any(span.get("name") == "payment.refund.process.wait"
+                           and span.get("tags", {}).get("kind") in {"retry", "lease-recovery"} for span in spans), "retry/restart wait span missing"
             print(json.dumps({"completed": refund_id, "external": int(external), "mileage": expected_mileage}), flush=True)
             return refund_id
 

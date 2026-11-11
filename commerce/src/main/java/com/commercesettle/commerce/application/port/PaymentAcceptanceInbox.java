@@ -2,6 +2,7 @@ package com.commercesettle.commerce.application.port;
 
 import com.commercesettle.commerce.application.event.EventEnvelope;
 import com.commercesettle.commerce.application.event.PaymentAcceptedPayload;
+import com.commercesettle.observability.AsyncObservation.Timing;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
@@ -26,9 +27,22 @@ public interface PaymentAcceptanceInbox {
 
   Optional<WaitingResult> claimResult(UUID eventId, Instant now);
 
-  record WaitingResult(UUID id, EventEnvelope<com.fasterxml.jackson.databind.JsonNode> event) {}
+  record WaitingResult(
+      UUID id,
+      EventEnvelope<com.fasterxml.jackson.databind.JsonNode> event,
+      String traceParent,
+      Timing timing) {
+    public WaitingResult(UUID id, EventEnvelope<com.fasterxml.jackson.databind.JsonNode> event) {
+      this(id, event, null, null);
+    }
+  }
 
-  record Waiting(UUID id, EventEnvelope<PaymentAcceptedPayload> event) {}
+  record Waiting(
+      UUID id, EventEnvelope<PaymentAcceptedPayload> event, String traceParent, Timing timing) {
+    public Waiting(UUID id, EventEnvelope<PaymentAcceptedPayload> event) {
+      this(id, event, null, null);
+    }
+  }
 
   record Source(String topic, int partition, long offset, byte[] body) {
     public Source {

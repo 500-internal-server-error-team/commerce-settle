@@ -1,5 +1,7 @@
 package com.commercesettle.payment.infrastructure.persistence.inbox;
 
+import com.commercesettle.observability.AsyncObservation;
+import com.commercesettle.observability.AsyncObservation.Timing;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
@@ -31,6 +33,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -49,6 +52,7 @@ public class JdbcInboxStore implements InboxStore {
   private final NamedParameterJdbcTemplate jdbc;
   private final ObjectMapper mapper;
   private final String consumer;
+  private AsyncObservation observations = AsyncObservation.NOOP;
 
   public JdbcInboxStore(
       NamedParameterJdbcTemplate jdbc,
@@ -60,6 +64,11 @@ public class JdbcInboxStore implements InboxStore {
     this.jdbc = jdbc;
     this.mapper = mapper;
     this.consumer = consumer;
+  }
+
+  @Autowired(required = false)
+  void asyncObservation(AsyncObservation observation) {
+    this.observations = observation;
   }
 
   @Override
@@ -84,6 +93,7 @@ public class JdbcInboxStore implements InboxStore {
             .addValue("aggregateVersion", event.aggregateVersion())
             .addValue("body", body)
             .addValue("json", new String(body, StandardCharsets.UTF_8))
+            .addValue("traceParent", observations.capture())
             .addValue("hash", hash(body))
             .addValue("topic", source.topic())
             .addValue("partition", source.partition())
@@ -92,9 +102,9 @@ public class JdbcInboxStore implements InboxStore {
     int inserted =
         jdbc.update(
             """
-        INSERT INTO payment.inbox (id,consumer,event_id,event_type,event_version,occurred_at,payload,
+        INSERT INTO payment.inbox (trace_parent,id,consumer,event_id,event_type,event_version,occurred_at,payload,
             raw_body,body_hash,source_topic,source_partition,source_offset,aggregate_id,aggregate_version,status,next_run_at)
-        VALUES (:id,:consumer,:eventId,:type,:eventVersion,CAST(:occurred AS timestamptz),CAST(:json AS jsonb),
+        VALUES (:traceParent,:id,:consumer,:eventId,:type,:eventVersion,CAST(:occurred AS timestamptz),CAST(:json AS jsonb),
             :body,:hash,:topic,:partition,:offset,:aggregate,:aggregateVersion,'WAITING',clock_timestamp())
         ON CONFLICT (consumer,event_id) DO NOTHING
         """,
@@ -154,7 +164,8 @@ public class JdbcInboxStore implements InboxStore {
         jdbc.query(
             """
               WITH next AS (
-                  SELECT id FROM payment.inbox
+                  SELECT id,updated_at AS queued_changed,next_run_at AS queued_due,
+                      observation_state AS queued_observation FROM payment.inbox
                   WHERE consumer = :consumer AND status = 'WAITING' AND next_run_at <= :now
                     AND (CAST(:eventId AS uuid) IS NULL OR event_id = :eventId)
                   ORDER BY next_run_at, id
@@ -163,6 +174,7 @@ public class JdbcInboxStore implements InboxStore {
               )
               UPDATE payment.inbox i
               SET status = CASE WHEN i.attempts >= :max THEN 'REVIEW_REQUIRED' ELSE 'WAITING' END,
+                  observation_state = CASE WHEN i.attempts >= :max THEN i.observation_state ELSE 'CLAIMED' END,
                   next_run_at = CASE WHEN i.attempts >= :max THEN NULL ELSE :leaseUntil END,
                   last_error_code = CASE WHEN i.attempts >= :max
                       THEN :exhausted ELSE i.last_error_code END,
@@ -170,7 +182,8 @@ public class JdbcInboxStore implements InboxStore {
                   updated_at = :now, version = i.version + 1
               FROM next WHERE i.id = next.id
               RETURNING i.id, i.event_id, i.event_type, i.version, i.attempts, i.status,
-                  i.raw_body, i.created_at
+                  i.raw_body,i.created_at,i.trace_parent,next.queued_changed,
+                  next.queued_due,next.queued_observation
               """,
             params,
             (rs, row) ->
@@ -182,7 +195,14 @@ public class JdbcInboxStore implements InboxStore {
                     rs.getInt("attempts"),
                     rs.getString("status"),
                     rs.getBytes("raw_body"),
-                    rs.getTimestamp("created_at").toInstant()));
+                    rs.getTimestamp("created_at").toInstant(),
+                    rs.getString("trace_parent"),
+                    new Timing(
+                        rs.getTimestamp("created_at").toInstant(),
+                        rs.getTimestamp("queued_changed").toInstant(),
+                        rs.getTimestamp("queued_due").toInstant(),
+                        rs.getString("queued_observation"),
+                        rs.getInt("attempts"))));
     if (rows.isEmpty()) {
       return Optional.empty();
     }
@@ -197,7 +217,13 @@ public class JdbcInboxStore implements InboxStore {
       return Optional.of(
           new InboxClaim.Claimed(
               new WaitingInboxEvent(
-                  row.id(), row.version(), row.attempts(), row.registeredAt(), event)));
+                  row.id(),
+                  row.version(),
+                  row.attempts(),
+                  row.registeredAt(),
+                  event,
+                  row.traceParent(),
+                  row.timing())));
     } catch (IOException | IllegalArgumentException exception) {
       // 저장 때 검증한 원문이므로 읽기 실패는 데이터 손상이나 계약 변경이다. 다시 읽어도 같으므로 재시도하지 않는다.
       finishWaiting(row.id(), "REVIEW_REQUIRED", null, BODY_UNREADABLE, now);
@@ -259,6 +285,8 @@ public class JdbcInboxStore implements InboxStore {
             """
             UPDATE payment.inbox
             SET last_error_code = :errorCode,
+                observation_state = CASE WHEN CAST(:retryAt AS timestamptz) IS NOT NULL
+                    THEN 'RETRY' ELSE observation_state END,
                 status = CASE WHEN CAST(:retryAt AS timestamptz) IS NULL
                     THEN 'REVIEW_REQUIRED' ELSE 'WAITING' END,
                 next_run_at = :retryAt, updated_at = :now, version = version + 1
@@ -472,5 +500,7 @@ public class JdbcInboxStore implements InboxStore {
       int attempts,
       String status,
       byte[] body,
-      Instant registeredAt) {}
+      Instant registeredAt,
+      String traceParent,
+      Timing timing) {}
 }

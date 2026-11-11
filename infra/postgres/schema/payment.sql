@@ -59,6 +59,8 @@ CREATE INDEX ix_payments_buyer_created ON payment.payments (buyer_id, created_at
 CREATE INDEX ix_payments_status_updated ON payment.payments (status, updated_at, id);
 
 CREATE TABLE payment.inbox (
+    trace_parent varchar(55),
+    observation_state varchar(16),
     id uuid PRIMARY KEY,
     consumer varchar(100) NOT NULL,
     event_id uuid NOT NULL,
@@ -124,6 +126,7 @@ CREATE TABLE payment.inbox_conflicts (
 CREATE INDEX inbox_conflicts_event ON payment.inbox_conflicts(consumer, event_id, created_at);
 
 CREATE TABLE payment.payment_jobs (
+    trace_parent varchar(55),
     id              uuid         PRIMARY KEY,
     payment_id      uuid         NOT NULL,
     refund_id       uuid,
@@ -303,6 +306,7 @@ CREATE TABLE payment.refund_sagas (
 CREATE INDEX ix_refund_sagas_step_updated ON payment.refund_sagas (step, updated_at, id);
 
 CREATE TABLE payment.outbox (
+    trace_parent varchar(55),
     id uuid PRIMARY KEY,
     sequence_no bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
     event_type varchar(80) NOT NULL,

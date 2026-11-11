@@ -1,5 +1,6 @@
 package com.commercesettle.payment.infrastructure.persistence.outbox;
 
+import com.commercesettle.observability.AsyncObservation;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationResultPayload;
@@ -21,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -42,6 +44,7 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
 
   private final NamedParameterJdbcTemplate jdbc;
   private final ObjectMapper mapper;
+  private AsyncObservation observations = AsyncObservation.NOOP;
   private final ApplicationEventPublisher events;
 
   public JdbcPaymentEventOutbox(
@@ -49,6 +52,11 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
     this.jdbc = jdbc;
     this.mapper = mapper;
     this.events = events;
+  }
+
+  @Autowired(required = false)
+  void asyncObservation(AsyncObservation observation) {
+    this.observations = observation;
   }
 
   @Override
@@ -126,6 +134,7 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
             .addValue("occurred", event.occurredAt().toString())
             .addValue("body", body)
             .addValue("json", new String(body, StandardCharsets.UTF_8))
+            .addValue("traceParent", observations.capture())
             .addValue("type", event.eventType())
             .addValue("key", paymentId.toString());
     // 집계별 append를 커밋까지 직렬화하여 늦은 낮은 버전의 삽입을 막는다.
@@ -153,9 +162,9 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
         jdbc.update(
             """
             INSERT INTO payment.outbox (id,event_type,event_version,aggregate_id,aggregate_version,
-                topic,occurred_at,message_key,payload,raw_body)
+                topic,occurred_at,message_key,payload,raw_body,trace_parent)
             VALUES (:id,:type,1,:aggregate,:version,'commerce-settle.payment.v1',
-                CAST(:occurred AS timestamptz),:key,CAST(:json AS jsonb),:body)
+                CAST(:occurred AS timestamptz),:key,CAST(:json AS jsonb),:body,:traceParent)
             ON CONFLICT (id) DO NOTHING
             """,
             params);

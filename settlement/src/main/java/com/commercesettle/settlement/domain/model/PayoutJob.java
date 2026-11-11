@@ -1,6 +1,7 @@
 package com.commercesettle.settlement.domain.model;
 
 import com.commercesettle.settlement.domain.exception.InvalidPayoutTransitionException;
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -16,6 +17,10 @@ import java.util.UUID;
 @Table(name = "payout_jobs")
 public class PayoutJob extends AuditableEntity {
   @Id private UUID id;
+
+  @Column(length = 55)
+  private String traceParent;
+
   private UUID payoutId;
   private UUID businessKey;
 
@@ -60,6 +65,15 @@ public class PayoutJob extends AuditableEntity {
     this.leaseToken = null;
     this.leaseUntil = null;
     touch(now);
+  }
+
+  /** 최초 저장 때만 인프라 어댑터가 설정하는 관측 메타데이터다. */
+  public void captureTraceParent(String parent) {
+    if (traceParent == null) traceParent = parent;
+  }
+
+  public String getTraceParent() {
+    return traceParent;
   }
 
   public UUID getId() {

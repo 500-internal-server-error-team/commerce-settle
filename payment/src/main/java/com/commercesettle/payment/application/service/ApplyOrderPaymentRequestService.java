@@ -33,6 +33,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -128,10 +129,7 @@ public class ApplyOrderPaymentRequestService {
   }
 
   private boolean processClaimed(Function<Instant, Optional<InboxClaim>> claim) {
-    return observations.observe(Stage.INBOX_PROCESS, () -> processObserved(claim));
-  }
 
-  private boolean processObserved(Function<Instant, Optional<InboxClaim>> claim) {
     Optional<InboxClaim> next =
         observations.observe(
             Stage.INBOX_CLAIM, () -> transactions.execute(status -> claim.apply(clock.instant())));
@@ -142,9 +140,25 @@ public class ApplyOrderPaymentRequestService {
       // 선점 트랜잭션에서 이미 확인 대상으로 넘기고 커밋했다. 처리 1건으로 센다.
       return true;
     }
+    return observations.observeStored(
+        Stage.INBOX_PROCESS,
+        claimed.traceParent(),
+        Map.of(
+            "event.id",
+            claimed.event().eventId().toString(),
+            "inbox.id",
+            claimed.inboxId().toString()),
+        claimed.timing(),
+        () -> processObserved(claimed));
+  }
+
+  private boolean processObserved(WaitingInboxEvent claimed) {
     observations.identify("event.id", claimed.event().eventId());
     observations.identify("inbox.id", claimed.inboxId());
-    observations.queueWait(Queue.INBOX, claimed.registeredAt(), claimed.attempts());
+    observations.queueWait(
+        Queue.INBOX,
+        claimed.timing() == null ? claimed.registeredAt() : claimed.timing().initialAt(),
+        claimed.attempts());
     try {
       observations.observe(
           Stage.INBOX_APPLY,

@@ -5,12 +5,14 @@ import com.commercesettle.commerce.application.event.OrderPaymentRequestedPayloa
 import com.commercesettle.commerce.application.port.OrderEventOutbox;
 import com.commercesettle.commerce.infrastructure.messaging.OutboxAppended;
 import com.commercesettle.commerce.infrastructure.persistence.TransactionLimits;
+import com.commercesettle.observability.AsyncObservation;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -22,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class JdbcOrderEventOutbox implements OrderEventOutbox {
   private final NamedParameterJdbcTemplate jdbc;
   private final ObjectMapper mapper;
+  private AsyncObservation observations = AsyncObservation.NOOP;
   private final ApplicationEventPublisher events;
 
   public JdbcOrderEventOutbox(
@@ -29,6 +32,11 @@ public class JdbcOrderEventOutbox implements OrderEventOutbox {
     this.jdbc = jdbc;
     this.mapper = mapper;
     this.events = events;
+  }
+
+  @Autowired(required = false)
+  void asyncObservation(AsyncObservation observation) {
+    this.observations = observation;
   }
 
   @Override
@@ -69,6 +77,7 @@ public class JdbcOrderEventOutbox implements OrderEventOutbox {
             .addValue("occurred", event.occurredAt().toString())
             .addValue("body", body)
             .addValue("json", new String(body, StandardCharsets.UTF_8))
+            .addValue("traceParent", observations.capture())
             .addValue("key", messageKey.toString());
     // 집계별 append를 커밋까지 직렬화하여 늦은 낮은 버전의 삽입을 막는다.
     jdbc.queryForList(
@@ -95,9 +104,9 @@ public class JdbcOrderEventOutbox implements OrderEventOutbox {
         jdbc.update(
             """
             INSERT INTO commerce.outbox (id,event_type,event_version,aggregate_id,aggregate_version,
-                topic,occurred_at,message_key,payload,raw_body)
+                topic,occurred_at,message_key,payload,raw_body,trace_parent)
             VALUES (:id,:type,1,:aggregate,:version,'commerce-settle.commerce.v1',
-                CAST(:occurred AS timestamptz),:key,CAST(:json AS jsonb),:body)
+                CAST(:occurred AS timestamptz),:key,CAST(:json AS jsonb),:body,:traceParent)
             ON CONFLICT (id) DO NOTHING
             """,
             params);
