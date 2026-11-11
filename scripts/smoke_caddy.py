@@ -1,6 +1,7 @@
 """Exercise the deployment Caddy config on isolated Docker resources, without public ACME."""
 
 import argparse
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -31,18 +32,18 @@ def verify(directory):
     project = "caddy-smoke-" + uuid.uuid4().hex[:12]
     settings = directory / "compose.json"
     backend = directory / "backend.Caddyfile"
+    authorization = base64.b64encode(b"viewer:synthetic-monitor-password").decode()
     backend.write_text(':8080, :3000, :9090, :9411, :8081 {\n log {\n output stdout\n }\n'
+                       ' handle /api/user {\n @valid header Authorization "Basic ' + authorization + '"\n'
+                       ' handle @valid {\n respond "authenticated" 200\n }\n respond "unauthorized" 401\n }\n'
                        ' handle /reset {\n abort\n }\n handle {\n'
                        ' respond "{method}|{uri}|{header.X-Forwarded-Proto}|'
                        '{header.X-Forwarded-Host}|{header.Authorization}|{header.Forwarded}"\n }\n}\n')
-    password_hash = run("docker", "run", "--rm", "--network", "none", container["image"],
-                        "caddy", "hash-password", "--plaintext", "synthetic-monitor-password").strip()
     caddy = {
         "image": container["image"], "command": container["command"],
         "mem_limit": f"{container['memory']}m",
         "environment": {"PUBLIC_DOMAIN": "localhost", "GATEWAY_UPSTREAM": "upstream:8080",
-                        "DATA_PRIVATE_IP": "upstream", "MONITORING_USER": "viewer",
-                        "MONITORING_PASSWORD_HASH": password_hash.replace("$", "$$")},
+                        "DATA_PRIVATE_IP": "upstream"},
         "ports": ["127.0.0.1::80", "127.0.0.1::443"],
         "volumes": [f"{ROOT / 'infra/caddy/Caddyfile'}:/etc/caddy/Caddyfile:ro",
                     f"{ROOT / 'infra/caddy/monitoring.Caddyfile'}:/etc/caddy/monitoring/tools.caddy:ro",
@@ -88,20 +89,23 @@ def verify(directory):
         args = ["curl", "--silent", "--show-error", "--noproxy", "*", "--max-time", "5",
                 "--cacert", str(directory / "root.crt"), "--resolve",
                 f"{host}:{port(443)}:127.0.0.1", "-H", "Host: " + host, "-X", method,
-                "-w", "\n%{http_code}"]
+                "-D", "-", "-w", "\n%{http_code}"]
         if authenticated:
             args.extend(["--user", "viewer:synthetic-monitor-password"])
-        body, status = run(*args, f"https://{host}:{port(443)}{path}").rsplit("\n", 1)
-        return body, int(status)
+        headers, result = run(*args, f"https://{host}:{port(443)}{path}").split("\n\n", 1)
+        body, status = result.rsplit("\n", 1)
+        return body, int(status), headers.lower()
 
     def verify_monitoring():
         for tool in ("prometheus", "zipkin", "kafka"):
-            assert monitoring_request(tool)[1] == 401, tool
-            body, status = monitoring_request(tool, "/deep/link?check=1", authenticated=True)
+            response = monitoring_request(tool)
+            assert response[1] == 401 and 'www-authenticate: basic realm="commerce-monitoring"' in response[2], tool
+            body, status, _ = monitoring_request(tool, "/deep/link?check=1", authenticated=True)
             assert status == 200 and body == f"GET|/deep/link?check=1|https|{tool}.localhost||", (tool, body)
         assert monitoring_request("zipkin", "/api/v2/spans", authenticated=True, method="POST")[1] == 405
         # Grafana keeps its own login/API credentials instead of receiving proxy Basic credentials.
         assert monitoring_request("grafana", "/login")[1] == 200
+        assert monitoring_request("grafana", "/api/user", authenticated=True)[1] == 200
 
     try:
         # Validate the public-domain path too; validation does not request a certificate.
@@ -128,6 +132,7 @@ def verify(directory):
                    if line.startswith("{")]
         assert sum(entry.get("request", {}).get("uri") == "/reset" for entry in entries) == 1
         cli("stop", "upstream")
+        assert monitoring_request("prometheus", authenticated=True)[1] == 502
         try:
             request("/unavailable", "POST")
             raise AssertionError("unavailable upstream must fail")
