@@ -1201,7 +1201,7 @@ Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보�
 
 Commerce·Payment·Settlement가 같은 구조를 씁니다. Settlement는 환불 SAGA 응답과 판매자 알림 요청을 저장합니다. 현재 저장 상태는 PENDING/RUNNING/RETRY/PUBLISHED/REVIEW_REQUIRED입니다. 저장 포트는 호출자의 업무 트랜잭션에 참여하며 트랜잭션 밖 호출을 거절합니다. 같은 집계의 append는 트랜잭션 잠금으로 직렬화하고 이전보다 낮은 집계 버전의 신규 삽입을 거절합니다. 같은 버전은 `sequence_no` 순서로 처리하며 identity의 빈 번호는 의미가 없습니다. 선행 미발행 행이 임대·재시도 대기·수동 확인 상태여도 후행을 먼저 발행하지 않습니다. 선점마다 version을 증가하고 유효 임대·version이 맞는 결과만 반영합니다. 이 DB 검사는 이미 시작된 Kafka 전송을 취소하지 못하므로 늦은 중복도 원래 ID로 수용해야 합니다.
 
-**인덱스:** (status,next_run_at,lease_until,id); (occurred_at,created_at,id).
+**인덱스:** (status,next_run_at,lease_until,id); (occurred_at,created_at,id); 발행기 선점용 (sequence_no) WHERE status IN (PENDING,RUNNING,RETRY); (attempts,sequence_no) WHERE status IN (PENDING,RUNNING,RETRY). 두 부분 인덱스는 미발행 행만 담아 발행 완료 이력이 늘어도 선점 비용이 커지지 않습니다.
 
 Commerce는 추가로 전체 행의 (aggregate_id,aggregate_version,sequence_no)를 인덱싱해 완료 이력을 포함한 최대 버전 조회와 선행 미발행 검사를 지원합니다.
 
