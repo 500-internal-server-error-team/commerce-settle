@@ -498,6 +498,21 @@ docker compose --profile observability up -d --wait --wait-timeout 300
 
 Grafana의 `commerce-settle / Runtime overview` 대시보드와 Prometheus 데이터 소스는 자동 등록됩니다. 수집 주기 때문에 첫 데이터가 표시되기까지 약 15초가 필요합니다. 이 구성은 로컬 전용이며 DB·Kafka·Redis·내부 앱·관리 포트는 호스트에 게시하지 않습니다. Zipkin은 기본 10% 샘플링이며 `.env`의 `TRACING_SAMPLING_PROBABILITY`로 바꿉니다. 모든 요청을 수집하면 부하·메모리 사용량이 달라집니다.
 
+#### Payment Worker 처리 시간
+
+`commerce-settle / Payment Worker` 대시보드는 첫 선점 대기, 처리 단계, SQL 실행의 평균·p95와 대기열을 보여줍니다. 새 Payment 이미지와 대시보드 설정을 함께 반영해야 하며, 이전 실행의 수치를 소급 생성하지 않습니다. 해당 작업이 실행되기 전이나 두 번의 수집이 쌓이기 전에는 패널에 데이터가 없을 수 있습니다.
+
+| 지표 | 측정 경계 |
+| --- | --- |
+| `payment_queue_wait_seconds` (`queue=inbox`, `approval`) | DB 등록 시각부터 첫 선점 완료까지. 재시도·임대 회수는 중복 집계하지 않습니다. 서로 다른 서버 시각으로 음수가 된 표본은 제외합니다. |
+| `payment_processing_seconds` (`stage=inbox.*`) | `process`는 한 번의 선점·처리, `claim`·`apply`·`failure`는 각각 선점·업무 반영·실패 기록 트랜잭션이며 커밋·롤백까지 포함합니다. |
+| `payment_processing_seconds` (`stage=approval.*`) | `process` 아래의 `lease`·`prepare`·`lease.check`·`gateway`·`record`로 임대·준비·임대 확인·PG 호출·결과 반영을 구분합니다. 트랜잭션 메서드는 프록시 호출이 끝나 커밋·롤백된 뒤 측정을 닫습니다. |
+| `jdbc_query_seconds` (`stage`) | 해당 처리 단계에서 실행한 JDBC 쿼리 시간. `unscoped`는 관측 수집 등 처리 단계 밖의 쿼리입니다. 결과 매핑·Java 처리·flush·커밋을 모두 포함하는 트랜잭션 시간과 구분합니다. |
+
+각 Timer는 `_count`·`_sum`·`_bucket`을 제공합니다. 예를 들어 `sum by (stage) (rate(payment_processing_seconds_sum{role="worker"}[2m])) / sum by (stage) (rate(payment_processing_seconds_count{role="worker"}[2m]))`는 단계별 평균 초입니다. `process`·하위 단계·SQL은 시간이 겹치므로 더하지 않습니다. 빈 폴링과 업무상 거절도 단계 실행 횟수에 포함돼 이 값을 결제 확정 TPS로 사용하지 않습니다. 롤백 예외는 해당 단계의 `error` label로 집계합니다.
+
+이 지표는 Trace 샘플링과 별도로 수집합니다. Zipkin에서는 `payment.inbox.process` 또는 `payment.approval.process`의 하위 단계·JDBC 연결·쿼리·결과 조회와 PG HTTP 호출을 확인합니다. Inbox와 승인 슬롯은 별도 비동기 실행이므로 각각 추적을 만들고 `payment.id`로 연결해 검색합니다. `event.id`·`inbox.id`·`job.id`도 Trace에만 기록하며 metric label로 사용하지 않습니다. JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업 기록은 비활성화합니다. SQL에 값을 직접 이어 붙이지 않고 기존 바인딩을 유지합니다. 새 처리·JDBC 추적의 예외는 오류 종류만 남기는 `ObservationFailure`로 정제해 실패 행·메시지·cause·stacktrace를 전송하지 않습니다. 호출자에게는 원래 예외를 전달하므로 기존 롤백·재시도는 유지합니다.
+
 ### Swagger 로그인
 
 로컬·팀 공용 배포 모두 상단 `개발용 계정`에서 구매자·판매자 A/B를 고르고 `로그인`을 누릅니다. 별도 가입이나 이메일·비밀번호·토큰 입력 없이 기존 로그인 API로 인증합니다. Gateway·Commerce에 같은 fixture 설정과 최초 적재에 사용한 `DEV_FIXTURE_PASSWORD`가 필요하며, 비밀번호는 브라우저에 전달하지 않습니다. 이미 생성된 계정의 비밀번호는 fixture 재기동으로 바뀌지 않습니다.

@@ -4,6 +4,7 @@ import com.commercesettle.payment.domain.model.PaymentJob;
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
 import com.commercesettle.payment.domain.model.PaymentJobStatus;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -56,5 +57,11 @@ public interface PaymentJobRepository {
     record StateConflict(PaymentJobStatus current) implements ReplayResult {}
   }
 
-  record LeasedJob(UUID jobId, UUID paymentId, UUID businessKey, UUID leaseToken, int attempts) {}
+  record LeasedJob(
+      UUID jobId,
+      UUID paymentId,
+      UUID businessKey,
+      UUID leaseToken,
+      int attempts,
+      Instant registeredAt) {}
 }

@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import com.commercesettle.payment.application.dto.ApprovalWorkerSettings;
 import com.commercesettle.payment.application.port.PaymentGateway;
 import com.commercesettle.payment.application.port.PaymentGateway.ApprovalRequest;
+import com.commercesettle.payment.application.port.PaymentProcessingObservation;
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository.LeasedJob;
@@ -39,7 +40,12 @@ class ApprovalWorkerTest {
     PaymentGateway gateway = mock(PaymentGateway.class);
     LeasedJob job =
         new LeasedJob(
-            UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1);
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            1,
+            java.time.Instant.EPOCH);
     ApprovalRequest request =
         new ApprovalRequest(
             "PG_A",
@@ -55,7 +61,10 @@ class ApprovalWorkerTest {
         .thenReturn(Optional.of(new ApprovalResultRecorder.Prepared(request, true)));
     when(jobs.holdsLease(job.jobId(), job.leaseToken(), SETTINGS.httpTimeout())).thenReturn(false);
 
-    assertThat(new ApprovalWorker(jobs, recorder, gateway, SETTINGS).runOnce()).isTrue();
+    assertThat(
+            new ApprovalWorker(jobs, recorder, gateway, SETTINGS, PaymentProcessingObservation.NOOP)
+                .runOnce())
+        .isTrue();
 
     verifyNoInteractions(gateway);
     verify(recorder, never()).record(any(), any());

@@ -170,7 +170,7 @@ public class JdbcInboxStore implements InboxStore {
                   updated_at = :now, version = i.version + 1
               FROM next WHERE i.id = next.id
               RETURNING i.id, i.event_id, i.event_type, i.version, i.attempts, i.status,
-                  i.raw_body
+                  i.raw_body, i.created_at
               """,
             params,
             (rs, row) ->
@@ -181,7 +181,8 @@ public class JdbcInboxStore implements InboxStore {
                     rs.getLong("version"),
                     rs.getInt("attempts"),
                     rs.getString("status"),
-                    rs.getBytes("raw_body")));
+                    rs.getBytes("raw_body"),
+                    rs.getTimestamp("created_at").toInstant()));
     if (rows.isEmpty()) {
       return Optional.empty();
     }
@@ -195,7 +196,8 @@ public class JdbcInboxStore implements InboxStore {
       EventEnvelope<?> event = mapper.readValue(row.body(), envelopeType(row.eventType()));
       return Optional.of(
           new InboxClaim.Claimed(
-              new WaitingInboxEvent(row.id(), row.version(), row.attempts(), event)));
+              new WaitingInboxEvent(
+                  row.id(), row.version(), row.attempts(), row.registeredAt(), event)));
     } catch (IOException | IllegalArgumentException exception) {
       // 저장 때 검증한 원문이므로 읽기 실패는 데이터 손상이나 계약 변경이다. 다시 읽어도 같으므로 재시도하지 않는다.
       finishWaiting(row.id(), "REVIEW_REQUIRED", null, BODY_UNREADABLE, now);
@@ -469,5 +471,6 @@ public class JdbcInboxStore implements InboxStore {
       long version,
       int attempts,
       String status,
-      byte[] body) {}
+      byte[] body,
+      Instant registeredAt) {}
 }

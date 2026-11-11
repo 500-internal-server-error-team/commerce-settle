@@ -33,7 +33,12 @@ class RefundWorkerTest {
     RefundGateway gateway = mock(RefundGateway.class);
     LeasedJob job =
         new LeasedJob(
-            UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1);
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            1,
+            java.time.Instant.EPOCH);
     RefundRequest request =
         new RefundRequest("PG_A", UUID.randomUUID(), job.businessKey(), 10_000, "pg-normal-v1");
     when(jobs.leaseNext(eq(PaymentJobOperation.REFUND), any(), eq(SETTINGS.leaseDuration())))

@@ -20,6 +20,7 @@ import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
+import com.commercesettle.payment.application.port.PaymentProcessingObservation;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
 import com.commercesettle.payment.domain.model.MileageEntry;
 import com.commercesettle.payment.domain.model.MileageEntryKind;
@@ -83,7 +84,8 @@ class ApplyOrderPaymentRequestServiceTest {
           mock(PaymentNotices.class),
           TransactionOperations.withoutTransaction(),
           Clock.fixed(NOW, ZoneOffset.UTC),
-          30_000);
+          30_000,
+          PaymentProcessingObservation.NOOP);
 
   @Test
   @DisplayName("처리할 WAITING이 없으면 아무것도 바꾸지 않는다")
@@ -980,6 +982,7 @@ class ApplyOrderPaymentRequestServiceTest {
                   inboxId,
                   3,
                   attempts,
+                  NOW,
                   new EventEnvelope<>(
                       UUID.randomUUID(),
                       "OrderPaymentRequested",
@@ -999,6 +1002,7 @@ class ApplyOrderPaymentRequestServiceTest {
                   inboxId,
                   3,
                   1,
+                  NOW,
                   new EventEnvelope<>(
                       UUID.randomUUID(),
                       "PaymentCancellationRequested",

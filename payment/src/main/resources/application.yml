@@ -1,6 +1,17 @@
 server:
   port: ${SERVER_PORT:8080}
 
+jdbc:
+  includes: CONNECTION,QUERY,FETCH
+  datasource-proxy:
+    include-parameter-values: false
+    query:
+      enable-logging: false
+    slow-query:
+      enable-logging: false
+  resultset-operations:
+    enabled: false
+
 spring:
   jackson:
     time-zone: Asia/Seoul
@@ -75,6 +86,19 @@ management:
         enabled: true
       show-details: always
   metrics:
+    distribution:
+      percentiles-histogram:
+        payment.processing: true
+        payment.queue.wait: true
+        jdbc.query: true
+      minimum-expected-value:
+        payment.processing: 1ms
+        payment.queue.wait: 1ms
+        jdbc.query: 1ms
+      maximum-expected-value:
+        payment.processing: 30s
+        payment.queue.wait: 5m
+        jdbc.query: 5s
     tags:
       application: ${spring.application.name}
       role: ${PAYMENT_ROLE:app}
