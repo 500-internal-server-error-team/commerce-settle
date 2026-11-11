@@ -90,7 +90,7 @@ class MockPaymentIntegrationTest {
   @Autowired TestRestTemplate http;
   @Autowired ObjectMapper mapper;
   @Autowired JdbcTemplate jdbc;
-  @Autowired HikariDataSource dataSource;
+  @Autowired javax.sql.DataSource dataSource;
   @Autowired MockAccountRepository accounts;
   @Autowired MockScenarioRepository scenarios;
   @MockitoSpyBean MockTransactionRepository transactions;
@@ -673,7 +673,12 @@ class MockPaymentIntegrationTest {
         .untilAsserted(
             () -> {
               assertThat(response.isDone()).isFalse();
-              assertThat(dataSource.getHikariPoolMXBean().getActiveConnections()).isZero();
+              assertThat(
+                      dataSource
+                          .unwrap(HikariDataSource.class)
+                          .getHikariPoolMXBean()
+                          .getActiveConnections())
+                  .isZero();
             });
     assertThat(
             jdbc.queryForObject(
