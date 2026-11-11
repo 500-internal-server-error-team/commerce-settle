@@ -78,8 +78,22 @@ public final class ObservationErrors {
 
     @Override
     public void onError(Observation.Context context) {
-      sanitize(context);
-      delegate.onError(context);
+      Throwable original = context.getError();
+      if (supported(context.getName())) {
+        sanitize(context);
+        delegate.onError(context);
+        return;
+      }
+      // SQL 원예외가 HTTP·Kafka 같은 상위 framework observation까지 전파될 수도 있다.
+      // Trace에는 종류만 전달하고 다른 framework metric handler의 원래 오류 분류는 보존한다.
+      if (original != null && !(original instanceof ObservationFailure)) {
+        context.setError(new ObservationFailure(original));
+      }
+      try {
+        delegate.onError(context);
+      } finally {
+        context.setError(original);
+      }
     }
 
     @Override
