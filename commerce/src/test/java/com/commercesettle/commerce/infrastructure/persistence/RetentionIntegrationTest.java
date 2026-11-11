@@ -1140,7 +1140,8 @@ class RetentionIntegrationTest {
       try {
         assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
         assertThat(
-                ((com.zaxxer.hikari.HikariDataSource) jdbc.getDataSource())
+                jdbc.getDataSource()
+                    .unwrap(com.zaxxer.hikari.HikariDataSource.class)
                     .getHikariPoolMXBean()
                     .getActiveConnections())
             .isZero();

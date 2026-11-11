@@ -675,7 +675,8 @@ class NotificationIntegrationTest {
         assertThat(entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
         assertThat(active).isFalse();
         assertThat(
-                ((com.zaxxer.hikari.HikariDataSource) jdbc.getDataSource())
+                jdbc.getDataSource()
+                    .unwrap(com.zaxxer.hikari.HikariDataSource.class)
                     .getHikariPoolMXBean()
                     .getActiveConnections())
             .isZero();
