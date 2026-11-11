@@ -122,6 +122,7 @@ CREATE INDEX ix_payouts_status_updated ON settlement.payouts (status, updated_at
 
 -- 지급 실행 작업. 지급 Worker가 임대해 한 건씩 실행한다.
 CREATE TABLE settlement.payout_jobs (
+    trace_parent varchar(55),
     id           uuid         PRIMARY KEY,
     payout_id    uuid         NOT NULL,
     business_key uuid         NOT NULL,
@@ -222,6 +223,7 @@ CREATE INDEX ix_settlement_entries_source_event ON settlement.settlement_entries
 -- 수신 이벤트. Payment와 같은 컬럼·제약이다. 선행 결제가 없는 구매확정은 WAITING으로 남겨 처리기가 다시 판정하고,
 -- Commerce Inbox와 같이 attempts·last_error_code로 10회 상한을 둔다.
 CREATE TABLE settlement.inbox (
+    trace_parent varchar(55),
     id uuid PRIMARY KEY,
     consumer varchar(100) NOT NULL,
     event_id uuid NOT NULL,
@@ -395,6 +397,7 @@ CREATE TABLE settlement.inbox_quarantine_resumes (
 
 -- Settlement 발행 Outbox. Payment·Commerce outbox와 같은 구조다.
 CREATE TABLE settlement.outbox (
+    trace_parent varchar(55),
     id uuid PRIMARY KEY,
     sequence_no bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
     event_type varchar(80) NOT NULL,

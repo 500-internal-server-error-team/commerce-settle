@@ -10,6 +10,7 @@ import com.commercesettle.payment.application.service.ApprovalResultRecorder.App
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository.LeasedJob;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -47,10 +48,6 @@ public class ApprovalWorker {
 
   /** 도래한 작업이 없으면 false를 돌려준다. */
   public boolean runOnce() {
-    return observations.observe(Stage.APPROVAL_PROCESS, this::processObserved);
-  }
-
-  private boolean processObserved() {
     Optional<LeasedJob> leased =
         observations.observe(
             Stage.APPROVAL_LEASE,
@@ -59,9 +56,21 @@ public class ApprovalWorker {
       return false;
     }
     LeasedJob job = leased.get();
+    return observations.observeStored(
+        Stage.APPROVAL_PROCESS,
+        job.traceParent(),
+        Map.of("job.id", job.jobId().toString(), "payment.id", job.paymentId().toString()),
+        job.timing(),
+        () -> processObserved(job));
+  }
+
+  private boolean processObserved(LeasedJob job) {
     observations.identify("job.id", job.jobId());
     observations.identify("payment.id", job.paymentId());
-    observations.queueWait(Queue.APPROVAL, job.registeredAt(), job.attempts());
+    observations.queueWait(
+        Queue.APPROVAL,
+        job.timing() == null ? job.registeredAt() : job.timing().initialAt(),
+        job.attempts());
     Optional<ApprovalResultRecorder.Prepared> prepared =
         observations.observe(Stage.APPROVAL_PREPARE, () -> recorder.prepare(job));
     if (prepared.isEmpty()) {

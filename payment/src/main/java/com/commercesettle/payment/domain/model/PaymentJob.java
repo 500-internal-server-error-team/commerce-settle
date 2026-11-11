@@ -1,5 +1,6 @@
 package com.commercesettle.payment.domain.model;
 
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -15,6 +16,10 @@ import java.util.UUID;
 @Table(name = "payment_jobs")
 public class PaymentJob extends AuditableEntity {
   @Id private UUID id;
+
+  @Column(length = 55)
+  private String traceParent;
+
   private UUID paymentId;
   private UUID refundId;
 
@@ -93,6 +98,15 @@ public class PaymentJob extends AuditableEntity {
     lastErrorCode = Objects.requireNonNull(reasonCode, "reasonCode");
     touch(now);
     return true;
+  }
+
+  /** 최초 저장 때만 인프라 어댑터가 설정하는 관측 메타데이터다. */
+  public void captureTraceParent(String parent) {
+    if (traceParent == null) traceParent = parent;
+  }
+
+  public String getTraceParent() {
+    return traceParent;
   }
 
   public UUID getId() {

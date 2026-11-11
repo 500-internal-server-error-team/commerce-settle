@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.application.service;
 
+import com.commercesettle.observability.AsyncObservation;
 import com.commercesettle.settlement.application.dto.PayoutWorkerSettings;
 import com.commercesettle.settlement.application.exception.LeaseLostException;
 import com.commercesettle.settlement.application.port.PayoutGateway;
@@ -7,10 +8,12 @@ import com.commercesettle.settlement.application.port.PayoutGateway.Result;
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository;
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository.LeaseKind;
 import com.commercesettle.settlement.domain.repository.PayoutJobRepository.LeasedJob;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -22,6 +25,7 @@ public class PayoutWorker {
   private static final Logger LOGGER = LoggerFactory.getLogger(PayoutWorker.class);
 
   private final PayoutJobRepository jobs;
+  private AsyncObservation observations = AsyncObservation.NOOP;
   private final PayoutResultRecorder recorder;
   private final PayoutGateway gateway;
   private final PayoutWorkerSettings settings;
@@ -38,6 +42,11 @@ public class PayoutWorker {
     this.settings = settings;
   }
 
+  @Autowired(required = false)
+  void asyncObservation(AsyncObservation observation) {
+    this.observations = observation;
+  }
+
   /** 종류와 관계없이 도래한 작업 하나를 임대해 실행한다. 도래한 작업이 없으면 false를 돌려준다. */
   public boolean runOnce() {
     Optional<LeasedJob> leased = jobs.leaseNext(owner, settings.leaseDuration());
@@ -52,13 +61,23 @@ public class PayoutWorker {
 
   /** 임대한 작업을 실행하고 결과를 반영한다. 임대를 잃었으면 결과를 버린다. */
   public void run(LeasedJob job) {
-    Optional<PayoutResultRecorder.Prepared> prepared = recorder.prepare(job);
+    observations.run(
+        "settlement.payout.process",
+        job.traceParent(),
+        Map.of("job.id", job.jobId().toString(), "payout.id", job.payoutId().toString()),
+        job.timing(),
+        () -> runObserved(job));
+  }
+
+  private void runObserved(LeasedJob job) {
+    Optional<PayoutResultRecorder.Prepared> prepared =
+        observations.step("settlement.payout.prepare", () -> recorder.prepare(job));
     if (prepared.isEmpty()) {
       return;
     }
-    Result result = call(job, prepared.get());
+    Result result = observations.step("settlement.payout.gateway", () -> call(job, prepared.get()));
     try {
-      recorder.record(job, result);
+      observations.step("settlement.payout.record", () -> recorder.record(job, result));
       LOGGER
           .atInfo()
           .addKeyValue("event", "settlement.payout")

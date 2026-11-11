@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.domain.repository;
 
+import com.commercesettle.observability.AsyncObservation.Timing;
 import com.commercesettle.settlement.domain.model.PayoutJob;
 import com.commercesettle.settlement.domain.model.PayoutJobStatus;
 import java.time.Duration;
@@ -66,5 +67,16 @@ public interface PayoutJobRepository {
     RECOVERY
   }
 
-  record LeasedJob(UUID jobId, UUID payoutId, UUID businessKey, UUID leaseToken, int attempts) {}
+  record LeasedJob(
+      UUID jobId,
+      UUID payoutId,
+      UUID businessKey,
+      UUID leaseToken,
+      int attempts,
+      String traceParent,
+      Timing timing) {
+    public LeasedJob(UUID jobId, UUID payoutId, UUID businessKey, UUID leaseToken, int attempts) {
+      this(jobId, payoutId, businessKey, leaseToken, attempts, null, null);
+    }
+  }
 }

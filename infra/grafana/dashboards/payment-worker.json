@@ -1,8 +1,8 @@
 {
   "uid": "commerce-settle-payment-worker",
-  "title": "commerce-settle / Payment Worker",
+  "title": "commerce-settle / Financial processing",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "15s",
   "timezone": "Asia/Seoul",
   "time": {
@@ -33,9 +33,15 @@
         {
           "refId": "A",
           "expr": "sum by (queue) (rate(payment_queue_wait_seconds_sum{application=\"payment\",role=\"worker\"}[2m])) / sum by (queue) (rate(payment_queue_wait_seconds_count{application=\"payment\",role=\"worker\"}[2m]))",
-          "legendFormat": "{{queue}}"
+          "legendFormat": "현재 {{queue}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (queue) (rate(payment_queue_wait_seconds_sum{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)) / sum by (queue) (rate(payment_queue_wait_seconds_count{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset))",
+          "legendFormat": "이전 ($comparison_offset) {{queue}}"
         }
-      ]
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
     },
     {
       "id": 2,
@@ -60,9 +66,15 @@
         {
           "refId": "A",
           "expr": "histogram_quantile(0.95, sum by (le,queue) (rate(payment_queue_wait_seconds_bucket{application=\"payment\",role=\"worker\"}[2m])))",
-          "legendFormat": "{{queue}}"
+          "legendFormat": "현재 {{queue}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le,queue) (rate(payment_queue_wait_seconds_bucket{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)))",
+          "legendFormat": "이전 ($comparison_offset) {{queue}}"
         }
-      ]
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
     },
     {
       "id": 3,
@@ -87,9 +99,15 @@
         {
           "refId": "A",
           "expr": "sum by (stage) (rate(payment_processing_seconds_sum{application=\"payment\",role=\"worker\"}[2m])) / sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[2m]))",
-          "legendFormat": "{{stage}}"
+          "legendFormat": "현재 {{stage}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (stage) (rate(payment_processing_seconds_sum{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)) / sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset))",
+          "legendFormat": "이전 ($comparison_offset) {{stage}}"
         }
-      ]
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
     },
     {
       "id": 4,
@@ -114,9 +132,15 @@
         {
           "refId": "A",
           "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(payment_processing_seconds_bucket{application=\"payment\",role=\"worker\"}[2m])))",
-          "legendFormat": "{{stage}}"
+          "legendFormat": "현재 {{stage}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(payment_processing_seconds_bucket{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)))",
+          "legendFormat": "이전 ($comparison_offset) {{stage}}"
         }
-      ]
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
     },
     {
       "id": 5,
@@ -141,9 +165,15 @@
         {
           "refId": "A",
           "expr": "sum by (stage) (rate(jdbc_query_seconds_sum{application=\"payment\",role=\"worker\"}[2m])) / sum by (stage) (rate(jdbc_query_seconds_count{application=\"payment\",role=\"worker\"}[2m]))",
-          "legendFormat": "{{stage}}"
+          "legendFormat": "현재 {{stage}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (stage) (rate(jdbc_query_seconds_sum{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)) / sum by (stage) (rate(jdbc_query_seconds_count{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset))",
+          "legendFormat": "이전 ($comparison_offset) {{stage}}"
         }
-      ]
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
     },
     {
       "id": 6,
@@ -168,9 +198,15 @@
         {
           "refId": "A",
           "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(jdbc_query_seconds_bucket{application=\"payment\",role=\"worker\"}[2m])))",
-          "legendFormat": "{{stage}}"
+          "legendFormat": "현재 {{stage}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(jdbc_query_seconds_bucket{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)))",
+          "legendFormat": "이전 ($comparison_offset) {{stage}}"
         }
-      ]
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
     },
     {
       "id": 7,
@@ -195,9 +231,15 @@
         {
           "refId": "A",
           "expr": "sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[2m]))",
-          "legendFormat": "{{stage}}"
+          "legendFormat": "현재 {{stage}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset))",
+          "legendFormat": "이전 ($comparison_offset) {{stage}}"
         }
-      ]
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
     },
     {
       "id": 8,
@@ -222,9 +264,15 @@
         {
           "refId": "A",
           "expr": "sum by (stage,error) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\",error!=\"none\"}[2m]))",
-          "legendFormat": "{{stage}} {{error}}"
+          "legendFormat": "현재 {{stage}} {{error}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (stage,error) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\",error!=\"none\"}[2m] offset $comparison_offset))",
+          "legendFormat": "이전 ($comparison_offset) {{stage}} {{error}}"
         }
-      ]
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
     },
     {
       "id": 9,
@@ -249,10 +297,15 @@
         {
           "refId": "A",
           "expr": "financial:queue_value{queue=~\"payment.inbox|payment.payment_jobs\"}",
-          "legendFormat": "{{queue}}"
+          "legendFormat": "현재 {{queue}}"
+        },
+        {
+          "refId": "B",
+          "expr": "financial:queue_value{queue=~\"payment.inbox|payment.payment_jobs\"} offset $comparison_offset",
+          "legendFormat": "이전 ($comparison_offset) {{queue}}"
         }
       ],
-      "description": "기존 금융 관측 recording rule로 최신 유효 표본만 사용한다. 관측 실패·오래된 표본은 No data로 남긴다. 결제 작업은 승인·환불의 PENDING/RUNNING/RETRY/REVIEW_REQUIRED를 포함한다."
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
     },
     {
       "id": 10,
@@ -277,10 +330,449 @@
         {
           "refId": "A",
           "expr": "financial:due_queue_value{queue=~\"payment.inbox|payment.payment_jobs\"}",
-          "legendFormat": "{{queue}}"
+          "legendFormat": "현재 {{queue}}"
+        },
+        {
+          "refId": "B",
+          "expr": "financial:due_queue_value{queue=~\"payment.inbox|payment.payment_jobs\"} offset $comparison_offset",
+          "legendFormat": "이전 ($comparison_offset) {{queue}}"
         }
       ],
-      "description": "최신 유효 표본의 도래한 WAITING/PENDING/RETRY와 임대가 만료된 RUNNING 기준. 관측 실패는 No data이며 전체 미완료 작업의 나이와 다르다."
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 11,
+      "title": "비동기 처리 · p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le,application,operation) (rate(async_work_seconds_bucket[2m])))",
+          "legendFormat": "현재 {{application}} {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le,application,operation) (rate(async_work_seconds_bucket[2m] offset $comparison_offset)))",
+          "legendFormat": "이전 ($comparison_offset) {{application}} {{operation}}"
+        }
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 12,
+      "title": "비동기 처리 · p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le,application,operation) (rate(async_work_seconds_bucket[2m])))",
+          "legendFormat": "현재 {{application}} {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le,application,operation) (rate(async_work_seconds_bucket[2m] offset $comparison_offset)))",
+          "legendFormat": "이전 ($comparison_offset) {{application}} {{operation}}"
+        }
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 13,
+      "title": "대기 · 종류별 p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le,application,queue,kind) (rate(async_queue_wait_seconds_bucket[2m])))",
+          "legendFormat": "현재 {{application}} {{queue}} {{kind}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le,application,queue,kind) (rate(async_queue_wait_seconds_bucket[2m] offset $comparison_offset)))",
+          "legendFormat": "이전 ($comparison_offset) {{application}} {{queue}} {{kind}}"
+        }
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 14,
+      "title": "실행 가능 시각 이후 지연 · p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le,application,queue,kind) (rate(async_queue_ready_delay_seconds_bucket[2m])))",
+          "legendFormat": "현재 {{application}} {{queue}} {{kind}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le,application,queue,kind) (rate(async_queue_ready_delay_seconds_bucket[2m] offset $comparison_offset)))",
+          "legendFormat": "이전 ($comparison_offset) {{application}} {{queue}} {{kind}}"
+        }
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 15,
+      "title": "재시도 백오프 · p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le,application,queue) (rate(async_queue_backoff_seconds_bucket[2m])))",
+          "legendFormat": "현재 {{application}} {{queue}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le,application,queue) (rate(async_queue_backoff_seconds_bucket[2m] offset $comparison_offset)))",
+          "legendFormat": "이전 ($comparison_offset) {{application}} {{queue}}"
+        }
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 16,
+      "title": "비동기 하위 단계 · p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 56,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(async_stage_seconds_bucket[2m])))",
+          "legendFormat": "현재 {{application}} {{stage}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(async_stage_seconds_bucket[2m] offset $comparison_offset)))",
+          "legendFormat": "이전 ($comparison_offset) {{application}} {{stage}}"
+        }
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 17,
+      "title": "전체 SQL 실행 · p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 64,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[2m])))",
+          "legendFormat": "현재 {{application}} {{stage}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[2m] offset $comparison_offset)))",
+          "legendFormat": "이전 ($comparison_offset) {{application}} {{stage}}"
+        }
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 18,
+      "title": "전체 SQL 실행 · p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 64,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[2m])))",
+          "legendFormat": "현재 {{application}} {{stage}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[2m] offset $comparison_offset)))",
+          "legendFormat": "이전 ($comparison_offset) {{application}} {{stage}}"
+        }
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 19,
+      "title": "비동기 실행 횟수 / 초 · 완료 TPS와 별도",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (application,operation) (rate(async_work_seconds_count[2m]))",
+          "legendFormat": "현재 {{application}} {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (application,operation) (rate(async_work_seconds_count[2m] offset $comparison_offset))",
+          "legendFormat": "이전 ($comparison_offset) {{application}} {{operation}}"
+        }
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 20,
+      "title": "비동기 예외 비율",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 72,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (application,operation) (rate(async_work_seconds_count{error!=\"none\"}[2m])) / sum by (application,operation) (rate(async_work_seconds_count[2m]))",
+          "legendFormat": "현재 {{application}} {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (application,operation) (rate(async_work_seconds_count{error!=\"none\"}[2m] offset $comparison_offset)) / sum by (application,operation) (rate(async_work_seconds_count[2m] offset $comparison_offset))",
+          "legendFormat": "이전 ($comparison_offset) {{application}} {{operation}}"
+        }
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 21,
+      "title": "Gateway 요청 / 초",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 80,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (rate(http_server_requests_seconds_count{application=\"gateway\"}[2m]))",
+          "legendFormat": "현재 HTTP {{status}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (status) (rate(http_server_requests_seconds_count{application=\"gateway\"}[2m] offset $comparison_offset))",
+          "legendFormat": "이전 ($comparison_offset) HTTP {{status}}"
+        }
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 22,
+      "title": "Payment 단계 · p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 80,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le,stage) (rate(payment_processing_seconds_bucket{application=\"payment\",role=\"worker\"}[2m])))",
+          "legendFormat": "현재 {{stage}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le,stage) (rate(payment_processing_seconds_bucket{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)))",
+          "legendFormat": "이전 ($comparison_offset) {{stage}}"
+        }
+      ],
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
     }
-  ]
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "comparison_offset",
+        "label": "이전 구간 간격",
+        "type": "custom",
+        "query": "1h,6h,1d,7d",
+        "current": {
+          "selected": true,
+          "text": "1h",
+          "value": "1h"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "1h",
+            "value": "1h"
+          },
+          {
+            "selected": false,
+            "text": "6h",
+            "value": "6h"
+          },
+          {
+            "selected": false,
+            "text": "1d",
+            "value": "1d"
+          },
+          {
+            "selected": false,
+            "text": "7d",
+            "value": "7d"
+          }
+        ]
+      }
+    ]
+  },
+  "description": "현재 구간과 선택한 간격 이전 구간을 겹쳐 비교합니다. 같은 부하·시나리오·자원·표본 길이의 실행만 비교하고 revision·이미지·실행 시간을 함께 기록하세요. 과거 계측이 없는 구간은 빈 값이며 0이 아닙니다."
 }

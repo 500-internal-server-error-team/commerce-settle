@@ -24,7 +24,19 @@
 
 ## 최초 배포와 기존 데이터 변경
 
-현재 초기 SQL은 빈 DB 생성용이며 기존 데이터의 업그레이드·롤백을 지원하지 않습니다. 기존 데이터를 보존하며 스키마를 변경하려면 적용 순서·호환성·검증·복구를 갖춘 별도 절차가 필요합니다. 배포 환경의 계정·권한과 적용 절차는 아직 검증하지 않았습니다.
+초기 SQL은 빈 DB 생성용입니다. 기존 데이터 변경은 아래처럼 대상·호환성·검증·복구를 정한 별도 절차로만 적용합니다.
+
+### 기존 DB의 추적 컬럼 추가
+
+Commerce·Payment·Settlement의 Outbox·Inbox, Payment의 payment_jobs, Settlement의 payout_jobs에 nullable `trace_parent varchar(55)`를 추가합니다. Payment Inbox에는 nullable `observation_state varchar(16)`도 추가합니다. [commerce-tracing.sql](../infra/postgres/upgrade/commerce-tracing.sql)·[payment-tracing.sql](../infra/postgres/upgrade/payment-tracing.sql)·[settlement-tracing.sql](../infra/postgres/upgrade/settlement-tracing.sql)은 기존 데이터·원문·해시·금액·offset을 갱신하지 않습니다. 기존 부모를 소급 생성하지 않습니다.
+
+1. 대상 DB·소유 역할과 현재 앱 이미지·스키마를 확인하고 기존 복구 기준을 보존합니다. 전체 초기 SQL을 재실행하지 않습니다.
+2. 새 앱 전에 각 소유 DB에서 해당 파일을 `psql --set ON_ERROR_STOP=1 --file ...`로 한 번씩 적용합니다. 앱은 계속 `ddl-auto=validate`·`spring.sql.init.mode=never`를 사용합니다.
+3. 스크립트는 DB마다 한 트랜잭션, 잠금 대기 2초·실행 15초 상한입니다. 잠금 시간 초과나 기존 동명 컬럼의 타입·길이·nullable 불일치면 해당 DB를 롤백하고 새 앱 적용을 중단합니다. DB 간 원자 적용은 아니므로 어느 DB가 완료됐는지 따로 확인합니다. 상한을 끄거나 컬럼을 삭제해 강행하지 않습니다.
+4. 모든 대상 컬럼의 타입·길이·nullable과 기존 행·업무 상태·원문 보존을 확인한 후 Commerce·Payment API/Worker·Settlement·Finance Mock 이미지를 교체하고 health·새 metric·선택 거래의 trace 부모 연결을 확인합니다. 신규 빈 DB는 기존 schema 파일로 같은 구조를 만듭니다.
+5. 앱 복구가 필요하면 기록한 이전 이미지를 적용합니다. 추가 nullable 컬럼은 남겨 구 이미지가 무시하도록 하며 기존 원문·데이터를 삭제하거나 컬럼 DROP으로 되돌리지 않습니다. 부분 완료 뒤 재실행은 `ADD COLUMN IF NOT EXISTS`와 호환성 검사로 처리합니다.
+
+`DurableTraceIntegrationTest`는 실제 PostgreSQL에서 저장·발행한 행을 가진 기존 구조를 재현하고 업그레이드를 두 번 적용해 관측 필드를 제외한 행 bytes/값 보존과 nullable 추가를 확인합니다. 실제 배포 환경의 소유 역할·실행 결과는 배포 때 별도로 확인합니다. 이 절은 다른 스키마 변경의 자동 업그레이드 체계를 추가하지 않습니다.
 
 ## 데이터 보존과 제약 조건
 

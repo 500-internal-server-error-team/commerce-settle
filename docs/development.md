@@ -675,20 +675,34 @@ docker compose --profile observability up -d --wait --wait-timeout 300
 
 Grafana의 `commerce-settle / Runtime overview` 대시보드와 Prometheus 데이터 소스는 자동 등록됩니다. 수집 주기 때문에 첫 데이터가 표시되기까지 약 15초가 필요합니다. 이 구성은 로컬 전용이며 DB·Kafka·Redis·내부 앱·관리 포트는 호스트에 게시하지 않습니다. Zipkin은 기본 10% 샘플링이며 `.env`의 `TRACING_SAMPLING_PROBABILITY`로 바꿉니다. 모든 요청을 수집하면 부하·메모리 사용량이 달라집니다.
 
-#### Payment Worker 처리 시간
+#### 금융 처리 시간과 비동기 추적
 
-`commerce-settle / Payment Worker` 대시보드는 첫 선점 대기, 처리 단계, SQL 실행의 평균·p95와 대기열을 보여줍니다. 새 Payment 이미지와 대시보드 설정을 함께 반영해야 하며, 이전 실행의 수치를 소급 생성하지 않습니다. 해당 작업이 실행되기 전이나 두 번의 수집이 쌓이기 전에는 패널에 데이터가 없을 수 있습니다.
+`commerce-settle / Financial processing` 대시보드(기존 Payment Worker UID 유지)는 Payment 단계별 평균·p95·p99, 세 서비스의 비동기 처리·대기·재시도·SQL과 대기열을 보여줍니다. 새 Commerce·Payment API/Worker·Settlement·Finance Mock 이미지와 대시보드 설정을 함께 반영합니다. 기존 DB에는 먼저 [추적 컬럼 업그레이드](migrations.md#기존-db의-추적-컬럼-추가)를 적용합니다. 작업이 실행되기 전이나 두 번의 수집이 쌓이기 전에는 데이터가 없을 수 있습니다.
 
 | 지표 | 측정 경계 |
 | --- | --- |
-| `payment_queue_wait_seconds` (`queue=inbox`, `approval`) | DB 등록 시각부터 첫 선점 완료까지. 재시도·임대 회수는 중복 집계하지 않습니다. 서로 다른 서버 시각으로 음수가 된 표본은 제외합니다. |
-| `payment_processing_seconds` (`stage=inbox.*`) | `process`는 한 번의 선점·처리, `claim`·`apply`·`failure`는 각각 선점·업무 반영·실패 기록 트랜잭션이며 커밋·롤백까지 포함합니다. |
-| `payment_processing_seconds` (`stage=approval.*`) | `process` 아래의 `lease`·`prepare`·`lease.check`·`gateway`·`record`로 임대·준비·임대 확인·PG 호출·결과 반영을 구분합니다. 트랜잭션 메서드는 프록시 호출이 끝나 커밋·롤백된 뒤 측정을 닫습니다. |
-| `jdbc_query_seconds` (`stage`) | 해당 처리 단계에서 실행한 JDBC 쿼리 시간. `unscoped`는 관측 수집 등 처리 단계 밖의 쿼리입니다. 결과 매핑·Java 처리·flush·커밋을 모두 포함하는 트랜잭션 시간과 구분합니다. |
+| `payment_queue_wait_seconds` (`queue=inbox`, `approval`) | 현재 대기 회차의 등록·변경 시각부터 첫 선점 완료까지. 재시도·임대 회수는 중복 집계하지 않습니다. |
+| `payment_processing_seconds` (`stage=inbox.*`, `approval.*`, `refund.*`) | 선점·업무 반영·실패 기록 또는 임대·준비·임대 확인·외부 호출·결과 반영 단계. 트랜잭션 프록시가 반환될 때 커밋·롤백까지 측정합니다. 빈 폴링도 포함하므로 완료 TPS가 아닙니다. |
+| `async_work_seconds` (`operation`) | 저장한 문맥으로 복원한 Inbox·Outbox·승인·환불·지급의 한 번의 실행. 빈 폴링은 제외하며 재시도는 별도 실행입니다. Settlement Inbox는 트랜잭션 완료까지, Outbox는 전송과 결과 콜백을 각각 측정합니다. |
+| `async_stage_seconds` (`stage`) | 지급의 준비·외부 호출·결과 반영. 기존 Payment 단계 지표와 별개입니다. |
+| `async_queue_wait_seconds` (`queue`, `kind`) | `initial`: 현재 대기 회차부터 선점까지, `retry`: 실패 기록부터 재선점까지, `lease-recovery`: 이전 임대 만료부터 회수까지. 기존 실행 시간은 재시도 대기에 더하지 않습니다. |
+| `async_queue_backoff_seconds` | 실패 기록부터 다음 실행 가능 시각까지의 계획된 재시도 대기입니다. |
+| `async_queue_ready_delay_seconds` | 실행 가능 시각부터 실제 선점까지의 지연. 슬롯·폴링·적체 원인을 백오프와 구분합니다. |
+| `jdbc_query_seconds` (`stage`) | Commerce·Payment·Settlement·Finance Mock의 JDBC 쿼리 실행. 현재 단계가 없으면 `unscoped`입니다. 결과 매핑·Java 처리·flush·커밋을 포함하는 전체 트랜잭션 시간과 구분합니다. |
 
-각 Timer는 `_count`·`_sum`·`_bucket`을 제공합니다. 예를 들어 `sum by (stage) (rate(payment_processing_seconds_sum{role="worker"}[2m])) / sum by (stage) (rate(payment_processing_seconds_count{role="worker"}[2m]))`는 단계별 평균 초입니다. `process`·하위 단계·SQL은 시간이 겹치므로 더하지 않습니다. 빈 폴링과 업무상 거절도 단계 실행 횟수에 포함돼 이 값을 결제 확정 TPS로 사용하지 않습니다. 롤백 예외는 해당 단계의 `error` label로 집계합니다.
+Timer의 `_count`·`_sum`·`_bucket`은 Trace 샘플링과 별도로 수집합니다. `process`·하위 단계·SQL은 시간이 겹치므로 합산하지 않습니다. 음수 대기 표본은 제외하며 서버 시각 동기화가 필요합니다. 기존 행의 추적 부모는 NULL이고, 과거 재시도 종류를 판단할 수 없으면 `kind=unknown`으로 실행 가능 시각 이후만 측정합니다. 수동 재처리는 원래 trace 부모를 유지하지만 새 대기 회차의 변경 시각부터 셉니다.
 
-이 지표는 Trace 샘플링과 별도로 수집합니다. Zipkin에서는 `payment.inbox.process` 또는 `payment.approval.process`의 하위 단계·JDBC 연결·쿼리·결과 조회와 PG HTTP 호출을 확인합니다. Inbox와 승인 슬롯은 별도 비동기 실행이므로 각각 추적을 만들고 `payment.id`로 연결해 검색합니다. `event.id`·`inbox.id`·`job.id`도 Trace에만 기록하며 metric label로 사용하지 않습니다. JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업 기록은 비활성화합니다. SQL에 값을 직접 이어 붙이지 않고 기존 바인딩을 유지합니다. 새 처리·JDBC 추적의 예외는 오류 종류만 남기는 `ObservationFailure`로 정제해 실패 행·메시지·cause·stacktrace를 전송하지 않습니다. 호출자에게는 원래 예외를 전달하므로 기존 롤백·재시도는 유지합니다.
+W3C `traceparent`는 Outbox·Inbox·금융 Job의 첫 저장 때 업무 원문과 분리해 저장하고, 실행기·콜백·재시작 뒤에 복원합니다. 같은 eventId 재전달은 원문 bytes·해시·최초 부모를 바꾸지 않습니다. Zipkin에서 `commerce.outbox.send` → Kafka → `payment.inbox.process` → `payment.approval.process`/`payment.refund.process` → Outbox·Commerce/Settlement Inbox를 같은 traceId로 따라갑니다. 지급은 배치·지급 Job을 만든 문맥에서 시작하므로 별도 trace일 수 있습니다. `.wait` span은 실행 span과 저장 부모를 공유하는 형제이며 메서드 실행 시간에 더하지 않습니다. `event.id`·`inbox.id`·`job.id`·금융 ID는 Trace에만 기록하며 metric label로 사용하지 않습니다.
+
+JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업은 비활성화합니다. 예외는 오류 종류만 남기는 `ObservationFailure`로 정제하며 원래 예외·롤백·재시도 동작은 유지합니다. 샘플링 기본값은 10%이고 Zipkin은 메모리에 최대 10,000개 span을 보관합니다. 재시작·보관 한도·비샘플 요청의 과거 trace를 복구하거나 모든 알림·운영 작업을 계측하지는 않습니다. `python3 -B scripts/smoke_financial_flow.py`는 선택한 요청에 sampled W3C 부모를 보내 실제 승인·환불·재시작 경로의 traceId·부모 연결을 금융 정합성과 함께 검사합니다. 지급 실행기 연결은 `PayoutTracingTest`, 저장 어댑터의 중복·재시작·기존 DB 업그레이드는 `DurableTraceIntegrationTest`로 별도 확인합니다.
+
+#### 병목 개선 전후 비교
+
+대시보드의 `이전 구간 간격`(1시간·6시간·1일·7일)은 현재와 이전 구간의 같은 집계식을 겹쳐 표시합니다. 과거 표본이 없는 선은 빈 값이며 0이 아닙니다. 개선 전에도 새 계측을 적용한 기준선을 먼저 수집해야 합니다. 배포·워밍업·측정·배출을 섞지 않은 동일 길이의 측정 구간을 선택하고, 이전 구간 간격을 두 실행의 시작 시각 차이에 맞춥니다. 지원 간격에 맞지 않으면 각 실행의 절대 시간 구간을 따로 선택해 동일 질의 결과를 비교합니다.
+
+기존 [부하 시험](../tests/load/README.md)의 실행 원장·summary와 함께 다음 조건을 기록합니다: commit SHA·실제 이미지 digest, CPU·메모리·DB 풀·Worker 동시성, 주입률·지속 시간·결제수단 비율·데이터 규모·PG 시나리오, 워밍업·측정·배출 시작/끝, scrape 주기·Trace 샘플링률·부하 발생기 위치. 자원·외부 지연·입력 분포가 다르면 그 차이를 먼저 명시합니다. 이전 지표가 없던 배포 전 구간과 신규 지표를 직접 비교해 개선율을 만들지 않습니다.
+
+완료 TPS·실패/거절·p95/p99와 미완료 수·배출 시간을 함께 비교하고 금융 원장 대조가 통과했는지 확인합니다. 단계 실행 횟수는 결제 완료 건수가 아니며 낮은 지연만으로 병목 개선을 판정하지 않습니다. 느려진 구간을 Zipkin의 선택 trace로 확인하고, SQL·외부 호출·첫 대기·백오프·도래 후 지연 중 무엇이 바뀌었는지 대조합니다. 현재 변경은 비교를 위한 계측이며 성능 개선 효과를 입증한 결과는 아닙니다.
 
 ### Swagger 로그인
 

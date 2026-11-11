@@ -1,5 +1,7 @@
 package com.commercesettle.settlement.infrastructure.persistence;
 
+import com.commercesettle.observability.AsyncObservation;
+import com.commercesettle.observability.AsyncObservation.Timing;
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
 import com.commercesettle.settlement.application.event.RefundFinancialCompletedPayload;
@@ -13,6 +15,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Types;
 import java.time.Duration;
 import java.time.Instant;
@@ -22,6 +26,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcOperations;
@@ -39,6 +44,7 @@ class JdbcInboxStore implements InboxStore {
   private final NamedParameterJdbcOperations jdbc;
   private final ObjectMapper mapper;
   private final String consumer;
+  private AsyncObservation observations = AsyncObservation.NOOP;
 
   JdbcInboxStore(
       NamedParameterJdbcOperations jdbc,
@@ -50,6 +56,11 @@ class JdbcInboxStore implements InboxStore {
     this.jdbc = jdbc;
     this.mapper = mapper;
     this.consumer = consumer;
+  }
+
+  @Autowired(required = false)
+  void asyncObservation(AsyncObservation observation) {
+    this.observations = observation;
   }
 
   @Override
@@ -67,6 +78,7 @@ class JdbcInboxStore implements InboxStore {
             .addValue("aggregateVersion", event.aggregateVersion())
             .addValue("body", body)
             .addValue("json", new String(body, StandardCharsets.UTF_8))
+            .addValue("traceParent", observations.capture())
             .addValue("hash", hash(body))
             .addValue("topic", source.topic())
             .addValue("partition", source.partition())
@@ -75,9 +87,9 @@ class JdbcInboxStore implements InboxStore {
     int inserted =
         jdbc.update(
             """
-            INSERT INTO settlement.inbox (id,consumer,event_id,event_type,event_version,occurred_at,payload,
+            INSERT INTO settlement.inbox (trace_parent,id,consumer,event_id,event_type,event_version,occurred_at,payload,
                 raw_body,body_hash,source_topic,source_partition,source_offset,aggregate_id,aggregate_version,status)
-            VALUES (:id,:consumer,:eventId,:type,:eventVersion,CAST(:occurred AS timestamptz),CAST(:json AS jsonb),
+            VALUES (:traceParent,:id,:consumer,:eventId,:type,:eventVersion,CAST(:occurred AS timestamptz),CAST(:json AS jsonb),
                 :body,:hash,:topic,:partition,:offset,:aggregate,:aggregateVersion,'RECEIVED')
             ON CONFLICT (consumer,event_id) DO NOTHING
             """,
@@ -113,18 +125,14 @@ class JdbcInboxStore implements InboxStore {
     List<Stored> rows =
         jdbc.query(
             """
-            SELECT id, event_type, raw_body FROM settlement.inbox
+            SELECT id,event_type,raw_body,trace_parent,created_at,updated_at,next_run_at,status,attempts FROM settlement.inbox
             WHERE consumer = :consumer AND status = 'WAITING' AND next_run_at <= clock_timestamp()
             ORDER BY next_run_at, id
             LIMIT 1
             FOR UPDATE SKIP LOCKED
             """,
             new MapSqlParameterSource("consumer", consumer),
-            (rs, row) ->
-                new Stored(
-                    rs.getObject("id", UUID.class),
-                    rs.getString("event_type"),
-                    rs.getBytes("raw_body")));
+            (rs, row) -> readStored(rs));
     if (rows.isEmpty()) {
       return Optional.empty();
     }
@@ -138,22 +146,30 @@ class JdbcInboxStore implements InboxStore {
             new Pending.Purchase(
                 row.id(),
                 mapper.<EventEnvelope<PurchaseConfirmedPayload>>readValue(
-                    row.body(), new TypeReference<>() {}));
+                    row.body(), new TypeReference<>() {}),
+                row.traceParent(),
+                row.timing());
         case "RefundReservationRequested" ->
             new Pending.RefundReservation(
                 row.id(),
                 mapper.<EventEnvelope<RefundReservationRequestedPayload>>readValue(
-                    row.body(), new TypeReference<>() {}));
+                    row.body(), new TypeReference<>() {}),
+                row.traceParent(),
+                row.timing());
         case "RefundFinancialCompleted" ->
             new Pending.RefundCompleted(
                 row.id(),
                 mapper.<EventEnvelope<RefundFinancialCompletedPayload>>readValue(
-                    row.body(), new TypeReference<>() {}));
+                    row.body(), new TypeReference<>() {}),
+                row.traceParent(),
+                row.timing());
         case "RefundReleaseRequested" ->
             new Pending.RefundRelease(
                 row.id(),
                 mapper.<EventEnvelope<RefundReleaseRequestedPayload>>readValue(
-                    row.body(), new TypeReference<>() {}));
+                    row.body(), new TypeReference<>() {}),
+                row.traceParent(),
+                row.timing());
         default -> throw new IllegalStateException("Unsupported inbox event type");
       };
     } catch (IOException | IllegalArgumentException exception) {
@@ -166,15 +182,11 @@ class JdbcInboxStore implements InboxStore {
     applyTransactionLimits();
     return jdbc
         .query(
-            "SELECT id,event_type,raw_body,version,status,last_error_code FROM settlement.inbox WHERE id=:id AND consumer=:consumer FOR UPDATE",
+            "SELECT id,event_type,raw_body,trace_parent,created_at,updated_at,next_run_at,attempts,version,status,last_error_code FROM settlement.inbox WHERE id=:id AND consumer=:consumer FOR UPDATE",
             new MapSqlParameterSource("id", inboxId).addValue("consumer", consumer),
             (rs, n) ->
                 new Review(
-                    decode(
-                        new Stored(
-                            rs.getObject("id", UUID.class),
-                            rs.getString("event_type"),
-                            rs.getBytes("raw_body"))),
+                    decode(readStored(rs)),
                     rs.getLong("version"),
                     rs.getString("status"),
                     rs.getString("last_error_code")))
@@ -324,5 +336,21 @@ class JdbcInboxStore implements InboxStore {
 
   private record Original(UUID id, byte[] body) {}
 
-  private record Stored(UUID id, String eventType, byte[] body) {}
+  private Stored readStored(ResultSet rs) throws SQLException {
+    var eligible = rs.getTimestamp("next_run_at");
+    return new Stored(
+        rs.getObject("id", UUID.class),
+        rs.getString("event_type"),
+        rs.getBytes("raw_body"),
+        rs.getString("trace_parent"),
+        new Timing(
+            rs.getTimestamp("created_at").toInstant(),
+            rs.getTimestamp("updated_at").toInstant(),
+            eligible == null ? null : eligible.toInstant(),
+            "WAITING".equals(rs.getString("status")) ? "WAITING_RETRY" : "unknown",
+            rs.getInt("attempts") + 1));
+  }
+
+  private record Stored(
+      UUID id, String eventType, byte[] body, String traceParent, Timing timing) {}
 }

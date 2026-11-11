@@ -160,6 +160,7 @@ CREATE TABLE commerce.order_addresses (
 );
 
 CREATE TABLE commerce.outbox (
+    trace_parent varchar(55),
     id uuid PRIMARY KEY,
     sequence_no bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
     event_type varchar(80) NOT NULL,
@@ -676,6 +677,7 @@ CREATE INDEX ix_audit_logs_actor ON commerce.audit_logs (actor_kind, actor_ref, 
 CREATE INDEX ix_audit_logs_correlation ON commerce.audit_logs (correlation_id);
 
 CREATE TABLE commerce.inbox (
+    trace_parent varchar(55),
     id uuid PRIMARY KEY,
     consumer varchar(100) NOT NULL,
     event_id uuid NOT NULL,

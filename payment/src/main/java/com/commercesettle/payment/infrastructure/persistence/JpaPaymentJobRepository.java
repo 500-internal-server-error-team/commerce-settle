@@ -1,5 +1,7 @@
 package com.commercesettle.payment.infrastructure.persistence;
 
+import com.commercesettle.observability.AsyncObservation;
+import com.commercesettle.observability.AsyncObservation.Timing;
 import com.commercesettle.payment.domain.model.PaymentJob;
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
 import com.commercesettle.payment.domain.model.PaymentJobStatus;
@@ -9,6 +11,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -24,6 +27,7 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
 
   private final SpringDataPaymentJobRepository repository;
   private final NamedParameterJdbcTemplate jdbc;
+  private AsyncObservation observations = AsyncObservation.NOOP;
 
   JpaPaymentJobRepository(
       SpringDataPaymentJobRepository repository, NamedParameterJdbcTemplate jdbc) {
@@ -31,8 +35,14 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
     this.jdbc = jdbc;
   }
 
+  @Autowired(required = false)
+  void asyncObservation(AsyncObservation observation) {
+    this.observations = observation;
+  }
+
   @Override
   public PaymentJob save(PaymentJob job) {
+    if (job.getVersion() == null) job.captureTraceParent(observations.capture());
     return repository.save(job);
   }
 
@@ -50,17 +60,21 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
     return jdbc
         .query(
             """
-            UPDATE payment.payment_jobs
-            SET status = 'RUNNING', lease_owner = :owner, lease_token = :token,
-                lease_until = clock_timestamp() + make_interval(secs => :leaseSeconds),
-                attempts = attempts + 1, updated_at = clock_timestamp(), version = version + 1
-            WHERE id = (
-              SELECT id FROM payment.payment_jobs
-              WHERE operation = :operation
+            WITH candidate AS (
+              SELECT id,created_at AS queued_created,updated_at AS queued_changed,
+                  next_run_at AS queued_due,lease_until AS queued_lease,status AS queued_status
+              FROM payment.payment_jobs WHERE operation = :operation
                 AND ((status IN ('PENDING', 'RETRY') AND next_run_at <= clock_timestamp())
                   OR (status = 'RUNNING' AND lease_until < clock_timestamp()))
               ORDER BY next_run_at, id LIMIT 1 FOR UPDATE SKIP LOCKED)
-            RETURNING id, payment_id, business_key, lease_token, attempts, created_at
+            UPDATE payment.payment_jobs j
+            SET status = 'RUNNING', lease_owner = :owner, lease_token = :token,
+                lease_until = clock_timestamp() + make_interval(secs => :leaseSeconds),
+                attempts = j.attempts + 1, updated_at = clock_timestamp(), version = j.version + 1
+            FROM candidate c WHERE j.id = c.id
+            RETURNING j.id,j.payment_id,j.business_key,j.lease_token,j.attempts,j.trace_parent,
+                c.queued_created,c.queued_changed,c.queued_status,
+                CASE WHEN c.queued_status='RUNNING' THEN c.queued_lease ELSE c.queued_due END AS queued_eligible
             """,
             new MapSqlParameterSource()
                 .addValue("operation", operation.name())
@@ -74,7 +88,14 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
                     rs.getObject("business_key", UUID.class),
                     rs.getObject("lease_token", UUID.class),
                     rs.getInt("attempts"),
-                    rs.getTimestamp("created_at").toInstant()))
+                    rs.getTimestamp("queued_created").toInstant(),
+                    rs.getString("trace_parent"),
+                    new Timing(
+                        rs.getTimestamp("queued_created").toInstant(),
+                        rs.getTimestamp("queued_changed").toInstant(),
+                        rs.getTimestamp("queued_eligible").toInstant(),
+                        rs.getString("queued_status"),
+                        rs.getInt("attempts"))))
         .stream()
         .findFirst();
   }

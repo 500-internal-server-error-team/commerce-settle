@@ -11,11 +11,14 @@ import com.commercesettle.commerce.domain.model.Order;
 import com.commercesettle.commerce.domain.model.OrderRefundRequest;
 import com.commercesettle.commerce.domain.repository.OrderRefundRepository;
 import com.commercesettle.commerce.domain.repository.OrderRepository;
+import com.commercesettle.observability.AsyncObservation;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -24,6 +27,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class OrderResultService {
+  private AsyncObservation observations = AsyncObservation.NOOP;
   private final PaymentAcceptanceInbox inbox;
   private final OrderRepository orders;
   private final OrderRefundRepository refunds;
@@ -59,6 +63,11 @@ public class OrderResultService {
     transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
   }
 
+  @Autowired(required = false)
+  void asyncObservation(AsyncObservation observation) {
+    this.observations = observation;
+  }
+
   @Transactional
   public void accept(EventEnvelope<JsonNode> event, PaymentAcceptanceInbox.Source source) {
     inbox.saveResult(event, source, clock.instant());
@@ -70,6 +79,7 @@ public class OrderResultService {
 
   public boolean processEvent(UUID eventId) {
     var selected = new AtomicReference<UUID>();
+    var scope = new AtomicReference<AsyncObservation.Scope>(AsyncObservation.Scope.NOOP);
     try {
       return Boolean.TRUE.equals(
           transactions.execute(
@@ -78,6 +88,16 @@ public class OrderResultService {
                 if (found.isEmpty()) return false;
                 var row = found.get();
                 selected.set(row.id());
+                scope.set(
+                    observations.start(
+                        "commerce.inbox.result",
+                        row.traceParent(),
+                        Map.of(
+                            "event.id",
+                            row.event().eventId().toString(),
+                            "inbox.id",
+                            row.id().toString()),
+                        row.timing()));
                 var p = row.event().payload();
                 var order = orders.findLockedById(id(p, "orderId"));
                 if (order.isEmpty()) {
@@ -100,6 +120,7 @@ public class OrderResultService {
                 return true;
               }));
     } catch (RuntimeException e) {
+      scope.get().error(e);
       if (selected.get() == null) throw e;
       transactions.executeWithoutResult(
           status -> {
@@ -108,6 +129,8 @@ public class OrderResultService {
             else inbox.retry(selected.get(), "ORDER_RESULT_APPLY_FAILED", clock.instant());
           });
       return true;
+    } finally {
+      scope.get().close();
     }
   }
 

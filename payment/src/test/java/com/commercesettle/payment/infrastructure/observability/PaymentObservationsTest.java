@@ -3,6 +3,8 @@ package com.commercesettle.payment.infrastructure.observability;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.commercesettle.observability.infrastructure.MicrometerAsyncObservation;
+import com.commercesettle.observability.infrastructure.ObservationErrors;
 import com.commercesettle.payment.application.port.PaymentProcessingObservation.Queue;
 import com.commercesettle.payment.application.port.PaymentProcessingObservation.Stage;
 import io.micrometer.core.instrument.MockClock;
@@ -34,11 +36,9 @@ class PaymentObservationsTest {
       new PaymentProcessingObservations(registry, meters, Clock.fixed(NOW, ZoneOffset.UTC));
 
   PaymentObservationsTest() {
-    registry
-        .observationConfig()
-        .observationHandler(PaymentProcessingObservations.paymentObservationErrors());
+    registry.observationConfig().observationHandler(ObservationErrors.handler());
     registry.observationConfig().observationHandler(new DefaultMeterObservationHandler(meters));
-    registry.observationConfig().observationFilter(PaymentProcessingObservations.paymentSqlStage());
+    registry.observationConfig().observationFilter(MicrometerAsyncObservation.sqlStage());
     registry
         .observationConfig()
         .observationHandler(
@@ -53,6 +53,46 @@ class PaymentObservationsTest {
                 completed.add(context);
               }
             });
+  }
+
+  @Test
+  @DisplayName("관측 시작·대기 Timer 등록 실패가 업무를 막거나 두 번 실행하지 않는다")
+  void telemetryFailureDoesNotBlockOrRepeatBusinessWork() {
+    var calls = new java.util.concurrent.atomic.AtomicInteger();
+    registry
+        .observationConfig()
+        .observationHandler(
+            new ObservationHandler<Observation.Context>() {
+              @Override
+              public boolean supportsContext(Observation.Context context) {
+                return true;
+              }
+
+              @Override
+              public void onStart(Observation.Context context) {
+                throw new IllegalStateException("observer unavailable");
+              }
+            });
+    observations.observe(Stage.INBOX_PROCESS, calls::incrementAndGet);
+    assertThat(calls.get()).isEqualTo(1);
+    assertThat(registry.getCurrentObservation()).isNull();
+    var failing =
+        new SimpleMeterRegistry() {
+          @Override
+          protected io.micrometer.core.instrument.Timer newTimer(
+              io.micrometer.core.instrument.Meter.Id id,
+              io.micrometer.core.instrument.distribution.DistributionStatisticConfig config,
+              io.micrometer.core.instrument.distribution.pause.PauseDetector detector) {
+            throw new IllegalStateException("meter unavailable");
+          }
+        };
+    try {
+      var unavailable =
+          new PaymentProcessingObservations(registry, failing, Clock.fixed(NOW, ZoneOffset.UTC));
+      unavailable.queueWait(Queue.INBOX, NOW.minusSeconds(1), 1);
+    } finally {
+      failing.close();
+    }
   }
 
   @Test
