@@ -6,6 +6,8 @@
 	}
 }
 
+import /etc/caddy/monitoring/*.caddy
+
 {$PUBLIC_DOMAIN} {
 	reverse_proxy {$GATEWAY_UPSTREAM} {
 		header_up -Forwarded

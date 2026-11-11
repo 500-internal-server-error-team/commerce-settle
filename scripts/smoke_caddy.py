@@ -31,16 +31,22 @@ def verify(directory):
     project = "caddy-smoke-" + uuid.uuid4().hex[:12]
     settings = directory / "compose.json"
     backend = directory / "backend.Caddyfile"
-    backend.write_text(':8080 {\n log {\n output stdout\n }\n'
+    backend.write_text(':8080, :3000, :9090, :9411, :8081 {\n log {\n output stdout\n }\n'
                        ' handle /reset {\n abort\n }\n handle {\n'
                        ' respond "{method}|{uri}|{header.X-Forwarded-Proto}|'
                        '{header.X-Forwarded-Host}|{header.Authorization}|{header.Forwarded}"\n }\n}\n')
+    password_hash = run("docker", "run", "--rm", "--network", "none", container["image"],
+                        "caddy", "hash-password", "--plaintext", "synthetic-monitor-password").strip()
     caddy = {
         "image": container["image"], "command": container["command"],
         "mem_limit": f"{container['memory']}m",
-        "environment": {"PUBLIC_DOMAIN": "localhost", "GATEWAY_UPSTREAM": "upstream:8080"},
+        "environment": {"PUBLIC_DOMAIN": "localhost", "GATEWAY_UPSTREAM": "upstream:8080",
+                        "DATA_PRIVATE_IP": "upstream", "MONITORING_USER": "viewer",
+                        "MONITORING_PASSWORD_HASH": password_hash.replace("$", "$$")},
         "ports": ["127.0.0.1::80", "127.0.0.1::443"],
-        "volumes": [f"{ROOT / 'infra/caddy'}:/etc/caddy:ro", "data:/data", "config:/config"],
+        "volumes": [f"{ROOT / 'infra/caddy/Caddyfile'}:/etc/caddy/Caddyfile:ro",
+                    f"{ROOT / 'infra/caddy/monitoring.Caddyfile'}:/etc/caddy/monitoring/tools.caddy:ro",
+                    "data:/data", "config:/config"],
     }
     settings.write_text(json.dumps({"services": {
         "caddy": caddy,
@@ -77,12 +83,33 @@ def verify(directory):
                     raise
                 time.sleep(0.25)
 
+    def monitoring_request(tool, path="/", authenticated=False, method="GET"):
+        host = tool + ".localhost"
+        args = ["curl", "--silent", "--show-error", "--noproxy", "*", "--max-time", "5",
+                "--cacert", str(directory / "root.crt"), "--resolve",
+                f"{host}:{port(443)}:127.0.0.1", "-H", "Host: " + host, "-X", method,
+                "-w", "\n%{http_code}"]
+        if authenticated:
+            args.extend(["--user", "viewer:synthetic-monitor-password"])
+        body, status = run(*args, f"https://{host}:{port(443)}{path}").rsplit("\n", 1)
+        return body, int(status)
+
+    def verify_monitoring():
+        for tool in ("prometheus", "zipkin", "kafka"):
+            assert monitoring_request(tool)[1] == 401, tool
+            body, status = monitoring_request(tool, "/deep/link?check=1", authenticated=True)
+            assert status == 200 and body == f"GET|/deep/link?check=1|https|{tool}.localhost||", (tool, body)
+        assert monitoring_request("zipkin", "/api/v2/spans", authenticated=True, method="POST")[1] == 405
+        # Grafana keeps its own login/API credentials instead of receiving proxy Basic credentials.
+        assert monitoring_request("grafana", "/login")[1] == 200
+
     try:
         # Validate the public-domain path too; validation does not request a certificate.
         cli("run", "--rm", "--no-deps", "-e", "PUBLIC_DOMAIN=api.example.com", "caddy",
             "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile")
         cli("up", "-d")
         ready()
+        verify_monitoring()
         root_sha = hashlib.sha256((directory / "root.crt").read_bytes()).hexdigest()
         certificate_sha = hashlib.sha256((directory / "localhost.crt").read_bytes()).hexdigest()
         for method in ("GET", "POST"):
@@ -109,14 +136,19 @@ def verify(directory):
         cli("start", "upstream")
         cli("restart", "caddy")
         ready()
+        verify_monitoring()
         assert hashlib.sha256((directory / "root.crt").read_bytes()).hexdigest() == root_sha
         assert hashlib.sha256((directory / "localhost.crt").read_bytes()).hexdigest() == certificate_sha
         cli("up", "-d", "--force-recreate", "caddy")
         ready()
+        verify_monitoring()
         assert hashlib.sha256((directory / "root.crt").read_bytes()).hexdigest() == root_sha
         assert hashlib.sha256((directory / "localhost.crt").read_bytes()).hexdigest() == certificate_sha
-        print("Caddy validation, HTTPS proxy, redirect, no POST replay, 502, restart and retained certificates: PASS")
-    except Exception:
+        print("Caddy HTTPS, monitoring authentication/routing, private-only trace ingestion, "
+              "no POST replay, 502, restart and retained certificates: PASS")
+    except Exception as error:
+        if isinstance(error, subprocess.CalledProcessError):
+            print(error.stderr)
         print(cli("logs", "--no-color", "--tail=50"))
         raise
     finally:

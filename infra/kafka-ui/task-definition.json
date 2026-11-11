@@ -1,0 +1,35 @@
+{
+  "family": "commerce-settle-kafka-ui",
+  "networkMode": "bridge",
+  "requiresCompatibilities": ["EC2"],
+  "executionRoleArn": "__EXECUTION_ROLE_ARN__",
+  "runtimePlatform": {"cpuArchitecture": "ARM64", "operatingSystemFamily": "LINUX"},
+  "placementConstraints": [{"type": "memberOf", "expression": "attribute:workload == data"}],
+  "containerDefinitions": [
+    {
+      "name": "kafka-ui",
+      "image": "ghcr.io/kafbat/kafka-ui:v1.5.0@sha256:7cda86a33344160309fdb65146332e4da65db81a945614f2fe32e210803f6fd1",
+      "essential": true,
+      "cpu": 256,
+      "memoryReservation": 512,
+      "memory": 1024,
+      "environment": [
+        {"name": "KAFKA_CLUSTERS_0_NAME", "value": "commerce-settle-aws"},
+        {"name": "KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS", "value": "__DATA_PRIVATE_IP__:9092"},
+        {"name": "KAFKA_CLUSTERS_0_READONLY", "value": "true"},
+        {"name": "DYNAMIC_CONFIG_ENABLED", "value": "false"},
+        {"name": "JAVA_TOOL_OPTIONS", "value": "-XX:MaxRAMPercentage=50"}
+      ],
+      "portMappings": [{"containerPort": 8080, "hostPort": 8081, "protocol": "tcp"}],
+      "stopTimeout": 30,
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/commerce-settle/kafka-ui",
+          "awslogs-region": "__AWS_REGION__",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
