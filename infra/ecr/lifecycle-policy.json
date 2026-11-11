@@ -1,0 +1,40 @@
+{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "untagged 1일 후 만료",
+      "selection": {"tagStatus": "untagged", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": 1},
+      "action": {"type": "expire"}
+    },
+    {
+      "rulePriority": 2,
+      "description": "gateway v* 최근 10개",
+      "selection": {"tagStatus": "tagged", "tagPrefixList": ["gateway-v"], "countType": "imageCountMoreThan", "countNumber": 10},
+      "action": {"type": "expire"}
+    },
+    {
+      "rulePriority": 3,
+      "description": "commerce v* 최근 10개",
+      "selection": {"tagStatus": "tagged", "tagPrefixList": ["commerce-v"], "countType": "imageCountMoreThan", "countNumber": 10},
+      "action": {"type": "expire"}
+    },
+    {
+      "rulePriority": 4,
+      "description": "payment v* 최근 10개",
+      "selection": {"tagStatus": "tagged", "tagPrefixList": ["payment-v"], "countType": "imageCountMoreThan", "countNumber": 10},
+      "action": {"type": "expire"}
+    },
+    {
+      "rulePriority": 5,
+      "description": "settlement v* 최근 10개",
+      "selection": {"tagStatus": "tagged", "tagPrefixList": ["settlement-v"], "countType": "imageCountMoreThan", "countNumber": 10},
+      "action": {"type": "expire"}
+    },
+    {
+      "rulePriority": 6,
+      "description": "finance-mock v* 최근 10개",
+      "selection": {"tagStatus": "tagged", "tagPrefixList": ["finance-mock-v"], "countType": "imageCountMoreThan", "countNumber": 10},
+      "action": {"type": "expire"}
+    }
+  ]
+}

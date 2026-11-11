@@ -260,6 +260,16 @@ aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$service"
 
 서비스별 전환 중 서로 다른 버전이 공존할 수 있으므로 API·이벤트 호환성을 유지합니다. 고정 포트의 구 Task를 먼저 멈추므로 중단 시간이 있으며 무중단 배포를 보장하지 않습니다. 실제 AWS의 역할·SSM·기동·재배포·실패 복구를 확인하기 전에는 자동 배포의 운영 검증 완료로 판단하지 않습니다.
 
+### ECR 수명 주기 정책
+
+[수명 주기 정책](../infra/ecr/lifecycle-policy.json)은 태그 없는 이미지를 push 1일 후 만료하고, `<모듈>-v` 접두사별로 최근 10개만 남깁니다. 접두사에 맞지 않는 태그 이미지는 만료하지 않습니다. 만료된 이미지의 digest를 쓰는 Task Definition으로는 되돌릴 수 없으므로, 복구에 필요한 릴리스가 보존 개수 안에 있는지 확인합니다. 정책은 CI가 적용하지 않으며 ECR 권한이 있는 적용자가 미리보기로 대상을 확인한 뒤 적용합니다.
+
+```bash
+aws ecr start-lifecycle-policy-preview --repository-name "$ECR_REPOSITORY" --lifecycle-policy-text file://infra/ecr/lifecycle-policy.json
+aws ecr get-lifecycle-policy-preview --repository-name "$ECR_REPOSITORY"
+aws ecr put-lifecycle-policy --repository-name "$ECR_REPOSITORY" --lifecycle-policy-text file://infra/ecr/lifecycle-policy.json
+```
+
 ## 배포용 HTTPS
 
 공개 경로는 **DuckDNS → 기존 앱 EC2의 Caddy → Gateway 내부 HTTP 주소**입니다. [Caddyfile](../infra/caddy/Caddyfile)과 [EC2 Task 템플릿](../infra/caddy/task-definition.json)만 배포에 사용하며, 로컬 `compose.yml`의 HTTP 실행에는 추가하지 않습니다. Caddy와 [Let's Encrypt 인증서](https://letsencrypt.org/about/), [DuckDNS 서브도메인](https://www.duckdns.org/about.jsp)은 무료입니다. EC2·공인 IPv4·디스크·트래픽·로그의 AWS 비용은 별도입니다. ALB나 추가 EC2를 만들지 않습니다.
