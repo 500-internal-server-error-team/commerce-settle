@@ -60,6 +60,35 @@ def verify():
                 if any(span.get("parentId") not in ids for span in work):
                     return None
                 assert all(span["traceId"] == trace_id for span in spans)
+                by_id = {span["id"]: span for span in spans}
+
+                def key(span):
+                    return (span.get("localEndpoint", {}).get("serviceName"), span.get("name"))
+
+                def ancestor_matches(span, expected):
+                    seen = {span["id"]}
+                    parent_id = span.get("parentId")
+                    while parent_id in by_id and parent_id not in seen:
+                        parent = by_id[parent_id]
+                        if key(parent) in expected:
+                            return True
+                        seen.add(parent_id)
+                        parent_id = parent.get("parentId")
+                    return False
+
+                # Check the actual runtime composition, including Kafka spans between saved boundaries.
+                ancestry = {
+                    ("payment", "payment.inbox.process"): {
+                        ("commerce", "commerce.outbox.send"), ("settlement", "settlement.outbox.send")},
+                    ("payment", "payment.approval.process"): {("payment", "payment.inbox.process")},
+                    ("payment", "payment.refund.process"): {("payment", "payment.inbox.process")},
+                    ("commerce", "commerce.inbox.accepted"): {("payment", "payment.outbox.send")},
+                    ("commerce", "commerce.inbox.result"): {("payment", "payment.outbox.send")},
+                    ("settlement", "settlement.inbox.process"): {
+                        ("payment", "payment.outbox.send"), ("commerce", "commerce.outbox.send")},
+                }
+                if any(key(span) in ancestry and not ancestor_matches(span, ancestry[key(span)]) for span in spans):
+                    return None
                 return spans
             spans = until(collected, "missing sampled async trace boundaries: " + ",".join(sorted(required)), 60)
             print(json.dumps({"traceId": trace_id, "spanCount": len(spans),
