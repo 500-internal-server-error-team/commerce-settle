@@ -659,12 +659,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (application,operation) (rate(async_work_seconds_count{error!=\"none\"}[2m])) / sum by (application,operation) (rate(async_work_seconds_count[2m]))",
+          "expr": "(sum by (application,operation) (rate(async_work_seconds_count{error!=\"none\"}[2m])) or on (application,operation) (0 * sum by (application,operation) (rate(async_work_seconds_count[2m])))) / sum by (application,operation) (rate(async_work_seconds_count[2m]))",
           "legendFormat": "현재 {{application}} {{operation}}"
         },
         {
           "refId": "B",
-          "expr": "sum by (application,operation) (rate(async_work_seconds_count{error!=\"none\"}[2m] offset $comparison_offset)) / sum by (application,operation) (rate(async_work_seconds_count[2m] offset $comparison_offset))",
+          "expr": "(sum by (application,operation) (rate(async_work_seconds_count{error!=\"none\"}[2m] offset $comparison_offset)) or on (application,operation) (0 * sum by (application,operation) (rate(async_work_seconds_count[2m] offset $comparison_offset)))) / sum by (application,operation) (rate(async_work_seconds_count[2m] offset $comparison_offset))",
           "legendFormat": "이전 ($comparison_offset) {{application}} {{operation}}"
         }
       ],
