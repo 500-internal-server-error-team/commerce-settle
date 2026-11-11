@@ -36,7 +36,7 @@ def verify():
         base = endpoint("gateway", 8080)
         prometheus = endpoint("prometheus", 9090)
         zipkin = endpoint("zipkin", 9411)
-        order_traces, refund_traces = {}, {}
+        refund_traces, refund_orders = {}, {}
 
         def trace_headers(trace_id):
             return {"traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"}
@@ -195,7 +195,13 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
             result = gateway_json(base, method, path, body, actor_token or token,
                                   {"Idempotency-Key": str(uuid.uuid4()), **trace_headers(trace_id)})
             if method == "POST" and path.startswith("/api/orders/") and path.endswith("/refund-requests") and result[0] == 201:
-                refund_traces[path.split("/")[3]] = trace_id
+                order_id = path.split("/")[3]
+                refund_traces[order_id] = trace_id
+                refund_orders[result[1]["id"]] = order_id
+            if (method == "POST" and path.startswith("/api/sellers/me/refund-requests/")
+                    and path.endswith("/decision") and result[0] == 202 and body.get("decision") == "APPROVE"):
+                # RETURN waits for a separate seller command. That command actually starts its refund SAGA.
+                refund_traces[refund_orders[path.split("/")[5]]] = trace_id
             return result
 
         status, address = request("POST", "/api/buyers/me/addresses", {
@@ -229,7 +235,6 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
             payment = sql("commerce", f"select payment_id from commerce.orders where id='{order['id']}'")
             until(lambda: sql("settlement", f"select count(*) from settlement.settlement_items where payment_id='{payment}'") == "1",
                   "Settlement did not create the item from PaymentConfirmed")
-            order_traces[order["id"]] = trace_id
             required = {"commerce.outbox.send", "payment.inbox.process", "payment.outbox.send",
                         "commerce.inbox.accepted", "commerce.inbox.result"}
             services = {"gateway", "commerce", "payment", "settlement"}

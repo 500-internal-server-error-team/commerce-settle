@@ -1728,7 +1728,7 @@ class OrderWorkflowIntegrationTest {
 
     @Bean
     @Primary
-    ClosureDouble closureDouble(javax.sql.DataSource source) {
+    ClosureDouble closureDouble(javax.sql.DataSource source) throws java.sql.SQLException {
       return new ClosureDouble(source);
     }
 
@@ -1757,9 +1757,11 @@ class OrderWorkflowIntegrationTest {
 
   static class ClosureDouble implements RefundClosureEvidence {
     private final javax.sql.DataSource source;
+    private final com.zaxxer.hikari.HikariDataSource pool;
 
-    ClosureDouble(javax.sql.DataSource source) {
+    ClosureDouble(javax.sql.DataSource source) throws java.sql.SQLException {
       this.source = source;
+      this.pool = source.unwrap(com.zaxxer.hikari.HikariDataSource.class);
     }
 
     volatile boolean safe;
@@ -1770,12 +1772,7 @@ class OrderWorkflowIntegrationTest {
     public Evidence verify(Subject subject, String customer) {
       assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
       assertThat(TransactionSynchronizationManager.hasResource(source)).isFalse();
-      if (!lockHolder)
-        assertThat(
-                ((com.zaxxer.hikari.HikariDataSource) source)
-                    .getHikariPoolMXBean()
-                    .getActiveConnections())
-            .isZero();
+      if (!lockHolder) assertThat(pool.getHikariPoolMXBean().getActiveConnections()).isZero();
       duringLookup.run();
       if (delegate != null) return delegate.verify(subject, customer);
       return new Evidence(
