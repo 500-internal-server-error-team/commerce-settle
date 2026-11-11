@@ -39,6 +39,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -264,6 +266,27 @@ class OrderWorkflowIntegrationTest {
     assertThat(results.processEvent(event)).isFalse();
     assertThat(number("select count(*) from commerce.audit_logs where event_id=?", event))
         .isEqualTo(count);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"accrual_cap, 100", "accrual_rate_bp, 1000"})
+  @DisplayName("적립 정책의 한도·적립률이 일부 NULL이면 DB가 거절하고 기존 사본을 보존한다")
+  void rejectsPartialNullAccrualPolicy(String column, long amount) {
+    var f = fixture();
+    var order = create(f);
+    var id = uuid(order, "id");
+
+    assertThatThrownBy(
+            () ->
+                jdbc.update(
+                    "UPDATE commerce.orders SET " + column + "=NULL, accrual_amount=? WHERE id=?",
+                    amount,
+                    id))
+        .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+    assertThat(number("SELECT accrual_cap FROM commerce.orders WHERE id=?", id)).isEqualTo(1000);
+    assertThat(number("SELECT accrual_rate_bp FROM commerce.orders WHERE id=?", id)).isEqualTo(100);
+    assertThat(number("SELECT accrual_amount FROM commerce.orders WHERE id=?", id)).isEqualTo(100);
   }
 
   @Test

@@ -106,7 +106,7 @@ public class JdbcPaymentIntegrityReader implements PaymentIntegrityReader {
         Map.entry(
             "financialInboxPending",
             count(
-                "SELECT count(*) FROM payment.inbox WHERE status<>'APPLIED' AND event_type IN ('OrderPaymentRequested','RefundApproved','RefundReservationAccepted','RefundFinancialCompleted')")),
+                "SELECT count(*) FROM payment.inbox WHERE status<>'APPLIED' AND event_type IN ('OrderPaymentRequested','RefundApproved','RefundReservationAccepted','RefundFinancialCompleted','MileageAccrualScheduled','MileageAccrualConfirmed')")),
         Map.entry(
             "financialOutboxPending",
             count(

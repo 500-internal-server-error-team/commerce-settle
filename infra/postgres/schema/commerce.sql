@@ -53,7 +53,8 @@ CREATE TABLE commerce.orders (
     version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
     CHECK ((accrual_policy_version IS NULL AND accrual_rate_bp IS NULL AND accrual_cap IS NULL
             AND accrual_amount = 0)
-        OR (accrual_policy_version IS NOT NULL AND accrual_rate_bp BETWEEN 1 AND 10000 AND accrual_cap > 0
+        OR (accrual_policy_version IS NOT NULL AND accrual_rate_bp IS NOT NULL AND accrual_cap IS NOT NULL
+            AND accrual_rate_bp BETWEEN 1 AND 10000 AND accrual_cap > 0
             AND accrual_amount = CASE WHEN buyer_coupon_id IS NULL
                 THEN least(accrual_cap, (external_amount * accrual_rate_bp) / 10000) ELSE 0 END)),
     CHECK ((event_id IS NULL AND quantity BETWEEN 1 AND 10)
