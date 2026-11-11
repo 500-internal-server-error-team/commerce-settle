@@ -42,6 +42,7 @@ def verify():
             return {"traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"}
 
         def observed_trace(trace_id, required, services):
+            last = {}
             def collected():
                 try:
                     with urlopen(zipkin + "/api/v2/trace/" + trace_id, timeout=5) as response:
@@ -54,10 +55,13 @@ def verify():
                 sources = {span.get("localEndpoint", {}).get("serviceName") for span in spans}
                 ids = {span["id"] for span in spans}
                 work = [span for span in spans if span.get("name") in required]
+                last.update(missingNames=sorted(required - names), missingServices=sorted(services - sources))
                 if not required <= names or not services <= sources:
                     return None
                 # Every selected durable-work parent is an actual exported span, not a new root.
-                if any(span.get("parentId") not in ids for span in work):
+                last["missingParents"] = [
+                    (span.get("name"), span.get("parentId")) for span in work if span.get("parentId") not in ids]
+                if last["missingParents"]:
                     return None
                 assert all(span["traceId"] == trace_id for span in spans)
                 by_id = {span["id"]: span for span in spans}
@@ -87,10 +91,15 @@ def verify():
                     ("settlement", "settlement.inbox.process"): {
                         ("payment", "payment.outbox.send"), ("commerce", "commerce.outbox.send")},
                 }
-                if any(key(span) in ancestry and not ancestor_matches(span, ancestry[key(span)]) for span in spans):
+                last["wrongAncestors"] = [
+                    key(span) for span in spans if key(span) in ancestry and not ancestor_matches(span, ancestry[key(span)])]
+                if last["wrongAncestors"]:
                     return None
                 return spans
-            spans = until(collected, "missing sampled async trace boundaries: " + ",".join(sorted(required)), 60)
+            try:
+                spans = until(collected, "missing sampled async trace boundaries: " + ",".join(sorted(required)), 60)
+            except AssertionError as failure:
+                raise AssertionError(str(failure) + "; " + json.dumps(last, sort_keys=True)) from failure
             print(json.dumps({"traceId": trace_id, "spanCount": len(spans),
                               "asyncBoundaries": sorted(required)}), flush=True)
             return spans
@@ -140,12 +149,13 @@ def verify():
                  input_text=json.dumps({"services": {"payment-worker": {"environment": environment}}}), timeout=180)
 
         # Immutable delay scenarios: one loses responses, one returns a late success for fencing.
-        for version, loss in [("flow-delayed-v1", 1), ("flow-late-success-v1", 0)]:
+        for version, loss, delay in [("flow-delayed-v1", 1, 7000), ("flow-late-success-v1", 0, 7000),
+                                     ("flow-crash-v1", 1, 15000)]:
             sql("finance_mock", f"""
 INSERT INTO finance_mock.mock_scenarios
 SELECT '{uuid.uuid4()}',settlement_delay_business_days,provider_id,'{version}',
 min_delay_ms,max_delay_ms,rejection_rate,response_loss_rate,lookup_failure_rate,
-7000,7000,0,{loss},lookup_min_delay_ms,lookup_max_delay_ms,seed,created_at
+{delay},{delay},0,{loss},lookup_min_delay_ms,lookup_max_delay_ms,seed,created_at
 FROM finance_mock.mock_scenarios WHERE provider_id='PG_A' AND scenario_version='fixture-pg-normal-v1';
 """)
         missing = f"/mock/providers/PG_A/transactions/{uuid.uuid4()}?operation=REFUND&scenarioVersion=fixture-pg-normal-v1"
@@ -263,7 +273,7 @@ from commerce.product_inventory where product_id='{product}'""")
 select r.status || '/' || s.step from payment.refunds r join payment.refund_sagas s on s.refund_id = r.id
 where r.payment_id='{payment}'""")
 
-        def completed(order_id, payment, expected_mileage=MILEAGE, stock="RESTORED"):
+        def completed(order_id, payment, expected_mileage=MILEAGE, stock="RESTORED", recovered_parent=None):
             until(lambda: refund_state(payment) == "COMPLETED/COMPLETED", "refund SAGA did not complete", 240)
             until(lambda: sql("commerce", f"select status from commerce.orders where id='{order_id}'") == "REFUNDED",
                   "Commerce did not restore the refunded order")
@@ -299,6 +309,9 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
                                    {"commerce.outbox.send", "payment.inbox.process", "payment.refund.process",
                                     "payment.outbox.send", "settlement.outbox.send", "commerce.inbox.result"},
                                    {"gateway", "commerce", "payment", "settlement"} | ({"finance-mock"} if int(external) else set()))
+            if recovered_parent is not None:
+                assert any(span.get("name") == "payment.refund.process" and span.get("parentId") == recovered_parent
+                           for span in spans), "recovered worker did not restore the persisted parent"
             if int(sql("payment", f"select attempts from payment.payment_jobs where refund_id='{refund_id}'")) > 1:
                 assert any(span.get("name") == "payment.refund.process.wait"
                            and span.get("tags", {}).get("kind") in {"retry", "lease-recovery"} for span in spans), "retry/restart wait span missing"
@@ -362,18 +375,35 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
             assert external_count(lost_key) == "1"
 
             # External success, then SIGKILL before local recording; a new worker queries the old key.
-            worker_settings("flow-delayed-v1", APP_REFUND_HTTP_TIMEOUT="15s")
+            worker_settings("flow-crash-v1", APP_REFUND_HTTP_TIMEOUT="20s")
             crash_order, crash_payment = paid_order()
             cancel(crash_order)
             until(lambda: sql("payment", f"select count(*) from payment.refunds where payment_id='{crash_payment}'") == "1", "refund not accepted")
             crash_refund, crash_key = refund_info(crash_payment)
             until(lambda: external_count(crash_key) == "1", "external refund not committed before crash")
+            stored = sql("payment", f"select trace_parent from payment.payment_jobs where refund_id='{crash_refund}'").split("-")
+            assert len(stored) == 4 and stored[1] == refund_traces[crash_order]
+            crash_parent = stored[2]
+
+            def parent_exported():
+                try:
+                    with urlopen(zipkin + "/api/v2/trace/" + stored[1], timeout=5) as response:
+                        return any(span["id"] == crash_parent for span in json.load(response))
+                except HTTPError as error:
+                    if error.code == 404:
+                        return False
+                    raise
+            # Prove the completed predecessor was collected before SIGKILL. A killed process cannot export
+            # its in-flight spans; do not turn batch-export timing into a false durable-context failure.
+            until(parent_exported, "persisted predecessor was not exported before the crash barrier", 10)
+            assert sql("payment", f"select external_status from payment.refunds where id='{crash_refund}'") == "REQUESTED"
+            assert sql("payment", f"select status from payment.payment_jobs where refund_id='{crash_refund}'") == "RUNNING"
             compose("kill", "-s", "SIGKILL", "payment-worker")
             assert reserved(crash_payment) == "ACTIVE"
             assert sql("payment", f"select count(*) from payment.mileage_entries where payment_id='{crash_payment}' and kind='RESTORE'") == "0"
             sql("payment", f"update payment.payment_jobs set lease_until=now()-interval '1s' where refund_id='{crash_refund}'")
             worker_settings()
-            completed(crash_order, crash_payment)
+            completed(crash_order, crash_payment, recovered_parent=crash_parent)
             assert external_count(crash_key) == "1"
             assert int(sql("payment", f"select attempts from payment.payment_jobs where refund_id='{crash_refund}'")) >= 2
 

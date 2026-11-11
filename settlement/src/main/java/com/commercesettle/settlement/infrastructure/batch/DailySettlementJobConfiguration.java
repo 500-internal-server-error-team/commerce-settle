@@ -1,9 +1,12 @@
 package com.commercesettle.settlement.infrastructure.batch;
 
+import com.commercesettle.observability.AsyncObservation;
 import com.commercesettle.settlement.application.exception.FixtureBatchConflictException;
 import com.commercesettle.settlement.application.exception.ProductSettlementContextUnavailableException;
 import com.commercesettle.settlement.application.service.SellerSettlementService;
 import com.commercesettle.settlement.domain.model.SettlementBatch;
+import com.commercesettle.settlement.infrastructure.observability.DailySettlementProgress;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.Arrays;
@@ -15,6 +18,7 @@ import java.util.stream.Collectors;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.batch.core.ChunkListener;
 import org.springframework.batch.core.ExitStatus;
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.SkipListener;
@@ -31,6 +35,7 @@ import org.springframework.batch.item.database.Order;
 import org.springframework.batch.item.database.builder.JdbcPagingItemReaderBuilder;
 import org.springframework.batch.item.database.support.PostgresPagingQueryProvider;
 import org.springframework.batch.support.transaction.ResourcelessTransactionManager;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -54,8 +59,17 @@ class DailySettlementJobConfiguration {
       LoggerFactory.getLogger(DailySettlementJobConfiguration.class);
 
   @Bean
-  Job dailySettlementJob(JobRepository jobRepository, Step settleSellersStep) {
-    return new JobBuilder(JOB_NAME, jobRepository).start(settleSellersStep).build();
+  Job dailySettlementJob(
+      JobRepository jobRepository, Step settleSellersStep, DailySettlementProgress progress) {
+    return new JobBuilder(JOB_NAME, jobRepository)
+        .listener(progress)
+        .start(settleSellersStep)
+        .build();
+  }
+
+  @Bean
+  DailySettlementProgress dailySettlementProgress(ObjectProvider<MeterRegistry> meters) {
+    return new DailySettlementProgress(meters.getIfAvailable(), JOB_NAME, "settleSellers");
   }
 
   /**
@@ -68,7 +82,8 @@ class DailySettlementJobConfiguration {
   Step settleSellersStep(
       JobRepository jobRepository,
       JdbcPagingItemReader<UUID> payableSellerReader,
-      ItemWriter<UUID> sellerSettlementWriter) {
+      ItemWriter<UUID> sellerSettlementWriter,
+      DailySettlementProgress progress) {
     return new StepBuilder("settleSellers", jobRepository)
         .<UUID, UUID>chunk(1, new ResourcelessTransactionManager())
         .reader(payableSellerReader)
@@ -84,6 +99,8 @@ class DailySettlementJobConfiguration {
         .skipLimit(Integer.MAX_VALUE)
         .listener(skippedSellerLogger())
         .listener(skipSummary())
+        .listener((StepExecutionListener) progress)
+        .listener((ChunkListener) progress)
         .build();
   }
 
@@ -122,13 +139,22 @@ class DailySettlementJobConfiguration {
   ItemWriter<UUID> sellerSettlementWriter(
       SellerSettlementService sellers,
       @Value("#{jobParameters['batchDate']}") LocalDate batchDate,
-      @Value("#{jobParameters['fixtureItemIds']}") String fixtureItemIds) {
+      @Value("#{jobParameters['fixtureItemIds']}") String fixtureItemIds,
+      ObjectProvider<AsyncObservation> observations) {
     Set<UUID> selected = selectedItems(fixtureItemIds);
+    AsyncObservation observation = observations.getIfAvailable(() -> AsyncObservation.NOOP);
     return chunk ->
         chunk.forEach(
             sellerId -> {
-              if (selected == null) sellers.settle(sellerId, batchDate);
-              else sellers.settleFixture(sellerId, batchDate, selected);
+              observation.run(
+                  "settlement.batch.seller",
+                  observation.capture(),
+                  Map.of("seller.id", sellerId.toString()),
+                  null,
+                  () -> {
+                    if (selected == null) sellers.settle(sellerId, batchDate);
+                    else sellers.settleFixture(sellerId, batchDate, selected);
+                  });
             });
   }
 
