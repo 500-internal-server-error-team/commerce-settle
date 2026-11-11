@@ -6,11 +6,14 @@ import com.commercesettle.commerce.application.port.PaymentAcceptanceInbox;
 import com.commercesettle.commerce.application.port.PaymentAcceptanceInbox.Source;
 import com.commercesettle.commerce.domain.model.Order.PaymentLinkResult;
 import com.commercesettle.commerce.domain.repository.OrderRepository;
+import com.commercesettle.observability.AsyncObservation;
 import java.time.Clock;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -21,6 +24,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class PaymentAcceptedService {
   private static final Logger LOG = LoggerFactory.getLogger(PaymentAcceptedService.class);
+  private AsyncObservation observations = AsyncObservation.NOOP;
   private final PaymentAcceptanceInbox inbox;
   private final OrderRepository orders;
   private final Clock clock;
@@ -36,6 +40,11 @@ public class PaymentAcceptedService {
     this.clock = clock;
     this.transactions = new TransactionTemplate(manager);
     this.transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+  }
+
+  @Autowired(required = false)
+  void asyncObservation(AsyncObservation observation) {
+    this.observations = observation;
   }
 
   @Transactional
@@ -54,6 +63,7 @@ public class PaymentAcceptedService {
 
   private boolean process(UUID eventId) {
     var selected = new AtomicReference<UUID>();
+    var scope = new AtomicReference<AsyncObservation.Scope>(AsyncObservation.Scope.NOOP);
     try {
       return Boolean.TRUE.equals(
           transactions.execute(
@@ -62,6 +72,16 @@ public class PaymentAcceptedService {
                 if (work.isEmpty()) return false;
                 var row = work.get();
                 selected.set(row.id());
+                scope.set(
+                    observations.start(
+                        "commerce.inbox.accepted",
+                        row.traceParent(),
+                        Map.of(
+                            "event.id",
+                            row.event().eventId().toString(),
+                            "inbox.id",
+                            row.id().toString()),
+                        row.timing()));
                 var payload = row.event().payload();
                 var found = orders.findLockedById(payload.orderId());
                 if (found.isEmpty()) {
@@ -90,12 +110,15 @@ public class PaymentAcceptedService {
                 return true;
               }));
     } catch (RuntimeException exception) {
+      scope.get().error(exception);
       if (selected.get() == null) throw exception;
       transactions.executeWithoutResult(
           status -> inbox.retry(selected.get(), "PAYMENT_LINK_APPLY_FAILED", clock.instant()));
       LOG.warn(
           "Payment link deferred: inboxId={}, errorCode=PAYMENT_LINK_APPLY_FAILED", selected.get());
       return true;
+    } finally {
+      scope.get().close();
     }
   }
 }

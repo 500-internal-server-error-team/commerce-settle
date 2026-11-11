@@ -1,6 +1,8 @@
 package com.commercesettle.payment.application.port;
 
+import com.commercesettle.observability.AsyncObservation.Timing;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -21,6 +23,11 @@ public interface PaymentProcessingObservation {
       };
 
   <T> T observe(Stage stage, Supplier<T> action);
+
+  default <T> T observeStored(
+      Stage stage, String parent, Map<String, String> ids, Timing timing, Supplier<T> action) {
+    return observe(stage, action);
+  }
 
   default void observe(Stage stage, Runnable action) {
     observe(
@@ -46,7 +53,13 @@ public interface PaymentProcessingObservation {
     APPROVAL_PREPARE,
     APPROVAL_LEASE_CHECK,
     APPROVAL_GATEWAY,
-    APPROVAL_RECORD
+    APPROVAL_RECORD,
+    REFUND_PROCESS,
+    REFUND_LEASE,
+    REFUND_PREPARE,
+    REFUND_LEASE_CHECK,
+    REFUND_GATEWAY,
+    REFUND_RECORD
   }
 
   enum Queue {

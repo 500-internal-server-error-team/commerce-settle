@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.application.port;
 
+import com.commercesettle.observability.AsyncObservation.Timing;
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
 import com.commercesettle.settlement.application.event.RefundFinancialCompletedPayload;
@@ -66,16 +67,53 @@ public interface InboxStore {
   sealed interface Pending {
     UUID inboxId();
 
-    record Purchase(UUID inboxId, EventEnvelope<PurchaseConfirmedPayload> event)
-        implements Pending {}
+    String traceParent();
 
-    record RefundReservation(UUID inboxId, EventEnvelope<RefundReservationRequestedPayload> event)
-        implements Pending {}
+    Timing timing();
 
-    record RefundCompleted(UUID inboxId, EventEnvelope<RefundFinancialCompletedPayload> event)
-        implements Pending {}
+    record Purchase(
+        UUID inboxId,
+        EventEnvelope<PurchaseConfirmedPayload> event,
+        String traceParent,
+        Timing timing)
+        implements Pending {
+      public Purchase(UUID inboxId, EventEnvelope<PurchaseConfirmedPayload> event) {
+        this(inboxId, event, null, null);
+      }
+    }
 
-    record RefundRelease(UUID inboxId, EventEnvelope<RefundReleaseRequestedPayload> event)
-        implements Pending {}
+    record RefundReservation(
+        UUID inboxId,
+        EventEnvelope<RefundReservationRequestedPayload> event,
+        String traceParent,
+        Timing timing)
+        implements Pending {
+      public RefundReservation(
+          UUID inboxId, EventEnvelope<RefundReservationRequestedPayload> event) {
+        this(inboxId, event, null, null);
+      }
+    }
+
+    record RefundCompleted(
+        UUID inboxId,
+        EventEnvelope<RefundFinancialCompletedPayload> event,
+        String traceParent,
+        Timing timing)
+        implements Pending {
+      public RefundCompleted(UUID inboxId, EventEnvelope<RefundFinancialCompletedPayload> event) {
+        this(inboxId, event, null, null);
+      }
+    }
+
+    record RefundRelease(
+        UUID inboxId,
+        EventEnvelope<RefundReleaseRequestedPayload> event,
+        String traceParent,
+        Timing timing)
+        implements Pending {
+      public RefundRelease(UUID inboxId, EventEnvelope<RefundReleaseRequestedPayload> event) {
+        this(inboxId, event, null, null);
+      }
+    }
   }
 }

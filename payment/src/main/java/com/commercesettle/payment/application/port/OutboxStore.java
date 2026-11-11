@@ -1,5 +1,6 @@
 package com.commercesettle.payment.application.port;
 
+import com.commercesettle.observability.AsyncObservation.Timing;
 import java.util.List;
 import java.util.UUID;
 
@@ -12,7 +13,18 @@ public interface OutboxStore {
 
   record Publication(String topic, int partition, long offset) {}
 
-  record Delivery(UUID id, long version, String topic, String key, byte[] body) {
+  record Delivery(
+      UUID id,
+      long version,
+      String topic,
+      String key,
+      byte[] body,
+      String traceParent,
+      Timing timing) {
+    public Delivery(UUID id, long version, String topic, String key, byte[] body) {
+      this(id, version, topic, key, body, null, null);
+    }
+
     public Delivery {
       body = body.clone();
     }

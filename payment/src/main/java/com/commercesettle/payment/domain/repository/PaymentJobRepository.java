@@ -1,5 +1,6 @@
 package com.commercesettle.payment.domain.repository;
 
+import com.commercesettle.observability.AsyncObservation.Timing;
 import com.commercesettle.payment.domain.model.PaymentJob;
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
 import com.commercesettle.payment.domain.model.PaymentJobStatus;
@@ -63,5 +64,17 @@ public interface PaymentJobRepository {
       UUID businessKey,
       UUID leaseToken,
       int attempts,
-      Instant registeredAt) {}
+      Instant registeredAt,
+      String traceParent,
+      Timing timing) {
+    public LeasedJob(
+        UUID jobId,
+        UUID paymentId,
+        UUID businessKey,
+        UUID leaseToken,
+        int attempts,
+        Instant registeredAt) {
+      this(jobId, paymentId, businessKey, leaseToken, attempts, registeredAt, null, null);
+    }
+  }
 }

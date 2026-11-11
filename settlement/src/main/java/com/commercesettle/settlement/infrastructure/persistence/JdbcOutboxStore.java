@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.infrastructure.persistence;
 
+import com.commercesettle.observability.AsyncObservation.Timing;
 import com.commercesettle.settlement.application.port.OutboxStore;
 import com.commercesettle.settlement.application.port.OutboxStore.Publication;
 import java.util.List;
@@ -45,7 +46,9 @@ class JdbcOutboxStore implements OutboxStore {
     return jdbc.query(
         """
         WITH candidates AS (
-            SELECT o.id FROM settlement.outbox o
+            SELECT o.id,o.created_at AS queued_created,o.updated_at AS queued_changed,
+                o.next_run_at AS queued_due,o.status AS queued_status,o.lease_until AS queued_lease
+            FROM settlement.outbox o
             WHERE o.status IN ('PENDING','RUNNING','RETRY') AND o.attempts < :max
               AND ((o.status IN ('PENDING','RETRY') AND o.next_run_at <= clock_timestamp())
                 OR (o.status='RUNNING' AND o.lease_until <= clock_timestamp()))
@@ -58,7 +61,10 @@ class JdbcOutboxStore implements OutboxStore {
             lease_until=clock_timestamp()+(:lease * interval '1 millisecond'),
             updated_at=clock_timestamp(),version=version+1
         FROM candidates WHERE o.id=candidates.id
-        RETURNING o.id,o.version,o.topic,o.message_key,o.raw_body
+        RETURNING o.id,o.version,o.topic,o.message_key,o.raw_body,o.trace_parent,o.attempts,
+            candidates.queued_created,candidates.queued_changed,candidates.queued_status,
+            CASE WHEN candidates.queued_status='RUNNING' THEN candidates.queued_lease
+              ELSE candidates.queued_due END AS queued_eligible
         """,
         params,
         (rs, row) ->
@@ -67,7 +73,14 @@ class JdbcOutboxStore implements OutboxStore {
                 rs.getLong("version"),
                 rs.getString("topic"),
                 rs.getString("message_key"),
-                rs.getBytes("raw_body")));
+                rs.getBytes("raw_body"),
+                rs.getString("trace_parent"),
+                new Timing(
+                    rs.getTimestamp("queued_created").toInstant(),
+                    rs.getTimestamp("queued_changed").toInstant(),
+                    rs.getTimestamp("queued_eligible").toInstant(),
+                    rs.getString("queued_status"),
+                    rs.getInt("attempts"))));
   }
 
   @Override

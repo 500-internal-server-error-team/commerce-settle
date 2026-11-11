@@ -1,3 +1,14 @@
+jdbc:
+  includes: CONNECTION,QUERY,FETCH
+  datasource-proxy:
+    include-parameter-values: false
+    query:
+      enable-logging: false
+    slow-query:
+      enable-logging: false
+  resultset-operations:
+    enabled: false
+
 server:
   port: ${SERVER_PORT:8080}
 
@@ -59,6 +70,11 @@ management:
         enabled: true
       show-details: always
   metrics:
+    distribution:
+      percentiles-histogram:
+        async.work: true
+        async.stage: true
+        jdbc.query: true
     tags:
       application: ${spring.application.name}
       role: ${PAYMENT_ROLE:app}

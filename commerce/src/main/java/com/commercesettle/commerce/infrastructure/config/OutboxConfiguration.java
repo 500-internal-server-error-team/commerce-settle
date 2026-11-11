@@ -2,8 +2,10 @@ package com.commercesettle.commerce.infrastructure.config;
 
 import com.commercesettle.commerce.application.service.OutboxDeliveryService;
 import com.commercesettle.commerce.infrastructure.messaging.OutboxRelay;
+import com.commercesettle.observability.AsyncObservation;
 import java.util.concurrent.Executor;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -57,7 +59,8 @@ public class OutboxConfiguration {
       @Value("${app.outbox.max-in-flight:8}") int maxInFlight,
       @Value("${app.outbox.lease-ms:240000}") long leaseMs,
       @Value("${app.outbox.max-attempts:10}") int maxAttempts,
-      @Value("${app.outbox.recovery-interval-ms:1000}") long recoveryIntervalMs) {
+      @Value("${app.outbox.recovery-interval-ms:1000}") long recoveryIntervalMs,
+      ObjectProvider<AsyncObservation> observations) {
     var producer = properties.buildProducerProperties();
     long maxBlock =
         Long.parseLong(producer.getOrDefault(ProducerConfig.MAX_BLOCK_MS_CONFIG, 60000).toString());
@@ -72,6 +75,13 @@ public class OutboxConfiguration {
           "Outbox lease must exceed producer metadata wait and delivery timeout");
     }
     return new OutboxRelay(
-        service, template, maxInFlight, leaseMs, maxAttempts, coordinator, executor);
+        service,
+        template,
+        maxInFlight,
+        leaseMs,
+        maxAttempts,
+        coordinator,
+        executor,
+        observations.getIfAvailable(() -> AsyncObservation.NOOP));
   }
 }

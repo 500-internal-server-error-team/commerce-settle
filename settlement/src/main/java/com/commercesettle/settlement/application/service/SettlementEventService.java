@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.application.service;
 
+import com.commercesettle.observability.AsyncObservation;
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PaymentConfirmedPayload;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
@@ -15,10 +16,12 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +36,7 @@ public class SettlementEventService {
   // policies.md 재처리: 최대 10회, 1초부터 최대 60초 간격, 소진 시 REVIEW_REQUIRED.
   private static final int MAX_WAITING_ATTEMPTS = 10;
 
+  private AsyncObservation observations = AsyncObservation.NOOP;
   private final InboxStore inbox;
   private final SettlementItemRepository items;
   private final SettlementEntryRepository entries;
@@ -53,6 +57,11 @@ public class SettlementEventService {
     this.refunds = refunds;
     this.clock = clock;
     this.waitingRecheckDelay = Duration.ofMillis(waitingRecheckMillis);
+  }
+
+  @Autowired(required = false)
+  void asyncObservation(AsyncObservation observation) {
+    this.observations = observation;
   }
 
   @Transactional
@@ -168,6 +177,23 @@ public class SettlementEventService {
   }
 
   private void process(InboxStore.Pending pending) {
+    var scope =
+        observations.start(
+            "settlement.inbox.process",
+            pending.traceParent(),
+            Map.of("inbox.id", pending.inboxId().toString()),
+            pending.timing());
+    try {
+      processObserved(pending);
+    } catch (RuntimeException | Error failure) {
+      scope.error(failure);
+      throw failure;
+    } finally {
+      observations.closeAfterTransaction(scope);
+    }
+  }
+
+  private void processObserved(InboxStore.Pending pending) {
     switch (pending) {
       case InboxStore.Pending.Purchase p -> applyPurchase(p.inboxId(), p.event());
       case InboxStore.Pending.RefundReservation p ->

@@ -1,5 +1,6 @@
 package com.commercesettle.payment.application.port;
 
+import com.commercesettle.observability.AsyncObservation.Timing;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.MileageAccrualConfirmedPayload;
 import com.commercesettle.payment.application.event.MileageAccrualScheduledPayload;
@@ -18,7 +19,17 @@ import java.util.UUID;
  * version은 처리·실패 기록이 그 사이 다른 처리기가 선점한 행을 덮어쓰지 않게 한다.
  */
 public record WaitingInboxEvent(
-    UUID inboxId, long version, int attempts, Instant registeredAt, EventEnvelope<?> event) {
+    UUID inboxId,
+    long version,
+    int attempts,
+    Instant registeredAt,
+    EventEnvelope<?> event,
+    String traceParent,
+    Timing timing) {
+  public WaitingInboxEvent(
+      UUID inboxId, long version, int attempts, Instant registeredAt, EventEnvelope<?> event) {
+    this(inboxId, version, attempts, registeredAt, event, null, null);
+  }
 
   /**
    * 처리 전에 잡는 잠금의 대상. 같은 주문의 결제 요청·취소·환불·구매 적립은 주문 ID로 직렬화된다. Settlement 환불 응답에는 주문 ID가 없어 원결제 ID로

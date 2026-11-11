@@ -88,6 +88,8 @@ management:
   metrics:
     distribution:
       percentiles-histogram:
+        async.work: true
+        async.stage: true
         payment.processing: true
         payment.queue.wait: true
         jdbc.query: true

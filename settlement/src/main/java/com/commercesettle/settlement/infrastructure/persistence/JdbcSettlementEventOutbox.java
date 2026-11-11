@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.infrastructure.persistence;
 
+import com.commercesettle.observability.AsyncObservation;
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.port.SettlementEventOutbox;
 import com.commercesettle.settlement.infrastructure.messaging.OutboxAppended;
@@ -10,6 +11,7 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -32,6 +34,7 @@ class JdbcSettlementEventOutbox implements SettlementEventOutbox {
 
   private final NamedParameterJdbcTemplate jdbc;
   private final ObjectMapper mapper;
+  private AsyncObservation observations = AsyncObservation.NOOP;
   private final ApplicationEventPublisher events;
 
   JdbcSettlementEventOutbox(
@@ -39,6 +42,11 @@ class JdbcSettlementEventOutbox implements SettlementEventOutbox {
     this.jdbc = jdbc;
     this.mapper = mapper;
     this.events = events;
+  }
+
+  @Autowired(required = false)
+  void asyncObservation(AsyncObservation observation) {
+    this.observations = observation;
   }
 
   @Override
@@ -63,6 +71,7 @@ class JdbcSettlementEventOutbox implements SettlementEventOutbox {
             .addValue("occurred", event.occurredAt().toString())
             .addValue("body", body)
             .addValue("json", new String(body, StandardCharsets.UTF_8))
+            .addValue("traceParent", observations.capture())
             .addValue("key", key.toString());
     // 집계별 append를 커밋까지 직렬화하여 늦은 낮은 버전의 삽입을 막는다.
     jdbc.queryForList(
@@ -89,9 +98,9 @@ class JdbcSettlementEventOutbox implements SettlementEventOutbox {
         jdbc.update(
             """
             INSERT INTO settlement.outbox (id,event_type,event_version,aggregate_id,aggregate_version,
-                topic,occurred_at,message_key,payload,raw_body)
+                topic,occurred_at,message_key,payload,raw_body,trace_parent)
             VALUES (:id,:type,1,:aggregate,:version,:topic,
-                CAST(:occurred AS timestamptz),:key,CAST(:json AS jsonb),:body)
+                CAST(:occurred AS timestamptz),:key,CAST(:json AS jsonb),:body,:traceParent)
             ON CONFLICT (id) DO NOTHING
             """,
             params);

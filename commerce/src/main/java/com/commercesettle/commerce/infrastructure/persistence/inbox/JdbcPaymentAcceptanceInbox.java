@@ -6,6 +6,8 @@ import com.commercesettle.commerce.application.port.PaymentAcceptanceInbox;
 import com.commercesettle.commerce.application.port.PaymentAcceptanceInbox.Source;
 import com.commercesettle.commerce.application.port.PaymentAcceptanceInbox.Waiting;
 import com.commercesettle.commerce.infrastructure.persistence.TransactionLimits;
+import com.commercesettle.observability.AsyncObservation;
+import com.commercesettle.observability.AsyncObservation.Timing;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -21,6 +23,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -34,6 +37,7 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
   private final NamedParameterJdbcTemplate jdbc;
   private final ObjectMapper mapper;
   private final String consumer;
+  private AsyncObservation observations = AsyncObservation.NOOP;
 
   public JdbcPaymentAcceptanceInbox(
       NamedParameterJdbcTemplate jdbc,
@@ -45,6 +49,11 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
     this.jdbc = jdbc;
     this.mapper = mapper;
     this.consumer = consumer;
+  }
+
+  @Autowired(required = false)
+  void asyncObservation(AsyncObservation observation) {
+    this.observations = observation;
   }
 
   @Override
@@ -92,6 +101,7 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
             .addValue("aggregateVersion", event.aggregateVersion())
             .addValue("body", body)
             .addValue("json", new String(body, StandardCharsets.UTF_8))
+            .addValue("traceParent", observations.capture())
             .addValue("hash", hash(body))
             .addValue("topic", source.topic())
             .addValue("partition", source.partition())
@@ -101,9 +111,9 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
     int inserted =
         jdbc.update(
             """
-        INSERT INTO commerce.inbox (id,consumer,event_id,event_type,event_version,occurred_at,payload,
+        INSERT INTO commerce.inbox (trace_parent,id,consumer,event_id,event_type,event_version,occurred_at,payload,
             raw_body,body_hash,source_topic,source_partition,source_offset,aggregate_id,aggregate_version,status,next_run_at,created_at,updated_at)
-        VALUES (:id,:consumer,:eventId,:type,:eventVersion,CAST(:occurred AS timestamptz),CAST(:json AS jsonb),
+        VALUES (:traceParent,:id,:consumer,:eventId,:type,:eventVersion,CAST(:occurred AS timestamptz),CAST(:json AS jsonb),
             :body,:hash,:topic,:partition,:offset,:aggregate,:aggregateVersion,'WAITING',:now,:now,:now)
         ON CONFLICT (consumer,event_id) DO NOTHING
         """,
@@ -138,11 +148,11 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
   public Optional<Waiting> claim(UUID eventId, Instant now) {
     var found = claimBody(eventId, now, true);
     if (found.isEmpty()) return Optional.empty();
-    Original row = found.get();
+    Work row = found.get();
     try {
       EventEnvelope<PaymentAcceptedPayload> event =
           mapper.readValue(row.body(), new TypeReference<>() {});
-      return Optional.of(new Waiting(row.id(), event));
+      return Optional.of(new Waiting(row.id(), event, row.traceParent(), row.timing()));
     } catch (IOException exception) {
       // 저장 시 검증한 원문이므로 읽기 실패는 데이터 손상이다. 원문을 예외에 싣지 않는다.
       throw new IllegalStateException("Stored inbox body cannot be read: " + row.id());
@@ -156,23 +166,25 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
     try {
       EventEnvelope<com.fasterxml.jackson.databind.JsonNode> event =
           mapper.readValue(found.get().body(), new TypeReference<>() {});
-      return Optional.of(new WaitingResult(found.get().id(), event));
+      return Optional.of(
+          new WaitingResult(
+              found.get().id(), event, found.get().traceParent(), found.get().timing()));
     } catch (IOException e) {
       throw new IllegalStateException("Stored result cannot be read");
     }
   }
 
-  private Optional<Original> claimBody(UUID eventId, Instant now, boolean accepted) {
+  private Optional<Work> claimBody(UUID eventId, Instant now, boolean accepted) {
     var params =
         new MapSqlParameterSource("consumer", consumer)
             .addValue("now", toTimestamp(now))
             .addValue("accepted", accepted)
             .addValue("eventId", eventId, Types.OTHER);
     TransactionLimits.apply(jdbc.getJdbcOperations());
-    List<Original> rows =
+    List<Work> rows =
         jdbc.query(
             """
-            SELECT id, raw_body FROM commerce.inbox
+            SELECT id,raw_body,trace_parent,created_at,updated_at,next_run_at,attempts FROM commerce.inbox
             WHERE consumer = :consumer AND status = 'WAITING' AND next_run_at <= :now
               AND ((:accepted AND event_type = 'PaymentAccepted') OR (NOT :accepted AND event_type IN ('PaymentConfirmed','PaymentDeclined','PaymentCancelled','PaymentCancellationRejected','RefundAccepted','RefundCompleted','RefundFailed'))) AND event_version = 1
               AND (CAST(:eventId AS uuid) IS NULL OR event_id = :eventId)
@@ -181,7 +193,17 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
             FOR UPDATE SKIP LOCKED
             """,
             params,
-            (rs, row) -> new Original(rs.getObject("id", UUID.class), rs.getBytes("raw_body")));
+            (rs, row) ->
+                new Work(
+                    rs.getObject("id", UUID.class),
+                    rs.getBytes("raw_body"),
+                    rs.getString("trace_parent"),
+                    new Timing(
+                        rs.getTimestamp("created_at").toInstant(),
+                        rs.getTimestamp("updated_at").toInstant(),
+                        rs.getTimestamp("next_run_at").toInstant(),
+                        "WAITING_RETRY",
+                        rs.getInt("attempts") + 1)));
     return rows.stream().findFirst();
   }
 
@@ -248,4 +270,6 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
   }
 
   private record Original(UUID id, byte[] body) {}
+
+  private record Work(UUID id, byte[] body, String traceParent, Timing timing) {}
 }
