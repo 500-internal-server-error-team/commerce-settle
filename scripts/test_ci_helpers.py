@@ -163,7 +163,7 @@ class CiGateTest(unittest.TestCase):
         self.assertEqual({name.strip() for name in names.split(",")}, set(self.results))
         tests = self.workflow.split("\n  tests:\n", 1)[1].split("\n  observability:\n", 1)[0]
         self.assertEqual(set(re.findall(r":([a-z-]+):test\b", tests)),
-                         {"commerce", "payment", "settlement", "finance-mock", "gateway", "internal-auth", "demo-control"})
+                         {"commerce", "payment", "settlement", "finance-mock", "gateway", "internal-auth", "observability", "demo-control"})
         self.assertIn("scenario: [smoke, redis, retention, admission, financial-flow, reconciliation, demo-ui]", self.workflow)
         self.assertRegex(self.workflow, r"Verify demo UI operator ports on startup and restart\n"
                          r"\s+if: matrix.scenario == 'demo-ui'")
