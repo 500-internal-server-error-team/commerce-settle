@@ -276,10 +276,18 @@ aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services commerce-settle
 
 DuckDNS를 사용할 때도 각 하위 이름의 DNS 응답을 실제 확인합니다. DNS가 이미 같은 앱 IP를 가리키면 새 레코드를 만들지 않습니다. data EC2의 자동 공인 IP는 사용하지 않고 `DATA_PRIVATE_IP`로 연결하므로 data 중지·시작에 따른 공인 IP 변경의 영향을 받지 않습니다. 인스턴스를 교체해 사설 IP가 바뀌면 Kafka의 advertised listener와 클라이언트·프록시 설정을 함께 갱신합니다.
 
-기본 [Caddyfile](../infra/caddy/Caddyfile)은 `/etc/caddy/monitoring/*.caddy`가 있을 때만 관측 프록시를 불러옵니다. [모니터링 설정](../infra/caddy/monitoring.Caddyfile)을 앱 EC2의 `/srv/commerce-settle/caddy/etc/monitoring/tools.caddy`에 설치합니다. 기존 `/data`·`/config` 인증서 영역은 보존합니다. Caddy Task에 다음 값을 추가합니다.
+기본 [Caddyfile](../infra/caddy/Caddyfile)은 `/etc/caddy/monitoring/*.caddy`가 있을 때만 관측 프록시를 불러옵니다. [모니터링 설정](../infra/caddy/monitoring.Caddyfile)을 앱 EC2의 `/srv/commerce-settle/caddy/etc/monitoring/tools.caddy`에 설치합니다. 기존 `/data`·`/config` 인증서 영역은 보존하고 Caddy Task에 `DATA_PRIVATE_IP` 환경 변수를 추가합니다. 기존 `PUBLIC_DOMAIN`·`GATEWAY_UPSTREAM`은 유지합니다.
 
-- 환경 변수 `DATA_PRIVATE_IP`, `MONITORING_USER`와 기존 `PUBLIC_DOMAIN`·`GATEWAY_UPSTREAM`.
-- 비밀번호 해시를 저장한 SSM SecureString의 ARN을 `secrets`의 `MONITORING_PASSWORD_HASH`에 연결합니다. 실행 역할에는 해당 파라미터 읽기 권한이 필요합니다. 해시는 `caddy hash-password`로 만들며 평문 비밀번호·해시·생성용 payload를 Git이나 로그에 남기지 않습니다.
+Prometheus·Zipkin·Kafka UI의 Basic 인증 창에는 각자의 Grafana 계정을 입력합니다. Caddy는 Grafana의 `/api/user`에 인증을 확인한 뒤 성공한 요청만 전달합니다. Grafana의 Basic 인증은 켜고 익명 인증은 끕니다. 팀원에게 Viewer 계정을 부여하며 관리자 비밀번호는 공유하지 않습니다. Caddy에 비밀번호·해시를 저장하거나 새 SSM 파라미터·IAM 권한을 만들지 않습니다. Grafana 장애나 인증 실패 때는 다른 도구의 공개 접근도 차단됩니다.
+
+모니터링 파일을 설치한 환경의 사전 검증은 세 환경 변수를 모두 지정해 수행합니다. 검증은 인증서 발급이나 Grafana 연결 성공을 대신하지 않습니다.
+
+```bash
+sudo docker run --rm --network none -e PUBLIC_DOMAIN="${PUBLIC_DOMAIN:?}" \
+  -e GATEWAY_UPSTREAM="${GATEWAY_UPSTREAM:?}" -e DATA_PRIVATE_IP="${DATA_PRIVATE_IP:?}" \
+  --mount type=bind,src=/srv/commerce-settle/caddy/etc,dst=/etc/caddy,readonly \
+  "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+```
 
 Grafana의 기존 관리자·SSM 비밀번호와 데이터 볼륨은 유지하고 `GF_SERVER_ROOT_URL=https://grafana.<PUBLIC_DOMAIN>/`을 지정합니다. Prometheus는 기존 보존·수집 옵션을 유지한 채 `--web.external-url=https://prometheus.<PUBLIC_DOMAIN>/`을 추가할 수 있습니다. 도구마다 별도 호스트명을 사용하므로 하위 경로 재작성은 필요 없습니다. Caddy 인증 헤더는 관측 도구에 전달하지 않으며, Grafana의 자체 API 인증 헤더는 유지합니다.
 
