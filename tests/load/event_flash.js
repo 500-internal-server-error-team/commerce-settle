@@ -10,8 +10,9 @@ import { SharedArray } from 'k6/data';
 
 const base = __ENV.BASE_URL || 'http://gateway:8080';
 const mode = __ENV.MODE || 'flash';
-const buyers = new SharedArray('buyers', () => JSON.parse(open('/work/buyers.json')));
-const plan = JSON.parse(open('/work/plan.json'));
+// 입력 파일은 단계마다 이름을 달리한다. 덮어쓴 파일을 다음 컨테이너가 이전 크기로 읽는 bind mount(OrbStack)가 있다.
+const buyers = new SharedArray('buyers', () => JSON.parse(open(mode === 'seed' ? '/work/buyers-seed.json' : '/work/buyers.json')));
+const plan = mode === 'seed' ? {} : JSON.parse(open(`/work/plan-${mode}.json`));
 
 function integer(name, fallback) {
   const value = Number(__ENV[name] || fallback);

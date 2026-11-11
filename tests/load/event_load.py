@@ -132,12 +132,13 @@ INSERT INTO commerce.product_inventory (id,product_id,available_qty,reserved_qty
         tokens = [session(stream, "BUYER", buyer_id(i)) for i in range(prepared)]
         compose("exec", "-T", "redis", "sh", "-c", 'REDISCLI_AUTH="$REDIS_PASSWORD" exec redis-cli --pipe',
                 input_text="".join(stream), timeout=600)
-        (work / "buyers.json").write_text(json.dumps([[t, None] for t in tokens]))
-        (work / "plan.json").write_text("{}")
+        (work / "buyers-seed.json").write_text(json.dumps([[t, None] for t in tokens]))
         started = time.monotonic()
         k6("seed", SEED_VUS=50)
-        addresses = dict(line.split("|") for line in sql(
-            "select buyer_id, id from commerce.buyer_addresses where deleted_at is null").splitlines())
+        # 개발 fixture의 시연 구매자 주소도 같은 테이블에 있으므로 시험 구매자 것만 센다.
+        addresses = dict(line.split("|") for line in sql("""
+select a.buyer_id, a.id from commerce.buyer_addresses a join commerce.buyer_accounts b on b.id=a.buyer_id
+where a.deleted_at is null and b.email_normalized like '%@load.test'""").splitlines())
         assert len(addresses) == prepared, f"{len(addresses)} of {prepared} addresses were created"
         (work / "buyers.json").write_text(json.dumps([[t, addresses[buyer_id(i)]] for i, t in enumerate(tokens)]))
         print(json.dumps({"seeded": prepared, "seconds": round(time.monotonic() - started)}), flush=True)
@@ -147,7 +148,7 @@ INSERT INTO commerce.product_inventory (id,product_id,available_qty,reserved_qty
         warmup = None
         if warmup_buyers:
             normal_version = int(sql(f"select version from commerce.products where id='{normal_product}'"))
-            (work / "plan.json").write_text(json.dumps({
+            (work / "plan-warmup.json").write_text(json.dumps({
                 "normal": {"productId": normal_product, "productVersion": normal_version, "price": NORMAL_PRICE}}))
             until(gate_open, "order admission did not open", 300)
             k6("warmup", WARMUP_SECONDS=args.warmup_seconds, WARMUP_RATE=args.warmup_rate, WARMUP_BUYERS=warmup_buyers)
@@ -170,7 +171,7 @@ INSERT INTO commerce.product_inventory (id,product_id,available_qty,reserved_qty
         assert event["status"] == "OPEN", event
         versions = dict(line.split("|") for line in sql(
             f"select id, version from commerce.products where id in ('{event_product}','{normal_product}')").splitlines())
-        (work / "plan.json").write_text(json.dumps({
+        (work / "plan-flash.json").write_text(json.dumps({
             "event": {"eventId": event["id"], "eventVersion": event["version"], "productId": event_product,
                       "productVersion": int(versions[event_product]), "price": EVENT_PRICE},
             "normal": {"productId": normal_product, "productVersion": int(versions[normal_product]), "price": NORMAL_PRICE}}))
