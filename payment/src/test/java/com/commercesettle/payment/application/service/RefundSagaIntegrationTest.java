@@ -625,6 +625,7 @@ class RefundSagaIntegrationTest {
     assertThat(lastInboxError("MileageAccrualConfirmed"))
         .isEqualTo("MILEAGE_ACCRUAL_NOT_SCHEDULED");
     assertThat(inboxStatuses()).containsOnly("WAITING");
+    assertThat(integrity.checks()).containsEntry("financialInboxPending", 1L);
 
     scheduleAccrual(payment, 500);
     assertThat(inboxProcessor.processNext()).isTrue();
@@ -635,6 +636,31 @@ class RefundSagaIntegrationTest {
 
     assertThat(accrualStatus(payment)).isEqualTo("AVAILABLE");
     assertThat(walletBalance(payment)).isEqualTo(500);
+    assertThat(integrity.checks()).containsEntry("financialInboxPending", 0L);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "MileageAccrualScheduled, WAITING, 1",
+    "MileageAccrualScheduled, REVIEW_REQUIRED, 1",
+    "MileageAccrualScheduled, APPLIED, 0",
+    "MileageAccrualConfirmed, WAITING, 1",
+    "MileageAccrualConfirmed, REVIEW_REQUIRED, 1",
+    "MileageAccrualConfirmed, APPLIED, 0"
+  })
+  @DisplayName("적립 예정·확정의 대기와 확인 대상은 금융 미처리로 집계하고 반영 완료만 제외한다")
+  void countsUnappliedAccrualEvents(String type, String status, long expected) throws Exception {
+    Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 0), 0);
+    if (type.equals("MileageAccrualScheduled")) scheduleAccrual(payment, 100);
+    else confirmAccrual(payment, 100);
+    jdbc()
+        .update(
+            "UPDATE payment.inbox SET status=?, next_run_at=CASE WHEN ?='WAITING' THEN clock_timestamp() ELSE NULL END, last_error_code=CASE WHEN ?='REVIEW_REQUIRED' THEN 'TEST_REVIEW' ELSE NULL END",
+            status,
+            status,
+            status);
+
+    assertThat(integrity.checks()).containsEntry("financialInboxPending", expected);
   }
 
   @Test
@@ -666,7 +692,12 @@ class RefundSagaIntegrationTest {
             "MILEAGE_ACCRUAL_POLICY_INVALID",
             "MILEAGE_ACCRUAL_CONFLICT");
     assertThat(accrualStatus(card)).isEqualTo("PENDING");
-    assertThat(integrity.checks()).allSatisfy((name, value) -> assertThat(value).as(name).isZero());
+    assertThat(integrity.checks()).containsEntry("financialInboxPending", 4L);
+    assertThat(integrity.checks())
+        .allSatisfy(
+            (name, value) -> {
+              if (!name.equals("financialInboxPending")) assertThat(value).as(name).isZero();
+            });
   }
 
   private void scheduleAccrual(Payment payment, long amount) throws Exception {
