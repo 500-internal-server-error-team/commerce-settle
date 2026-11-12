@@ -262,11 +262,26 @@ aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$service"
 
 ### ECR 수명 주기 정책
 
-[수명 주기 정책](../infra/ecr/lifecycle-policy.json)은 태그 없는 이미지를 push 1일 후 만료하고, `<모듈>-v` 접두사별로 최근 10개만 남깁니다. 접두사에 맞지 않는 태그 이미지는 만료하지 않습니다. 만료된 이미지의 digest를 쓰는 Task Definition으로는 되돌릴 수 없으므로, 복구에 필요한 릴리스가 보존 개수 안에 있는지 확인합니다. 정책은 CI가 적용하지 않으며 ECR 권한이 있는 적용자가 미리보기로 대상을 확인한 뒤 적용합니다.
+[수명 주기 정책](../infra/ecr/lifecycle-policy.json)은 태그 없는 이미지를 push 1일 후 만료하고, `<모듈>-v` 접두사별로 최근 10개를 기본 보관합니다. `keep-<모듈>-` 접두사의 상위 규칙은 모듈당 이미지 3개까지 보존하므로, 보호 대상이 최근 10개 밖에 있으면 보관 개수가 늘어납니다. 릴리스·보호 접두사에 맞지 않는 태그 이미지는 만료하지 않습니다.
+
+보호 태그는 모듈별 `keep-<모듈>-current`·`keep-<모듈>-rollback`·`keep-<모듈>-candidate` 세 이름만 사용하며, 배포 주체가 다음 순서로 관리합니다.
+
+1. 정책 적용 전에 실행 Task와 서비스의 Task Definition을 대조해 실행·필수 롤백 digest가 ECR에 존재하는지 확인합니다. 기존 untagged 실행 이미지에도 보호 태그를 붙이며, 보호 누락이나 모듈당 대상 3개 초과가 있으면 적용하지 않습니다.
+2. 같은 환경·저장소의 태그 갱신과 배포를 직렬화합니다. 후보는 pull 전에 `candidate`로 보호하고, 이전 후보 Task가 모두 종료되고 실행·롤백 대상이 계속 보호될 때만 다음 후보로 옮깁니다.
+3. 모든 관련 서비스가 안정화되면 기존 `current`를 `rollback`에 먼저 보존한 뒤 새 digest로 `current`를 옮깁니다. 두 대상의 보호를 확인한 뒤 `candidate`를 제거합니다. 실패하면 기존 `current`·`rollback`을 유지하고, 복구와 후보 Task 종료가 끝날 때까지 다음 배포를 막습니다.
+
+**보호 태그 갱신과 릴리스 태그 재사용 거절을 구현·검증하기 전에는 정책을 적용하지 않습니다.** 정책 파일 추가가 이 절차의 구현이나 실제 AWS 검증을 뜻하지 않습니다. 보호 방식의 선택 이유는 [이미지 보관 결정](decisions/0014-ecr-and-ecs-image-retention.md)에 정리합니다.
+
+조건을 충족한 뒤 ECR 권한이 있는 적용자가 AWS 계정·리전·리포지토리와 기존 정책을 확인하고 미리보기를 시작합니다. CI는 정책을 적용하지 않습니다.
 
 ```bash
 aws ecr start-lifecycle-policy-preview --repository-name "$ECR_REPOSITORY" --lifecycle-policy-text file://infra/ecr/lifecycle-policy.json
 aws ecr get-lifecycle-policy-preview --repository-name "$ECR_REPOSITORY"
+```
+
+`status`가 `IN_PROGRESS`이면 결과를 다시 조회합니다. `COMPLETE`가 된 뒤 만료 대상 전체를 검토하고, 보호 digest가 하나라도 포함되거나 필요한 보호 대상이 모듈당 3개를 넘으면 적용하지 않습니다. `FAILED`·`EXPIRED`이면 중단하고 원인을 확인합니다. 검토를 마친 뒤에만 아래 명령을 별도로 실행합니다.
+
+```bash
 aws ecr put-lifecycle-policy --repository-name "$ECR_REPOSITORY" --lifecycle-policy-text file://infra/ecr/lifecycle-policy.json
 ```
 

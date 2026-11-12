@@ -8,30 +8,60 @@
     },
     {
       "rulePriority": 2,
+      "description": "gateway 실행·롤백·배포 후보 보호",
+      "selection": {"tagStatus": "tagged", "tagPrefixList": ["keep-gateway-"], "countType": "imageCountMoreThan", "countNumber": 3},
+      "action": {"type": "expire"}
+    },
+    {
+      "rulePriority": 3,
+      "description": "commerce 실행·롤백·배포 후보 보호",
+      "selection": {"tagStatus": "tagged", "tagPrefixList": ["keep-commerce-"], "countType": "imageCountMoreThan", "countNumber": 3},
+      "action": {"type": "expire"}
+    },
+    {
+      "rulePriority": 4,
+      "description": "payment 실행·롤백·배포 후보 보호",
+      "selection": {"tagStatus": "tagged", "tagPrefixList": ["keep-payment-"], "countType": "imageCountMoreThan", "countNumber": 3},
+      "action": {"type": "expire"}
+    },
+    {
+      "rulePriority": 5,
+      "description": "settlement 실행·롤백·배포 후보 보호",
+      "selection": {"tagStatus": "tagged", "tagPrefixList": ["keep-settlement-"], "countType": "imageCountMoreThan", "countNumber": 3},
+      "action": {"type": "expire"}
+    },
+    {
+      "rulePriority": 6,
+      "description": "finance-mock 실행·롤백·배포 후보 보호",
+      "selection": {"tagStatus": "tagged", "tagPrefixList": ["keep-finance-mock-"], "countType": "imageCountMoreThan", "countNumber": 3},
+      "action": {"type": "expire"}
+    },
+    {
+      "rulePriority": 7,
       "description": "gateway v* 최근 10개",
       "selection": {"tagStatus": "tagged", "tagPrefixList": ["gateway-v"], "countType": "imageCountMoreThan", "countNumber": 10},
       "action": {"type": "expire"}
     },
     {
-      "rulePriority": 3,
+      "rulePriority": 8,
       "description": "commerce v* 최근 10개",
       "selection": {"tagStatus": "tagged", "tagPrefixList": ["commerce-v"], "countType": "imageCountMoreThan", "countNumber": 10},
       "action": {"type": "expire"}
     },
     {
-      "rulePriority": 4,
+      "rulePriority": 9,
       "description": "payment v* 최근 10개",
       "selection": {"tagStatus": "tagged", "tagPrefixList": ["payment-v"], "countType": "imageCountMoreThan", "countNumber": 10},
       "action": {"type": "expire"}
     },
     {
-      "rulePriority": 5,
+      "rulePriority": 10,
       "description": "settlement v* 최근 10개",
       "selection": {"tagStatus": "tagged", "tagPrefixList": ["settlement-v"], "countType": "imageCountMoreThan", "countNumber": 10},
       "action": {"type": "expire"}
     },
     {
-      "rulePriority": 6,
+      "rulePriority": 11,
       "description": "finance-mock v* 최근 10개",
       "selection": {"tagStatus": "tagged", "tagPrefixList": ["finance-mock-v"], "countType": "imageCountMoreThan", "countNumber": 10},
       "action": {"type": "expire"}
