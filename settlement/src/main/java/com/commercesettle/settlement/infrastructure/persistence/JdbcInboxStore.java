@@ -258,6 +258,24 @@ class JdbcInboxStore implements InboxStore {
   }
 
   @Override
+  public boolean deferWaiting(UUID inboxId, Duration delay, Instant now) {
+    applyTransactionLimits();
+    return jdbc.update(
+            """
+            UPDATE settlement.inbox
+            SET next_run_at = clock_timestamp() + make_interval(secs => :delay),
+                updated_at = :now, version = version + 1
+            WHERE id = :inboxId AND consumer = :consumer AND status = 'WAITING'
+              AND next_run_at <= clock_timestamp()
+            """,
+            new MapSqlParameterSource("inboxId", inboxId)
+                .addValue("consumer", consumer)
+                .addValue("delay", delay.toMillis() / 1000.0)
+                .addValue("now", now.atOffset(ZoneOffset.UTC)))
+        == 1;
+  }
+
+  @Override
   public List<UUID> reviveExhaustedPurchases(UUID paymentId, int maxAttempts, Instant now) {
     // 시도 상한 조건은 대기 중 결제가 도착한 뒤 다른 사유로 운영 확인에 남은 행(마지막 사유가 그대로 남음)을 거른다.
     // WAITING도 대상이다. 처리기가 잠근 마지막 판정 행은 커밋 전까지 WAITING으로 보이므로 이 문장이 잠금을 기다리고, 처리기가

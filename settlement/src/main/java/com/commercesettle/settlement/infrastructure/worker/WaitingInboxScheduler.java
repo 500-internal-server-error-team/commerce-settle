@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.infrastructure.worker;
 
+import com.commercesettle.settlement.application.exception.WaitingInboxFailedException;
 import com.commercesettle.settlement.application.service.SettlementEventService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -8,7 +9,10 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-/** 선행 결제를 기다리는 구매확정을 짧은 주기로 다시 판정한다. 한 건이 실패해도 다음 건으로 넘어간다. */
+/**
+ * 선행 결제를 기다리는 구매확정을 짧은 주기로 다시 판정한다. 한 건이 실패하면 별도 트랜잭션에서 그 행을 미루고 다음 건으로 넘어가, 같은 행을 한 주기에 여러 번 선점하지
+ * 않는다. 미루기나 선점 자체가 실패하면 이번 주기를 멈춘다.
+ */
 @Component
 @ConditionalOnProperty(name = "settlement.inbox-processor.enabled", havingValue = "true")
 class WaitingInboxScheduler {
@@ -31,15 +35,28 @@ class WaitingInboxScheduler {
         if (!service.processNextWaiting()) {
           return;
         }
+      } catch (WaitingInboxFailedException e) {
+        log(e.getCause(), "Waiting inbox event failed; it is deferred and stays waiting");
+        try {
+          service.deferFailedWaiting(e.inboxId());
+        } catch (RuntimeException deferFailure) {
+          log(deferFailure, "Waiting inbox event could not be deferred; stopping this poll");
+          return;
+        }
       } catch (RuntimeException e) {
-        LOGGER
-            .atError()
-            .setCause(e)
-            .addKeyValue("event", "settlement.inbox")
-            .addKeyValue("result", "ERROR")
-            .addKeyValue("errorType", e.getClass().getName())
-            .log("Waiting inbox event failed; it stays waiting");
+        log(e, "Waiting inbox poll failed; stopping this poll");
+        return;
       }
     }
+  }
+
+  private static void log(Throwable failure, String message) {
+    LOGGER
+        .atError()
+        .setCause(failure)
+        .addKeyValue("event", "settlement.inbox")
+        .addKeyValue("result", "ERROR")
+        .addKeyValue("errorType", failure.getClass().getName())
+        .log(message);
   }
 }

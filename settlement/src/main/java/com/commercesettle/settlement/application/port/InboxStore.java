@@ -43,6 +43,12 @@ public interface InboxStore {
   boolean markWaiting(UUID inboxId, Duration baseDelay, int maxAttempts, Instant now);
 
   /**
+   * 재판정이 예외로 롤백된 WAITING 행의 다음 판정을 {@code delay} 뒤로 미룬다. 시도 횟수·사유는 결제 미도착 판정의 것이므로 바꾸지 않는다. 그 사이 다른
+   * 트랜잭션이 행을 바꿔 더는 기한이 지난 WAITING이 아니면 false.
+   */
+  boolean deferWaiting(UUID inboxId, Duration delay, Instant now);
+
+  /**
    * 결제가 오지 않아 {@code maxAttempts}번 판정 뒤 REVIEW_REQUIRED로 남은 같은 결제의 구매확정을 WAITING·시도 0으로 되돌리고 되돌린
    * Inbox ID를 돌려준다. 아직 대기 중인 같은 결제의 구매확정도 시도 0으로 바로 다시 판정하게 한다. 처리기가 마지막 판정 중이면 그 커밋을 기다렸다가 되돌린다.
    * 다른 사유로 운영 확인에 남은 행은 건드리지 않는다.
