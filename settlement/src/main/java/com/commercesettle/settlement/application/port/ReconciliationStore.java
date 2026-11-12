@@ -29,9 +29,13 @@ public interface ReconciliationStore {
 
   LocalEvent local(Event event, Instant cutoff);
 
+  /** 이벤트 묶음의 로컬 기록을 eventId별로 반환한다. 판정 조건은 {@link #local}과 같다. */
+  Map<UUID, LocalEvent> locals(List<Event> events, Instant cutoff);
+
   List<Finding> localChecks(Instant cutoff, Instant snapshot);
 
-  void result(Run run, Event event, Finding finding);
+  /** 한 호출의 판정을 판정 순서대로 한 번에 기록한다. 임대를 잃었으면 아무것도 기록하지 않는다. */
+  void record(Run run, Map<UUID, Finding> findings);
 
   /** 미검사 이벤트가 남으면 다음 호출로 넘기고, 모두 검사한 회차에서만 원장 전체 검사를 실행한다. */
   void finish(Run run, Supplier<List<Finding>> checks);
