@@ -30,6 +30,7 @@ python3 tests/load/payment_load.py reconcile          # 원장 ↔ Payment ↔ f
 - `scenario`는 PG 시나리오를 바꿔 Worker를 다시 만들고 초당 100건을 60초 넣은 뒤 대조합니다. `restart`는 시작 25초 뒤 `payment-worker`를 SIGKILL하고 다시 띄웁니다.
 - 결제 요청 처리 슬롯·승인 슬롯·DB 연결 풀은 `LOAD_PAYMENT_REQUEST_CONCURRENCY`(기본 3)·`LOAD_PAYMENT_APPROVAL_CONCURRENCY`(기본 6)·`LOAD_PAYMENT_DB_POOL_SIZE`(기본 20)로 바꿉니다. `enable`·`scenario`가 payment-worker를 다시 만들 때도 같은 값을 지정해야 합니다. `ramp --kill-after`의 재기동은 죽이기 전 Worker의 실제 값을 그대로 넘기므로 다시 지정하지 않아도 되며, 그 값을 `summary.json`의 `fault.workerSettingsBeforeKill`에 남깁니다. `ramp`는 실행 중인 Worker의 실제 값을 `summary.json`의 `workerSettings`에 남기고, Worker를 읽을 수 없으면 `null`로 남깁니다. 이 기록은 `ramp`만 하며 `scenario` 결과에는 남지 않습니다.
 - `prepare`는 시험 스택의 finance-mock DB에 `load-pg-*` 시나리오를 직접 넣습니다.
+- 새 시험 지갑의 초기 잔액은 100억 원이며, `prepare`를 다시 실행해도 기존 잔액은 바꾸지 않습니다. `reconcile`은 함께 생성한 간편결제 지갑의 저장된 초기 잔액을 기준으로 마일리지와 간편결제 잔액을 대조하므로 이전 1억 원 지갑도 그대로 검증합니다.
 - `replay`는 시험 스택의 `payment-api`에만 운영자 자격(`operator:load`)을 설정합니다. 자격은 `tests/load/work/operator.credential`에 무작위로 만듭니다.
 - `payment_load.py`와 `event_load.py`는 [자원 overlay](compose.load-resources.yml)를 함께 읽어 컨테이너 메모리 한도(합계 약 21.5GiB)와 PostgreSQL `shared_buffers=1GB`를 적용합니다. Docker 메모리를 24GiB 이상 할당한 호스트를 기준으로 합니다. Compose를 직접 실행해 관측 스택을 추가할 때도 `-f tests/load/compose.load-resources.yml`을 붙여야 한도가 유지됩니다.
 - 주입 원장·표본·요약·대조 결과는 Git에서 제외한 `tests/load/work/<실행 이름>/`에 남습니다. `LOAD_WORK_DIR`를 지정하면 그 경로를 사용합니다.
