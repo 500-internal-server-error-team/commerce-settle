@@ -3,6 +3,7 @@
 import argparse
 import csv
 import contextlib
+from datetime import datetime, timezone
 import importlib.util
 import io
 import json
@@ -563,6 +564,98 @@ class WorkerSettingsTest(unittest.TestCase):
         summary = RestartRegressionTest().ramp()
         self.assertIsNone(summary["workerSettings"])
         self.assertIn("final", summary)
+
+
+class InjectedAggregationTest(unittest.TestCase):
+    """#254: Worker 중단 중 Kafka에서 기다리거나 drain에 확정된 요청과 drain의 최대 lag가 요약에서 빠지지 않는다."""
+    START = 1_793_664_000.0  # 2026-11-03T00:00:00Z
+
+    def iso(self, offset):
+        return datetime.fromtimestamp(self.START + offset, timezone.utc).isoformat()
+
+    def summary(self, ledger, outcomes, lags):
+        snapshots = iter([{**dict.fromkeys(("received", "confirmed", "declined", "unfinished", "waiting",
+                                            "outboxPending", "jobsReview", "inboxReview"), 0),
+                           "at": "2026-11-03T00:00:00Z", "kafkaLag": lag} for lag in lags])
+        calls = []
+
+        def snapshot():
+            calls.append(1)
+            return next(snapshots)
+
+        class StageThread:
+            # 첫 관측 표본까지는 주입 중이고, 이후는 drain이다. 주입 결과는 join에서 확정한다.
+            def __init__(self, target):
+                self.target = target
+
+            def start(self):
+                pass
+
+            def is_alive(self):
+                return len(calls) < 3
+
+            def join(self):
+                self.target()
+
+        def produce(stages, mix, directory, offset, marks, *_):
+            with open(directory / "requests.csv", "a", newline="", encoding="utf-8") as out:
+                for order, published in ledger:
+                    csv.writer(out).writerow([order, "card", 10000, 0, 0, self.iso(published)])
+            marks.append({"stage": 0, "rate": 100, "seconds": 60, "start": self.iso(0), "end": self.iso(60),
+                          "sent": len(ledger), "stopped": False, "elapsed": 60, "maxBehindSeconds": 0})
+
+        def psql(database, sql):
+            if "percentile_cont" in sql:
+                return [["1", "500.0", "500.0", "500.0", "500.0"]]
+            return [[order, *("" if v is None else str(self.START + v) if isinstance(v, float) else v
+                              for v in outcome)] for order, outcome in outcomes.items()]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = argparse.Namespace(stages="100:60", run="restart", mix="card", offset=0, interval=0,
+                                      drain=60, kill_after=0, scenario=None, stop_file=None)
+            with patch("threading.Thread", StageThread), patch.object(load, "WORK", root), \
+                    patch.object(load, "STACK_RUNS", root / "runs"), patch.object(load, "produce", produce), \
+                    patch.object(load, "snapshot", side_effect=snapshot), patch.object(load, "psql", psql), \
+                    patch.object(load, "worker_settings", return_value=None), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                (root / "restart").mkdir()
+                (root / "restart/requests.csv").write_text(f"old,card,10000,0,0,{self.iso(-100)}\n")
+                load.cmd_ramp(args)
+            return json.loads((root / "restart/summary.json").read_text(encoding="utf-8"))
+
+    def test_counts_kafka_waiting_and_drain_confirmations_in_the_injected_stage(self):
+        ledger = [("in-window", 1.0), ("kafka-wait", 2.0), ("drain", 3.0), ("not-received", 4.0)]
+        outcomes = {"in-window": (1.1, "CONFIRMED", 1.6), "kafka-wait": (70.0, "CONFIRMED", 71.0),
+                    "drain": (3.1, "CONFIRMED", 90.0), "old": (-99.0, "CONFIRMED", -98.0)}
+
+        summary = self.summary(ledger, outcomes, lags=[0, 2690, 3489, 0])
+
+        injected = summary["stages"][0]["injected"]
+        self.assertEqual((4, 3, 3, 1, False), (injected["injected"], injected["received"], injected["confirmed"],
+                                               injected["unresolved"], injected["complete"]))
+        self.assertEqual({"count": 3, "p50Ms": 69000.0, "p95Ms": 85200.0, "p99Ms": 86640.0, "maxMs": 87000.0},
+                         injected["publishToConfirmed"])
+        self.assertEqual(68000.0, injected["publishToReceipt"]["maxMs"])
+        self.assertEqual(86900.0, injected["receiptToConfirmed"]["maxMs"])
+        self.assertEqual(injected, summary["injected"])
+        self.assertEqual(1, summary["stages"][0]["latency"]["count"])
+
+    def test_peak_kafka_lag_includes_drain_samples(self):
+        summary = self.summary([("a", 1.0)], {"a": (1.1, "CONFIRMED", 1.6)}, lags=[0, 2690, 3489, 0])
+
+        self.assertEqual(2690, summary["stages"][0]["maxKafkaLag"])
+        self.assertEqual(3489, summary["peaks"]["kafkaLag"]["value"])
+        self.assertEqual("drain", summary["peaks"]["kafkaLag"]["stage"])
+        self.assertEqual(2, summary["aggregation"]["version"])
+
+    def test_unreadable_consumer_group_lag_is_not_recorded_as_zero(self):
+        rebalancing = "\nConsumer group 'payment.v1' is rebalancing.\n"
+        row = [["2026-11-03 00:00:00+00", *["0"] * 8, str(self.START)]]
+        with patch.object(load, "kafka", return_value=rebalancing), patch.object(load, "psql", return_value=row):
+            sample = load.snapshot()
+
+        self.assertIsNone(sample["kafkaLag"])
 
 
 class NamespaceTest(unittest.TestCase):
