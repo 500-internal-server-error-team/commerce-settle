@@ -571,6 +571,7 @@ CREATE TABLE settlement.reconciliation_runs (
  status varchar(24) NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','RUNNING','WAITING','UNVERIFIED','REVIEW_REQUIRED','COMPLETED')), cursor text, expected_total bigint, captured bigint NOT NULL DEFAULT 0,
  lease_token uuid, lease_until timestamptz, CHECK((lease_token IS NULL)=(lease_until IS NULL)), next_run_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  requested_by varchar(100) NOT NULL, attempts integer NOT NULL DEFAULT 0,
+ idle_rounds integer NOT NULL DEFAULT 0 CHECK (idle_rounds >= 0),
  last_error varchar(100), created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(), completed_at timestamptz
 );
@@ -596,5 +597,7 @@ CREATE TABLE settlement.reconciliation_checks (
 );
 
 CREATE INDEX reconciliation_source_page ON settlement.reconciliation_events(run_id,source,source_cursor);
+CREATE INDEX reconciliation_events_unmatched ON settlement.reconciliation_events(run_id,checked_at NULLS FIRST,event_id)
+ WHERE status <> 'MATCH';
 
 CREATE INDEX ix_settlement_items_observation_created ON settlement.settlement_items (created_at, id);
