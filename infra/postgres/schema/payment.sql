@@ -391,6 +391,9 @@ CREATE INDEX outbox_unpublished ON payment.outbox(sequence_no) WHERE status IN (
 CREATE INDEX outbox_unpublished_attempts ON payment.outbox(attempts, sequence_no) WHERE status IN ('PENDING','RUNNING','RETRY');
 CREATE INDEX outbox_occurred ON payment.outbox(occurred_at, created_at, id);
 CREATE INDEX outbox_aggregate ON payment.outbox(aggregate_id, aggregate_version, sequence_no);
+-- 정산 대조 피드는 금융 이벤트 두 종류만 created_at DESC,id DESC keyset으로 읽는다.
+CREATE INDEX ix_outbox_reconciliation ON payment.outbox(created_at, id)
+    WHERE event_type IN ('PaymentConfirmed','RefundFinancialCompleted');
 
 -- 유효한 Envelope로 해석할 수 없는 bytes도 보존한다. null과 빈 bytes를 구분한다.
 CREATE TABLE payment.inbox_quarantines (
