@@ -12,6 +12,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -23,8 +24,8 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
- * Payment {@code OutboxRelay}를 바탕으로 한다. 커밋 후·기동 시와, 결과 저장으로 같은 집계의 다음 이벤트가 풀리거나 슬롯이 모자랐을 때 깨우고 1초
- * 복구 조회로 신호 누락·재시도·만료 임대를 처리한다. 빈 슬롯만 선점하며 전송은 전용 실행기에서 한다.
+ * Payment {@code OutboxRelay}를 바탕으로 한다. 커밋 후·기동 시와, 발행 결과 저장 뒤 같은 집계의 다음 이벤트가 풀렸거나 저장 중 새 Outbox 커밋
+ * 신호가 왔거나 슬롯이 모자랐을 때 깨우고 1초 복구 조회로 신호 누락·재시도·만료 임대·소진 정리를 처리한다. 빈 슬롯만 선점하며 전송은 전용 실행기에서 한다.
  */
 public class OutboxRelay {
   private static final Logger LOG = LoggerFactory.getLogger(OutboxRelay.class);
@@ -39,6 +40,8 @@ public class OutboxRelay {
   private final AtomicBoolean saturated = new AtomicBoolean();
   // 시도를 다 쓴 행 정리는 복구 주기에만 한다.
   private final AtomicBoolean reviewDue = new AtomicBoolean();
+  // 같은 프로세스의 Outbox 커밋 신호 수. 발행 결과 저장 중 신호가 왔는지 판정한다.
+  private final AtomicLong appendSignals = new AtomicLong();
   private final int maxInFlight;
   private final long leaseMs;
   private final int maxAttempts;
@@ -88,6 +91,7 @@ public class OutboxRelay {
 
   @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
   public void onOutboxAppended(OutboxAppended event) {
+    appendSignals.incrementAndGet();
     wakeUp();
   }
 
@@ -213,6 +217,7 @@ public class OutboxRelay {
   private void persistResult(
       Delivery delivery, SendResult<String, byte[]> result, Throwable failure) {
     boolean successorWaiting = false;
+    long signalsBefore = appendSignals.get();
     try {
       boolean updated;
       if (failure == null) {
@@ -222,7 +227,11 @@ public class OutboxRelay {
                 delivery,
                 new Publication(metadata.topic(), metadata.partition(), metadata.offset()));
         updated = published != PublishResult.STALE;
-        successorWaiting = published == PublishResult.PUBLISHED_WITH_SUCCESSOR;
+        // 결과 UPDATE 스냅샷 뒤 커밋된 뒤 이벤트는 결과가 보지 못하고, 그 신호의 선점은 앞 이벤트가 아직 RUNNING이라 건너뛸 수 있다.
+        // 그 뒤 이벤트의 커밋 신호는 결과 저장이 시작된 뒤에 오므로 저장 중 신호 수가 바뀌었으면 커밋 뒤 다시 선점한다.
+        successorWaiting =
+            published == PublishResult.PUBLISHED_WITH_SUCCESSOR
+                || (published == PublishResult.PUBLISHED && appendSignals.get() != signalsBefore);
       } else {
         updated = service.markFailed(delivery, maxAttempts);
       }
@@ -239,8 +248,8 @@ public class OutboxRelay {
           .log("Outbox result persistence failed; the original event remains recoverable");
     } finally {
       inFlight.decrementAndGet();
-      // 결과마다 선점하지 않는다. 같은 집계의 다음 이벤트가 풀렸거나 슬롯 부족으로 남은 행이 있을 때만 깨운다. 실패 결과의 재시도는
-      // 1초 이상 뒤라 새 Outbox 커밋 신호와 복구 주기가 처리한다.
+      // 결과마다 선점하지 않는다. 같은 집계의 다음 이벤트가 풀렸을 수 있거나 슬롯 부족으로 남은 행이 있을 때만 깨운다. 실패 결과의
+      // 재시도는 1초 이상 뒤라 새 Outbox 커밋 신호와 복구 주기가 처리한다. 다른 인스턴스가 저장한 뒤 이벤트는 복구 주기가 찾는다.
       if (successorWaiting || saturated.get()) {
         wakeUp();
       }
