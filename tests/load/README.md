@@ -2,6 +2,46 @@
 
 [#133](https://github.com/500-internal-server-error-team/commerce-settle/issues/133)의 결제 처리량, PG 장애, Worker 재시작 뒤 정합성을 측정합니다. 지표 정의는 [검증 지표와 완료 기준](../../docs/design.md#검증-지표와-완료-기준)를 따릅니다.
 
+## Mac에서 공개 HTTPS 주문 200건/초 시험
+
+[order_load.py](order_load.py)는 Mac의 Docker k6에서 **공개 HTTPS → Caddy → Gateway → 주문 API**로 요청합니다. Node.js나 서버의 k6 배포는 필요하지 않습니다. Python 3·실행 중인 Docker Desktop과 접근 가능한 배포 주소를 준비한 뒤 저장소 루트에서 실행합니다.
+
+```bash
+python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN
+```
+
+기본값은 **한 구매자·한 상품에 200건/초·60초(12,000건)**입니다. 먼저 낮은 부하로 실행 경로를 확인하려면 `--rate 2 --seconds 3`을 붙입니다. 기존 로컬 `order.json`·`orders-200.js`나 `.env`는 읽거나 덮어쓰지 않습니다.
+
+### 서버와 실행 준비
+
+- 팀과 시험 시간을 맞추고 앱·데이터 EC2와 기존 ECS 서비스를 기동합니다. 연결된 탄력적 IP를 유지한 같은 인스턴스의 재기동에서는 DNS를 바꾸지 않습니다. Redis 재시작 뒤 로그인 차단은 [인증 복구](../../docs/development.md#redis-세션-검증과-복구)로 해결하고, 기존 DB·토픽·offset을 초기화하지 않습니다.
+- 관측 대상의 `UP`, `commerce_order_admission_open=1`, 금융 Worker·Outbox·Consumer 활성화를 확인합니다. 접수 gate는 정상 조건을 60초 연속 충족한 뒤 열립니다. 실제 이미지·CPU/메모리·DB 풀·Worker 동시성·샘플링과 시험 시각은 [전후 비교 조건](../../docs/development.md#병목-개선-전후-비교)대로 기록합니다.
+- 개발 fixture를 켠 환경에서는 구매자 A·판매자 A를 기존 Swagger 로그인 경로로 인증합니다. fixture를 쓰지 않는 환경은 유효한 `BUYER_TOKEN`·`SELLER_TOKEN`을 환경 변수로 전달합니다. 두 계정은 시험 계정이어야 하며 토큰·비밀번호를 파일·명령 인자에 쓰지 않습니다. 이 도구가 발급한 세션만 끝에 로그아웃하고 전달받은 기존 세션은 유지합니다.
+
+도구는 구매자의 기존 배송지를 선택하며 없을 때만 가상 주소를 등록합니다. 판매자 계정으로 새 `k6-<실행 ID>` 일반 상품을 만들고 재고를 **예정 주문 수 + 사전 주문 1개 + 여유분(최소 100개·10%)**만큼 준비합니다. 기존 fixture 상품이나 다른 상품의 재고는 바꾸지 않습니다. 실제 견적에서 상품 버전·금액을 받아 주문 본문을 만들고, 사전 주문 한 건의 `PAID` 반영을 확인한 뒤에만 k6를 시작합니다. 명시적인 접수 gate 거절은 30초 간격으로 두 번 더 확인하고 다른 변경 요청은 자동 재시도하지 않습니다.
+
+로그인·준비·사전 주문까지만 검증하려면 `--prepare-only`를 사용합니다. 이때 새 상품과 재고는 유지하며 200건/초 주입은 하지 않습니다. 이후 일반 실행은 별도 상품·실행 ID를 새로 만듭니다. 준비가 성공해도 부하 시험을 통과했다는 의미는 아닙니다.
+
+### 결과와 종료
+
+결과는 Git에서 제외한 `tests/load/work/orders-<실행 ID>/`에 남습니다.
+
+| 파일 | 내용 |
+| --- | --- |
+| `plan.json`, `order.json` | 대상·실행 ID·시험 상품·준비 재고·사전 주문과 실제 견적을 반영한 주문 본문. 토큰 없음 |
+| `requests.jsonl` | 전송 전 `started`·응답 후 `completed` 행을 반복 번호로 연결. 요청 시각·HTTP 상태·주문 ID·오류 코드·지연. 멱등키는 `<runId>-load-<iteration>`으로 복원 |
+| `k6-summary.json` | 실제 요청 수, p95/p99·오류율·`dropped_iterations`와 임계값 결과 |
+| `order-states.json` | 사전 주문을 뺀 상품별 주문 상태·누락된 접수 주문·201 원장이 없는 주문과 결제 시각별 건수 |
+| `summary.json` | 입력·VU 조건·측정 시작/끝·결과·준비/수집/정리 실패 |
+
+`summary.json`의 `passed=true`는 **예정 요청 전부 시작·201·서로 다른 주문 ID·미시작 반복 0·조회된 주문 전부 PAID**가 함께 확인됐다는 뜻입니다. 배출 대기 기준은 기본 300초이며 `--drain-seconds`로 바꿉니다. 진행 중 조회 한 건의 timeout(10초)만큼 더 걸릴 수 있습니다. 목표 주입을 놓치거나 관측이 실패하면 실패로 끝내고 원장과 거래를 보존합니다. `completed`가 없는 `started`와 요청 timeout은 접수되지 않았다는 증거가 아니므로, 미확정 거래를 다음 시험으로 덮거나 DB 초기화로 없애지 않습니다.
+
+Grafana의 **Financial processing**, Zipkin, Kafka UI에서 같은 측정 구간의 단계·SQL·PG 호출·대기열·lag를 확인합니다. `paymentConfirmedAtCounts`는 Commerce가 돌려준 결제 확정시각의 집계이며 Payment DB의 직접 측정과 구분합니다. 단계 실행 횟수·HTTP 201을 결제 확정 TPS로 해석하지 않습니다. **Settlement·대역 원장·금액 대조와 15분 지속 성능 판정은 이 도구의 성공 판정에 포함하지 않습니다.** [정산 대조](../../docs/development.md#정산-대조-실행과-재개)와 시험 원장의 주문 ID를 별도로 대조합니다.
+
+일반 실행이 끝나면 자체 k6 컨테이너·발급 세션을 정리하고 새 시험 상품을 판매 중지합니다. 주문·재고 이력·시험 결과는 삭제하지 않습니다. 중단·정리 실패는 요약에 남으며 다음 시험 전에 미확정 거래를 확인합니다. 로컬 도구가 EC2를 종료하지는 않습니다. 공유 환경의 적체 배출·대조와 팀 사용 여부를 확인한 뒤 담당자가 EC2를 중지합니다.
+
+준비·실패·결과 판정 회귀 검사는 `python3 -B -m unittest discover -s tests/load -p 'test_order_load.py'`로 실행합니다. API 계약 대역 검사는 실제 배포 환경의 준비·부하 실행을 대신하지 않습니다.
+
 ## 측정 범위
 
 Commerce가 발행하는 것과 같은 `OrderPaymentRequested` v1을 `commerce-settle.commerce.v1`에 직접 넣고, Payment 수신부터 finance-mock 승인과 결과 Outbox 발행까지 측정합니다. 주문 API·Gateway 구간과 Commerce·Settlement의 결과 반영은 포함하지 않습니다.
