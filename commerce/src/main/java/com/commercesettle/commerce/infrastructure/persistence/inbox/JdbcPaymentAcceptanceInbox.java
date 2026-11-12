@@ -34,6 +34,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 @Transactional(propagation = Propagation.MANDATORY)
 public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
+  private static final String ACCEPTED_TYPE = "event_type = 'PaymentAccepted'";
+  private static final String RESULT_TYPES =
+      "event_type <> 'PaymentAccepted' AND event_type IN ('PaymentConfirmed','PaymentDeclined',"
+          + "'PaymentCancelled','PaymentCancellationRejected','RefundAccepted','RefundCompleted',"
+          + "'RefundFailed')";
   private final NamedParameterJdbcTemplate jdbc;
   private final ObjectMapper mapper;
   private final String consumer;
@@ -178,20 +183,22 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
     var params =
         new MapSqlParameterSource("consumer", consumer)
             .addValue("now", toTimestamp(now))
-            .addValue("accepted", accepted)
             .addValue("eventId", eventId, Types.OTHER);
     TransactionLimits.apply(jdbc.getJdbcOperations());
+    // 종류 조건은 리터럴로 고정해 처리기별 WAITING 부분 인덱스(inbox_waiting_accepted·inbox_waiting_results)의
+    // 조건을 함축하게 한다. 그래야 다른 처리기의 대기 행을 건너뛰며 훑지 않는다.
     List<Work> rows =
         jdbc.query(
             """
             SELECT id,raw_body,trace_parent,created_at,updated_at,next_run_at,attempts FROM commerce.inbox
             WHERE consumer = :consumer AND status = 'WAITING' AND next_run_at <= :now
-              AND ((:accepted AND event_type = 'PaymentAccepted') OR (NOT :accepted AND event_type IN ('PaymentConfirmed','PaymentDeclined','PaymentCancelled','PaymentCancellationRejected','RefundAccepted','RefundCompleted','RefundFailed'))) AND event_version = 1
+              AND %s AND event_version = 1
               AND (CAST(:eventId AS uuid) IS NULL OR event_id = :eventId)
             ORDER BY next_run_at, id
             LIMIT 1
             FOR UPDATE SKIP LOCKED
-            """,
+            """
+                .formatted(accepted ? ACCEPTED_TYPE : RESULT_TYPES),
             params,
             (rs, row) ->
                 new Work(

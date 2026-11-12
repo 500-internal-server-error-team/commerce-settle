@@ -719,6 +719,11 @@ CREATE TABLE commerce.inbox (
 );
 CREATE INDEX inbox_state ON commerce.inbox(status, created_at, id);
 CREATE INDEX inbox_waiting ON commerce.inbox(consumer, next_run_at, id) WHERE status = 'WAITING';
+-- 결제 접수·결과 처리기가 같은 consumer를 쓰므로 종류별로 나눠 다른 처리기의 대기 행을 훑지 않는다.
+CREATE INDEX inbox_waiting_accepted ON commerce.inbox(consumer, next_run_at, id)
+    WHERE status = 'WAITING' AND event_type = 'PaymentAccepted';
+CREATE INDEX inbox_waiting_results ON commerce.inbox(consumer, next_run_at, id)
+    WHERE status = 'WAITING' AND event_type <> 'PaymentAccepted';
 CREATE INDEX inbox_applied_result ON commerce.inbox(consumer, result_ref, created_at, id) WHERE status = 'APPLIED';
 
 CREATE TABLE commerce.inbox_conflicts (
