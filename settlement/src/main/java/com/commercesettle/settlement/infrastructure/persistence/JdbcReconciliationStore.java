@@ -26,6 +26,7 @@ public class JdbcReconciliationStore implements ReconciliationStore {
   private final JdbcTemplate jdbc;
   private final ObjectMapper mapper;
   private final String consumer;
+  private static final int[] WAIT_DELAYS = {60, 120, 240, 300};
 
   public JdbcReconciliationStore(
       JdbcTemplate jdbc,
@@ -805,7 +806,7 @@ public class JdbcReconciliationStore implements ReconciliationStore {
           differences.add(Long.toString(f.difference()));
           evidence.add(json(f.evidence()));
         });
-    long updated =
+    long[] written =
         jdbc.query(
             """
       WITH lease AS (SELECT id FROM settlement.reconciliation_runs
@@ -818,8 +819,8 @@ public class JdbcReconciliationStore implements ReconciliationStore {
         RETURNING x.n,e.run_id,e.event_id,e.status,e.reason,e.evidence,old.status AS old_status,old.reason AS old_reason),
       h AS (INSERT INTO settlement.reconciliation_history(run_id,event_id,status,reason,evidence)
         SELECT run_id,event_id,status,reason,evidence FROM u
-        WHERE (old_status,coalesce(old_reason,'')) IS DISTINCT FROM (status,reason) ORDER BY n)
-      SELECT count(*) FROM u
+        WHERE (old_status,coalesce(old_reason,'')) IS DISTINCT FROM (status,reason) ORDER BY n RETURNING 1)
+      SELECT (SELECT count(*) FROM u),(SELECT count(*) FROM h)
       """,
             ps -> {
               ps.setObject(1, run.id());
@@ -833,9 +834,15 @@ public class JdbcReconciliationStore implements ReconciliationStore {
             },
             rs -> {
               rs.next();
-              return rs.getLong(1);
+              return new long[] {rs.getLong(1), rs.getLong(2)};
             });
-    if (updated != findings.size()) throw new IllegalStateException("Reconciliation lease lost");
+    if (written[0] != findings.size()) throw new IllegalStateException("Reconciliation lease lost");
+    // 판정이 바뀌면 대기 회차의 재확인 간격을 처음으로 되돌린다.
+    if (written[1] > 0)
+      jdbc.update(
+          "UPDATE settlement.reconciliation_runs SET idle_rounds=0 WHERE id=? AND lease_token=? AND idle_rounds<>0",
+          run.id(),
+          run.token());
   }
 
   @Override
@@ -856,19 +863,51 @@ public class JdbcReconciliationStore implements ReconciliationStore {
     List<Finding> local = checks.get();
     // 전체 검사가 임대 시간을 쓰므로 기록 전에 임대를 다시 확인한다.
     fence(run);
-    for (Finding f : local)
-      jdbc.update(
-          """
-      INSERT INTO settlement.reconciliation_checks VALUES(?,?,?,?,?,?,?::jsonb)
-      ON CONFLICT(run_id,check_key) DO UPDATE SET status=excluded.status,reason=excluded.reason,count=excluded.count,difference=excluded.difference,evidence=excluded.evidence
+    // 결과가 같은 검사는 다시 쓰지 않고, 새로 쓰거나 바뀐 검사가 있으면 진척으로 본다.
+    boolean progressed =
+        !local.isEmpty()
+            && jdbc.query(
+                    """
+      WITH x AS (SELECT * FROM unnest(?::text[],?::text[],?::text[],?::text[]::bigint[],?::text[]::bigint[],?::text[]::jsonb[])
+        AS x(check_key,status,reason,count,difference,evidence)),
+      w AS (INSERT INTO settlement.reconciliation_checks AS c SELECT ?::uuid,x.* FROM x
+        ON CONFLICT(run_id,check_key) DO UPDATE SET status=excluded.status,reason=excluded.reason,count=excluded.count,
+          difference=excluded.difference,evidence=excluded.evidence
+        WHERE (c.status,c.reason,c.count,c.difference,c.evidence)
+          IS DISTINCT FROM (excluded.status,excluded.reason,excluded.count,excluded.difference,excluded.evidence)
+        RETURNING 1)
+      SELECT count(*) FROM w
       """,
-          run.id(),
-          f.key(),
-          f.status(),
-          f.reason(),
-          f.count(),
-          f.difference(),
-          json(f.evidence()));
+                    ps -> {
+                      var c = ps.getConnection();
+                      ps.setArray(
+                          1, c.createArrayOf("text", local.stream().map(Finding::key).toArray()));
+                      ps.setArray(
+                          2,
+                          c.createArrayOf("text", local.stream().map(Finding::status).toArray()));
+                      ps.setArray(
+                          3,
+                          c.createArrayOf("text", local.stream().map(Finding::reason).toArray()));
+                      ps.setArray(
+                          4,
+                          c.createArrayOf(
+                              "text", local.stream().map(f -> Long.toString(f.count())).toArray()));
+                      ps.setArray(
+                          5,
+                          c.createArrayOf(
+                              "text",
+                              local.stream().map(f -> Long.toString(f.difference())).toArray()));
+                      ps.setArray(
+                          6,
+                          c.createArrayOf(
+                              "text", local.stream().map(f -> json(f.evidence())).toArray()));
+                      ps.setObject(7, run.id());
+                    },
+                    rs -> {
+                      rs.next();
+                      return rs.getLong(1);
+                    })
+                > 0;
     long unresolved = ((Number) counts.get("unresolved")).longValue();
     long defects = ((Number) counts.get("defects")).longValue();
     boolean localDefect = local.stream().anyMatch(f -> "DEFECT".equals(f.status()));
@@ -877,15 +916,30 @@ public class JdbcReconciliationStore implements ReconciliationStore {
         unresolved == 0 && !localPending
             ? "COMPLETED"
             : defects > 0 || localDefect ? "REVIEW_REQUIRED" : "WAITING";
-    jdbc.update(
-        "UPDATE settlement.reconciliation_runs SET stage=?,cursor=NULL,expected_total=NULL,captured=0,completed_at=CASE WHEN ?='COMPLETED' THEN clock_timestamp() ELSE NULL END,last_error=NULL WHERE id=? AND lease_token=?",
-        "CHECK",
-        status,
-        run.id(),
-        run.token());
+    // 진척 없는 WAITING 회차는 60초부터 두 배씩 최대 300초 간격으로 다시 확인한다. 대기 경보(15분)보다 충분히 짧게 둔다.
+    int idle =
+        jdbc.queryForObject(
+            """
+      UPDATE settlement.reconciliation_runs SET stage=?,cursor=NULL,expected_total=NULL,captured=0,
+        completed_at=CASE WHEN ?='COMPLETED' THEN clock_timestamp() ELSE NULL END,last_error=NULL,
+        idle_rounds=CASE WHEN ?<>'WAITING' THEN 0 WHEN ? THEN 1 ELSE idle_rounds+1 END
+      WHERE id=? AND lease_token=? RETURNING idle_rounds
+      """,
+            Integer.class,
+            "CHECK",
+            status,
+            status,
+            progressed,
+            run.id(),
+            run.token());
+    int delay = "WAITING".equals(status) ? WAIT_DELAYS[Math.min(idle, WAIT_DELAYS.length) - 1] : 60;
     history(
-        run, null, status, "ROUND_EVALUATED", Map.of("unresolved", unresolved, "defects", defects));
-    release(run, status, 60);
+        run,
+        null,
+        status,
+        "ROUND_EVALUATED",
+        Map.of("unresolved", unresolved, "defects", defects, "nextDelaySeconds", delay));
+    release(run, status, delay);
   }
 
   @Override
