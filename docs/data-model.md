@@ -1286,7 +1286,7 @@ Commerce의 `result_ref`는 주문 ID입니다. 주문 연결·결과 반영과 
 
 Payment Inbox의 nullable `observation_state varchar(16)`는 최초 NULL, 선점 커밋 시 CLAIMED, 실패 후 재시도 예약 시 RETRY입니다. WAITING의 `next_run_at`가 임대 만료와 재시도 시각을 함께 표현하므로 대기 종류만 구분하며 업무 상태·선점 조건·버전 검사는 기존 필드를 사용합니다. 기존 시도 행의 NULL은 미확인 종류로 남깁니다. 다른 서비스에는 추가하지 않습니다.
 
-추적 부모는 첫 INSERT 때 현재 문맥만 저장하고, 중복 수신·재시도·운영 재처리가 원문·해시·최초 부모를 덮어쓰지 않습니다. 부모가 없거나 형식이 잘못된 기존 행도 업무 처리는 진행합니다. 기존 DB의 추가 순서와 복구는 [DB 적용 절차](migrations.md#기존-db의-추적-컬럼-추가)를 따릅니다.
+추적 부모는 첫 INSERT 때 현재 문맥만 저장하고, 중복 수신·재시도·운영 재처리가 원문·해시·최초 부모를 덮어쓰지 않습니다. 부모가 없거나 형식이 잘못된 기존 행도 업무 처리는 진행합니다. 추적 컬럼이 없는 기존 실험 DB의 구성은 [DB 적용 절차](migrations.md#최초-배포와-기존-데이터-변경)를 따릅니다.
 
 ### inbox_rejudgement_runs · inbox_rejudgement_targets · inbox_rejudgement_attempts
 
