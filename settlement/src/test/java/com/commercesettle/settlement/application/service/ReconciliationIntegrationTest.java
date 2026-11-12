@@ -361,6 +361,72 @@ class ReconciliationIntegrationTest {
     }
   }
 
+  /** 시험 중 대상 테이블의 행 또는 문장 단위 갱신 횟수를 센다. */
+  private void track(String table, String level) {
+    jdbc.execute(
+        "CREATE UNLOGGED TABLE IF NOT EXISTS settlement.test_writes(name text NOT NULL, op text NOT NULL)");
+    jdbc.execute(
+        """
+        CREATE OR REPLACE FUNCTION settlement.test_count_write() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN INSERT INTO settlement.test_writes VALUES(TG_TABLE_NAME, TG_OP); RETURN NULL; END $$
+        """);
+    jdbc.execute(
+        "CREATE TRIGGER test_count_write AFTER INSERT OR UPDATE ON settlement."
+            + table
+            + " FOR EACH "
+            + level
+            + " EXECUTE FUNCTION settlement.test_count_write()");
+  }
+
+  private long writes(String table, String op) {
+    return jdbc.queryForObject(
+        "SELECT count(*) FROM settlement.test_writes WHERE name=? AND op=?", Long.class, table, op);
+  }
+
+  private void untrack(String... tables) {
+    for (String table : tables)
+      jdbc.execute("DROP TRIGGER IF EXISTS test_count_write ON settlement." + table);
+    jdbc.execute("DROP TABLE IF EXISTS settlement.test_writes");
+  }
+
+  @Test
+  @DisplayName("검사 결과 기록은 회차 행을 이벤트마다 갱신하지 않고 만료된 실행자의 기록을 거절한다")
+  void fencesResultsWithoutRewritingRunPerEvent() {
+    for (int i = 0; i < 100; i++) feed.items.add(payment(false));
+    UUID id = service.request(cutoff, "operator:ops");
+    tick(2);
+    track("reconciliation_runs", "ROW");
+    try {
+      service.tick();
+
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT count(*) FROM settlement.reconciliation_events WHERE run_id=? AND status='WAIT_PUBLICATION'",
+                  Long.class,
+                  id))
+          .isEqualTo(100);
+      assertThat(writes("reconciliation_runs", "UPDATE")).isLessThan(10);
+    } finally {
+      untrack("reconciliation_runs");
+    }
+    due(id);
+    var old = store.claim().orElseThrow();
+    jdbc.update(
+        "UPDATE settlement.reconciliation_runs SET lease_until=clock_timestamp()-interval '1 second'");
+    store.claim().orElseThrow();
+    var event = feed.items.getFirst();
+
+    assertThatThrownBy(
+            () -> store.result(old, event, ReconciliationStore.Finding.of("x", "DEFECT", "STALE")))
+        .hasMessageContaining("lease lost");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM settlement.reconciliation_events WHERE event_id=?",
+                String.class,
+                event.eventId()))
+        .isEqualTo("WAIT_PUBLICATION");
+  }
+
   @Test
   @DisplayName("미검사 이벤트가 남은 호출은 원장 전체 검사를 건너뛰고 모두 검사한 뒤 한 번 기록한다")
   void runsLocalChecksOnlyAfterAllEventsChecked() {
