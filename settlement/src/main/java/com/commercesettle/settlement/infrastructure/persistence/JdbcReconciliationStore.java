@@ -36,9 +36,10 @@ public class JdbcReconciliationStore implements ReconciliationStore {
     this.consumer = consumer;
   }
 
+  /** 클래스 트랜잭션 안에서만 유효한 상한을 왕복 한 번으로 건다. */
   private void limits() {
-    jdbc.execute("SET LOCAL lock_timeout='1s'");
-    jdbc.execute("SET LOCAL statement_timeout='5s'");
+    jdbc.queryForList(
+        "SELECT set_config('lock_timeout','1s',true),set_config('statement_timeout','5s',true)");
   }
 
   private static OffsetDateTime at(Instant i) {
