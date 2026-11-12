@@ -247,6 +247,65 @@ class SettlementOutboxIntegrationTest {
         .isEqualTo(2);
   }
 
+  @Test
+  @DisplayName("결과 저장이 변경 없는 행 잠금을 기다리는 동안 임대가 끝나면 결과를 저장하지 않는다")
+  void resultWaitingOnLockIsFencedByLeaseExpiry() throws Exception {
+    assertThat(
+            resultAfterLeaseExpiresWhileLocked(d -> deliveries.markPublished(d, publication(d, 1))))
+        .isEqualTo(PublishResult.STALE);
+    deleteRows();
+    assertThat(resultAfterLeaseExpiresWhileLocked(d -> deliveries.markFailed(d, 10)))
+        .isEqualTo(false);
+  }
+
+  /** 다른 트랜잭션이 같은 version의 행을 FOR UPDATE로만 잡고 있는 동안 임대를 만료시킨 뒤 결과를 돌려준다. */
+  private Object resultAfterLeaseExpiresWhileLocked(
+      java.util.function.Function<Delivery, Object> store) throws Exception {
+    var event = event(UUID.randomUUID(), "RefundReservationResult", UUID.randomUUID(), 0);
+    transactions.executeWithoutResult(status -> outbox.append(event, UUID.randomUUID()));
+    Delivery delivery = deliveries.claim(1, LEASE_MS, 10).getFirst();
+    // version은 그대로 두고 임대만 결과 저장의 잠금 대기 상한(1초)보다 먼저 끝나게 줄인다.
+    jdbc.update(
+        "UPDATE settlement.outbox SET lease_until = clock_timestamp() + interval '400 milliseconds'");
+    var locked = new java.util.concurrent.CountDownLatch(1);
+    var release = new java.util.concurrent.CountDownLatch(1);
+    Object result;
+    try (var executor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+      var holder =
+          executor.submit(
+              () ->
+                  transactions.executeWithoutResult(
+                      status -> {
+                        jdbc.queryForList("SELECT id FROM settlement.outbox FOR UPDATE");
+                        locked.countDown();
+                        try {
+                          release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                          Thread.currentThread().interrupt();
+                        }
+                      }));
+      assertThat(locked.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+      var pending = java.util.concurrent.CompletableFuture.supplyAsync(() -> store.apply(delivery));
+      long deadline = System.nanoTime() + 5_000_000_000L;
+      while (jdbc.queryForObject("SELECT count(*) FROM pg_locks WHERE NOT granted", Long.class) == 0
+          && System.nanoTime() < deadline) {
+        Thread.onSpinWait();
+      }
+      // 결과 저장이 잠금을 기다리는 동안 임대가 끝난 뒤에 잠금을 놓는다.
+      while (Boolean.FALSE.equals(
+          jdbc.queryForObject(
+              "SELECT lease_until <= clock_timestamp() FROM settlement.outbox", Boolean.class))) {
+        Thread.sleep(50);
+      }
+      release.countDown();
+      holder.get(10, java.util.concurrent.TimeUnit.SECONDS);
+      result = pending.get(10, java.util.concurrent.TimeUnit.SECONDS);
+    }
+    assertThat(jdbc.queryForObject("SELECT status FROM settlement.outbox", String.class))
+        .isEqualTo("RUNNING");
+    return result;
+  }
+
   private static Publication publication(Delivery delivery, long offset) {
     return new Publication(delivery.topic(), 0, offset);
   }
