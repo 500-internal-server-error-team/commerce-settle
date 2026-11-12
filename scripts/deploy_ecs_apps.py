@@ -2,11 +2,13 @@
 
 import argparse
 import copy
+from contextlib import ExitStack
 import hashlib
 import json
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import urllib.parse
 import urllib.request
 
@@ -27,14 +29,19 @@ class Aws:
     def __call__(self, service, operation, *arguments, payload=None):
         command = ["aws", "--region", self.region, "--output", "json", "--no-cli-pager",
                    service, operation, *arguments]
-        if payload is not None:
-            command += ["--cli-input-json", "file:///dev/stdin"]
         try:
-            result = subprocess.run(
-                command, input=json.dumps(payload) if payload is not None else None,
-                capture_output=True, text=True, check=True,
-                timeout=660 if operation == "wait" else 60,
-            )
+            with ExitStack() as stack:
+                if payload is not None:
+                    parameters = stack.enter_context(tempfile.NamedTemporaryFile(
+                        mode="w", encoding="utf-8", prefix="commerce-settle-ecs-", suffix=".json",
+                    ))
+                    json.dump(payload, parameters)
+                    parameters.flush()
+                    command += ["--cli-input-json", "file://" + parameters.name]
+                result = subprocess.run(
+                    command, capture_output=True, text=True, check=True,
+                    timeout=660 if operation == "wait" else 60,
+                )
         except (OSError, subprocess.SubprocessError) as error:
             # Do not send task environment values or AWS response bodies to CI logs.
             raise RuntimeError(f"AWS {service} {operation} failed") from error
