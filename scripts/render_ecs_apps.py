@@ -96,7 +96,8 @@ def render(service, services, image, region, role, parameter_prefix, app_ip, dat
         environment["APP_ORDER_ADMISSION_PROMETHEUS_URL"] = f"http://{data_ip}:9090"
     health = source["healthcheck"]
     container = {
-        "name": service, "image": image, "essential": True, "memory": 512,
+        "name": service, "image": image, "essential": True,
+        "memory": 1024 if service == "commerce" else 512,
         "environment": [{"name": name, "value": value}
                         for name, value in sorted(environment.items())],
         "secrets": [{"name": name, "valueFrom": value}
