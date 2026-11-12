@@ -575,7 +575,7 @@
 | `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(payment_id), amount>0. status=RESERVED/CONSUMED/RELEASED. 재시도마다 새cycle_id, RESERVE/RELEASE business_ref는cycle_id; DEBIT/RESTORE business_ref는payment_id. 이력은mileage_entries로보존.
+**제약:** UNIQUE(payment_id,cycle_id), amount>0. status=RESERVED/CONSUMED/RELEASED. 부분 UNIQUE(payment_id) WHERE status='RESERVED'로 결제마다 활성 예약은 하나만 허용합니다. 재시도는 새 cycle_id의 새 행을 만들고 이전 RELEASED 행을 보존합니다. 현재 예약 조회는 payments.current_cycle_id와 일치하는 행만 읽습니다. RESERVE/RELEASE business_ref는 cycle_id, DEBIT/RESTORE business_ref는 payment_id이며 원장도 보존합니다.
 
 **인덱스:** (wallet_id,status); (status,updated_at,id).
 
@@ -609,7 +609,7 @@
 | `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(order_id). T=E+M=B-P, fee=floor(B*15/100), seller_net=B-fee; D=S+P, B=G-S, 모두 비음수,T>=1. 쿠폰 사용 시 M=0. 같은 주문 재시도는 같은 결제의 새 attempt.
+**제약:** UNIQUE(order_id). T=E+M=B-P, fee=floor(B*15/100), seller_net=B-fee; D=S+P, B=G-S, 모두 비음수,T>=1. 쿠폰 사용 시 M=0. 확정 거절 뒤 같은 주문 재시도는 같은 결제 ID·생성 시각·불변 금액을 유지하며 current_cycle_id·order_version을 갱신하고 새 attempt를 만듭니다. attempt_no는 결제 행 잠금 안에서 전체 이력 다음 번호로 정합니다. 승인 준비·결과 반영은 작업 business_key와 현재 회차가 일치해야 하며 이전 회차 작업이 새 회차를 바꾸지 않습니다.
 
 **인덱스:** (buyer_id,created_at,id); (status,updated_at,id).
 

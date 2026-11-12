@@ -212,12 +212,14 @@ CREATE TABLE payment.mileage_reservations (
     updated_at timestamptz NOT NULL,
     version    bigint      NOT NULL,
 
-    CONSTRAINT uk_mileage_reservations_payment UNIQUE (payment_id),
+    CONSTRAINT uk_mileage_reservations_payment_cycle UNIQUE (payment_id, cycle_id),
     CONSTRAINT ck_mileage_reservations_amount CHECK (amount > 0),
     CONSTRAINT ck_mileage_reservations_status CHECK (status IN ('RESERVED', 'CONSUMED', 'RELEASED')),
     CONSTRAINT ck_mileage_reservations_version CHECK (version >= 0)
 );
 CREATE INDEX ix_mileage_reservations_wallet_status ON payment.mileage_reservations (wallet_id, status);
+CREATE UNIQUE INDEX uk_mileage_reservations_reserved ON payment.mileage_reservations (payment_id)
+    WHERE status='RESERVED';
 CREATE INDEX ix_mileage_reservations_status_updated ON payment.mileage_reservations (status, updated_at, id);
 
 CREATE TABLE payment.mileage_entries (

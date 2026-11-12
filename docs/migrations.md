@@ -51,3 +51,14 @@ Commerce·Payment·Settlement의 Outbox·Inbox, Payment의 payment_jobs, Settlem
 [Commerce](../infra/postgres/upgrade/commerce-business-metrics.sql)·[Payment](../infra/postgres/upgrade/payment-business-metrics.sql)·[Settlement](../infra/postgres/upgrade/settlement-business-metrics.sql) 소유 DB에서 새 앱 배포 전에 `psql --set ON_ERROR_STOP=1 --file ...`로 적용합니다. 기존 데이터가 있는 DB에 초기 schema 전체를 재실행하지 않습니다. Commerce Outbox·Payment Inbox/Outbox·Settlement Inbox의 nullable `order_accepted_at timestamptz`와 기간 집계/주문-cycle 조회 인덱스만 추가하며, 기존 원문·해시·금액·상태·offset은 변경하지 않습니다. 과거 접수 시각은 소급 생성하지 않습니다.
 
 스크립트는 DB별 한 트랜잭션이며 잠금 2초·실행 15초 상한, 기존 동명 컬럼의 타입·nullable 검사를 유지합니다. 상한 내 인덱스를 만들 수 없거나 동명 인덱스 정의가 다르면 배포를 중단하고 해당 DB의 실제 정의와 계획을 확인합니다. 인덱스 이름만으로 적용 완료를 판단하지 않습니다. 적용 전후 컬럼·인덱스 정의, 기존 행/원문 보존, 선택 거래의 시각 전달과 실제 metric을 검증합니다. 세 DB의 적용 결과를 따로 기록합니다. 이전 이미지로 복구할 때 추가 nullable 컬럼·인덱스는 남기며 DROP으로 되돌리지 않습니다.
+
+## 기존 DB의 결제 회차별 예약
+
+[payment-retry-cycles.sql](../infra/postgres/upgrade/payment-retry-cycles.sql)은 기존 단일 Payment 예약 제약을 `(payment_id,cycle_id)` 유일 제약과 결제별 RESERVED 부분 유일 인덱스로 바꿉니다. Payment 소유 역할로 `psql --set ON_ERROR_STOP=1 --file ...`을 실행하며 한 트랜잭션·잠금 2초·실행 15초 상한입니다. 동명 제약·인덱스 정의가 다르거나 기존 행이 새 제약을 위반하면 전체를 롤백하고 배포를 중단합니다. 금융 행·원장·원문을 수정하거나 삭제하지 않습니다.
+
+1. DB·이미지·Task Definition과 기존 행/제약을 기록합니다. Worker의 기존 `APP_PAYMENT_REQUEST_PROCESSOR_ENABLED=false` 설정으로 새 회차 접수를 멈추고 실행 중 처리가 끝났는지 확인한 뒤 업그레이드를 적용합니다.
+2. 회차별 예약 조회·승인 fencing을 포함한 새 Payment API/Worker를 배포합니다. Worker의 접수 처리 중단을 유지한 채 모든 서비스 health를 확인하고, 이때의 새 이미지·Task Definition을 복구 대상으로 보존합니다. 기존 승인·환불 작업 처리기는 새 회차를 구분하는 코드로 유지합니다.
+3. Worker 접수 설정을 원래 true로 복구해 활성화합니다. 실제 거절→재시도→승인→정산과 혼합 결제 환불을 확인합니다. 업그레이드 반복 적용 시 금융 행이 보존되는지 별도 PostgreSQL 시험으로 확인합니다.
+4. 새 회차 수용 후 문제가 생기면 Worker만 2단계의 새 이미지·접수 중단 Task Definition으로 되돌립니다. 회차별 조회 코드·확장 제약·금융 이력은 유지하고 전진 수정합니다. 구 단일 예약 조회 이미지로 일괄 역배포하거나 과거 예약 행을 지우지 않습니다. 구 이미지 복구는 접수·처리를 멈춘 상태에서 **새 회차 기록이 전혀 없음을 입증한 활성화 이전**에만 판단합니다.
+
+새 회차 유무는 여러 회차의 `PaymentAccepted`, 승인 시도·예약 이력, 현재 회차와 최초 요청 회차 차이를 함께 검사합니다. 카드 결제는 예약 행이 없으므로 예약 개수만으로 구 이미지 복구 가능 여부를 판단하지 않습니다.

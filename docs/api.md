@@ -111,6 +111,8 @@ Kafka key는 위 표를 따르며 envelope의 aggregateId와 같다는 뜻은 �
 
 Commerce는 `PaymentAccepted`로 본인 주문의 paymentId만 연결하며 접수 통지로 금액·주문 상태·재고를 바꾸지 않습니다. 같은 수신 경계가 결제·취소·환불 결과도 인계하고, 현재 회차와 맞는 결과·혜택·감사·Outbox를 원자 반영합니다. 선행 주문은 영속 대기로 기다리며 충돌은 보존합니다. [활성화·복구](development.md#결제-접수-결과-수신)와 [Inbox 저장 계약](data-model.md#inbox)을 따릅니다.
 
+확정 거절 뒤 `payment-retries`로 만든 요청은 기존 Payment ID를 유지합니다. Payment는 이전보다 높은 주문 버전·사용하지 않은 새 회차·동일 당사자/상품/금액/정책/결제수단을 확인하고 마일리지를 다시 예약한 뒤 회차별 승인 작업과 `PaymentAccepted`를 함께 저장합니다. 처리 대기 상태는 DECLINED이며 새 승인 시 PROCESSING으로 전이합니다. UNKNOWN은 원거래 조회를 유지합니다. 과거 승인 시도·예약·원장·이벤트는 보존하고, 새 `PaymentAccepted`·`PaymentDeclined` 식별자는 회차별로 구분합니다. 취소가 먼저 처리된 새 회차는 승인하지 않습니다.
+
 Settlement는 `PaymentConfirmed`·`PurchaseConfirmed`와 아래 환불 SAGA 요청 v1을 수신합니다. 종류·버전·생산자 토픽·key(paymentId)·필드 타입을 검사하며 같은 토픽의 다른 eventType은 저장 없이 ACK합니다. 결제는 최초 원장, 구매확정은 지급 가능 상태로 반영합니다. 선행 결제가 없으면 기다리고, 나중에 결제가 도착하면 그 대기만 재개합니다. 원문 격리·실패·대기 소진·재개는 [Inbox 계약](data-model.md#inbox), 활성화·offset은 [Kafka 실행](development.md#kafka-전달-기반)을 따릅니다. 세 서비스의 실제 연동 확인은 [왕복 smoke](development.md#주문결제정산환불-왕복)에서 다룹니다.
 
 Payment는 commerce 토픽에서 `OrderPaymentRequested`·`PaymentCancellationRequested`·`RefundApproved`·`RefundOrderRestored` v1만 처리합니다. 같은 토픽의 다른 eventType(`PurchaseConfirmed` 등)은 저장·격리 없이 ACK합니다. eventType을 읽을 수 없거나 처리 대상 종류의 버전·key·필드가 계약에 맞지 않으면 [원문 격리](development.md#kafka-전달-기반)를 따릅니다.

@@ -122,6 +122,56 @@ class PaymentTest {
   }
 
   @Test
+  @DisplayName("새 회차는 결제 ID·최초 생성·금액을 유지하고 승인 준비 전까지 거절 상태를 보존한다")
+  void adoptsOnlyANewerRetryCycleAfterDecline() {
+    Payment payment = cardPayment();
+    UUID id = payment.getId();
+    UUID oldCycle = payment.getCurrentCycleId();
+    var amounts = payment.getAmounts();
+    payment.startProcessing(CHANGED_AT);
+    payment.decline(CHANGED_AT);
+    UUID nextCycle = UUID.randomUUID();
+
+    payment.acceptRetryCycle(nextCycle, 3, CONFIRMED_AT);
+
+    assertThat(payment.getId()).isEqualTo(id);
+    assertThat(payment.getCurrentCycleId()).isEqualTo(nextCycle).isNotEqualTo(oldCycle);
+    assertThat(payment.getOrderVersion()).isEqualTo(3);
+    assertThat(payment.getStatus()).isEqualTo(PaymentStatus.DECLINED);
+    assertThat(payment.getCreatedAt()).isEqualTo(CREATED_AT);
+    assertThat(payment.getAmounts()).isEqualTo(amounts);
+    assertThat(payment.getConfirmedAt()).isNull();
+    assertThatThrownBy(() -> payment.acceptRetryCycle(oldCycle, 2, CONFIRMED_AT))
+        .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> payment.acceptRetryCycle(nextCycle, 4, CONFIRMED_AT))
+        .isInstanceOf(IllegalArgumentException.class);
+    payment.startProcessing(CONFIRMED_AT);
+    assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PROCESSING);
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.EnumSource(
+      value = PaymentStatus.class,
+      names = {"PENDING", "PROCESSING", "UNKNOWN", "CONFIRMED", "CANCELLED"})
+  @DisplayName("거절이 확정되지 않은 결제는 새 회차를 받지 않는다")
+  void rejectsRetryForOtherStates(PaymentStatus status) {
+    Payment payment = cardPayment();
+    if (status == PaymentStatus.CANCELLED) payment.cancel(CHANGED_AT);
+    if (status == PaymentStatus.PROCESSING
+        || status == PaymentStatus.UNKNOWN
+        || status == PaymentStatus.CONFIRMED) payment.startProcessing(CHANGED_AT);
+    if (status == PaymentStatus.UNKNOWN) payment.markUnknown(CHANGED_AT);
+    if (status == PaymentStatus.CONFIRMED) payment.confirm(CHANGED_AT);
+    UUID cycle = payment.getCurrentCycleId();
+
+    assertThatThrownBy(() -> payment.acceptRetryCycle(UUID.randomUUID(), 3, CONFIRMED_AT))
+        .isInstanceOf(InvalidPaymentTransitionException.class);
+    assertThat(payment.getStatus()).isEqualTo(status);
+    assertThat(payment.getCurrentCycleId()).isEqualTo(cycle);
+    assertThat(payment.getOrderVersion()).isZero();
+  }
+
+  @Test
   @DisplayName("확정된 결제는 취소할 수 없다")
   void rejectsCancelWhenConfirmed() {
     Payment payment = mileageOnlyPayment();
