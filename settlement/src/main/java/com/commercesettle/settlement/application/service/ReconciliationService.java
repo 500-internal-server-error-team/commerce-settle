@@ -102,7 +102,7 @@ public class ReconciliationService {
           }
           store.result(run, event, result);
         }
-        store.finish(run, store.localChecks(run.cutoff(), run.snapshot()));
+        store.finish(run, () -> store.localChecks(run.cutoff(), run.snapshot()));
       }
       return true;
     } catch (RuntimeException failure) {

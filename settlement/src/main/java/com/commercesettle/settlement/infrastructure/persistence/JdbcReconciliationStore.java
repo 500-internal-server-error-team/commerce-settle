@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -686,7 +687,19 @@ public class JdbcReconciliationStore implements ReconciliationStore {
   }
 
   @Override
-  public void finish(Run run, List<Finding> local) {
+  public void finish(Run run, Supplier<List<Finding>> checks) {
+    fence(run);
+    long untouched =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM settlement.reconciliation_events WHERE run_id=? AND status='PENDING'",
+            Long.class,
+            run.id());
+    if (untouched > 0) {
+      release(run, "PENDING", 0);
+      return;
+    }
+    List<Finding> local = checks.get();
+    // 전체 검사가 임대 시간을 쓰므로 기록 전에 임대를 다시 확인한다.
     fence(run);
     for (Finding f : local)
       jdbc.update(
@@ -701,15 +714,6 @@ public class JdbcReconciliationStore implements ReconciliationStore {
           f.count(),
           f.difference(),
           json(f.evidence()));
-    long untouched =
-        jdbc.queryForObject(
-            "SELECT count(*) FROM settlement.reconciliation_events WHERE run_id=? AND status='PENDING'",
-            Long.class,
-            run.id());
-    if (untouched > 0) {
-      release(run, "PENDING", 0);
-      return;
-    }
     long unresolved =
         jdbc.queryForObject(
             "SELECT count(*) FROM settlement.reconciliation_events WHERE run_id=? AND status<>'MATCH'",

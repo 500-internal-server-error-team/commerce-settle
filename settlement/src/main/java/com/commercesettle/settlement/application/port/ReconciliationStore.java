@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 public interface ReconciliationStore {
   UUID request(Instant cutoff, String actor);
@@ -32,7 +33,8 @@ public interface ReconciliationStore {
 
   void result(Run run, Event event, Finding finding);
 
-  void finish(Run run, List<Finding> local);
+  /** 미검사 이벤트가 남으면 다음 호출로 넘기고, 모두 검사한 회차에서만 원장 전체 검사를 실행한다. */
+  void finish(Run run, Supplier<List<Finding>> checks);
 
   void failed(Run run, String reason);
 
