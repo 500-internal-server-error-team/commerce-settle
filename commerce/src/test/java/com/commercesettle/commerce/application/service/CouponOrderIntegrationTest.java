@@ -164,7 +164,7 @@ class CouponOrderIntegrationTest {
   }
 
   @Test
-  @DisplayName("쿠폰 주문은 견적과 예약에서 쿠폰 행을 한 번만 잠그고 읽는다")
+  @DisplayName("쿠폰 주문은 견적과 예약에서 쿠폰 행을 한 번만 잠그고 읽으며 이력은 조회 없이 추가한다")
   void readsCouponOnceWhileCreatingOrder() throws Exception {
     Buyer buyer = buyer();
     UUID product = product();
@@ -176,6 +176,9 @@ class CouponOrderIntegrationTest {
         .filteredOn(e -> e.sql().contains("from commerce.buyer_coupons"))
         .singleElement()
         .satisfies(e -> assertThat(e.sql()).contains("for no key update"));
+    assertThat(created.executions())
+        .filteredOn(e -> e.sql().contains("from commerce.coupon_history"))
+        .isEmpty();
     assertThat(
             jdbc.queryForObject(
                 "select status from commerce.buyer_coupons where id=?", String.class, coupon))
