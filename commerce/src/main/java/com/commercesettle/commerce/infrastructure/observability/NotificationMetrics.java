@@ -12,18 +12,21 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 /** scrape는 DB를 조회하지 않는다. 실패·오래된 표본은 Prometheus에서 별도로 경보한다. */
 public final class NotificationMetrics implements AutoCloseable {
+  // 지표마다 필요한 행만 인덱스 조건으로 읽는다. 발송 완료(SENT) 이력은 주문과 함께 늘어나므로 훑지 않는다.
   private static final String SQL =
       """
       SELECT extract(epoch FROM statement_timestamp())::double precision AS observed,
-        count(*) FILTER (WHERE status = 'REVIEW_REQUIRED') AS review,
-        count(*) FILTER (WHERE status = 'REVIEW_REQUIRED' AND retry_count >= 10) AS exhausted,
-        count(*) FILTER (WHERE kind IN ('REFUND_ACTION_REQUIRED','PAYOUT_ACTION_REQUIRED')
-          AND created_at >= statement_timestamp() - interval '5 minutes') AS action,
-        coalesce(max(greatest(0, extract(epoch FROM
-          (statement_timestamp() - coalesce(bucket_end, created_at))))) FILTER (
+        review.total AS review, review.exhausted,
+        (SELECT count(*) FROM commerce.notification_deliveries
+          WHERE kind IN ('REFUND_ACTION_REQUIRED','PAYOUT_ACTION_REQUIRED')
+            AND created_at >= statement_timestamp() - interval '5 minutes') AS action,
+        (SELECT coalesce(max(greatest(0, extract(epoch FROM
+            (statement_timestamp() - coalesce(bucket_end, created_at))))), 0)::double precision
+          FROM commerce.notification_deliveries
           WHERE (status IN ('PENDING','RETRY','UNKNOWN') AND next_run_at <= statement_timestamp())
-            OR (status = 'SENDING' AND lease_until <= statement_timestamp())), 0)::double precision AS age
-      FROM commerce.notification_deliveries
+            OR (status = 'SENDING' AND lease_until <= statement_timestamp())) AS age
+      FROM (SELECT count(*) AS total, count(*) FILTER (WHERE retry_count >= 10) AS exhausted
+        FROM commerce.notification_deliveries WHERE status = 'REVIEW_REQUIRED') review
       """;
   private final JdbcTemplate jdbc;
   private final AtomicReference<Snapshot> snapshot =
