@@ -323,6 +323,23 @@ public class OrderWorkflowService {
             o.getId(), o.getVersion(), o.getPaymentCycleId(), requestId));
   }
 
+  /**
+   * 처리 중이라 거절된 취소는 Payment에 다시 판정할 요청으로 남지 않는다. 같은 회차의 확정 거절을 받은 뒤 그 회차의 취소를 다시 요청해 승인 차단을 확정받는다.
+   * eventId·requestId는 거절 이벤트에서 고정해 같은 결과의 재처리가 새 요청을 만들지 않게 한다.
+   */
+  void requestCancellationAfterDecline(Order o, UUID declinedEventId) {
+    var id =
+        UUID.nameUUIDFromBytes(
+            ("PaymentCancellationRequested:" + declinedEventId).getBytes(StandardCharsets.UTF_8));
+    emit(
+        o,
+        id,
+        "PaymentCancellationRequested",
+        o.getId(),
+        new OrderLifecycleEvents.CancellationRequested(
+            o.getId(), o.getVersion(), o.getPaymentCycleId(), id));
+  }
+
   void paymentRequested(Order o) {
     var a = o.getAmounts();
     var payload =
