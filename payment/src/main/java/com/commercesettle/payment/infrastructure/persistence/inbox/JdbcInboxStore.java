@@ -16,6 +16,7 @@ import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
+import com.commercesettle.payment.infrastructure.persistence.TransactionLimits;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -105,7 +106,7 @@ public class JdbcInboxStore implements InboxStore {
             .addValue("topic", source.topic())
             .addValue("partition", source.partition())
             .addValue("offset", source.offset());
-    applyTransactionLimits();
+    TransactionLimits.apply(jdbc.getJdbcTemplate());
     int inserted =
         jdbc.update(
             """
@@ -165,7 +166,7 @@ public class JdbcInboxStore implements InboxStore {
             .addValue("max", maxAttempts)
             .addValue("exhausted", ATTEMPTS_EXHAUSTED)
             .addValue("eventId", eventId, Types.OTHER);
-    applyTransactionLimits();
+    TransactionLimits.apply(jdbc.getJdbcTemplate());
     // 한 번에 한 행만 다룬다. 확인 대상으로 넘긴 행도 처리 1건으로 돌려줘 처리기의 배치 크기에 들어가게 한다.
     List<Claimed> rows =
         jdbc.query(
@@ -241,7 +242,7 @@ public class JdbcInboxStore implements InboxStore {
 
   @Override
   public void lockOrder(UUID orderId) {
-    applyTransactionLimits();
+    TransactionLimits.apply(jdbc.getJdbcTemplate());
     jdbc.queryForList(
         "SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))",
         new MapSqlParameterSource("key", "payment-order:" + Objects.requireNonNull(orderId)));
@@ -249,7 +250,7 @@ public class JdbcInboxStore implements InboxStore {
 
   @Override
   public boolean lockClaimed(UUID inboxId, long version) {
-    applyTransactionLimits();
+    TransactionLimits.apply(jdbc.getJdbcTemplate());
     return !jdbc.queryForList(
             """
             SELECT id FROM payment.inbox
@@ -282,7 +283,7 @@ public class JdbcInboxStore implements InboxStore {
                 retryAt == null ? null : toTimestamp(retryAt),
                 Types.TIMESTAMP_WITH_TIMEZONE)
             .addValue("now", toTimestamp(now));
-    applyTransactionLimits();
+    TransactionLimits.apply(jdbc.getJdbcTemplate());
     // 선점 때 다음 처리 시각을 임대 만료로 미뤘으므로 임대 안에서는 다른 처리기가 이 행을 잡지 않는다.
     // 임대가 끝나 다른 처리기가 이미 선점했다면 버전이 바뀌어 기록하지 않는다.
     if (!lockClaimed(inboxId, version)) {
@@ -465,19 +466,6 @@ public class JdbcInboxStore implements InboxStore {
 
   private static OffsetDateTime toTimestamp(Instant instant) {
     return instant.atOffset(ZoneOffset.UTC);
-  }
-
-  private void applyTransactionLimits() {
-    jdbc.getJdbcTemplate()
-        .queryForList(
-            """
-        SELECT set_config(budget.name,
-            least(coalesce(nullif(settings.setting::integer,0),budget.timeout_ms),
-                budget.timeout_ms)::text,true)
-        FROM (VALUES ('lock_timeout',1000),('statement_timeout',5000))
-            AS budget(name,timeout_ms)
-        JOIN pg_settings settings ON settings.name=budget.name
-        """);
   }
 
   private static String hash(byte[] body) {
