@@ -190,7 +190,7 @@ class DurableTraceIntegrationTest {
             assertThat(row.timing().attempts()).isEqualTo(1);
             assertThat(row.timing().previousStatus()).isEqualTo("PENDING");
             assertThat(store.markPublished(row, new OutboxStore.Publication(row.topic(), 0, 42)))
-                .isTrue();
+                .isEqualTo(OutboxStore.PublishResult.PUBLISHED);
           });
       verifiesLegacyUpgrade(restarted.getBean(JdbcTemplate.class));
     }
