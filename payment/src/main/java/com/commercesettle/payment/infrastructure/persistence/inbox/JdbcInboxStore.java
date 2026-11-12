@@ -96,6 +96,11 @@ public class JdbcInboxStore implements InboxStore {
             .addValue("body", body)
             .addValue("json", new String(body, StandardCharsets.UTF_8))
             .addValue("traceParent", observations.capture())
+            .addValue(
+                "orderAcceptedAt",
+                source.orderAcceptedAt() == null
+                    ? null
+                    : source.orderAcceptedAt().atOffset(ZoneOffset.UTC))
             .addValue("hash", hash(body))
             .addValue("topic", source.topic())
             .addValue("partition", source.partition())
@@ -104,9 +109,9 @@ public class JdbcInboxStore implements InboxStore {
     int inserted =
         jdbc.update(
             """
-        INSERT INTO payment.inbox (trace_parent,id,consumer,event_id,event_type,event_version,occurred_at,payload,
+        INSERT INTO payment.inbox (order_accepted_at,trace_parent,id,consumer,event_id,event_type,event_version,occurred_at,payload,
             raw_body,body_hash,source_topic,source_partition,source_offset,aggregate_id,aggregate_version,status,next_run_at)
-        VALUES (:traceParent,:id,:consumer,:eventId,:type,:eventVersion,CAST(:occurred AS timestamptz),CAST(:json AS jsonb),
+        VALUES (:orderAcceptedAt,:traceParent,:id,:consumer,:eventId,:type,:eventVersion,CAST(:occurred AS timestamptz),CAST(:json AS jsonb),
             :body,:hash,:topic,:partition,:offset,:aggregate,:aggregateVersion,'WAITING',clock_timestamp())
         ON CONFLICT (consumer,event_id) DO NOTHING
         """,

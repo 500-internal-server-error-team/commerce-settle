@@ -1234,3 +1234,13 @@ python3 -B -m unittest discover -s tests/load -p 'test_payment_load.py'
 ```
 
 API/역할 격리·미확정·중복 요청·순위의 권한/페이지·중지 동작과 실제 화면을 확인합니다. UI의 경로·요청 필드는 빌드 시 OpenAPI에서 생성하므로 계약 변경 후 다시 생성·빌드합니다. 프론트 테스트·빌드는 CI 필수 결과에 포함합니다. 종료는 시작한 UI/Java 프로세스만 종료하며 연결된 기존 백엔드·DB·사용자 데모를 함께 종료하지 않습니다.
+
+### 업무 완료 TPS와 전구간 성능 비교
+
+Grafana UID `commerce-settle-business-performance`에서 업무 완료 TPS·주문 결제 접수→정산 최초 반영·결제 확정→정산 반영·HTTP p95/p99와 표본 수를 조회합니다. 집계 창은 60/300/900초이며 원래 시간 구간과 동일 창의 이전 구간을 겹쳐 봅니다. 개선 판정에 필요한 조건과 결과 수집은 [부하 전후 비교](../tests/load/README.md#업무-완료전구간-지연의-전후-비교)를 따릅니다.
+
+업무 지표는 `BusinessMetrics`가 서비스 소유 DB에서 15초마다 읽고 scrape는 메모리 snapshot만 반환합니다. 2초 query timeout이나 DB 오류면 이전 표본과 성공 시각을 유지하며, Prometheus는 45초를 넘긴 표본을 제외합니다. Payment API·Worker는 `business:source`가 고른 단일 source의 모든 bucket/sum/count를 사용합니다. raw `commerce_settle_business_completions`와 `commerce_settle_business_duration_bucket_records`는 구간 Gauge이며 `rate()`로 완료 TPS를 계산하지 않습니다. `business:completions / 창 길이`와 `histogram_quantile(..., business:duration_bucket)`를 사용합니다.
+
+승인 확정, 환불 전체 완료, 정산 최초 반영은 각각 `payment.confirmed`, `refund.completed`, `order.settlement.applied`입니다. 승인 지연은 Payment 생성→확정, 환불 지연은 Payment 환불 등록→주문 복구 확인이며, 주문 전체 지연은 별도의 `order.settlement.applied`입니다. 정산항목의 최초 생성 시각을 완료 시각으로 사용하되 커밋되어 조회되는 이력만 셉니다. 지급 배치/송금의 완료 시각과 혼동하지 않습니다. 시작 시각 누락·역전은 `business:duration_missing`에 포함하고 유효 지연 분포에서 제외합니다. 무표본은 0ms가 아니며 p99는 1만 유효 표본 이상에서만 표시합니다.
+
+기존 DB에는 [업무 지표 관측 컬럼 적용](migrations.md#기존-db의-업무-지표-관측-컬럼)을 먼저 수행합니다. 실제 사용본에는 새 이미지뿐 아니라 `financial.rules.yml`과 `business-performance.json`도 적용한 뒤 rule evaluation·수집 신선도·실제 주문 반영과 지연 coverage를 확인합니다. `app.business-metrics.enabled=false`는 DB 표본 수집을 끄며, 꺼진 환경은 전체 지표 준비 완료로 보고하지 않습니다.

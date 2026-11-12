@@ -5,6 +5,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.commercesettle.commerce.application.event.EventEnvelope;
+import com.commercesettle.commerce.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.commerce.application.event.PaymentAcceptedPayload;
 import com.commercesettle.commerce.application.port.OrderEventOutbox;
 import com.commercesettle.commerce.application.port.OutboxStore;
@@ -14,9 +15,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -176,6 +180,82 @@ class DurableTraceIntegrationTest {
                 .isTrue();
           });
       verifiesLegacyUpgrade(restarted.getBean(JdbcTemplate.class));
+    }
+  }
+
+  @Test
+  void keepsOriginalOrderTimeSeparateFromRetryEventAndDoesNotRewriteBodyOnDuplicateOrRestart()
+      throws Exception {
+    UUID eventId;
+    byte[] original;
+    var created = Instant.now().minusSeconds(600).truncatedTo(ChronoUnit.MICROS);
+    try (var context = new AnnotationConfigApplicationContext(Config.class)) {
+      var writer = context.getBean(OrderEventOutbox.class);
+      var transaction = new TransactionTemplate(context.getBean(PlatformTransactionManager.class));
+      UUID order = UUID.randomUUID();
+      var now = OffsetDateTime.now(ZoneOffset.UTC);
+      var payload =
+          new OrderPaymentRequestedPayload(
+              order,
+              UUID.randomUUID(),
+              UUID.randomUUID(),
+              UUID.randomUUID(),
+              UUID.randomUUID(),
+              1,
+              OrderPaymentRequestedPayload.Status.PAYMENT_PENDING,
+              "v1",
+              now.plusMinutes(30),
+              null,
+              null,
+              1000,
+              0,
+              1000,
+              1000,
+              0,
+              0,
+              0,
+              1000);
+      var event =
+          new EventEnvelope<>(
+              UUID.randomUUID(), "OrderPaymentRequested", 1, now, order, 1, payload);
+      eventId = event.eventId();
+      original = context.getBean(ObjectMapper.class).writeValueAsBytes(event);
+      transaction.executeWithoutResult(
+          tx -> {
+            writer.appendPaymentRequested(event, created);
+            writer.appendPaymentRequested(event, created.plusSeconds(100));
+          });
+    }
+    try (var restarted = new AnnotationConfigApplicationContext(Config.class)) {
+      new TransactionTemplate(restarted.getBean(PlatformTransactionManager.class))
+          .executeWithoutResult(
+              tx -> {
+                var row =
+                    restarted.getBean(OutboxStore.class).claim(100, 240000, 10).stream()
+                        .filter(value -> value.id().equals(eventId))
+                        .findFirst()
+                        .orElseThrow();
+                assertThat(row.orderAcceptedAt()).isEqualTo(created);
+                assertThat(row.body()).containsExactly(original);
+              });
+      var jdbc = restarted.getBean(JdbcTemplate.class);
+      String before =
+          jdbc.queryForObject(
+              "SELECT jsonb_agg(to_jsonb(t)-'order_accepted_at' ORDER BY id)::text FROM commerce.outbox t",
+              String.class);
+      jdbc.execute("ALTER TABLE commerce.outbox DROP COLUMN order_accepted_at");
+      String upgrade =
+          Files.readString(Path.of("../infra/postgres/upgrade/commerce-business-metrics.sql"));
+      for (int i = 0; i < 2; i++)
+        try (var connection = restarted.getBean(DataSource.class).getConnection();
+            var statement = connection.createStatement()) {
+          statement.execute(upgrade);
+        }
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT jsonb_agg(to_jsonb(t)-'order_accepted_at' ORDER BY id)::text FROM commerce.outbox t",
+                  String.class))
+          .isEqualTo(before);
     }
   }
 

@@ -79,6 +79,11 @@ class JdbcInboxStore implements InboxStore {
             .addValue("body", body)
             .addValue("json", new String(body, StandardCharsets.UTF_8))
             .addValue("traceParent", observations.capture())
+            .addValue(
+                "orderAcceptedAt",
+                source.orderAcceptedAt() == null
+                    ? null
+                    : source.orderAcceptedAt().atOffset(ZoneOffset.UTC))
             .addValue("hash", hash(body))
             .addValue("topic", source.topic())
             .addValue("partition", source.partition())
@@ -87,9 +92,9 @@ class JdbcInboxStore implements InboxStore {
     int inserted =
         jdbc.update(
             """
-            INSERT INTO settlement.inbox (trace_parent,id,consumer,event_id,event_type,event_version,occurred_at,payload,
+            INSERT INTO settlement.inbox (order_accepted_at,trace_parent,id,consumer,event_id,event_type,event_version,occurred_at,payload,
                 raw_body,body_hash,source_topic,source_partition,source_offset,aggregate_id,aggregate_version,status)
-            VALUES (:traceParent,:id,:consumer,:eventId,:type,:eventVersion,CAST(:occurred AS timestamptz),CAST(:json AS jsonb),
+            VALUES (:orderAcceptedAt,:traceParent,:id,:consumer,:eventId,:type,:eventVersion,CAST(:occurred AS timestamptz),CAST(:json AS jsonb),
                 :body,:hash,:topic,:partition,:offset,:aggregate,:aggregateVersion,'RECEIVED')
             ON CONFLICT (consumer,event_id) DO NOTHING
             """,

@@ -223,6 +223,7 @@ CREATE INDEX ix_settlement_entries_source_event ON settlement.settlement_entries
 -- 수신 이벤트. Payment와 같은 컬럼·제약이다. 선행 결제가 없는 구매확정은 WAITING으로 남겨 처리기가 다시 판정하고,
 -- Commerce Inbox와 같이 attempts·last_error_code로 10회 상한을 둔다.
 CREATE TABLE settlement.inbox (
+    order_accepted_at timestamptz,
     trace_parent varchar(55),
     id uuid PRIMARY KEY,
     consumer varchar(100) NOT NULL,
@@ -591,3 +592,5 @@ CREATE TABLE settlement.reconciliation_checks (
 );
 
 CREATE INDEX reconciliation_source_page ON settlement.reconciliation_events(run_id,source,source_cursor);
+
+CREATE INDEX ix_settlement_items_observation_created ON settlement.settlement_items (created_at, id);

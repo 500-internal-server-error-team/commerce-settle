@@ -92,6 +92,7 @@ management:
   metrics:
     distribution:
       percentiles-histogram:
+        http.server.requests: true
         async.work: true
         async.stage: true
         jdbc.query: true

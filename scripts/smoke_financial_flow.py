@@ -219,7 +219,7 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
             "addressLine1": "test", "addressLine2": "", "isDefault": True})
         assert status == 201, (status, address)
 
-        def paid_order(mileage=MILEAGE, method="CREDIT_CARD", account="test-card", *, recover_admission=True):
+        def paid_order(mileage=MILEAGE, method="CREDIT_CARD", account="test-card", *, recover_admission=True, retry_after_decline=False):
             body = {
                 "productId": product, "quantity": 1, "eventId": None, "buyerCouponId": None, "mileageAmount": mileage,
                 "addressId": address["id"], "expectedProductVersion": 0, "expectedEventVersion": None,
@@ -240,11 +240,41 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
                 return result
 
             order = until(create_when_admitted, "order was not admitted within the recovery budget", 300)
+            if retry_after_decline:
+                until(lambda: sql("commerce", f"select status from commerce.orders where id='{order['id']}'") == "DECLINED",
+                      "first approval did not reach confirmed decline")
+                worker_settings()
+                until(gate_open,"retry admission did not recover",300)
+                status,current=request("GET","/api/orders/"+order["id"])
+                assert status==200,(status,current)
+                retry_key=str(uuid.uuid4())
+                trace_id=uuid.uuid4().hex
+                retry_headers={"Idempotency-Key":retry_key,**trace_headers(trace_id)}
+                def retry_when_admitted():
+                    status,result=gateway_json(base,"POST",f"/api/orders/{order['id']}/payment-retries",
+                        {"expectedVersion":current["version"]},token,retry_headers)
+                    if status==503 and result.get("code")=="COMMON_CAPACITY_EXCEEDED":return None
+                    assert status==202,(status,result)
+                    return result
+                until(retry_when_admitted,"actual payment retry API was not accepted",300)
             until(lambda: sql("commerce", f"select status from commerce.orders where id='{order['id']}'") == "PAID",
                   "order was not paid through Payment")
             payment = sql("commerce", f"select payment_id from commerce.orders where id='{order['id']}'")
             until(lambda: sql("settlement", f"select count(*) from settlement.settlement_items where payment_id='{payment}'") == "1",
                   "Settlement did not create the item from PaymentConfirmed")
+            accepted = sql("commerce", f"select extract(epoch from occurred_at)::text from commerce.outbox where event_type='OrderPaymentRequested' and aggregate_id='{order['id']}' order by created_at,id limit 1")
+            order_created = sql("commerce", f"select extract(epoch from created_at)::text from commerce.orders where id='{order['id']}'")
+            assert accepted == order_created, (accepted,order_created)
+            persisted = sql("payment", f"select extract(epoch from order_accepted_at)::text from payment.outbox where event_type='PaymentConfirmed' and aggregate_id='{payment}'")
+            received = sql("settlement", f"select extract(epoch from order_accepted_at)::text from settlement.inbox where event_type='PaymentConfirmed' and aggregate_id='{payment}' and status='APPLIED'")
+            captured=sql("payment",f"select extract(epoch from order_accepted_at)::text from payment.inbox where event_type='OrderPaymentRequested' and aggregate_id='{order['id']}' order by created_at desc,id desc limit 1")
+            assert accepted and accepted == captured == persisted == received, (accepted,captured,persisted,received)
+            if retry_after_decline:
+                count,cycles=sql("commerce",f"select count(*) || '/' || count(distinct payload->'payload'->>'paymentCycleId') from commerce.outbox where event_type='OrderPaymentRequested' and aggregate_id='{order['id']}'").split('/')
+                assert (count,cycles)==('2','2'),(count,cycles)
+                waited=float(sql("commerce",f"select extract(epoch from max(o.occurred_at)-min(c.created_at)) from commerce.outbox o join commerce.orders c on c.id=o.aggregate_id where o.event_type='OrderPaymentRequested' and c.id='{order['id']}'"))
+                assert waited>0,waited
+                print(json.dumps({"orderRetryOrigin":"PASS","waitBeforeRetrySeconds":waited}),flush=True)
             required = {"commerce.outbox.send", "payment.inbox.process", "payment.outbox.send",
                         "commerce.inbox.accepted", "commerce.inbox.result"}
             services = {"gateway", "commerce", "payment", "settlement"}
@@ -481,6 +511,11 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
             worker_settings()
             returns(paid_order, request, seller_token, completed, inventory, reservation, compose)
 
+            worker_settings("fixture-pg-reject-v1")
+            retry_order,retry_payment=paid_order(0,retry_after_decline=True)
+            cancel(retry_order)
+            completed(retry_order,retry_payment,0)
+
             for database in ["commerce", "payment", "settlement"]:
                 assert sql(database, f"select count(*) from {database}.inbox where status='REVIEW_REQUIRED'") == "0", database
                 until(lambda: sql(database, f"select count(*) from {database}.outbox where status<>'PUBLISHED'") == "0",
@@ -488,6 +523,25 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
             assert sql("payment", f"select balance || '/' || reserved_amount from payment.mileage_wallets where buyer_id='{buyer}'") == f"{10_000-MILEAGE}/0"
             # The declined refund keeps one sale and the disposed return leaves stock without restoring it.
             assert inventory() == "8/0/1", inventory()
+            def committed_business_metrics():
+                expected = {
+                    "payment.confirmed": int(sql("payment", "select count(*) from payment.payments where confirmed_at >= statement_timestamp()-interval '900 seconds' and confirmed_at < statement_timestamp()")),
+                    "refund.completed": int(sql("payment", "select count(*) from payment.refund_sagas s join payment.refunds r on r.id=s.refund_id where s.step='COMPLETED' and r.status='COMPLETED' and s.order_restored_at >= statement_timestamp()-interval '900 seconds' and s.order_restored_at < statement_timestamp()")),
+                    "order.settlement.applied": int(sql("settlement", "select count(*) from settlement.settlement_items where created_at >= statement_timestamp()-interval '900 seconds' and created_at < statement_timestamp()")),
+                }
+                expression='business:completions{window="900"}'
+                with urlopen(prometheus + "/api/v1/query?"+urlencode({"query":expression}),timeout=5) as response:
+                    rows=json.load(response)["data"]["result"]
+                actual={row["metric"]["operation"]:float(row["value"][1]) for row in rows}
+                return expected if all(value>0 and actual.get(operation)==value for operation,value in expected.items()) else None
+            counts=until(committed_business_metrics,"committed DB completion TPS did not reach Prometheus",60)
+            with urlopen(prometheus + "/api/v1/query?"+urlencode({"query":'business:duration_count{window="900",operation="order.settlement.applied"}'}),timeout=5) as response:
+                samples=json.load(response)["data"]["result"]
+            assert samples and float(samples[0]["value"][1])>0, samples
+            with urlopen(prometheus + "/api/v1/query?"+urlencode({"query":'sum(http_server_requests_seconds_bucket{application="gateway",le="+Inf"})'}),timeout=5) as response:
+                histogram=json.load(response)["data"]["result"]
+            assert histogram and float(histogram[0]["value"][1])>0, histogram
+            print(json.dumps({"businessCompletions":counts,"orderToSettlementLatencySamples":samples[0]["value"][1],"httpHistogram":"observed"}),flush=True)
             print(json.dumps({"result": "PASS", "refunds": [first_refund, second_refund],
                               "externalRefund": PRICE - MILEAGE, "mileageRestored": MILEAGE,
                               "scope": "actual HTTP Finance Mock approval/refund and Commerce, Payment, Settlement over Kafka/Inbox/Outbox"}),
