@@ -5,13 +5,17 @@ SET LOCAL lock_timeout='2s';
 SET LOCAL statement_timeout='15s';
 CREATE INDEX IF NOT EXISTS ix_outbox_reconciliation ON payment.outbox (created_at, id)
     WHERE event_type IN ('PaymentConfirmed','RefundFinancialCompleted');
+CREATE INDEX IF NOT EXISTS ix_payment_jobs_lease ON payment.payment_jobs (operation, next_run_at, id)
+    WHERE status IN ('PENDING','RETRY','RUNNING');
 DO $$
 DECLARE
     expected record;
 BEGIN
     FOR expected IN SELECT * FROM (VALUES
         ('payment.ix_outbox_reconciliation',
-         'CREATE INDEX ix_outbox_reconciliation ON payment.outbox USING btree (created_at, id) WHERE ((event_type)::text = ANY ((ARRAY[''PaymentConfirmed''::character varying, ''RefundFinancialCompleted''::character varying])::text[]))')
+         'CREATE INDEX ix_outbox_reconciliation ON payment.outbox USING btree (created_at, id) WHERE ((event_type)::text = ANY ((ARRAY[''PaymentConfirmed''::character varying, ''RefundFinancialCompleted''::character varying])::text[]))'),
+        ('payment.ix_payment_jobs_lease',
+         'CREATE INDEX ix_payment_jobs_lease ON payment.payment_jobs USING btree (operation, next_run_at, id) WHERE ((status)::text = ANY ((ARRAY[''PENDING''::character varying, ''RETRY''::character varying, ''RUNNING''::character varying])::text[]))')
     ) AS v(name, definition) LOOP
         IF NOT EXISTS (SELECT 1 FROM pg_index WHERE indexrelid = to_regclass(expected.name)
             AND indisvalid AND pg_get_indexdef(indexrelid) = expected.definition) THEN
