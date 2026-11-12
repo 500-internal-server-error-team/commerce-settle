@@ -427,6 +427,66 @@ class SettlementEventServiceIntegrationTest {
   }
 
   @Test
+  @DisplayName("대기 구매확정 판정이 실패하면 롤백한 행을 같은 주기에 다시 잡지 않도록 별도 트랜잭션에서 미룬다")
+  void failedWaitingIsDeferredInsteadOfReclaimed() throws Exception {
+    var purchase = purchase(UUID.randomUUID(), orderId, CONFIRMED_AT);
+    service.receivePurchaseConfirmed(purchase, source("commerce-settle.commerce.v1", purchase));
+    var payment = payment(UUID.randomUUID(), 10_000, 0, 0, 10_000, 0);
+    service.receivePaymentConfirmed(payment, source("commerce-settle.payment.v1", payment));
+    UUID inboxId =
+        jdbc.queryForObject(
+            "SELECT id FROM settlement.inbox WHERE event_id = ?", UUID.class, purchase.eventId());
+    int attempts =
+        jdbc.queryForObject(
+            "SELECT attempts FROM settlement.inbox WHERE id = ?", Integer.class, inboxId);
+    CountDownLatch locked = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      // 다른 트랜잭션이 항목을 잡고 있어 판정의 커밋 flush가 잠금 상한(1초)에 걸려 롤백된다.
+      Future<?> holder =
+          executor.submit(
+              () ->
+                  transactions.executeWithoutResult(
+                      status -> {
+                        jdbc.queryForList(
+                            "SELECT id FROM settlement.settlement_items WHERE payment_id = ? FOR UPDATE",
+                            paymentId);
+                        locked.countDown();
+                        await(release);
+                      }));
+      assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+      var failure =
+          org.assertj.core.api.Assertions.catchThrowableOfType(
+              com.commercesettle.settlement.application.exception.WaitingInboxFailedException.class,
+              () -> service.processNextWaiting());
+      assertThat(failure.inboxId()).isEqualTo(inboxId);
+      assertInbox(purchase.eventId(), "WAITING", null);
+
+      assertThat(service.deferFailedWaiting(inboxId)).isTrue();
+      assertThat(service.processNextWaiting()).isFalse();
+      assertThat(service.deferFailedWaiting(inboxId)).isFalse();
+      release.countDown();
+      holder.get(10, TimeUnit.SECONDS);
+    } finally {
+      release.countDown();
+      executor.shutdownNow();
+    }
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT next_run_at > clock_timestamp() + interval '500 milliseconds'"
+                    + " FROM settlement.inbox WHERE id = ?",
+                Boolean.class,
+                inboxId))
+        .isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT attempts FROM settlement.inbox WHERE id = ?", Integer.class, inboxId))
+        .isEqualTo(attempts);
+    assertThat(lastErrorCode(purchase.eventId())).isEqualTo("PAYMENT_ARRIVED_LATE");
+  }
+
+  @Test
   @DisplayName("본문의 paymentId가 대문자여도 소진 구매확정은 결제확정이 오면 다시 대기한다")
   void upperCasePaymentIdIsRevived() {
     var purchase = purchase(UUID.randomUUID(), orderId, CONFIRMED_AT);
