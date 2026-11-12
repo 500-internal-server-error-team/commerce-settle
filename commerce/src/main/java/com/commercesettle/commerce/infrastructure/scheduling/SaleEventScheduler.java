@@ -1,6 +1,7 @@
 package com.commercesettle.commerce.infrastructure.scheduling;
 
 import com.commercesettle.commerce.application.service.SaleEventService;
+import com.commercesettle.observability.RepeatedWarning;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.UUID;
@@ -14,6 +15,7 @@ import org.springframework.scheduling.annotation.Scheduled;
  */
 public class SaleEventScheduler {
   private static final Logger LOG = LoggerFactory.getLogger(SaleEventScheduler.class);
+  private final RepeatedWarning stepFailed = new RepeatedWarning();
 
   private final SaleEventService events;
   private final Clock clock;
@@ -48,8 +50,9 @@ public class SaleEventScheduler {
   }
 
   // 예외 메시지는 남기지 않고 종류만 기록한다.
-  private static void warn(String event, UUID eventId, RuntimeException e) {
-    LOG.atWarn()
+  private void warn(String event, UUID eventId, RuntimeException e) {
+    stepFailed
+        .at(LOG)
         .addKeyValue("event", event)
         .addKeyValue("eventId", eventId == null ? "" : eventId.toString())
         .addKeyValue("errorType", e.getClass().getName())

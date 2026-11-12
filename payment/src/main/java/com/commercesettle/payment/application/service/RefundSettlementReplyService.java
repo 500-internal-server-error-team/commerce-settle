@@ -203,7 +203,7 @@ public class RefundSettlementReplyService {
   }
 
   private static void log(Refund refund, String reply, String result) {
-    LOG.atInfo()
+    LOG.atDebug()
         .addKeyValue("event", "payment.refund")
         .addKeyValue("refundId", refund.getId())
         .addKeyValue("paymentId", refund.getPaymentId())

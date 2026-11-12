@@ -40,7 +40,7 @@ public class GradeCouponScheduler {
       return;
     }
     if (!running.compareAndSet(false, true)) {
-      LOG.atInfo()
+      LOG.atDebug()
           .addKeyValue("event", "coupon.grade-job")
           .addKeyValue("targetMonth", month)
           .addKeyValue("result", "PREVIOUS_RUN_ACTIVE")

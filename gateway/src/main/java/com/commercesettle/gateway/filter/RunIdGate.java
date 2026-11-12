@@ -61,7 +61,7 @@ public final class RunIdGate {
     } else if (disconnects == disconnectsBeforeCheck) {
       state = State.OPEN;
       LOGGER
-          .atInfo()
+          .atDebug()
           .addKeyValue("event", "auth.redis-gate")
           .addKeyValue("state", State.OPEN)
           .addKeyValue("runId", runId)

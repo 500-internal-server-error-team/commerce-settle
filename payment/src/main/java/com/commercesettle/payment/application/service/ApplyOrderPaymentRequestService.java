@@ -1,5 +1,6 @@
 package com.commercesettle.payment.application.service;
 
+import com.commercesettle.observability.RepeatedWarning;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
@@ -68,6 +69,7 @@ public class ApplyOrderPaymentRequestService {
   private static final String PAYMENT_CANCELLED_JOB = "PAYMENT_CANCELLED";
 
   private static final Logger LOG = LoggerFactory.getLogger(ApplyOrderPaymentRequestService.class);
+  private final RepeatedWarning processingRetry = new RepeatedWarning();
 
   private final InboxStore inbox;
   private final PaymentRepository payments;
@@ -217,7 +219,8 @@ public class ApplyOrderPaymentRequestService {
     }
     String result =
         !Boolean.TRUE.equals(recorded) ? "SKIPPED" : retry == null ? "REVIEW_REQUIRED" : "WAITING";
-    LOG.atWarn()
+    // 다시 처리할 실패는 장애 중 건마다 반복되므로 묶어서 남기고, 확인 대상 전환만 매번 남긴다.
+    (result.equals("REVIEW_REQUIRED") ? LOG.atWarn() : processingRetry.at(LOG))
         .setCause(cause)
         .addKeyValue("event", "payment.accept")
         .addKeyValue("inboxId", claimed.inboxId())

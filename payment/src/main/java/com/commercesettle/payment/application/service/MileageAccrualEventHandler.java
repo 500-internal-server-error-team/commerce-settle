@@ -235,7 +235,7 @@ public class MileageAccrualEventHandler {
   }
 
   private static void log(MileageAccrual accrual, String message) {
-    LOG.atInfo()
+    LOG.atDebug()
         .addKeyValue("event", "payment.mileage_accrual")
         .addKeyValue("paymentId", accrual.getPaymentId())
         .addKeyValue("accrualAmount", accrual.getAccrualAmount())
@@ -244,7 +244,8 @@ public class MileageAccrualEventHandler {
   }
 
   private static void warn(WaitingInboxEvent claimed, String result, String errorCode) {
-    LOG.atWarn()
+    // 선행 결과를 기다리는 WAITING은 다시 시도하는 정상 흐름이다.
+    (result.equals("WAITING") ? LOG.atDebug() : LOG.atWarn())
         .addKeyValue("event", "payment.mileage_accrual")
         .addKeyValue("eventId", claimed.event().eventId())
         .addKeyValue("eventType", claimed.event().eventType())

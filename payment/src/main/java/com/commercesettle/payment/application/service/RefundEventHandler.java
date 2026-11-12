@@ -158,7 +158,7 @@ public class RefundEventHandler {
             refund.getId(), payment.getId(), payment.getAmounts().sellerNetAmount()),
         now);
     inbox.markApplied(claimed.inboxId(), refund.getId(), now);
-    LOG.atInfo()
+    LOG.atDebug()
         .addKeyValue("event", "payment.refund")
         .addKeyValue("refundId", refund.getId())
         .addKeyValue("paymentId", payment.getId())
@@ -198,7 +198,7 @@ public class RefundEventHandler {
     // 구매확정 전 환불이 끝났다. 아직 잔액에 넣지 않은 적립 예정을 같은 트랜잭션에서 취소한다.
     accruals.cancelOnRefundCompleted(refund, now);
     inbox.markApplied(claimed.inboxId(), refund.getId(), now);
-    LOG.atInfo()
+    LOG.atDebug()
         .addKeyValue("event", "payment.refund")
         .addKeyValue("refundId", refund.getId())
         .addKeyValue("paymentId", refund.getPaymentId())
@@ -239,7 +239,8 @@ public class RefundEventHandler {
   }
 
   private static void log(WaitingInboxEvent claimed, String result, String errorCode) {
-    LOG.atWarn()
+    // 선행 결과를 기다리는 WAITING은 다시 시도하는 정상 흐름이다.
+    (result.equals("WAITING") ? LOG.atDebug() : LOG.atWarn())
         .addKeyValue("event", "payment.refund")
         .addKeyValue("eventId", claimed.event().eventId())
         .addKeyValue("eventType", claimed.event().eventType())

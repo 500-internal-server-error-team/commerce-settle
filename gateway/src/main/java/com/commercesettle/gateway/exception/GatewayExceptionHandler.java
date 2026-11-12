@@ -5,9 +5,12 @@ import java.io.IOException;
 import java.net.URI;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.spi.LoggingEventBuilder;
 import org.springframework.boot.web.reactive.error.ErrorWebExceptionHandler;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
@@ -27,7 +30,16 @@ import reactor.core.publisher.Mono;
 @Order(-2)
 public class GatewayExceptionHandler implements ErrorWebExceptionHandler {
   private static final Logger LOGGER = LoggerFactory.getLogger(GatewayExceptionHandler.class);
+  private static final long UNAVAILABLE_WARN_WINDOW_NANOS = TimeUnit.MINUTES.toNanos(1);
   private final Tracer tracer;
+
+  /**
+   * 503은 저장소·상류 장애 동안 요청마다 반복되므로 1분에 한 번만 WARN으로 남기고 나머지는 DEBUG로 내린다. 건수는 HTTP 지표로 센다. 서블릿 서비스의
+   * observability 모듈 RepeatedWarning과 같은 규칙이며, Gateway는 그 모듈의 자동 구성을 받지 않으므로 여기에 둔다.
+   */
+  private final AtomicLong nextUnavailableWarnAt = new AtomicLong(System.nanoTime());
+
+  private final AtomicLong suppressedUnavailable = new AtomicLong();
 
   private final ServerResponse.Context responseContext;
 
@@ -87,7 +99,7 @@ public class GatewayExceptionHandler implements ErrorWebExceptionHandler {
           problem.setProperty("code", code);
           problem.setProperty("traceId", traceId);
           if (status.is5xxServerError()) {
-            final var event = status.value() == 503 ? LOGGER.atWarn() : LOGGER.atError();
+            final var event = status.value() == 503 ? unavailableEvent() : LOGGER.atError();
             if (status.value() == 503 && !notForwarded) {
               event.addKeyValue("result", "UNKNOWN");
             }
@@ -163,5 +175,18 @@ public class GatewayExceptionHandler implements ErrorWebExceptionHandler {
       case 503 -> "연결된 서비스에 요청을 전달할 수 없습니다. 처리 결과는 확인이 필요합니다.";
       default -> "요청을 처리할 수 없습니다.";
     };
+  }
+
+  private LoggingEventBuilder unavailableEvent() {
+    long now = System.nanoTime();
+    long next = nextUnavailableWarnAt.get();
+    if (now - next >= 0
+        && nextUnavailableWarnAt.compareAndSet(next, now + UNAVAILABLE_WARN_WINDOW_NANOS)) {
+      long skipped = suppressedUnavailable.getAndSet(0);
+      var warn = LOGGER.atWarn();
+      return skipped == 0 ? warn : warn.addKeyValue("suppressed", skipped);
+    }
+    suppressedUnavailable.incrementAndGet();
+    return LOGGER.atDebug();
   }
 }

@@ -54,6 +54,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     properties = {
       "management.server.port=0",
       "management.tracing.enabled=false",
+      // 정상 발송·재처리 결과는 DEBUG다. 커밋 뒤에만 기록하는지 확인하려고 이 시험에서만 연다.
+      "logging.level.com.commercesettle.commerce.application.service=DEBUG",
       "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
       "app.auth.rate-limit.identifier-hmac-key=notification-test-hmac-key-32bytes-long",
       "app.auth.password-reset.delivery-key=notification-test-delivery-key-32bytes",

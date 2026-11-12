@@ -1,5 +1,6 @@
 package com.commercesettle.payment.presentation.exception;
 
+import com.commercesettle.observability.RepeatedWarning;
 import com.commercesettle.payment.domain.exception.IdempotencyConflictException;
 import com.commercesettle.payment.domain.exception.InvalidReconciliationCursorException;
 import com.commercesettle.payment.domain.exception.PaymentJobNotFoundException;
@@ -47,6 +48,7 @@ public class PaymentExceptionHandler extends ResponseEntityExceptionHandler {
   private static final Logger LOGGER = LoggerFactory.getLogger(PaymentExceptionHandler.class);
   private static final String CODE = "code";
   private static final String INVALID_FORMAT = "형식이 올바르지 않습니다.";
+  private final RepeatedWarning temporarilyUnavailable = new RepeatedWarning();
 
   private final ObjectProvider<Tracer> tracer;
 
@@ -93,8 +95,8 @@ public class PaymentExceptionHandler extends ResponseEntityExceptionHandler {
 
   @ExceptionHandler({TransientDataAccessException.class, CannotCreateTransactionException.class})
   ResponseEntity<Object> temporarilyUnavailable(RuntimeException e, WebRequest request) {
-    LOGGER
-        .atWarn()
+    temporarilyUnavailable
+        .at(LOGGER)
         .addKeyValue("event", "payment.request")
         .addKeyValue("errorCode", ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE.name())
         .addKeyValue("errorType", e.getClass().getName())

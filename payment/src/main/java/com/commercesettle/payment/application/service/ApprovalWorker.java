@@ -80,7 +80,7 @@ public class ApprovalWorker {
     if (!observations.observe(
         Stage.APPROVAL_LEASE_CHECK,
         () -> jobs.holdsLease(job.jobId(), job.leaseToken(), settings.httpTimeout()))) {
-      LOG.atWarn()
+      LOG.atDebug()
           .addKeyValue("event", "payment.approval")
           .addKeyValue("paymentId", job.paymentId())
           .addKeyValue("jobId", job.jobId())
@@ -93,7 +93,7 @@ public class ApprovalWorker {
       observations.observe(Stage.APPROVAL_RECORD, () -> recorder.record(job, result));
       LOG.atLevel(
               result instanceof Result.Succeeded || result instanceof Result.Declined
-                  ? Level.INFO
+                  ? Level.DEBUG
                   : Level.WARN)
           .addKeyValue("event", "payment.approval")
           .addKeyValue("paymentId", job.paymentId())
@@ -102,7 +102,7 @@ public class ApprovalWorker {
           .addKeyValue("result", result.getClass().getSimpleName())
           .log("Approval job result recorded");
     } catch (ApprovalLeaseLostException e) {
-      LOG.atWarn()
+      LOG.atDebug()
           .addKeyValue("event", "payment.approval")
           .addKeyValue("paymentId", job.paymentId())
           .addKeyValue("jobId", job.jobId())

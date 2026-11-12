@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.presentation.exception;
 
+import com.commercesettle.observability.RepeatedWarning;
 import com.commercesettle.settlement.application.exception.IdempotencyConflictException;
 import com.commercesettle.settlement.application.exception.OperationRejectedException;
 import com.commercesettle.settlement.application.exception.ProductSettlementContextUnavailableException;
@@ -49,6 +50,7 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
   private static final String CODE = "code";
   private static final String INVALID_FORMAT = "형식이 올바르지 않습니다.";
   private static final String UNIQUE_VIOLATION = "23505";
+  private final RepeatedWarning temporarilyUnavailable = new RepeatedWarning();
 
   private final ObjectProvider<Tracer> tracer;
 
@@ -153,8 +155,8 @@ public class SettlementExceptionHandler extends ResponseEntityExceptionHandler {
     ProductSettlementContextUnavailableException.class
   })
   ResponseEntity<Object> temporarilyUnavailable(RuntimeException e, WebRequest request) {
-    LOGGER
-        .atWarn()
+    temporarilyUnavailable
+        .at(LOGGER)
         .addKeyValue("event", "settlement.request")
         .addKeyValue("errorCode", ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE.name())
         .addKeyValue("errorType", e.getClass().getName())

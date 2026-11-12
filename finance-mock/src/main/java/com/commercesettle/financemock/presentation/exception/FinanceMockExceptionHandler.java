@@ -8,6 +8,7 @@ import com.commercesettle.financemock.application.exception.ScenarioUnavailableE
 import com.commercesettle.financemock.application.exception.TransactionNotFoundException;
 import com.commercesettle.financemock.domain.exception.InsufficientMockFundsException;
 import com.commercesettle.financemock.domain.exception.InvalidMockTransitionException;
+import com.commercesettle.observability.RepeatedWarning;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
 import java.net.URI;
@@ -44,6 +45,7 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExcep
 public class FinanceMockExceptionHandler extends ResponseEntityExceptionHandler {
   private static final Logger LOGGER = LoggerFactory.getLogger(FinanceMockExceptionHandler.class);
   private static final String CODE = "code";
+  private final RepeatedWarning temporarilyUnavailable = new RepeatedWarning();
 
   private final ObjectProvider<Tracer> tracer;
 
@@ -117,8 +119,8 @@ public class FinanceMockExceptionHandler extends ResponseEntityExceptionHandler 
 
   @ExceptionHandler({TransientDataAccessException.class, CannotCreateTransactionException.class})
   ResponseEntity<Object> temporarilyUnavailable(RuntimeException e, WebRequest request) {
-    LOGGER
-        .atWarn()
+    temporarilyUnavailable
+        .at(LOGGER)
         .addKeyValue("event", "mock.request")
         .addKeyValue("result", "UNKNOWN")
         .addKeyValue("errorType", e.getClass().getName())

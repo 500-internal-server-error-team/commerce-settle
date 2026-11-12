@@ -1,6 +1,7 @@
 package com.commercesettle.commerce.infrastructure.scheduling;
 
 import com.commercesettle.commerce.application.service.CouponService;
+import com.commercesettle.observability.RepeatedWarning;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.UUID;
@@ -14,6 +15,7 @@ import org.springframework.scheduling.annotation.Scheduled;
  */
 public class CouponExpiryScheduler {
   private static final Logger LOG = LoggerFactory.getLogger(CouponExpiryScheduler.class);
+  private final RepeatedWarning expireFailed = new RepeatedWarning();
 
   private final CouponService coupons;
   private final Clock clock;
@@ -38,7 +40,8 @@ public class CouponExpiryScheduler {
         coupons.expireIfDue(couponId, now);
       } catch (RuntimeException e) {
         // 예외 메시지는 남기지 않고 종류만 기록한다.
-        LOG.atWarn()
+        expireFailed
+            .at(LOG)
             .addKeyValue("event", "coupon.expire-failed")
             .addKeyValue("couponId", couponId.toString())
             .addKeyValue("errorType", e.getClass().getName())

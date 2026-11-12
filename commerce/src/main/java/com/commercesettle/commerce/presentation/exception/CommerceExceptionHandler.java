@@ -24,6 +24,7 @@ import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.exception.SaleEventConflictException;
 import com.commercesettle.commerce.domain.exception.SaleEventNotFoundException;
 import com.commercesettle.commerce.domain.exception.VersionConflictException;
+import com.commercesettle.observability.RepeatedWarning;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 import io.micrometer.tracing.Span;
@@ -78,6 +79,8 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
   private static final String UNIQUE_VIOLATION = "23505";
   private static final String ERRORS = "errors";
   private static final String INVALID_FORMAT = "형식이 올바르지 않습니다.";
+  private final RepeatedWarning authUnavailable = new RepeatedWarning();
+  private final RepeatedWarning storageUnavailable = new RepeatedWarning();
 
   private final ObjectProvider<Tracer> tracer;
 
@@ -298,8 +301,8 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
   @ExceptionHandler(AuthenticationUnavailableException.class)
   ResponseEntity<Object> authenticationUnavailable(
       AuthenticationUnavailableException e, WebRequest request) {
-    LOGGER
-        .atWarn()
+    authUnavailable
+        .at(LOGGER)
         .addKeyValue("event", "commerce.auth")
         .addKeyValue("errorCode", ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE.name())
         .addKeyValue("errorType", errorType(e))
@@ -340,8 +343,8 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
   })
   ResponseEntity<Object> temporarilyUnavailable(RuntimeException e, WebRequest request) {
     String traceId = traceId();
-    LOGGER
-        .atWarn()
+    storageUnavailable
+        .at(LOGGER)
         .addKeyValue("event", "commerce.request")
         .addKeyValue("result", "UNKNOWN")
         .addKeyValue("errorCode", ErrorCode.COMMON_TEMPORARILY_UNAVAILABLE.name())
@@ -372,7 +375,7 @@ public class CommerceExceptionHandler extends ResponseEntityExceptionHandler {
   ResponseEntity<Object> integrityViolation(DataIntegrityViolationException e, WebRequest request) {
     if (!UNIQUE_VIOLATION.equals(sqlState(e))) return unexpected(e, request);
     LOGGER
-        .atWarn()
+        .atDebug()
         .addKeyValue("event", "commerce.request")
         .addKeyValue("errorCode", ErrorCode.COMMON_VERSION_CONFLICT.name())
         .addKeyValue("constraint", constraintName(e))

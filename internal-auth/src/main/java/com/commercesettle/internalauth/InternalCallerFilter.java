@@ -1,5 +1,6 @@
 package com.commercesettle.internalauth;
 
+import com.commercesettle.observability.RepeatedWarning;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -47,6 +48,7 @@ public class InternalCallerFilter extends OncePerRequestFilter {
   private final InternalOperations operations;
   private final HandlerExceptionResolver errors;
   private final MeterRegistry meters;
+  private final RepeatedWarning rejected = new RepeatedWarning();
 
   public InternalCallerFilter(
       String service,
@@ -135,8 +137,8 @@ public class InternalCallerFilter extends OncePerRequestFilter {
             "status",
             Integer.toString(status.value()))
         .increment();
-    LOGGER
-        .atWarn()
+    rejected
+        .at(LOGGER)
         .addKeyValue("event", service + ".internal-auth")
         .addKeyValue("sender", sender)
         .addKeyValue("method", request.getMethod())

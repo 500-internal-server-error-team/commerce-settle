@@ -3,6 +3,7 @@ package com.commercesettle.commerce.infrastructure.config;
 import com.commercesettle.commerce.application.service.OrderResultService;
 import com.commercesettle.commerce.application.service.OrderWorkflowService;
 import com.commercesettle.commerce.infrastructure.messaging.PaymentAcceptedProcessor;
+import com.commercesettle.observability.RepeatedWarning;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -25,6 +26,7 @@ public class OrderWorkflowConfiguration {
 
   static class OrderClock {
     private final OrderWorkflowService workflow;
+    private final RepeatedWarning deferred = new RepeatedWarning();
 
     OrderClock(OrderWorkflowService workflow) {
       this.workflow = workflow;
@@ -42,7 +44,8 @@ public class OrderWorkflowConfiguration {
           try {
             workflow.advance(id);
           } catch (RuntimeException e) {
-            LoggerFactory.getLogger(OrderClock.class).warn("Order clock deferred: orderId={}", id);
+            deferred.at(LoggerFactory.getLogger(OrderClock.class)).log(
+                "Order clock deferred: orderId={}", id);
           }
         }
         after = due.getLast();
@@ -52,6 +55,7 @@ public class OrderWorkflowConfiguration {
 
   static class OrderResults {
     private final OrderResultService results;
+    private final RepeatedWarning paused = new RepeatedWarning();
 
     OrderResults(OrderResultService results) {
       this.results = results;
@@ -64,8 +68,8 @@ public class OrderWorkflowConfiguration {
       try {
         PaymentAcceptedProcessor.drain(results::processNext, 100);
       } catch (RuntimeException e) {
-        LoggerFactory.getLogger(OrderResults.class)
-            .warn("Order result processing paused: errorCode=INBOX_UNAVAILABLE");
+        paused.at(LoggerFactory.getLogger(OrderResults.class)).log(
+            "Order result processing paused: errorCode=INBOX_UNAVAILABLE");
       }
     }
   }

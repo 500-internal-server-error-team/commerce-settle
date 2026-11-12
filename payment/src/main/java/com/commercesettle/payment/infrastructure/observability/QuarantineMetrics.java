@@ -1,5 +1,6 @@
 package com.commercesettle.payment.infrastructure.observability;
 
+import com.commercesettle.observability.RepeatedWarning;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.util.HashMap;
@@ -41,6 +42,7 @@ public final class QuarantineMetrics implements AutoCloseable {
       JOIN payment.inbox_quarantines q ON q.id = d.quarantine_id
       WHERE q.consumer = ? GROUP BY d.kind, d.status
       """;
+  private final RepeatedWarning observationFailed = new RepeatedWarning();
 
   private final JdbcTemplate jdbc;
   private final String consumer;
@@ -128,7 +130,8 @@ public final class QuarantineMetrics implements AutoCloseable {
       success.set(1);
     } catch (DataAccessException exception) {
       success.set(0);
-      LOG.atWarn()
+      observationFailed
+          .at(LOG)
           .addKeyValue("event", "quarantine.observation-failed")
           .log("Quarantine observation retains the last successful sample");
     }

@@ -101,7 +101,7 @@ public class RefundWorker {
   }
 
   private static void logLeaseLost(LeasedJob job, String message) {
-    LOG.atWarn()
+    LOG.atDebug()
         .addKeyValue("event", "payment.refund")
         .addKeyValue("paymentId", job.paymentId())
         .addKeyValue("jobId", job.jobId())

@@ -12,6 +12,7 @@ import com.commercesettle.financemock.domain.model.MockPaymentMethod;
 import com.commercesettle.financemock.domain.model.MockScenario;
 import com.commercesettle.financemock.domain.model.PaymentProvider;
 import com.commercesettle.financemock.domain.repository.MockScenarioRepository;
+import com.commercesettle.observability.RepeatedWarning;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -26,6 +27,7 @@ import org.springframework.transaction.CannotCreateTransactionException;
 @Service
 public class MockPaymentService {
   private static final Logger LOGGER = LoggerFactory.getLogger(MockPaymentService.class);
+  private final RepeatedWarning receiptUnavailable = new RepeatedWarning();
   private final PaymentTransactions transactions;
   private final MockScenarioRepository scenarios;
 
@@ -108,8 +110,8 @@ public class MockPaymentService {
       try {
         transactions.receive(id);
       } catch (TransientDataAccessException | CannotCreateTransactionException e) {
-        LOGGER
-            .atWarn()
+        receiptUnavailable
+            .at(LOGGER)
             .addKeyValue("event", "mock.pg-receipt")
             .addKeyValue("result", "UNKNOWN")
             .log("Receipt storage is temporarily unavailable; remaining receipts continue");
@@ -120,7 +122,7 @@ public class MockPaymentService {
   private static void recordOutcome(MockTransactionView view) {
     var transaction = view.transaction();
     LOGGER
-        .atInfo()
+        .atDebug()
         .addKeyValue(
             "event", "mock." + transaction.getOperation().name().toLowerCase(java.util.Locale.ROOT))
         .addKeyValue("providerId", transaction.getProviderId())
