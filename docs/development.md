@@ -1243,6 +1243,6 @@ Grafana UID `commerce-settle-business-performance`에서 업무 완료 TPS·주�
 
 승인 확정, 환불 전체 완료, 정산 최초 반영은 각각 `payment.confirmed`, `refund.completed`, `order.settlement.applied`입니다. 승인 지연은 Payment 생성→확정, 환불 지연은 Payment 환불 등록→주문 복구 확인이며, 주문 전체 지연은 별도의 `order.settlement.applied`입니다. 정산항목의 최초 생성 시각을 완료 시각으로 사용하되 커밋되어 조회되는 이력만 셉니다. 지급 배치/송금의 완료 시각과 혼동하지 않습니다. 시작 시각 누락·역전은 `business:duration_missing`에 포함하고 유효 지연 분포에서 제외합니다. 무표본은 0ms가 아니며 p99는 1만 유효 표본 이상에서만 표시합니다.
 
-현재 Payment는 확정 거절 뒤 새 결제 회차를 충돌로 분류합니다([#305](https://github.com/500-internal-server-error-team/commerce-settle/issues/305)). 최초 시각 보존의 재시도 검증은 DB·Workflow·Relay 경계까지이며, 실제 재결제 금융 왕복은 해당 이슈를 해결한 뒤 확인합니다.
+왕복 smoke는 확정 거절 뒤 실제 `payment-retries` API로 새 회차를 접수하고 승인·정산항목 생성까지 확인합니다. 이전 DECLINED 시도, 새 APPROVED 시도 번호, 단일 정산항목과 최초 주문 생성 시각 전달을 검사합니다. 재시도 배포에는 [예약 이력 업그레이드와 복구 절차](migrations.md#기존-db의-결제-회차별-예약)를 함께 적용합니다. 코드 검증과 실제 환경 배포·수집 확인은 각각 기록합니다.
 
 기존 DB에는 [업무 지표 관측 컬럼 적용](migrations.md#기존-db의-업무-지표-관측-컬럼)을 먼저 수행합니다. 실제 사용본에는 새 이미지뿐 아니라 `financial.rules.yml`과 `business-performance.json`도 적용한 뒤 rule evaluation·수집 신선도·실제 주문 반영과 지연 coverage를 확인합니다. `app.business-metrics.enabled=false`는 DB 표본 수집을 끄며, 꺼진 환경은 전체 지표 준비 완료로 보고하지 않습니다.

@@ -39,6 +39,7 @@ public class PaymentAttempt extends AuditableEntity {
 
   private PaymentAttempt(
       Payment payment,
+      int attemptNo,
       String providerId,
       String method,
       String accountRef,
@@ -46,9 +47,10 @@ public class PaymentAttempt extends AuditableEntity {
       String scenarioVersion,
       Instant now) {
     super(now);
+    if (attemptNo <= 0) throw new IllegalArgumentException("attemptNo");
     this.id = UUID.randomUUID();
     this.paymentId = payment.getId();
-    this.attemptNo = 1;
+    this.attemptNo = attemptNo;
     this.cycleId = payment.getCurrentCycleId();
     this.providerId = Objects.requireNonNull(providerId, "providerId");
     this.method = Objects.requireNonNull(method, "method");
@@ -69,11 +71,32 @@ public class PaymentAttempt extends AuditableEntity {
       String fundingAccountRef,
       String scenarioVersion,
       Instant now) {
+    return start(
+        payment, 1, providerId, method, accountRef, fundingAccountRef, scenarioVersion, now);
+  }
+
+  /** 결제 행을 잠근 실행기가 보존된 시도 수를 읽어 다음 번호를 준다. */
+  public static PaymentAttempt start(
+      Payment payment,
+      int attemptNo,
+      String providerId,
+      String method,
+      String accountRef,
+      String fundingAccountRef,
+      String scenarioVersion,
+      Instant now) {
     if (payment.getAmounts().externalAmount() <= 0) {
       throw new IllegalArgumentException("외부 결제액이 0원인 결제는 승인 시도를 만들지 않습니다.");
     }
     return new PaymentAttempt(
-        payment, providerId, method, accountRef, fundingAccountRef, scenarioVersion, now);
+        payment,
+        attemptNo,
+        providerId,
+        method,
+        accountRef,
+        fundingAccountRef,
+        scenarioVersion,
+        now);
   }
 
   public void approve(UUID externalRef, Instant now) {

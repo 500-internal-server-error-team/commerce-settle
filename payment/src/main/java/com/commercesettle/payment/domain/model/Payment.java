@@ -123,6 +123,21 @@ public class Payment extends AuditableEntity {
     transitionTo(PaymentStatus.CANCELLED, now);
   }
 
+  /** 확정 거절 뒤 예약을 다시 확보한 새 회차를 받는다. 승인 작업이 시작할 때까지 거절 상태를 유지한다. */
+  public void acceptRetryCycle(UUID cycleId, long requestedVersion, Instant now) {
+    Objects.requireNonNull(cycleId, "cycleId");
+    Objects.requireNonNull(now, "now");
+    if (status != PaymentStatus.DECLINED || !hasExternalAmount()) {
+      throw new InvalidPaymentTransitionException(status, PaymentStatus.PROCESSING);
+    }
+    if (cycleId.equals(currentCycleId) || requestedVersion <= orderVersion) {
+      throw new IllegalArgumentException("A retry needs a new cycle and newer order version");
+    }
+    currentCycleId = cycleId;
+    orderVersion = requestedVersion;
+    touch(now);
+  }
+
   public UUID getId() {
     return id;
   }

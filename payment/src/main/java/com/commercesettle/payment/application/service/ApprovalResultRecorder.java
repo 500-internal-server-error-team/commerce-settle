@@ -86,8 +86,8 @@ class ApprovalResultRecorder {
 
   /**
    * 호출할 요청을 준비한다. 처음 실행하는 결제(PENDING)는 승인 시도를 만들고 PROCESSING으로 바꿔 실행(POST)을, 이미 처리 중이거나 미확정이면 결과를
-   * 모르므로 원거래 조회부터 하게 한다. 취소·확정·거절된 결제는 호출하지 않고 작업을 끝낸다. 임대에 호출 제한 시간만큼 남지 않았거나 시도 상한을 넘었으면 호출하지
-   * 않는다.
+   * 모르므로 원거래 조회부터 하게 한다. 확정 거절 뒤 새로 수용한 회차만 새 승인을 준비하며 이전 회차·기존 확정 거절·취소·확정은 호출하지 않는다. 임대에 호출 제한
+   * 시간만큼 남지 않았거나 시도 상한을 넘었으면 호출하지 않는다.
    */
   @Transactional
   public Optional<Prepared> prepare(LeasedJob job) {
@@ -96,13 +96,24 @@ class ApprovalResultRecorder {
     if (!jobs.holdsLease(job.jobId(), job.leaseToken(), settings.httpTimeout())) {
       return Optional.empty();
     }
+    if (!payment.getCurrentCycleId().equals(job.businessKey())) {
+      release(job, PaymentJobStatus.DONE, "PAYMENT_CYCLE_SUPERSEDED");
+      return Optional.empty();
+    }
     Instant now = clock.instant();
     if (job.attempts() > settings.maxAttempts()) {
       exhaust(job, payment, now);
       return Optional.empty();
     }
     switch (payment.getStatus()) {
-      case PENDING -> {
+      case PENDING, DECLINED -> {
+        if (attempts
+            .findByPaymentIdAndCycleId(payment.getId(), payment.getCurrentCycleId())
+            .isPresent()) {
+          // 같은 회차의 확정 거절을 운영 재처리해도 새 외부 승인을 만들지 않는다.
+          release(job, PaymentJobStatus.DONE, "PAYMENT_CYCLE_ALREADY_ATTEMPTED");
+          return Optional.empty();
+        }
         Optional<OrderPaymentRequestedPayload> original =
             inbox.findOriginalRequest(payment.getId());
         if (original.isEmpty() || original.get().externalMethod() == null) {
@@ -114,6 +125,7 @@ class ApprovalResultRecorder {
             attempts.save(
                 PaymentAttempt.start(
                     payment,
+                    Math.toIntExact(Math.addExact(attempts.countByPaymentId(payment.getId()), 1)),
                     "EASY_PAY".equals(method) ? "EASY_PAY" : settings.cardProvider(),
                     method,
                     original.get().methodAccountRef(),
@@ -144,6 +156,10 @@ class ApprovalResultRecorder {
     Instant now = clock.instant();
     // 결제 행을 대기 상한 안에서 잠가, 경합이 길면 임대가 만료되기 전에 롤백한다.
     Payment payment = payments.findByIdForUpdate(job.paymentId()).orElseThrow();
+    if (!payment.getCurrentCycleId().equals(job.businessKey())) {
+      release(job, PaymentJobStatus.DONE, "PAYMENT_CYCLE_SUPERSEDED");
+      return;
+    }
     PaymentAttempt attempt =
         attempts
             .findByPaymentIdAndCycleId(payment.getId(), payment.getCurrentCycleId())
@@ -291,7 +307,8 @@ class ApprovalResultRecorder {
 
   private static UUID eventId(String eventType, Payment payment) {
     return UUID.nameUUIDFromBytes(
-        (eventType + ":" + payment.getId()).getBytes(StandardCharsets.UTF_8));
+        (eventType + ":" + payment.getId() + ":" + payment.getCurrentCycleId())
+            .getBytes(StandardCharsets.UTF_8));
   }
 
   private static ApprovalRequest request(PaymentAttempt attempt) {

@@ -219,7 +219,7 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
             "addressLine1": "test", "addressLine2": "", "isDefault": True})
         assert status == 201, (status, address)
 
-        def paid_order(mileage=MILEAGE, method="CREDIT_CARD", account="test-card", *, recover_admission=True):
+        def paid_order(mileage=MILEAGE, method="CREDIT_CARD", account="test-card", *, recover_admission=True, retry_after_decline=False):
             body = {
                 "productId": product, "quantity": 1, "eventId": None, "buyerCouponId": None, "mileageAmount": mileage,
                 "addressId": address["id"], "expectedProductVersion": 0, "expectedEventVersion": None,
@@ -240,6 +240,23 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
                 return result
 
             order = until(create_when_admitted, "order was not admitted within the recovery budget", 300)
+            if retry_after_decline:
+                until(lambda: sql("commerce", f"select status from commerce.orders where id='{order['id']}'") == "DECLINED",
+                      "first approval did not reach confirmed decline")
+                worker_settings()
+                until(gate_open,"retry admission did not recover",300)
+                status,current=request("GET","/api/orders/"+order["id"])
+                assert status==200,(status,current)
+                retry_key=str(uuid.uuid4())
+                trace_id=uuid.uuid4().hex
+                retry_headers={"Idempotency-Key":retry_key,**trace_headers(trace_id)}
+                def retry_when_admitted():
+                    status,result=gateway_json(base,"POST",f"/api/orders/{order['id']}/payment-retries",
+                        {"expectedVersion":current["version"]},token,retry_headers)
+                    if status==503 and result.get("code")=="COMMON_CAPACITY_EXCEEDED":return None
+                    assert status==202,(status,result)
+                    return result
+                until(retry_when_admitted,"actual payment retry API was not accepted",300)
             until(lambda: sql("commerce", f"select status from commerce.orders where id='{order['id']}'") == "PAID",
                   "order was not paid through Payment")
             payment = sql("commerce", f"select payment_id from commerce.orders where id='{order['id']}'")
@@ -252,6 +269,15 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
             received = sql("settlement", f"select extract(epoch from order_accepted_at)::text from settlement.inbox where event_type='PaymentConfirmed' and aggregate_id='{payment}' and status='APPLIED'")
             captured=sql("payment",f"select extract(epoch from order_accepted_at)::text from payment.inbox where event_type='OrderPaymentRequested' and aggregate_id='{order['id']}' order by created_at desc,id desc limit 1")
             assert accepted and accepted == captured == persisted == received, (accepted,captured,persisted,received)
+            if retry_after_decline:
+                attempts=sql("payment",f"select string_agg(attempt_no || ':' || status, ',' order by attempt_no) from payment.payment_attempts where payment_id='{payment}'")
+                assert attempts == "1:DECLINED,2:APPROVED", attempts
+                settlement_items=int(sql("settlement",f"select count(*) from settlement.settlement_items where payment_id='{payment}'"))
+                approved=int(sql("payment",f"select count(*) from payment.payment_attempts a join payment.payments p on p.id=a.payment_id and p.current_cycle_id=a.cycle_id where p.id='{payment}' and a.status='APPROVED'"))
+                assert approved == settlement_items == 1, (approved,settlement_items)
+                cycles=sql("commerce",f"select count(distinct payload->'payload'->>'paymentCycleId') from commerce.outbox where event_type='OrderPaymentRequested' and aggregate_id='{order['id']}'")
+                assert cycles == '2', cycles
+                print(json.dumps({"paymentRetryCase":{"retry_completed":True,"settlement_items":settlement_items,"approved_current_attempts":approved,"old_attempt_status":attempts.split(',')[0].split(':')[1],"new_attempt_no":int(attempts.split(',')[1].split(':')[0]),"origin_preserved":accepted == captured == persisted == received == order_created}}),flush=True)
             required = {"commerce.outbox.send", "payment.inbox.process", "payment.outbox.send",
                         "commerce.inbox.accepted", "commerce.inbox.result"}
             services = {"gateway", "commerce", "payment", "settlement"}
@@ -323,11 +349,17 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
                 assert any(span.get("name") == "payment.refund.process.wait"
                            and span.get("tags", {}).get("kind") in {"retry", "lease-recovery"} for span in spans), "retry/restart wait span missing"
             print(json.dumps({"completed": refund_id, "external": int(external), "mileage": expected_mileage}), flush=True)
+            if expected_mileage == MILEAGE:
+                print(json.dumps({"mixedRefundCase":{"refund_completed":True,"external_refund_amount":int(external),"mileage_restored_amount":int(mileage)}}),flush=True)
             return refund_id
 
         try:
             first_refund, second_refund = scenarios(paid_order, cancel, refund_state, completed, inventory, reservation,
                                                     compose, gate_open)
+            worker_settings("fixture-pg-reject-v1")
+            retry_order, retry_payment = paid_order(0, retry_after_decline=True)
+            cancel(retry_order)
+            completed(retry_order, retry_payment, 0)
             # Card, all-mileage (including zero external HTTP calls), and external EASY_PAY wallet.
             card_order, card_payment = paid_order(0)
             cancel(card_order)
