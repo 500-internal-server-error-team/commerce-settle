@@ -16,6 +16,7 @@ from urllib.error import HTTPError
 import uuid
 
 from smoke import gateway_json
+from prepare_financial_kafka import SUBSCRIPTIONS, bounds, group_offsets, partitions
 from test_admission import prepare_offsets, stack, until
 
 
@@ -219,7 +220,7 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
             "addressLine1": "test", "addressLine2": "", "isDefault": True})
         assert status == 201, (status, address)
 
-        def paid_order(mileage=MILEAGE, method="CREDIT_CARD", account="test-card", *, recover_admission=True, retry_after_decline=False):
+        def place_order(mileage=MILEAGE, method="CREDIT_CARD", account="test-card", *, recover_admission=True):
             body = {
                 "productId": product, "quantity": 1, "eventId": None, "buyerCouponId": None, "mileageAmount": mileage,
                 "addressId": address["id"], "expectedProductVersion": 0, "expectedEventVersion": None,
@@ -239,24 +240,62 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
                 assert status == 201, (status, result)
                 return result
 
-            order = until(create_when_admitted, "order was not admitted within the recovery budget", 300)
+            return until(create_when_admitted, "order was not admitted within the recovery budget", 300), trace_id
+
+        def order_status(order_id):
+            return sql("commerce", f"select status from commerce.orders where id='{order_id}'")
+
+        def retry_payment(order_id):
+            """Calls the actual retry API after a confirmed decline and returns the new cycle and its trace."""
+            until(gate_open,"retry admission did not recover",300)
+            status,current=request("GET","/api/orders/"+order_id)
+            assert status==200 and current["status"]=="DECLINED",(status,current)
+            previous=sql("commerce",f"select payment_cycle_id from commerce.orders where id='{order_id}'")
+            retry_key=str(uuid.uuid4())
+            trace_id=uuid.uuid4().hex
+            retry_headers={"Idempotency-Key":retry_key,**trace_headers(trace_id)}
+            def retry_when_admitted():
+                status,result=gateway_json(base,"POST",f"/api/orders/{order_id}/payment-retries",
+                    {"expectedVersion":current["version"]},token,retry_headers)
+                if status==503 and result.get("code")=="COMMON_CAPACITY_EXCEEDED":return None
+                assert status==202,(status,result)
+                return result
+            until(retry_when_admitted,"actual payment retry API was not accepted",300)
+            cycle=sql("commerce",f"select payment_cycle_id from commerce.orders where id='{order_id}'")
+            assert cycle!=previous,(cycle,previous)
+            return cycle,trace_id
+
+        def mileage_history(payment):
+            reservations=sql("payment",f"select string_agg(status, ',' order by created_at,id) from payment.mileage_reservations where payment_id='{payment}'")
+            entries=sql("payment",f"select string_agg(kind || ':' || amount, ',' order by kind,created_at) from payment.mileage_entries where payment_id='{payment}'")
+            return reservations,entries
+
+        def attempts(payment):
+            return sql("payment",f"select string_agg(attempt_no || ':' || status, ',' order by attempt_no) from payment.payment_attempts where payment_id='{payment}'")
+
+        def outbox_event(database, event_type, aggregate, cycle):
+            return sql(database,f"""select payload->>'eventId' from {database}.outbox where event_type='{event_type}'
+and aggregate_id='{aggregate}' and payload->'payload'->>'paymentCycleId'='{cycle}'""")
+
+        def replay(database, event_id):
+            # Re-send the stored bytes with the original topic/key. Consumers must treat it as a duplicate.
+            topic,key,body=sql(database,f"select topic || chr(9) || message_key || chr(9) || convert_from(raw_body,'UTF8') from {database}.outbox where payload->>'eventId'='{event_id}'").split("\t",2)
+            compose("exec","-T","kafka","/opt/kafka/bin/kafka-console-producer.sh","--bootstrap-server","kafka:9092",
+                    "--topic",topic,"--property","parse.key=true","--property","key.separator=\t",input_text=key+"\t"+body+"\n")
+
+        def drained(group):
+            # The group has committed every record, including replays, of its subscribed topics.
+            ends=bounds(compose,partitions(compose),"latest")
+            offsets=group_offsets(compose,group)
+            return all(offsets.get(key)==end for key,end in ends.items() if key[0] in SUBSCRIPTIONS[group])
+
+        def paid_order(mileage=MILEAGE, method="CREDIT_CARD", account="test-card", *, recover_admission=True, retry_after_decline=False):
+            order, trace_id = place_order(mileage, method, account, recover_admission=recover_admission)
             if retry_after_decline:
-                until(lambda: sql("commerce", f"select status from commerce.orders where id='{order['id']}'") == "DECLINED",
-                      "first approval did not reach confirmed decline")
+                until(lambda: order_status(order["id"]) == "DECLINED", "first approval did not reach confirmed decline")
+                first_cycle=sql("commerce",f"select payment_cycle_id from commerce.orders where id='{order['id']}'")
                 worker_settings()
-                until(gate_open,"retry admission did not recover",300)
-                status,current=request("GET","/api/orders/"+order["id"])
-                assert status==200,(status,current)
-                retry_key=str(uuid.uuid4())
-                trace_id=uuid.uuid4().hex
-                retry_headers={"Idempotency-Key":retry_key,**trace_headers(trace_id)}
-                def retry_when_admitted():
-                    status,result=gateway_json(base,"POST",f"/api/orders/{order['id']}/payment-retries",
-                        {"expectedVersion":current["version"]},token,retry_headers)
-                    if status==503 and result.get("code")=="COMMON_CAPACITY_EXCEEDED":return None
-                    assert status==202,(status,result)
-                    return result
-                until(retry_when_admitted,"actual payment retry API was not accepted",300)
+                cycle,trace_id=retry_payment(order["id"])
             until(lambda: sql("commerce", f"select status from commerce.orders where id='{order['id']}'") == "PAID",
                   "order was not paid through Payment")
             payment = sql("commerce", f"select payment_id from commerce.orders where id='{order['id']}'")
@@ -270,14 +309,25 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
             captured=sql("payment",f"select extract(epoch from order_accepted_at)::text from payment.inbox where event_type='OrderPaymentRequested' and aggregate_id='{order['id']}' order by created_at desc,id desc limit 1")
             assert accepted and accepted == captured == persisted == received, (accepted,captured,persisted,received)
             if retry_after_decline:
-                attempts=sql("payment",f"select string_agg(attempt_no || ':' || status, ',' order by attempt_no) from payment.payment_attempts where payment_id='{payment}'")
-                assert attempts == "1:DECLINED,2:APPROVED", attempts
+                history=attempts(payment)
+                assert history == "1:DECLINED,2:APPROVED", history
                 settlement_items=int(sql("settlement",f"select count(*) from settlement.settlement_items where payment_id='{payment}'"))
                 approved=int(sql("payment",f"select count(*) from payment.payment_attempts a join payment.payments p on p.id=a.payment_id and p.current_cycle_id=a.cycle_id where p.id='{payment}' and a.status='APPROVED'"))
                 assert approved == settlement_items == 1, (approved,settlement_items)
                 cycles=sql("commerce",f"select count(distinct payload->'payload'->>'paymentCycleId') from commerce.outbox where event_type='OrderPaymentRequested' and aggregate_id='{order['id']}'")
                 assert cycles == '2', cycles
-                print(json.dumps({"paymentRetryCase":{"retry_completed":True,"settlement_items":settlement_items,"approved_current_attempts":approved,"old_attempt_status":attempts.split(',')[0].split(':')[1],"new_attempt_no":int(attempts.split(',')[1].split(':')[0]),"origin_preserved":accepted == captured == persisted == received == order_created}}),flush=True)
+                if mileage:
+                    # Each cycle reserves again: the declined cycle's reservation stays RELEASED and only the new one is debited.
+                    assert mileage_history(payment) == ("RELEASED,CONSUMED", f"DEBIT:{mileage},RELEASE:{mileage},RESERVE:{mileage},RESERVE:{mileage}"), mileage_history(payment)
+                    assert sql("payment",f"select string_agg(cycle_id::text, ',' order by created_at,id) from payment.mileage_reservations where payment_id='{payment}'") == f"{first_cycle},{cycle}"
+                # Duplicate deliveries of the old cycle's request and result do not change the paid cycle.
+                before=(history,mileage_history(payment),order_status(order["id"]))
+                replay("payment",outbox_event("payment","PaymentDeclined",payment,first_cycle))
+                replay("commerce",outbox_event("commerce","OrderPaymentRequested",order["id"],first_cycle))
+                until(lambda: drained("commerce.v1") and drained("payment.v1"),"replayed records were not consumed",60)
+                assert (attempts(payment),mileage_history(payment),order_status(order["id"])) == before
+                assert sql("payment",f"select status || '/' || current_cycle_id from payment.payments where id='{payment}'") == f"CONFIRMED/{cycle}"
+                print(json.dumps({"paymentRetryCase":{"retry_completed":True,"settlement_items":settlement_items,"approved_current_attempts":approved,"old_attempt_status":history.split(',')[0].split(':')[1],"new_attempt_no":int(history.split(',')[1].split(':')[0]),"mileage":mileage,"origin_preserved":accepted == captured == persisted == received == order_created}}),flush=True)
             required = {"commerce.outbox.send", "payment.inbox.process", "payment.outbox.send",
                         "commerce.inbox.accepted", "commerce.inbox.result"}
             services = {"gateway", "commerce", "payment", "settlement"}
@@ -353,13 +403,73 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
                 print(json.dumps({"mixedRefundCase":{"refund_completed":True,"external_refund_amount":int(external),"mileage_restored_amount":int(mileage)}}),flush=True)
             return refund_id
 
+        def cancelled_retry(block_approval):
+            """Mixed payment: confirmed decline, real retry API, then the buyer's unpaid cancellation of the retry cycle."""
+            worker_settings("fixture-pg-reject-v1")
+            wallet=sql("payment",f"select balance || '/' || reserved_amount from payment.mileage_wallets where buyer_id='{buyer}'")
+            order,_=place_order(MILEAGE)
+            order_id=order["id"]
+            until(lambda: order_status(order_id) == "DECLINED", "first approval did not reach confirmed decline")
+            first_cycle=sql("commerce",f"select payment_cycle_id from commerce.orders where id='{order_id}'")
+            payment=sql("commerce",f"select payment_id from commerce.orders where id='{order_id}'")
+            if block_approval:
+                worker_settings("fixture-pg-reject-v1",APP_PAYMENT_APPROVAL_ENABLED="false")
+            posts=mock_calls("POST")
+            cycle,_=retry_payment(order_id)
+            if block_approval:
+                # Payment adopted the cycle and reserved mileage again, but no approval ran yet.
+                until(lambda: sql("payment",f"select status || '/' || current_cycle_id from payment.payments where id='{payment}'") == f"DECLINED/{cycle}",
+                      "Payment did not accept the retry cycle")
+                assert sql("payment",f"select status from payment.mileage_reservations where payment_id='{payment}' and cycle_id='{cycle}'") == "RESERVED"
+                assert sql("payment",f"select reserved_amount from payment.mileage_wallets where buyer_id='{buyer}'") == str(MILEAGE)
+            else:
+                until(lambda: order_status(order_id) == "DECLINED" and attempts(payment) == "1:DECLINED,2:DECLINED",
+                      "retry cycle was not declined again")
+                assert sql("commerce",f"select payment_cycle_id from commerce.orders where id='{order_id}'") == cycle
+            status,current=request("GET","/api/orders/"+order_id)
+            assert status==200,(status,current)
+            status,cancelled=request("POST",f"/api/orders/{order_id}/cancellation",
+                                     {"expectedVersion":current["version"],"reason":"financial flow retry cancellation"})
+            assert status==202 and cancelled["status"]=="CANCEL_PENDING",(status,cancelled)
+            until(lambda: order_status(order_id) == "CANCELLED", "retry cycle cancellation was not confirmed")
+            if block_approval:
+                worker_settings()
+                until(lambda: sql("payment",f"select status || '/' || last_error_code from payment.payment_jobs where operation='APPROVE' and business_key='{cycle}'") == "DONE/PAYMENT_CANCELLED",
+                      "retry approval job was not closed by the cancellation")
+            expected_attempts="1:DECLINED" if block_approval else "1:DECLINED,2:DECLINED"
+            assert attempts(payment) == expected_attempts, attempts(payment)
+            assert mock_calls("POST") == posts + (0 if block_approval else 1), (mock_calls("POST"), posts)
+            assert sql("payment",f"select status || '/' || current_cycle_id from payment.payments where id='{payment}'") == f"CANCELLED/{cycle}"
+            assert mileage_history(payment) == ("RELEASED,RELEASED", f"RELEASE:{MILEAGE},RELEASE:{MILEAGE},RESERVE:{MILEAGE},RESERVE:{MILEAGE}"), mileage_history(payment)
+            assert sql("payment",f"select string_agg(cycle_id::text, ',' order by created_at,id) from payment.mileage_reservations where payment_id='{payment}'") == f"{first_cycle},{cycle}"
+            assert sql("payment",f"select balance || '/' || reserved_amount from payment.mileage_wallets where buyer_id='{buyer}'") == wallet
+            assert sql("payment",f"select string_agg(payload->'payload'->>'paymentCycleId' || ':' || (payload->'payload'->>'reasonCode'), ',') from payment.outbox where aggregate_id='{payment}' and event_type='PaymentCancelled'") == f"{cycle}:CANCELLED_BEFORE_APPROVAL"
+            assert reservation(order_id) == "RELEASED", reservation(order_id)
+            assert sql("settlement",f"select count(*) from settlement.settlement_items where payment_id='{payment}'") == "0"
+            # Duplicate deliveries of both cycles' requests and results keep the cancelled cycle unchanged.
+            before=(attempts(payment),mileage_history(payment),order_status(order_id),reservation(order_id),inventory())
+            replay("payment",outbox_event("payment","PaymentDeclined",payment,first_cycle))
+            if not block_approval:
+                replay("payment",outbox_event("payment","PaymentDeclined",payment,cycle))
+            replay("payment",outbox_event("payment","PaymentCancelled",payment,cycle))
+            replay("commerce",outbox_event("commerce","OrderPaymentRequested",order_id,cycle))
+            replay("commerce",outbox_event("commerce","PaymentCancellationRequested",order_id,cycle))
+            until(lambda: drained("commerce.v1") and drained("payment.v1"),"replayed records were not consumed",60)
+            assert (attempts(payment),mileage_history(payment),order_status(order_id),reservation(order_id),inventory()) == before
+            assert mock_calls("POST") == posts + (0 if block_approval else 1)
+            print(json.dumps({"paymentRetryCancellationCase":{"approval_blocked":block_approval,"attempts":expected_attempts,
+                              "mileage_reservations":"RELEASED,RELEASED","order":"CANCELLED","inventory_reservation":"RELEASED",
+                              "duplicates_replayed":True}}),flush=True)
+
         try:
             first_refund, second_refund = scenarios(paid_order, cancel, refund_state, completed, inventory, reservation,
                                                     compose, gate_open)
             worker_settings("fixture-pg-reject-v1")
-            retry_order, retry_payment = paid_order(0, retry_after_decline=True)
+            retry_order, retry_paid = paid_order(MILEAGE, retry_after_decline=True)
             cancel(retry_order)
-            completed(retry_order, retry_payment, 0)
+            completed(retry_order, retry_paid)
+            cancelled_retry(block_approval=False)
+            cancelled_retry(block_approval=True)
             # Card, all-mileage (including zero external HTTP calls), and external EASY_PAY wallet.
             card_order, card_payment = paid_order(0)
             cancel(card_order)
