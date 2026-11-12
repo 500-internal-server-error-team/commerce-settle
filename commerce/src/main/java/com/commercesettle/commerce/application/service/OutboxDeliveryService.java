@@ -24,6 +24,14 @@ public class OutboxDeliveryService {
   }
 
   @Transactional
+  public int expireExhausted(int limit, int maxAttempts) {
+    if (limit < 1 || limit > 100 || maxAttempts < 1 || maxAttempts > 10) {
+      throw new IllegalArgumentException("Invalid outbox expiry limits");
+    }
+    return store.expireExhausted(limit, maxAttempts);
+  }
+
+  @Transactional
   public boolean markPublished(Delivery delivery, Publication publication) {
     if (!delivery.topic().equals(publication.topic())
         || publication.partition() < 0
