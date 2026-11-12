@@ -81,9 +81,10 @@ public class OrderBenefitsService implements OrderBenefits {
       coupons.reserve(order, now);
     }
     if (order.getEventId() != null) {
-      inventory.reserveForEvent(
+      inventory.reserveNewForEvent(
           order.getId(),
           order.getEventId(),
+          order.getProductId(),
           order.getBuyerId(),
           order.getPaymentCycleId(),
           order.getPaymentWaitUntil());
