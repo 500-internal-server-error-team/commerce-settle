@@ -487,6 +487,21 @@ docker compose up -d --build --wait --wait-timeout 300
 
 계속 사용할 옵션은 `.env`에 저장합니다. 비밀번호는 `init_env.py`가 생성한 `DEV_FIXTURE_PASSWORD`이며 최초 계정에만 적용합니다. 기존 Argon2id·주소 AES-GCM 암호화를 사용합니다. 비밀번호나 주소 암호화 키를 공유·커밋하지 않습니다.
 
+### 마일리지 시연 지갑
+
+계정 fixture와 같은 `COMMERCE_DEV_FIXTURES_ENABLED`로 Payment API가 구매자 A/B의 마일리지 지갑을 준비합니다(Payment 설정은 `APP_DEMO_WALLETS_ENABLED`, 기본 false). 구매자 A는 100,000점, 구매자 B는 잔액 부족 확인용 0점입니다. 금융 스냅샷과 별개라 `APP_DEV_FIXTURES_ENABLED`·정산 일배치·지급 Worker 설정을 바꾸지 않고 기동합니다. 두 fixture를 함께 켜도 같은 금액의 지갑을 한 번만 만듭니다.
+
+- 지갑이 없을 때만 만들고 양수 잔액은 `SEED` 원장 한 줄을 남깁니다. API 역할만 실행하며 동시 기동은 잠금으로 직렬화합니다.
+- 기존 지갑의 잔액·예약·원장은 바꾸지 않습니다. 사용한 잔액은 재기동해도 다시 채워지지 않으므로 처음 잔액이 필요하면 삭제 승인된 볼륨을 [초기화](#종료재실행초기화)합니다.
+- 주문의 마일리지 예약·차감·복원은 [주문·결제·정산·환불 왕복](#주문결제정산환불-왕복)의 금융 흐름 구성에서 실행합니다. 기본 구성만으로는 주문이 결제 대기로 남습니다.
+- 마일리지 충전·현금 인출·만료는 제공하지 않습니다. 구매 적립은 결제 완료 뒤 예정액으로만 보이고 자동 구매확정 뒤 잔액에 더해지며, 업무 시간 이동 기능이 없어 시연 중에는 사용 가능 전환을 확인할 수 없습니다.
+- 이미 만든 ECS Task 정의는 이미지 배포가 환경을 보존하므로 `payment-api`에 `APP_DEMO_WALLETS_ENABLED=true`를 추가해야 반영됩니다.
+
+```bash
+docker compose exec postgres psql -U postgres -d payment -c \
+  "SELECT w.buyer_id,w.balance,w.reserved_amount,e.kind,e.amount FROM payment.mileage_wallets w LEFT JOIN payment.mileage_entries e ON e.wallet_id=w.id ORDER BY w.buyer_id,e.created_at;"
+```
+
 ### Commerce 조회 데이터
 
 UUID는 `00000000-0000-4000-8000-` 뒤에 아래 접미사를 12자리로 채웁니다.
