@@ -197,17 +197,18 @@ def inject(base, buyer, plan, directory, args):
     name = "cs-orders-" + plan["runId"]
     environment = {**os.environ, "BASE_URL": target, "BUYER_TOKEN": buyer,
                    "RUN_ID": plan["runId"], "RATE": str(args.rate),
+                   "ORDER_FILE": "/work/order.json",
                    "DURATION_SECONDS": str(args.seconds),
                    "PRE_ALLOCATED_VUS": str(args.pre_allocated_vus), "MAX_VUS": str(args.max_vus)}
     command = ["docker", "run", "--rm", "--name", name,
                "--label", "commerce-settle.load-run=" + plan["runId"], *network,
                "-v", str(Path(__file__).parent) + ":/scripts:ro",
                "-v", str(directory) + ":/work"]
-    for key in ("BASE_URL", "BUYER_TOKEN", "RUN_ID", "RATE", "DURATION_SECONDS",
+    for key in ("BASE_URL", "BUYER_TOKEN", "RUN_ID", "RATE", "ORDER_FILE", "DURATION_SECONDS",
                 "PRE_ALLOCATED_VUS", "MAX_VUS"):
         command += ["-e", key]
     command += [K6_IMAGE, "run", "--quiet", "--log-format=raw", "--log-output=stdout",
-                "--summary-export", "/work/k6-summary.json", "/scripts/orders_http.js"]
+                "--summary-export", "/work/k6-summary.json", "/scripts/orders.js"]
     records = []
     process = None
     try:
@@ -301,10 +302,12 @@ def verdict(plan, records, k6, code, observed):
 def parser():
     result = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     result.add_argument("--base-url", required=True)
-    result.add_argument("--rate", type=int, default=200)
+    result.add_argument("--tps", "--rate", dest="rate", metavar="TPS", type=int, default=200,
+                        help="초당 주문 요청 수: 1..1000 (기본 200). 결제 완료 TPS와 구분")
     result.add_argument("--seconds", type=int, default=60)
-    result.add_argument("--pre-allocated-vus", type=int, default=400)
-    result.add_argument("--max-vus", type=int, default=1200)
+    result.add_argument("--pre-allocated-vus", type=int,
+                        help="사전 VU 수 (기본 max(400, TPS×2))")
+    result.add_argument("--max-vus", type=int, help="최대 VU 수 (기본 max(1200, TPS×6))")
     result.add_argument("--smoke-timeout", type=int, default=90)
     result.add_argument("--drain-seconds", type=int, default=300)
     result.add_argument("--prepare-only", action="store_true")
@@ -315,14 +318,18 @@ def parser():
 def main(argv=None):
     arguments = parser()
     args = arguments.parse_args(argv)
+    if args.pre_allocated_vus is None:
+        args.pre_allocated_vus = max(400, args.rate * 2)
+    if args.max_vus is None:
+        args.max_vus = max(1200, args.rate * 6)
     try:
         target = base_url(args.base_url)
     except ValueError as error:
         arguments.error(str(error))
-    if (not 1 <= args.rate <= 200 or not 1 <= args.seconds <= 60
-            or not 1 <= args.pre_allocated_vus <= args.max_vus <= 2000
+    if (not 1 <= args.rate <= 1000 or not 1 <= args.seconds <= 60
+            or not 1 <= args.pre_allocated_vus <= args.max_vus <= 10000
             or not 1 <= args.smoke_timeout <= 300 or not 0 <= args.drain_seconds <= 900):
-        arguments.error("rate=1..200, seconds=1..60, VU=1..2000, smoke=1..300초, drain=0..900초 범위입니다.")
+        arguments.error("tps=1..1000, seconds=1..60, VU=1..10000, smoke=1..300초, drain=0..900초 범위입니다.")
     if not args.prepare_only:
         if not shutil.which("docker"):
             arguments.error("Docker Desktop이 필요합니다.")

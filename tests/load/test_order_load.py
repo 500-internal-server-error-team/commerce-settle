@@ -222,6 +222,58 @@ class ResultTest(unittest.TestCase):
         process.terminate.assert_called_once()
         cleanup.assert_called_once_with("cs-orders-run", "run")
 
+    def test_inject_uses_canonical_script_and_generated_container_input(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        process = Mock(stdout=[])
+        process.wait.return_value = 0
+        process.poll.return_value = 0
+        args = SimpleNamespace(rate=2, seconds=3, pre_allocated_vus=4, max_vus=12)
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.dict(os.environ, {"ORDER_FILE": "/outside/unrelated.json"}), \
+                patch.object(load.subprocess, "Popen", return_value=process) as start, \
+                patch.object(load, "cleanup_container"):
+            code, records = load.inject("https://load.test", "secret", {"runId": "run"}, Path(tmp), args)
+        command = start.call_args.args[0]
+        environment = start.call_args.kwargs["env"]
+        self.assertEqual(command[-1], "/scripts/orders.js")
+        self.assertTrue((HERE / "orders.js").is_file())
+        self.assertIn(["-e", "ORDER_FILE"], [command[n:n + 2] for n in range(len(command) - 1)])
+        self.assertEqual(environment["ORDER_FILE"], "/work/order.json")
+        self.assertEqual(environment["RATE"], "2")
+        self.assertEqual(environment["DURATION_SECONDS"], "3")
+        self.assertEqual((code, records), (0, []))
+
+    def test_tps_option_keeps_rate_alias(self):
+        self.assertEqual(load.parser().parse_args(["--base-url", "https://load.test"]).rate, 200)
+        for option in ("--tps", "--rate"):
+            with self.subTest(option=option):
+                self.assertEqual(load.parser().parse_args([
+                    "--base-url", "https://load.test", option, "1000"]).rate, 1000)
+
+    def test_maximum_tps_prepares_matching_inventory_and_vu_budget(self):
+        fixture = ApiFixture("https://load.test")
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=True), \
+                patch.object(load, "Api", return_value=fixture), contextlib.redirect_stdout(io.StringIO()):
+            target = Path(tmp) / "result"
+            self.assertEqual(load.main(["--base-url", fixture.base, "--tps", "1000", "--seconds", "3",
+                                        "--prepare-only", "--output-dir", str(target)]), 0)
+            report = json.loads((target / "summary.json").read_text())
+            plan = json.loads((target / "plan.json").read_text())
+        self.assertEqual((report["rate"], report["preAllocatedVUs"], report["maxVUs"]), (1000, 2000, 6000))
+        self.assertEqual((plan["plannedOrders"], plan["stockPrepared"]), (3000, 3301))
+        self.assertFalse(report["loadExecuted"])
+
+    def test_tps_outside_bounds_is_rejected_before_docker_or_api(self):
+        for tps in (0, 1001):
+            with self.subTest(tps=tps), patch.object(load.subprocess, "run") as run, \
+                    patch.object(load, "Api") as api, contextlib.redirect_stderr(io.StringIO()), \
+                    self.assertRaises(SystemExit):
+                load.main(["--base-url", "https://load.test", "--tps", str(tps)])
+            run.assert_not_called()
+            api.assert_not_called()
+
     def test_https_origin_and_docker_localhost_mapping(self):
         for url in ["http://example.com", "https://u:p@example.com", "https://example.com/api",
                     "https://example.com?token=private", "https://example.com#x"]:

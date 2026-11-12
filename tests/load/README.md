@@ -2,15 +2,27 @@
 
 [#133](https://github.com/500-internal-server-error-team/commerce-settle/issues/133)의 결제 처리량, PG 장애, Worker 재시작 뒤 정합성을 측정합니다. 지표 정의는 [검증 지표와 완료 기준](../../docs/design.md#검증-지표와-완료-기준)를 따릅니다.
 
-## Mac에서 공개 HTTPS 주문 200건/초 시험
+## Mac에서 공개 HTTPS 주문 부하 시험
 
-[order_load.py](order_load.py)는 Mac의 Docker k6에서 **공개 HTTPS → Caddy → Gateway → 주문 API**로 요청합니다. Node.js나 서버의 k6 배포는 필요하지 않습니다. Python 3·실행 중인 Docker Desktop과 접근 가능한 배포 주소를 준비한 뒤 저장소 루트에서 실행합니다.
+[order_load.py](order_load.py)는 공개 API로 주문을 준비하고 [orders.js](orders.js)를 Mac의 Docker k6에서 실행합니다. 요청은 **공개 HTTPS → Caddy → Gateway → 주문 API**를 거칩니다. Node.js나 서버의 k6 배포는 필요하지 않습니다. Python 3·실행 중인 Docker Desktop과 접근 가능한 배포 주소를 준비한 뒤 저장소 루트에서 실행합니다.
 
 ```bash
 python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN
 ```
 
-기본값은 **한 구매자·한 상품에 200건/초·60초(12,000건)**입니다. 먼저 낮은 부하로 실행 경로를 확인하려면 `--rate 2 --seconds 3`을 붙입니다. 기존 로컬 `order.json`·`orders-200.js`나 `.env`는 읽거나 덮어쓰지 않습니다.
+기본값은 **한 구매자·한 상품에 200건/초·60초(12,000건)**입니다. 먼저 낮은 부하로 실행 경로를 확인하려면 `--tps 2 --seconds 3`을 붙입니다. 기존 로컬 `order.json`이나 `.env`는 읽거나 덮어쓰지 않습니다.
+
+`--tps`로 초당 주문 요청 수를 **1~1000**에서 선택합니다. 기존 `--rate`도 같은 옵션입니다. 실행 시간은 `--seconds`로 1~60초를 지정하며 기본값은 60초입니다.
+
+```bash
+python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN --tps 200
+python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN --tps 400
+python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN --tps 1000
+```
+
+기본 사전 VU는 `max(400, TPS×2)`, 최대 VU는 `max(1200, TPS×6)`이며 `--pre-allocated-vus`·`--max-vus`로 1~10000 안에서 조정합니다. 실제 선택값은 요약에 남습니다. 지정 TPS는 요청 도착률이며 서버의 결제 완료 TPS나 달성 보장이 아닙니다.
+
+실행기는 생성한 주문 본문을 컨테이너의 `ORDER_FILE=/work/order.json`으로 전달합니다. `orders.js`를 직접 실행할 때도 `ORDER_FILE`에 준비된 주문 JSON을 지정할 수 있으며, 로그인 본문·잘못된 JSON은 요청 전에 거절합니다. 직접 k6 실행은 Python 실행기의 사전 PAID 확인·원장 저장·배출 대조·상품/세션 정리를 수행하지 않으므로, 전후 비교에는 위 Python 명령을 사용합니다.
 
 ### 서버와 실행 준비
 
