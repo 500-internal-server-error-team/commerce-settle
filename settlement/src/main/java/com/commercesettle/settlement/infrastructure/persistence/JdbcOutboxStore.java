@@ -89,11 +89,12 @@ class JdbcOutboxStore implements OutboxStore {
                     rs.getInt("attempts"))));
   }
 
-  // 결과 저장은 UPDATE 한 문장의 영향 행 수로 임대 소유를 판정한다. 잠금을 기다리는 동안 다른 선점이 행을 가져가면 version이
-  // 바뀌므로 PostgreSQL이 잠금을 얻은 뒤 최신 행으로 조건(version·임대 시각)을 다시 검사해 0행이 된다.
   @Override
   public PublishResult markPublished(Delivery delivery, Publication publication) {
     applyTransactionLimits();
+    if (!lockCurrentDelivery(delivery)) {
+      return PublishResult.STALE;
+    }
     List<Boolean> updated =
         jdbc.query(
             """
@@ -119,6 +120,9 @@ class JdbcOutboxStore implements OutboxStore {
   @Override
   public boolean markFailed(Delivery delivery, int maxAttempts) {
     applyTransactionLimits();
+    if (!lockCurrentDelivery(delivery)) {
+      return false;
+    }
     return jdbc.update(
             """
             UPDATE settlement.outbox SET status=CASE WHEN attempts >= :max THEN 'REVIEW_REQUIRED' ELSE 'RETRY' END,
@@ -128,6 +132,19 @@ class JdbcOutboxStore implements OutboxStore {
             """,
             position(delivery).addValue("max", maxAttempts))
         == 1;
+  }
+
+  private boolean lockCurrentDelivery(Delivery delivery) {
+    // 잠금 대기 중 임대가 만료될 수 있어 시각 조건은 잠금을 얻은 다음 SQL에서 검사한다. 다른 트랜잭션이 행을 바꾸지 않고
+    // 잠금만 쥐고 있으면 PostgreSQL은 UPDATE 조건을 다시 검사하지 않으므로 한 문장으로 합치지 않는다.
+    return !jdbc.queryForList(
+            """
+            SELECT id FROM settlement.outbox
+            WHERE id=:id AND version=:version AND status='RUNNING'
+            FOR UPDATE
+            """,
+            position(delivery))
+        .isEmpty();
   }
 
   private static MapSqlParameterSource position(Delivery delivery) {
