@@ -56,7 +56,11 @@ public interface InboxStore {
   Optional<EarlierRefundRequest> findEarlierRefundRequest(UUID refundId, UUID inboxId);
 
   /** 수신 위치와 최초 bytes. */
-  record Source(String topic, int partition, long offset, byte[] body) {}
+  record Source(String topic, int partition, long offset, byte[] body, Instant orderAcceptedAt) {
+    public Source(String topic, int partition, long offset, byte[] body) {
+      this(topic, partition, offset, body, null);
+    }
+  }
 
   /** 같은 환불의 원요청과 그 판정. 대기 중이면 {@code resultRef}가 없다. */
   record EarlierRefundRequest(String status, UUID paymentId, long netAmount, UUID resultRef) {}

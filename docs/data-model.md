@@ -1483,3 +1483,9 @@ DDL의 enum·부분 유니크·CHECK·인덱스를 실제 PostgreSQL에서 검�
 현재 Settlement 초기 DDL의 `reconciliation_runs`는 `cutoff_at` 유일 회차와 최초 `snapshot_at`, 원천별 `stage`·`cursor`·대상 건수·저장 건수, 임대 token/만료·다음 실행·시도 수·최종 오류를 보존합니다. 임대는 60초이며 각 짧은 저장에서 token·만료를 확인하고 갱신합니다. 실행자가 죽으면 만료 뒤 다른 실행자가 같은 진행 위치를 선점합니다. 외부 읽기 동안 DB 트랜잭션을 잡지 않습니다.
 
 `reconciliation_events`는 `(run_id,event_id)`별 원천 금액·ID·시각·원래 페이지 cursor와 최신 발행/성공/차감 증빙, 분류·사유·차액·최초 관측·검사 시각을 보존합니다. 원금액·업무 키가 바뀌면 판정을 중단하며 발행 위치 진행과 최초 성공 관측만 갱신합니다. `reconciliation_checks`는 회차별 내부 참조·금액 검사 결과, `reconciliation_history`는 회차 요청·선점/재개·페이지 커밋·판정 변화·중단 이력을 추가로 보존합니다. 업무 원장·예약을 수정하거나 이 기록을 자동 삭제하지 않습니다.
+
+### 업무 지연 관측 시각
+
+Commerce Outbox·Payment Inbox/Outbox·Settlement Inbox의 nullable `order_accepted_at timestamptz`는 원문/해시와 분리한 관측 메타데이터입니다. 최초 주문 `created_at`을 OrderService·OrderWorkflowService에서 Commerce Outbox에 저장하고, Payment Inbox/Outbox와 Settlement Inbox로 Kafka 헤더를 통해 전달합니다. 같은 cycle의 Payment Inbox 관측 시각을 복사하며 새 retry 이벤트의 `occurredAt`으로 원래 시각을 대체하지 않습니다. 최초 Inbox 값은 중복 수신으로 덮어쓰지 않습니다. 없는 값·잘못되거나 중복된 헤더는 업무 결과를 바꾸지 않고 지연 coverage 누락으로 표시합니다. 기존 금융 행을 갱신하거나 이벤트 본문/버전·멱등 키를 변경하지 않습니다.
+
+완료 기간 집계는 Payment `confirmed_at`, 완결 환불 SAGA `order_restored_at`, 정산항목 `created_at`의 범위 인덱스를 사용합니다. 최초 원장 `source_event_id`와 같은 APPLIED Inbox만 정산 지연에 연결해 다른 eventId의 중복 확정을 다시 세지 않습니다. 승인 완료 이력은 이후 취소돼도 유지하며, 환불은 환불/SAGA 모두 COMPLETED인 건만 완료 TPS로 셉니다.

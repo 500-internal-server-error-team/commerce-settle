@@ -1,6 +1,7 @@
 package com.commercesettle.payment.application.port;
 
 import com.commercesettle.observability.AsyncObservation.Timing;
+import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -24,9 +25,21 @@ public interface OutboxStore {
       String key,
       byte[] body,
       String traceParent,
-      Timing timing) {
+      Timing timing,
+      Instant orderAcceptedAt) {
+    public Delivery(
+        UUID id,
+        long version,
+        String topic,
+        String key,
+        byte[] body,
+        String traceParent,
+        Timing timing) {
+      this(id, version, topic, key, body, traceParent, timing, null);
+    }
+
     public Delivery(UUID id, long version, String topic, String key, byte[] body) {
-      this(id, version, topic, key, body, null, null);
+      this(id, version, topic, key, body, null, null, null);
     }
 
     public Delivery {

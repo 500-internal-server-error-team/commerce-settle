@@ -21,6 +21,7 @@ import com.commercesettle.commerce.domain.repository.AccountRepository;
 import com.commercesettle.commerce.domain.repository.OrderRepository;
 import com.commercesettle.commerce.domain.repository.PageResult;
 import com.commercesettle.commerce.domain.repository.ProductRepository;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -355,7 +356,8 @@ public class OrderWorkflowService {
             time(clock.instant()),
             o.getId(),
             o.getVersion(),
-            payload));
+            payload),
+        o.getCreatedAt());
   }
 
   void emit(Order order, String type, UUID key, Object payload) {
@@ -370,8 +372,7 @@ public class OrderWorkflowService {
     UUID paymentId = java.util.Objects.requireNonNull(order.getPaymentId(), "paymentId");
     emit(
         order,
-        UUID.nameUUIDFromBytes(
-            (type + ":" + paymentId).getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+        UUID.nameUUIDFromBytes((type + ":" + paymentId).getBytes(StandardCharsets.UTF_8)),
         type,
         paymentId,
         payload);

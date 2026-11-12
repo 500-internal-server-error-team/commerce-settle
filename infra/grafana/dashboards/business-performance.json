@@ -1,0 +1,598 @@
+{
+  "uid": "commerce-settle-business-performance",
+  "title": "commerce-settle / 업무 완료·전구간 성능 비교",
+  "schemaVersion": 40,
+  "version": 1,
+  "refresh": "15s",
+  "timezone": "Asia/Seoul",
+  "tags": [
+    "commerce-settle"
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "window",
+        "label": "집계 창(초)",
+        "type": "custom",
+        "query": "60,300,900",
+        "current": {
+          "text": "300",
+          "value": "300"
+        },
+        "options": [
+          {
+            "text": "60",
+            "value": "60",
+            "selected": false
+          },
+          {
+            "text": "300",
+            "value": "300",
+            "selected": true
+          },
+          {
+            "text": "900",
+            "value": "900",
+            "selected": false
+          }
+        ]
+      },
+      {
+        "name": "comparison_offset",
+        "label": "기준 구간 간격",
+        "type": "custom",
+        "query": "1h,6h,1d,7d",
+        "current": {
+          "text": "1h",
+          "value": "1h"
+        },
+        "options": [
+          {
+            "text": "1h",
+            "value": "1h",
+            "selected": true
+          },
+          {
+            "text": "6h",
+            "value": "6h",
+            "selected": false
+          },
+          {
+            "text": "1d",
+            "value": "1d",
+            "selected": false
+          },
+          {
+            "text": "7d",
+            "value": "7d",
+            "selected": false
+          }
+        ]
+      },
+      {
+        "name": "application",
+        "label": "HTTP 서비스",
+        "type": "custom",
+        "query": "gateway,commerce,payment,settlement,finance-mock",
+        "current": {
+          "text": "gateway",
+          "value": "gateway"
+        },
+        "options": [
+          {
+            "text": "gateway",
+            "value": "gateway",
+            "selected": true
+          },
+          {
+            "text": "commerce",
+            "value": "commerce",
+            "selected": false
+          },
+          {
+            "text": "payment",
+            "value": "payment",
+            "selected": false
+          },
+          {
+            "text": "settlement",
+            "value": "settlement",
+            "selected": false
+          },
+          {
+            "text": "finance-mock",
+            "value": "finance-mock",
+            "selected": false
+          }
+        ],
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*"
+      }
+    ]
+  },
+  "links": [
+    {
+      "type": "link",
+      "title": "비동기·SQL·배치 병목",
+      "url": "/d/commerce-settle-payment-worker"
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "업무 완료 TPS · 재시도 횟수 제외",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "business:completions{window=\"$window\",operation=~\"payment.confirmed|refund.completed|order.settlement.applied\"} / $window",
+          "legendFormat": "현재 {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "business:completions{window=\"$window\",operation=~\"payment.confirmed|refund.completed|order.settlement.applied\"} offset $comparison_offset / $window",
+          "legendFormat": "기준 ($comparison_offset) {{operation}}"
+        }
+      ],
+      "description": "DB에 커밋된 승인 확정·환불 전체 완료·정산 최초 반영 건수/창 길이. 지급 완료 TPS가 아닙니다. 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 2,
+      "title": "완료 건수 · 선택 집계 창",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "business:completions{window=\"$window\",operation=~\"payment.confirmed|refund.completed|order.settlement.applied\"}",
+          "legendFormat": "현재 {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "business:completions{window=\"$window\",operation=~\"payment.confirmed|refund.completed|order.settlement.applied\"} offset $comparison_offset",
+          "legendFormat": "기준 ($comparison_offset) {{operation}}"
+        }
+      ],
+      "description": "승인은 이후 취소/환불되어도 confirmed_at 이력을 유지합니다. 환불은 원장 상쇄·주문 복구 확인까지 완료해야 셉니다. 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 3,
+      "title": "주문 결제 접수 → 정산 최초 반영 · p50",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, business:duration_bucket{window=\"$window\",operation=\"order.settlement.applied\"})",
+          "legendFormat": "현재 {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.5, business:duration_bucket{window=\"$window\",operation=\"order.settlement.applied\"} offset $comparison_offset)",
+          "legendFormat": "기준 ($comparison_offset) {{operation}}"
+        }
+      ],
+      "description": "최초 주문 created_at부터 커밋되어 보이는 정산항목 최초 생성 시각까지. Kafka/대기/재시도 포함, 일배치·판매대금 지급 대기는 제외. p99는 1만 유효 표본 이상에서만 표시합니다. 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 4,
+      "title": "주문 결제 접수 → 정산 최초 반영 · p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, business:duration_bucket{window=\"$window\",operation=\"order.settlement.applied\"})",
+          "legendFormat": "현재 {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, business:duration_bucket{window=\"$window\",operation=\"order.settlement.applied\"} offset $comparison_offset)",
+          "legendFormat": "기준 ($comparison_offset) {{operation}}"
+        }
+      ],
+      "description": "최초 주문 created_at부터 커밋되어 보이는 정산항목 최초 생성 시각까지. Kafka/대기/재시도 포함, 일배치·판매대금 지급 대기는 제외. p99는 1만 유효 표본 이상에서만 표시합니다. 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 5,
+      "title": "주문 결제 접수 → 정산 최초 반영 · p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, business:duration_bucket{window=\"$window\",operation=\"order.settlement.applied\"}) and on (operation,window) (business:duration_count{window=\"$window\",operation=\"order.settlement.applied\"} >= 10000)",
+          "legendFormat": "현재 {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, business:duration_bucket{window=\"$window\",operation=\"order.settlement.applied\"} offset $comparison_offset) and on (operation,window) (business:duration_count{window=\"$window\",operation=\"order.settlement.applied\"} offset $comparison_offset >= 10000)",
+          "legendFormat": "기준 ($comparison_offset) {{operation}}"
+        }
+      ],
+      "description": "최초 주문 created_at부터 커밋되어 보이는 정산항목 최초 생성 시각까지. Kafka/대기/재시도 포함, 일배치·판매대금 지급 대기는 제외. p99는 1만 유효 표본 이상에서만 표시합니다. 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 6,
+      "title": "결제 확정 → 정산 최초 반영 · p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, business:duration_bucket{window=\"$window\",operation=\"payment.settlement.applied\"})",
+          "legendFormat": "현재 {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, business:duration_bucket{window=\"$window\",operation=\"payment.settlement.applied\"} offset $comparison_offset)",
+          "legendFormat": "기준 ($comparison_offset) {{operation}}"
+        }
+      ],
+      "description": "전체 지연과 함께 결제 이후 Outbox/Kafka/정산 반영 구간을 비교합니다. 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 7,
+      "title": "유효 지연 표본 수 · p99 기준 10,000",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "business:duration_count{window=\"$window\"}",
+          "legendFormat": "현재 {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "business:duration_count{window=\"$window\"} offset $comparison_offset",
+          "legendFormat": "기준 ($comparison_offset) {{operation}}"
+        }
+      ],
+      "description": " 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 8,
+      "title": "시작 시각 누락·역전 표본 수",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "business:duration_missing{window=\"$window\"}",
+          "legendFormat": "현재 {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "business:duration_missing{window=\"$window\"} offset $comparison_offset",
+          "legendFormat": "기준 ($comparison_offset) {{operation}}"
+        }
+      ],
+      "description": "과거 원문에 없는 시각을 소급 추정하지 않습니다. 이 값이 양수면 완료 수 전체를 대표하는 지연 분포로 해석하지 마세요. 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 9,
+      "title": "HTTP 서버 응답 · p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (application,uri,method,le) (rate(http_server_requests_seconds_bucket{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s])))",
+          "legendFormat": "현재 {{application}} {{method}} {{uri}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (application,uri,method,le) (rate(http_server_requests_seconds_bucket{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s] offset $comparison_offset)))",
+          "legendFormat": "기준 ($comparison_offset) {{application}} {{method}} {{uri}}"
+        }
+      ],
+      "description": "서버가 처리한 요청 분포입니다. 발생기 타임아웃/연결 실패는 별도 발생기 결과를 확인합니다. p99는 1만 요청 이상에서만 표시합니다. 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 10,
+      "title": "HTTP 서버 응답 · p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (application,uri,method,le) (rate(http_server_requests_seconds_bucket{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s]))) and on (application,uri,method) (sum by (application,uri,method) (increase(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s])) >= 10000)",
+          "legendFormat": "현재 {{application}} {{method}} {{uri}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (application,uri,method,le) (rate(http_server_requests_seconds_bucket{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s] offset $comparison_offset))) and on (application,uri,method) (sum by (application,uri,method) (increase(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s] offset $comparison_offset)) >= 10000)",
+          "legendFormat": "기준 ($comparison_offset) {{application}} {{method}} {{uri}}"
+        }
+      ],
+      "description": "서버가 처리한 요청 분포입니다. 발생기 타임아웃/연결 실패는 별도 발생기 결과를 확인합니다. p99는 1만 요청 이상에서만 표시합니다. 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 11,
+      "title": "HTTP 요청 표본 수",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (application,uri,method) (increase(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s]))",
+          "legendFormat": "현재 {{application}} {{method}} {{uri}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (application,uri,method) (increase(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s] offset $comparison_offset))",
+          "legendFormat": "기준 ($comparison_offset) {{application}} {{method}} {{uri}}"
+        }
+      ],
+      "description": " 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 12,
+      "title": "업무 지표 수집 표본의 나이",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - max by(operation,window) (business:source{window=\"$window\"})",
+          "legendFormat": "현재 {{operation}}"
+        }
+      ],
+      "description": "45초 초과/미래/수집 전 표본은 recording rule에서 제외됩니다. API·Worker 중 단일 source의 완전한 snapshot만 사용합니다. 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 13,
+      "title": "HTTP 요청 / 초",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (application,uri,method) (rate(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s]))",
+          "legendFormat": "현재 {{application}} {{method}} {{uri}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (application,uri,method) (rate(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s] offset $comparison_offset))",
+          "legendFormat": "기준 {{application}} {{method}} {{uri}}"
+        }
+      ],
+      "description": "서버가 수신한 요청 시도 기준입니다. 발생기 타임아웃·연결 실패는 발생기 결과에서 별도로 확인합니다. 무요청/미수집은 정상 0%로 해석하지 않습니다."
+    },
+    {
+      "id": 14,
+      "title": "HTTP 서버 5xx 비율",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "—"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum by (application,uri,method) (rate(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\",status=~\"5..\"}[${window}s])) or on(application,uri,method) (0 * sum by (application,uri,method) (rate(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s])))) / sum by (application,uri,method) (rate(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s]))",
+          "legendFormat": "현재 {{application}} {{method}} {{uri}}"
+        },
+        {
+          "refId": "B",
+          "expr": "(sum by (application,uri,method) (rate(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\",status=~\"5..\"}[${window}s] offset $comparison_offset)) or on(application,uri,method) (0 * sum by (application,uri,method) (rate(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s] offset $comparison_offset)))) / sum by (application,uri,method) (rate(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s] offset $comparison_offset))",
+          "legendFormat": "기준 {{application}} {{method}} {{uri}}"
+        }
+      ],
+      "description": "서버가 수신한 요청 시도 기준입니다. 발생기 타임아웃·연결 실패는 발생기 결과에서 별도로 확인합니다. 무요청/미수집은 정상 0%로 해석하지 않습니다."
+    }
+  ]
+}

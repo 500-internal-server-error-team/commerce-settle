@@ -45,3 +45,9 @@ Commerce·Payment·Settlement의 Outbox·Inbox, Payment의 payment_jobs, Settlem
 - 결제·환불·정산 이력은 삭제하지 않고 상태 전이와 추가 기록으로 보존합니다. 확정 원장의 금액은 덮어쓰지 않으며 정정·상쇄 항목을 추가합니다.
 - 서비스 간·같은 서비스 내부 모두 FK constraint를 두지 않습니다. 참조 유효성은 애플리케이션에서 검증하며, `NOT NULL`·`UNIQUE`·`CHECK`와 조회 인덱스는 필요한 불변식에 맞게 둡니다. FK를 생략해도 중복 방지·금액 제약은 유지합니다. 내부 참조 대조·재검토 조건은 [내부 참조 검증](data-model.md#내부-참조-대조)을 따릅니다.
 - 시각 컬럼은 `timestamptz`를 사용합니다. 삭제·보존 정책을 바꾸거나 데이터를 물리적으로 제거할 때는 접근 영향·보존 범위·복구 절차를 PR에서 검토합니다.
+
+## 기존 DB의 업무 지표 관측 컬럼
+
+[Commerce](../infra/postgres/upgrade/commerce-business-metrics.sql)·[Payment](../infra/postgres/upgrade/payment-business-metrics.sql)·[Settlement](../infra/postgres/upgrade/settlement-business-metrics.sql) 소유 DB에서 새 앱 배포 전에 `psql --set ON_ERROR_STOP=1 --file ...`로 적용합니다. 기존 데이터가 있는 DB에 초기 schema 전체를 재실행하지 않습니다. Commerce Outbox·Payment Inbox/Outbox·Settlement Inbox의 nullable `order_accepted_at timestamptz`와 기간 집계/주문-cycle 조회 인덱스만 추가하며, 기존 원문·해시·금액·상태·offset은 변경하지 않습니다. 과거 접수 시각은 소급 생성하지 않습니다.
+
+스크립트는 DB별 한 트랜잭션이며 잠금 2초·실행 15초 상한, 기존 동명 컬럼의 타입·nullable 검사를 유지합니다. 상한 내 인덱스를 만들 수 없거나 동명 인덱스 정의가 다르면 배포를 중단하고 해당 DB의 실제 정의와 계획을 확인합니다. 인덱스 이름만으로 적용 완료를 판단하지 않습니다. 적용 전후 컬럼·인덱스 정의, 기존 행/원문 보존, 선택 거래의 시각 전달과 실제 metric을 검증합니다. 세 DB의 적용 결과를 따로 기록합니다. 이전 이미지로 복구할 때 추가 nullable 컬럼·인덱스는 남기며 DROP으로 되돌리지 않습니다.

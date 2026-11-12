@@ -156,3 +156,46 @@ ORDER_QUERY_BENCHMARK=true ./gradlew --no-daemon :commerce:test --rerun-tasks \
 `httpMs`·`acquireMs`는 각각 HTTP 왕복과 연결 획득 시간의 p50/p95/p99(ms)입니다. `lockWaitBackendSamples`는 10ms 간격 조회마다 관측한 잠금 대기 backend 수의 합이며 대기 시간이나 고유 거래 수가 아닙니다. 표본 사이의 짧은 대기는 놓칠 수 있습니다. 동시 클라이언트가 응답 후 다음 요청을 보내는 시험이므로 목표 도착률 200회/초 검증이나 Gateway·금융 후속 처리 성능으로 해석하지 않습니다.
 
 SQL 중복 방지 회귀는 환경 변수 없이 기본 테스트의 `locksInventoryOncePerNewOrder`가 검사합니다. 성능 비교 기록과 채택 근거는 [#246](https://github.com/500-internal-server-error-team/commerce-settle/issues/246)에 남깁니다.
+
+## 업무 완료·전구간 지연의 전후 비교
+
+Grafana `commerce-settle / 업무 완료·전구간 성능 비교`는 완료 TPS, 주문 결제 접수→정산 최초 반영 지연, HTTP 서버 p95/p99를 같은 60/300/900초 창으로 비교합니다. 기존 금융 처리 대시보드의 비동기·SQL·배치 구간과 함께 봅니다. 승인 확정 TPS는 이후 취소돼도 남는 `confirmed_at` 이력이며, 환불은 외부 환불·마일리지 복원·원장 상쇄·주문 복구 확인까지 끝나야 완료입니다. 정산 최초 반영은 판매대금 지급 완료와 다릅니다.
+
+기준 구간 offset은 시각을 겹쳐 보는 기능입니다. 개선의 근거는 같은 초기 데이터·요청 혼합·도착률·장애 시나리오·발생기 위치·CPU/메모리·runtime·warm-up 조건으로 반복 실행해 남깁니다. 코드 revision과 조정한 동시성 등의 `variant`는 결과에 따로 기록합니다. 원래 Payment 직접 주입 도구는 주문 API와 Settlement 반영을 실행하지 않으므로 그 결과를 전체 주문 왕복 성능으로 바꾸어 부르지 않습니다.
+
+`performance.py capture`는 이미 실행한 부하의 끝 시각에 Prometheus의 같은 창을 읽는 도구입니다. 부하를 주입하거나 데이터를 초기화하지 않습니다. DB는 주기 수집하므로 각 업무의 실제 `dbWindowStart/End`와 관측 지연(최대 45초)을 결과에 남기고, HTTP 창은 지정한 조회 종료 시각을 기준으로 합니다. 일정 부하가 이 전체 구간과 warm-up 이후에도 유지되도록 실행하며, 경계가 다른 급격한 ramp 구간을 같은 창으로 해석하지 않습니다. 전체 주문 왕복 부하는 Gateway 주문 API를 거쳐 실제 정산 반영까지 진행하고, warm-up을 제외한 창 끝에서 수집합니다. 격리된 시험의 초기 데이터와 실제 사용 이미지·자원·발생기 결과는 실행자가 확인합니다. 클라이언트 타임아웃·연결 실패·`dropped_iterations`는 발생기 원문도 함께 보존합니다.
+
+측정마다 저장소 밖 또는 기존 ignored `tests/load/work/<실행>/`에 metadata JSON을 만듭니다. 다음은 필드 형식이며 자리표시는 실제 관측값으로 채웁니다.
+
+```json
+{
+  "revision": "<40자리 실제 소스 SHA>",
+  "imageDigests": {
+    "gateway": "sha256:<실제 digest>", "commerce": "sha256:<실제 digest>",
+    "payment": "sha256:<실제 digest>", "settlement": "sha256:<실제 digest>",
+    "finance-mock": "sha256:<실제 digest>"
+  },
+  "variant": {"approvalConcurrency": 6},
+  "conditions": {
+    "workload": "order-approval-refund",
+    "datasetSha256": "<초기 fixture SHA256>",
+    "arrivalRate": 100,
+    "mix": ["card"],
+    "scenario": "normal",
+    "generator": "<발생기 위치와 버전>",
+    "resources": {"appCpu": 2, "appMemoryMiB": 4096},
+    "runtime": {"jdk": "<실제 JDK>", "postgres": "<실제 버전>"},
+    "warmupSeconds": 60
+  },
+  "operations": ["payment.confirmed", "refund.completed", "order.settlement.applied", "payment.settlement.applied"],
+  "http": {"application": "gateway", "method": "POST", "uri": "<실제 metric의 URI template>"}
+}
+```
+
+```bash
+python3 -B tests/load/performance.py capture --prometheus http://127.0.0.1:9090   --metadata tests/load/work/before/metadata.json --window 900   --at <측정 종료 epoch초> --output tests/load/work/before/performance.json
+python3 -B tests/load/performance.py compare   tests/load/work/before/performance.json tests/load/work/after/performance.json
+python3 -B -m unittest discover -s tests/load -p test_performance.py
+```
+
+인증된 HTTPS Prometheus에는 `PERFORMANCE_AUTH_USER`·`PERFORMANCE_AUTH_PASSWORD` 환경 변수를 사용합니다. 자격은 결과에 기록하지 않으며 redirect를 따르지 않습니다. 결과 파일은 덮어쓰지 않습니다. 수집 실패·45초 초과 표본·미래 표본·중복 source는 수집을 실패시킵니다. 완료 수는 있지만 시작 시각이 없거나 역전된 지연은 별도 건수로 남깁니다. 비교는 조건이 다르면 거부하며, 누락 지연·무표본·1만 건 미만 p99는 `unavailable`와 종료 코드 2로 남깁니다. TPS 증가나 지연 감소를 관측하지 않은 상태에서 개선됐다고 판정하지 않습니다. HTTP는 서버 분포이고 업무 지연 bucket은 DB의 rolling-window Gauge이므로 `rate()`·`increase()`를 다시 적용하지 않습니다.

@@ -1,11 +1,13 @@
 package com.commercesettle.payment.infrastructure.messaging;
 
 import com.commercesettle.observability.AsyncObservation;
+import com.commercesettle.observability.infrastructure.BusinessMetrics;
 import com.commercesettle.payment.application.port.OutboxStore.Delivery;
 import com.commercesettle.payment.application.port.OutboxStore.Publication;
 import com.commercesettle.payment.application.port.OutboxStore.Published;
 import com.commercesettle.payment.application.service.OutboxDeliveryService;
 import jakarta.annotation.PreDestroy;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -16,6 +18,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -180,27 +183,38 @@ public class OutboxRelay {
     String parent = observations.capture();
     try {
       // claim 커밋 후 원문을 전송하고 완료 콜백에서는 결과 작업만 예약한다.
-      template
-          .send(delivery.topic(), delivery.key(), delivery.body())
-          .whenComplete(
-              (result, failure) -> {
-                if (failure == null) {
-                  queuePublished(delivery, result, parent);
-                  return;
-                }
-                try {
-                  executor.execute(
-                      () ->
-                          observations.run(
-                              RESULT_OPERATION,
-                              parent,
-                              ids(delivery),
-                              null,
-                              () -> persistFailure(delivery, failure)));
-                } catch (RejectedExecutionException exception) {
-                  rejected(delivery);
-                }
-              });
+      var record =
+          new ProducerRecord<String, byte[]>(delivery.topic(), delivery.key(), delivery.body());
+      if (delivery.orderAcceptedAt() != null) {
+        record
+            .headers()
+            .add(
+                BusinessMetrics.ORDER_ACCEPTED_AT_HEADER,
+                delivery.orderAcceptedAt().toString().getBytes(StandardCharsets.US_ASCII));
+      }
+      var sent =
+          delivery.orderAcceptedAt() == null
+              ? template.send(delivery.topic(), delivery.key(), delivery.body())
+              : template.send(record);
+      sent.whenComplete(
+          (result, failure) -> {
+            if (failure == null) {
+              queuePublished(delivery, result, parent);
+              return;
+            }
+            try {
+              executor.execute(
+                  () ->
+                      observations.run(
+                          RESULT_OPERATION,
+                          parent,
+                          ids(delivery),
+                          null,
+                          () -> persistFailure(delivery, failure)));
+            } catch (RejectedExecutionException exception) {
+              rejected(delivery);
+            }
+          });
     } catch (RuntimeException exception) {
       persistFailure(delivery, exception);
     }
