@@ -160,6 +160,8 @@ ECS 안정화 후 앱 호스트에서 세 사설 포트 도달 여부, 서비스
 
 최초 준비는 [실행 정의 생성기](../scripts/render_ecs_apps.py), 이후 배포는 [배포 도구](../scripts/deploy_ecs_apps.py)가 담당합니다. 생성기는 Compose의 기본 환경·역할·건강 검사를 재사용하고 비밀값 대신 SSM ARN을 출력합니다. 자동 배포는 기존 Task Definition의 앱 이미지 digest만 바꿔 새 revision으로 등록하며, 환경·자격 참조·포트·사이드카·사용자 태그를 보존합니다. DB·Kafka·Redis·관측 도구·Caddy는 갱신하지 않습니다.
 
+정지한 기존 EC2는 데이터 서비스·인증 세대와 필요한 DB 구조를 준비한 뒤 앱을 기동합니다. 사용자가 시험 데이터 폐기를 명시한 개발환경은 앱을 모두 멈추고 기존 네 앱 DB의 소유 스키마에 최신 초기 SQL을 다시 적용할 수 있습니다. 이 경우 보존용 upgrade SQL은 실행하지 않습니다. 이전 Kafka 거래 이벤트·관련 consumer offset과 앱 Redis 상태도 같은 초기화 기준으로 맞추고 인증 세대와 Redis 실행 식별자를 함께 갱신합니다. DB 역할·자격과 관측 기록은 보존하며, 이미지 교체만으로 DB가 초기화되지는 않습니다.
+
 ### 최초 앱 준비
 
 앱은 `workload=app`인 기존 EC2에서 `bridge` 모드로 실행합니다. 컨테이너의 업무·관리 포트는 `8080/9091`이며 호스트 포트는 다음과 같습니다.
@@ -239,6 +241,9 @@ GitHub 저장소 변수는 다음과 같습니다. AWS 연결 정보이며 비�
 | `ECR_REPOSITORY` | 앱 이미지 다섯 종을 저장하는 리포지토리 |
 | `ECS_CLUSTER` | 최초 준비를 마친 앱 ECS 클러스터 이름 |
 | `PUBLIC_BASE_URL` | 공개 앱의 `https://<도메인>` |
+| `ECS_DEPLOY_ENABLED` | 기본 자동 서버 배포; `false`이면 이미지 게시까지만 실행 |
+
+CI 역할에 ECS 권한을 추가하지 않는 환경은 `ECS_DEPLOY_ENABLED=false`로 서버 교체를 제외합니다. 이때 태그 CI 성공은 이미지 게시 완료만 뜻합니다. 기존 승인된 AWS 실행 환경에서 수동 반영하기 직전에 태그가 가리키는 commit·동일 Actions run의 head SHA·현재 `origin/main`을 새로 대조합니다. 세 값이 같은 경우에만 해당 태그의 생성기·배포 도구와 `release-image-*` artifact를 사용합니다. 최초 앱은 아래 표준 서비스·Task family·bridge 포트와 기존 자격·업무 설정을 대조해 준비하고, 이후 갱신은 `--prepare-only`·baseline SHA 대조·실제 배포 순서로 진행합니다. CI와 수동 배포를 동시에 실행하지 않으며, 실제 revision·digest·health와 공개 HTTPS를 별도로 확인합니다.
 
 OIDC 신뢰는 해당 저장소의 `refs/tags/v*`와 `sts.amazonaws.com` audience에 한정합니다. 배포 역할은 기존 ECR 권한 외에 앱 서비스의 `ecs:DescribeServices`·`ecs:UpdateService`, 앱 실행 정의의 `ecs:DescribeTaskDefinition`·`ecs:ListTagsForResource`·`ecs:RegisterTaskDefinition`·등록 시 `ecs:TagResource`, 해당 실행·Task 역할에 대한 `iam:PassRole`이 필요합니다. 등록 API의 리소스 제약 한계를 확인하고 서비스·실행 정의 family·전달 역할을 이 앱 범위로 제한합니다. 서비스 최초 생성 권한은 CI 역할에 추가하지 않습니다.
 
