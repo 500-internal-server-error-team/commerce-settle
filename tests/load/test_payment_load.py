@@ -498,5 +498,59 @@ class NamespaceTest(unittest.TestCase):
                 spec.loader.exec_module(module)
 
 
+class RemoteRoutingTest(unittest.TestCase):
+    REMOTE_SETTINGS = dict(REMOTE=True, APP_SSH="ubuntu@13.125.2.200", INFRA_SSH="ubuntu@10.0.1.20",
+                           SSH_JUMP="ubuntu@13.125.2.200", SSH_KEY="key.pem",
+                           REMOTE_REPO="commerce-settle")
+
+    def test_local_mode_keeps_local_compose_paths(self):
+        with patch.multiple(load, REMOTE=False):
+            argv = load.command_for(["exec", "-T", "postgres", "psql"], {})
+        self.assertEqual(argv[:4], ["docker", "compose", "-p", load.PROJECT])
+        self.assertIn(str(load.ROOT / "compose.yml"), argv)
+
+    def test_services_map_to_their_hosts(self):
+        self.assertEqual(load.host_for(["up", "-d", "--no-deps", "payment-worker"]), "app")
+        self.assertEqual(load.host_for(["exec", "-T", "payment-api", "curl"]), "app")
+        self.assertEqual(load.host_for(["exec", "-T", "kafka", "/opt/kafka/bin/x"]), "infra")
+        self.assertEqual(load.host_for(["up", "-d", "--wait", "redis"]), "infra")
+
+    def test_unknown_service_is_refused_in_remote_mode(self):
+        with patch.multiple(load, **self.REMOTE_SETTINGS):
+            with self.assertRaises(SystemExit):
+                load.command_for(["up", "-d", "--build"], {})
+
+    def test_infra_command_goes_through_jump_host_and_forwards_only_load_vars(self):
+        env = {"LOAD_NAMESPACE": "r1", "AUTH_REDIS_RUN_ID": "a" * 40, "PATH": "/bin",
+               "LOAD_PG_SCENARIO": "load pg"}
+        with patch.multiple(load, **self.REMOTE_SETTINGS):
+            argv = load.command_for(["exec", "-T", "postgres", "psql"], env)
+        self.assertEqual(argv[0], "ssh")
+        self.assertIn("-J", argv)
+        self.assertEqual(argv[argv.index("-J") + 1], "ubuntu@13.125.2.200")
+        self.assertEqual(argv[argv.index("-i") + 1], "key.pem")
+        self.assertEqual(argv[-2], "ubuntu@10.0.1.20")
+        remote = argv[-1]
+        self.assertTrue(remote.startswith("cd commerce-settle && env "))
+        self.assertIn("LOAD_NAMESPACE=r1", remote)
+        self.assertIn("LOAD_PG_SCENARIO='load pg'", remote)
+        self.assertIn("AUTH_REDIS_RUN_ID=" + "a" * 40, remote)
+        self.assertNotIn("PATH=", remote)
+        self.assertIn("compose.yml", remote)
+        self.assertNotIn(str(load.ROOT), remote)
+
+    def test_app_command_skips_jump_host(self):
+        with patch.multiple(load, **self.REMOTE_SETTINGS):
+            argv = load.command_for(["up", "-d", "--no-deps", "payment-worker"], {})
+        self.assertNotIn("-J", argv)
+        self.assertEqual(argv[-2], "ubuntu@13.125.2.200")
+
+    def test_missing_host_setting_is_refused(self):
+        settings = dict(self.REMOTE_SETTINGS, APP_SSH="")
+        with patch.multiple(load, **settings):
+            with self.assertRaises(SystemExit):
+                load.command_for(["up", "-d", "--no-deps", "payment-worker"], {})
+
+
 if __name__ == "__main__":
     unittest.main()
