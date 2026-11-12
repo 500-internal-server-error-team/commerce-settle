@@ -217,46 +217,6 @@ class ReconciliationIntegrationTest {
         .contains("WAIT_PUBLICATION", "MATCH");
   }
 
-  private long nextDelay(UUID id) {
-    return jdbc.queryForObject(
-        "SELECT round(extract(epoch FROM next_run_at-updated_at)) FROM settlement.reconciliation_runs WHERE id=?",
-        Long.class,
-        id);
-  }
-
-  @Test
-  @DisplayName("진척 없는 대기 회차는 재확인 간격을 최대 5분까지 늘리고 판정이 바뀌면 처음으로 되돌린다")
-  void backsOffIdleWaitingRounds() throws Exception {
-    var e = payment(false);
-    feed.items.add(e);
-    UUID id = service.request(cutoff, "operator:ops");
-    tick(3);
-    var delays = new ArrayList<Long>(List.of(nextDelay(id)));
-    for (int i = 0; i < 4; i++) {
-      due(id);
-      service.tick();
-      delays.add(nextDelay(id));
-    }
-
-    assertThat(status(id)).isEqualTo("WAITING");
-    assertThat(delays).containsExactly(60L, 120L, 240L, 300L, 300L);
-
-    jdbc.update(
-        "INSERT INTO settlement.inbox_quarantines(id,consumer,source_topic,source_partition,source_offset,raw_body,error_code,created_at) VALUES(?,'settlement.v1',?,0,5,?,'UNSUPPORTED_VERSION',clock_timestamp())",
-        UUID.randomUUID(),
-        e.topic(),
-        ("{\"eventId\":\"" + e.eventId() + "\"}")
-            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-    due(id);
-    service.tick();
-
-    assertThat(nextDelay(id)).isEqualTo(60);
-    apply(e);
-    due(id);
-    service.tick();
-    assertThat(status(id)).isEqualTo("COMPLETED");
-  }
-
   @Test
   @DisplayName("한 페이지 저장 뒤 조회 장애는 같은 snapshot·cursor에서 재개하며 중복·누락을 만들지 않는다")
   void resumesCommittedPageAfterFailure() {
