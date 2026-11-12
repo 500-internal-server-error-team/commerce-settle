@@ -253,7 +253,7 @@ OIDC 신뢰는 해당 저장소의 `refs/tags/v*`와 `sts.amazonaws.com` audienc
 
 실패하면 이번 실행이 갱신을 시도한 앱을 역순으로 되돌립니다. 조회 시 다른 revision을 감지한 서비스는 변경하지 않습니다. 다만 ECS의 조회와 갱신은 원자적이지 않아 조회 직후의 수동 변경까지 막지는 못합니다. **CI 배포가 시작되면 완료·복구까지 콘솔·CLI 수동 갱신을 중단합니다.** CI의 동시 실행 제한이 수동 AWS 작업을 잠그지는 않습니다.
 
-`rollback_errors`에 남은 서비스는 현재 revision·로그를 대조해 적용자가 복구합니다. 강제 종료로 결과 artifact가 없더라도 사전에 보관한 `rollback-plan.json`의 `previous`를 사용합니다. 이 값은 시작 상태이므로 실제 변경된 서비스는 현재 AWS 상태로 확인합니다. 결과 기록이 없으면 현재 Task Definition의 이미지와 계획의 digest를 대조해 이번 실행의 변경인지 확인합니다. 수동 복구도 AWS 계정·리전·클러스터와 현재/직전/이번 등록 revision을 대조한 뒤 수행합니다. SSM 값·DB migration의 복구는 별도입니다.
+`rollback_errors`에 남은 서비스는 현재 revision·로그를 대조해 적용자가 복구합니다. 강제 종료로 결과 artifact가 없더라도 사전에 보관한 `rollback-plan.json`의 `previous`를 사용합니다. 이 값은 시작 상태이므로 실제 변경된 서비스는 현재 AWS 상태로 확인합니다. 결과 기록이 없으면 현재 Task Definition의 이미지와 계획의 digest를 대조해 이번 실행의 변경인지 확인합니다. 수동 복구도 AWS 계정·리전·클러스터와 현재/직전/이번 등록 revision을 대조한 뒤 수행합니다. SSM 값 복구는 별도이며 스키마 변경은 [DB 적용 정책](migrations.md)을 따릅니다.
 
 ```bash
 jq '.status, .previous' work/rollback-plan.json
@@ -724,7 +724,7 @@ Timer의 `_count`·`_sum`·`_bucket`은 Trace 샘플링과 별도로 수집합�
 
 W3C `traceparent`는 Outbox·Inbox·금융 Job의 첫 저장 때 업무 원문과 분리해 저장하고, 실행기·콜백·재시작 뒤에 복원합니다. 같은 eventId 재전달은 원문 bytes·해시·최초 부모를 바꾸지 않습니다. Zipkin에서 `commerce.outbox.send` → Kafka → `payment.inbox.process` → `payment.approval.process`/`payment.refund.process` → Outbox·Commerce/Settlement Inbox를 같은 traceId로 따라갑니다. 판매자 승인처럼 별도 사용자가 새로 내리는 명령은 새 HTTP trace이며, 반품 환불은 실제 SAGA를 시작하는 판매자 승인 요청에서 추적합니다. 지급도 배치·지급 Job을 만든 문맥에서 시작하므로 주문과 별도 trace일 수 있습니다. 관련 거래는 Trace의 업무 ID로 대조합니다. `.wait` span은 실행 span과 저장 부모를 공유하는 형제이며 메서드 실행 시간에 더하지 않습니다. `event.id`·`inbox.id`·`job.id`·`seller.id`·금융 ID는 Trace에만 기록하며 metric label로 사용하지 않습니다.
 
-JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업은 비활성화합니다. 예외는 오류 종류만 남기는 `ObservationFailure`로 정제하며 SQL 오류가 상위 HTTP·Kafka span에 전파돼도 원문을 내보내지 않습니다. 원래 예외·롤백·재시도 동작과 framework 지표의 오류 분류는 유지합니다. 샘플링 기본값은 10%이고 Zipkin은 메모리에 최대 10,000개 span을 보관합니다. 재시작·보관 한도·비샘플 요청의 과거 trace를 복구하거나 모든 알림·운영 작업을 계측하지는 않습니다. 강제 종료 시 아직 export하지 못한 span과 진행 중이던 span은 유실될 수 있습니다. 저장 부모 복원은 같은 traceId로 후속 작업을 연결하며 유실된 span 자체를 복원하지는 않습니다. 강제 종료 smoke는 외부 성공·로컬 미반영을 유지한 채 완료된 선행 부모가 수집된 것을 먼저 확인하고, 재시작한 실행이 DB에 저장된 부모를 실제로 복원하는지 대조합니다. `python3 -B scripts/smoke_financial_flow.py`는 선택한 요청에 sampled W3C 부모를 보내 실제 승인·환불·재시작 경로의 traceId·부모 연결을 금융 정합성과 함께 검사합니다. 일배치 Job→Step→판매자→저장된 지급 부모→실제 지급 Worker의 연결과 상태·진행량의 실제 Prometheus HTTP 응답은 `DailySettlementObservabilityIntegrationTest`(외부 지급 호출은 대역), 실행기 문맥 복원은 `PayoutTracingTest`, 저장 어댑터의 중복·재시작·기존 DB 업그레이드는 `DurableTraceIntegrationTest`로 별도 확인합니다.
+JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업은 비활성화합니다. 예외는 오류 종류만 남기는 `ObservationFailure`로 정제하며 SQL 오류가 상위 HTTP·Kafka span에 전파돼도 원문을 내보내지 않습니다. 원래 예외·롤백·재시도 동작과 framework 지표의 오류 분류는 유지합니다. 샘플링 기본값은 10%이고 Zipkin은 메모리에 최대 10,000개 span을 보관합니다. 재시작·보관 한도·비샘플 요청의 과거 trace를 복구하거나 모든 알림·운영 작업을 계측하지는 않습니다. 강제 종료 시 아직 export하지 못한 span과 진행 중이던 span은 유실될 수 있습니다. 저장 부모 복원은 같은 traceId로 후속 작업을 연결하며 유실된 span 자체를 복원하지는 않습니다. 강제 종료 smoke는 외부 성공·로컬 미반영을 유지한 채 완료된 선행 부모가 수집된 것을 먼저 확인하고, 재시작한 실행이 DB에 저장된 부모를 실제로 복원하는지 대조합니다. `python3 -B scripts/smoke_financial_flow.py`는 선택한 요청에 sampled W3C 부모를 보내 실제 승인·환불·재시작 경로의 traceId·부모 연결을 금융 정합성과 함께 검사합니다. 일배치 Job→Step→판매자→저장된 지급 부모→실제 지급 Worker의 연결과 상태·진행량의 실제 Prometheus HTTP 응답은 `DailySettlementObservabilityIntegrationTest`(외부 지급 호출은 대역), 실행기 문맥 복원은 `PayoutTracingTest`, 저장 어댑터의 중복·재시작은 `DurableTraceIntegrationTest`로 별도 확인합니다.
 
 #### 병목 개선 전후 비교
 
@@ -1248,6 +1248,6 @@ Grafana UID `commerce-settle-business-performance`에서 업무 완료 TPS·주�
 
 승인 확정, 환불 전체 완료, 정산 최초 반영은 각각 `payment.confirmed`, `refund.completed`, `order.settlement.applied`입니다. 승인 지연은 Payment 생성→확정, 환불 지연은 Payment 환불 등록→주문 복구 확인이며, 주문 전체 지연은 별도의 `order.settlement.applied`입니다. 정산항목의 최초 생성 시각을 완료 시각으로 사용하되 커밋되어 조회되는 이력만 셉니다. 지급 배치/송금의 완료 시각과 혼동하지 않습니다. 시작 시각 누락·역전은 `business:duration_missing`에 포함하고 유효 지연 분포에서 제외합니다. 무표본은 0ms가 아니며 p99는 1만 유효 표본 이상에서만 표시합니다.
 
-왕복 smoke는 확정 거절 뒤 실제 `payment-retries` API로 새 회차를 접수하고 승인·정산항목 생성까지 확인합니다. 이전 DECLINED 시도, 새 APPROVED 시도 번호, 단일 정산항목과 최초 주문 생성 시각 전달을 검사합니다. 재시도 배포에는 [예약 이력 업그레이드와 복구 절차](migrations.md#기존-db의-결제-회차별-예약)를 함께 적용합니다. 코드 검증과 실제 환경 배포·수집 확인은 각각 기록합니다.
+왕복 smoke는 확정 거절 뒤 실제 `payment-retries` API로 새 회차를 접수하고 승인·정산항목 생성까지 확인합니다. 이전 DECLINED 시도, 새 APPROVED 시도 번호, 단일 정산항목과 최초 주문 생성 시각 전달을 검사합니다. 회차별 예약 제약이 없는 기존 실험 DB는 [DB 적용 정책](migrations.md#최초-배포와-기존-데이터-변경)에 따라 초기화하고 현재 DDL로 구성합니다. 코드 검증과 실제 환경 배포·수집 확인은 각각 기록합니다.
 
 업무 지표 관측 컬럼·인덱스가 없는 기존 실험 DB는 [DB 적용 정책](migrations.md#최초-배포와-기존-데이터-변경)에 따라 초기화하고 현재 DDL로 구성합니다. 실제 사용본에는 새 이미지뿐 아니라 `financial.rules.yml`과 `business-performance.json`도 적용한 뒤 rule evaluation·수집 신선도·실제 주문 반영과 지연 coverage를 확인합니다. `app.business-metrics.enabled=false`는 DB 표본 수집을 끄며, 꺼진 환경은 전체 지표 준비 완료로 보고하지 않습니다.

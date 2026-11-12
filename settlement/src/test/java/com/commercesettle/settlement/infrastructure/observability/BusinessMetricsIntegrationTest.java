@@ -15,8 +15,6 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.prometheus.metrics.model.snapshots.GaugeSnapshot;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -236,33 +234,6 @@ class BusinessMetricsIntegrationTest {
       assertThat(argument.getValue().orderAcceptedAt())
           .isEqualTo(
               headers.length == 1 && headers[0].equals(accepted) ? Instant.parse(accepted) : null);
-    }
-  }
-
-  @Test
-  void upgradePreservesExistingFactsAndIsIdempotent() throws Exception {
-    fact(12);
-    String before =
-        jdbc.queryForObject(
-            "SELECT jsonb_agg(to_jsonb(t) ORDER BY id)::text FROM settlement.settlement_items t",
-            String.class);
-    jdbc.execute("ALTER TABLE settlement.inbox DROP COLUMN order_accepted_at");
-    String sql =
-        Files.readString(Path.of("../infra/postgres/upgrade/settlement-business-metrics.sql"));
-    for (int i = 0; i < 2; i++)
-      try (var connection = source.getConnection();
-          var statement = connection.createStatement()) {
-        statement.execute(sql);
-      }
-    assertThat(
-            jdbc.queryForObject(
-                "SELECT jsonb_agg(to_jsonb(t) ORDER BY id)::text FROM settlement.settlement_items t",
-                String.class))
-        .isEqualTo(before);
-    try (var metrics = metrics()) {
-      metrics.refresh();
-      assertThat(value(metrics, "completions", "order.settlement.applied")).isEqualTo(1);
-      assertThat(value(metrics, "duration_missing", "order.settlement.applied")).isEqualTo(1);
     }
   }
 
