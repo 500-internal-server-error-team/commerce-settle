@@ -783,6 +783,9 @@ CREATE TABLE commerce.notification_deliveries (
 );
 CREATE INDEX notification_deliveries_due ON commerce.notification_deliveries(status,next_run_at,lease_until,id);
 CREATE INDEX notification_deliveries_recipient ON commerce.notification_deliveries(recipient_kind,recipient_id,created_at DESC,id DESC);
+-- 최근 5분 금융 조치 알림 지표는 두 종류의 생성 시각만 본다.
+CREATE INDEX notification_deliveries_action_created ON commerce.notification_deliveries(created_at)
+    WHERE kind IN ('REFUND_ACTION_REQUIRED','PAYOUT_ACTION_REQUIRED');
 
 CREATE TABLE commerce.notification_items (
     id uuid PRIMARY KEY,

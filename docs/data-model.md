@@ -1118,7 +1118,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 **제약:** UNIQUE NULLS NOT DISTINCT(channel,channel_account_ref,kind,recipient_kind,recipient_id,dedup_key). MOCK_KAKAO의 계정 참조는 NULL, KAKAO_SELF는 소문자 SHA-256 64자리 필수다. recipient_kind에 맞는 계정을 검증한다. 모의 수신처는 mock:<종류>:<ID>, 실제 수신 참조는 kakao-self:<계정 해시>:<종류>:<ID>다. SALE_COMPLETED만 COLLECTING과 1분 구간을 사용한다. 마감 시 행 잠금 아래 항목 추가를 차단하고 본문·템플릿·합계를 고정한다. 같은 채널·물리 계정·논리 수신자의 동일 구간에 열린 묶음 하나만 존재한다. 그 외 종류의 bucket 값은 NULL이다. SENT에는 sent_at 필수. lease_token과 lease_until은 함께 설정/해제한다. attempt_count/retry_count>=0, retry_count<=10.
 
-**인덱스:** (status,next_run_at,lease_until,id); (recipient_kind,recipient_id,created_at DESC,id DESC).
+**인덱스:** (status,next_run_at,lease_until,id); (recipient_kind,recipient_id,created_at DESC,id DESC); 최근 금융 조치 알림 지표용 (created_at) WHERE kind IN (REFUND_ACTION_REQUIRED,PAYOUT_ACTION_REQUIRED). 알림 지표는 이 인덱스들의 조건으로 미완료·확인 대상·최근 조치 행만 읽고 SENT 이력은 훑지 않습니다.
 
 ### notification_items
 
