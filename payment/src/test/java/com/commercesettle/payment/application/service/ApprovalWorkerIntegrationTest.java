@@ -431,6 +431,64 @@ class ApprovalWorkerIntegrationTest {
   }
 
   @Test
+  @DisplayName("미확정 재시도 회차의 취소는 거절하고, 그 회차가 확정 거절된 뒤 같은 회차 취소를 다시 받으면 추가 승인 없이 취소한다")
+  void cancelsDeclinedRetryCycleWhenCancellationIsRequestedAgain() throws Exception {
+    fundWallet(5_000);
+    UUID order = request(10_000, 2_000, "CREDIT_CARD");
+    gateway.approve = r -> new Result.Declined(UUID.randomUUID());
+    worker.runOnce();
+    UUID cycle = UUID.randomUUID();
+    retry(cycle, 2);
+    gateway.approve = r -> new Result.Unconfirmed("timeout");
+    worker.runOnce();
+    assertThat(status()).isEqualTo("UNKNOWN");
+
+    cancellation(order, cycle, 3);
+    assertThat(status()).isEqualTo("UNKNOWN");
+    assertThat(
+            jdbc()
+                .queryForList(
+                    "SELECT payload->'payload'->>'paymentCycleId' || ':' || (payload->'payload'->>'reasonCode') FROM payment.outbox WHERE event_type='PaymentCancellationRejected'",
+                    String.class))
+        .containsExactly(cycle + ":PAYMENT_IN_PROGRESS");
+    assertThat(
+            jdbc()
+                .queryForObject("SELECT reserved_amount FROM payment.mileage_wallets", Long.class))
+        .isEqualTo(2_000);
+
+    makeJobDue();
+    gateway.lookup = r -> new Result.Declined(UUID.randomUUID());
+    worker.runOnce();
+    assertThat(status()).isEqualTo("DECLINED");
+    cancellation(order, cycle, 3);
+
+    assertThat(status()).isEqualTo("CANCELLED");
+    assertThat(
+            jdbc()
+                .queryForList(
+                    "SELECT payload->'payload'->>'paymentCycleId' || ':' || (payload->'payload'->>'reasonCode') FROM payment.outbox WHERE event_type='PaymentCancelled'",
+                    String.class))
+        .containsExactly(cycle + ":CANCELLED_BEFORE_APPROVAL");
+    assertThat(worker.runOnce()).isFalse();
+    assertThat(gateway.approvals).hasSize(2);
+    assertThat(gateway.lookups).hasSize(1);
+    assertThat(jdbc().queryForMap("SELECT balance, reserved_amount FROM payment.mileage_wallets"))
+        .containsEntry("balance", 5_000L)
+        .containsEntry("reserved_amount", 0L);
+    assertThat(
+            jdbc()
+                .queryForList(
+                    "SELECT status FROM payment.mileage_reservations ORDER BY created_at, id",
+                    String.class))
+        .containsExactly("RELEASED", "RELEASED");
+    assertThat(
+            jdbc()
+                .queryForList(
+                    "SELECT kind FROM payment.mileage_entries ORDER BY kind", String.class))
+        .containsExactly("RELEASE", "RELEASE", "RESERVE", "RESERVE");
+  }
+
+  @Test
   @DisplayName("결과를 모르면 미확정으로 두고 다시 실행할 때 승인을 반복하지 않고 원거래를 조회해 확정한다")
   void looksUpUnconfirmedApprovalInsteadOfRetrying() {
     request(10_000, 0, "CREDIT_CARD");
@@ -786,6 +844,13 @@ class ApprovalWorkerIntegrationTest {
 
   /** 첫 요청의 불변 합의를 그대로 두고 회차·주문 버전·이벤트 식별자만 바꾼다. */
   private UUID retry(UUID cycle, long version) throws IOException {
+    UUID eventId = saveRetry(cycle, version);
+    assertThat(requests.processEvent(eventId)).isTrue();
+    makeJobDue();
+    return eventId;
+  }
+
+  private UUID saveRetry(UUID cycle, long version) throws IOException {
     var event =
         (com.fasterxml.jackson.databind.node.ObjectNode)
             mapper.readTree(
@@ -807,12 +872,14 @@ class ApprovalWorkerIntegrationTest {
             s ->
                 inbox.saveWaiting(
                     parsed, new Source("commerce-settle.commerce.v1", 0, version, body)));
-    assertThat(requests.processEvent(eventId)).isTrue();
-    makeJobDue();
     return eventId;
   }
 
   private void cancellation(UUID order, UUID cycle, long version) throws IOException {
+    assertThat(requests.processEvent(saveCancellation(order, cycle, version))).isTrue();
+  }
+
+  private UUID saveCancellation(UUID order, UUID cycle, long version) throws IOException {
     UUID eventId = UUID.randomUUID();
     var event = mapper.createObjectNode();
     event.put("eventId", eventId.toString());
@@ -834,7 +901,7 @@ class ApprovalWorkerIntegrationTest {
             s ->
                 inbox.saveWaiting(
                     parsed, new Source("commerce-settle.commerce.v1", 0, version + 100, body)));
-    assertThat(requests.processEvent(eventId)).isTrue();
+    return eventId;
   }
 
   /** 쿠폰 없는 결제 요청을 Inbox에 넣고 처리해 결제·승인 작업을 만든다. */
