@@ -4,6 +4,7 @@ import com.commercesettle.observability.AsyncObservation;
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PaymentConfirmedPayload;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
+import com.commercesettle.settlement.application.exception.WaitingInboxFailedException;
 import com.commercesettle.settlement.application.port.InboxStore;
 import com.commercesettle.settlement.application.port.InboxStore.Source;
 import com.commercesettle.settlement.domain.model.InboxReviewReason;
@@ -19,12 +20,15 @@ import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 결제확정·구매확정 이벤트를 Inbox 저장과 같은 트랜잭션에 반영한다. 선행 결제가 없는 구매확정만 WAITING으로 남기고 처리기가 다시 판정한다. 같은 결제의 다른
@@ -35,6 +39,7 @@ public class SettlementEventService {
   private static final Logger LOGGER = LoggerFactory.getLogger(SettlementEventService.class);
   // policies.md 재처리: 최대 10회, 1초부터 최대 60초 간격, 소진 시 REVIEW_REQUIRED.
   private static final int MAX_WAITING_ATTEMPTS = 10;
+  private static final Duration MIN_FAILURE_DELAY = Duration.ofSeconds(1);
 
   private AsyncObservation observations = AsyncObservation.NOOP;
   private final InboxStore inbox;
@@ -43,6 +48,7 @@ public class SettlementEventService {
   private final RefundEventService refunds;
   private final Clock clock;
   private final Duration waitingRecheckDelay;
+  private final TransactionTemplate transactions;
 
   SettlementEventService(
       InboxStore inbox,
@@ -50,12 +56,14 @@ public class SettlementEventService {
       SettlementEntryRepository entries,
       RefundEventService refunds,
       Clock clock,
+      PlatformTransactionManager transactionManager,
       @Value("${settlement.inbox-processor.interval-ms}") long waitingRecheckMillis) {
     this.inbox = inbox;
     this.items = items;
     this.entries = entries;
     this.refunds = refunds;
     this.clock = clock;
+    this.transactions = new TransactionTemplate(transactionManager);
     this.waitingRecheckDelay = Duration.ofMillis(waitingRecheckMillis);
   }
 
@@ -129,15 +137,41 @@ public class SettlementEventService {
     }
   }
 
-  /** WAITING 구매확정이나 환불 예약 요청 하나를 다시 판정한다. 대기 중인 건이 없으면 false. */
-  @Transactional
+  /**
+   * WAITING 구매확정이나 환불 예약 요청 하나를 다시 판정한다. 대기 중인 건이 없으면 false. 선점한 행의 판정이 커밋 flush까지 포함해 실패하면 롤백 뒤 그
+   * 행 ID를 담은 {@link WaitingInboxFailedException}을 던진다. 롤백된 행은 기한이 지난 WAITING 그대로라 처리기가 별도 트랜잭션에서
+   * 미룬다.
+   */
   public boolean processNextWaiting() {
-    Optional<InboxStore.Pending> waiting = inbox.claimNextWaiting();
-    if (waiting.isEmpty()) {
-      return false;
+    AtomicReference<UUID> claimed = new AtomicReference<>();
+    try {
+      return Boolean.TRUE.equals(
+          transactions.execute(
+              status -> {
+                Optional<InboxStore.Pending> waiting = inbox.claimNextWaiting();
+                if (waiting.isEmpty()) {
+                  return false;
+                }
+                claimed.set(waiting.get().inboxId());
+                process(waiting.get());
+                return true;
+              }));
+    } catch (RuntimeException failure) {
+      if (claimed.get() == null) {
+        throw failure;
+      }
+      throw new WaitingInboxFailedException(claimed.get(), failure);
     }
-    process(waiting.get());
-    return true;
+  }
+
+  /** 재판정이 실패한 WAITING 행의 다음 판정을 재판정 주기(최소 1초) 뒤로 미룬다. 실패한 처리와 별도 트랜잭션이다. */
+  @Transactional
+  public boolean deferFailedWaiting(UUID inboxId) {
+    Duration delay =
+        waitingRecheckDelay.compareTo(MIN_FAILURE_DELAY) < 0
+            ? MIN_FAILURE_DELAY
+            : waitingRecheckDelay;
+    return inbox.deferWaiting(inboxId, delay, clock.instant());
   }
 
   /** 고정한 버전·사유만 재판정한다. 선행 근거가 없으면 원래 상태를 유지한다. */
