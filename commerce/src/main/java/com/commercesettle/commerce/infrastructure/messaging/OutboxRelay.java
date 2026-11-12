@@ -33,6 +33,9 @@ public class OutboxRelay {
   private final Executor coordinator;
   private final AtomicBoolean requested = new AtomicBoolean();
   private final AtomicBoolean scheduled = new AtomicBoolean();
+  private final AtomicBoolean expiryRequested = new AtomicBoolean();
+  // 마지막 선점이 빈 슬롯을 모두 채웠으면 더 남은 작업이 있을 수 있다.
+  private volatile boolean saturated;
   private final int maxInFlight;
   private final long leaseMs;
   private final int maxAttempts;
@@ -94,6 +97,8 @@ public class OutboxRelay {
       initialDelayString = "${app.outbox.recovery-interval-ms:1000}",
       fixedDelayString = "${app.outbox.recovery-interval-ms:1000}")
   public void recover() {
+    // 시도를 소진한 작업의 수동 확인 전환은 선점마다가 아니라 복구 주기에만 실행한다.
+    expiryRequested.set(true);
     wakeUp();
   }
 
@@ -135,8 +140,16 @@ public class OutboxRelay {
   }
 
   private void publishDue() {
+    if (accepting && expiryRequested.getAndSet(false)) {
+      try {
+        service.expireExhausted(100, maxAttempts);
+      } catch (RuntimeException exception) {
+        LOG.atWarn().addKeyValue("event", "outbox.expire").log("Outbox exhaustion check failed");
+      }
+    }
     int available = Math.min(100, maxInFlight - inFlight.get());
     if (!accepting || available <= 0) {
+      saturated = true;
       return;
     }
     List<Delivery> deliveries;
@@ -146,6 +159,7 @@ public class OutboxRelay {
       LOG.atWarn().addKeyValue("event", "outbox.claim").log("Outbox claim failed");
       return;
     }
+    saturated = deliveries.size() >= available;
     for (var delivery : deliveries) {
       inFlight.incrementAndGet();
       try {
@@ -227,7 +241,11 @@ public class OutboxRelay {
           .log("Outbox result persistence failed; the original event remains recoverable");
     } finally {
       inFlight.decrementAndGet();
-      wakeUp();
+      // 슬롯이 모자랐거나 같은 주문의 후행이 이 결과를 기다리면 바로 다시 선점한다. 그 밖의 새 작업은
+      // 커밋 신호, 재시도·임대 만료는 복구 주기가 깨운다.
+      if (saturated || delivery.successorWaiting()) {
+        wakeUp();
+      }
     }
   }
 

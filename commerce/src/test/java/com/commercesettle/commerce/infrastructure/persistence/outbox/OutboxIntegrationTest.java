@@ -324,6 +324,28 @@ class OutboxIntegrationTest {
   }
 
   @Test
+  @DisplayName("선점 결과는 같은 주문의 미발행 후행이 있는지 알린다")
+  void reportsWaitingSuccessorOfClaimedDelivery() throws Exception {
+    var predecessor = event(UUID.randomUUID(), 0);
+    var successor = event(UUID.randomUUID(), 1);
+    var independent = forAnotherOrder(event(UUID.randomUUID(), 0));
+    tx.executeWithoutResult(
+        status -> {
+          writer.appendPaymentRequested(predecessor);
+          writer.appendPaymentRequested(successor);
+          writer.appendPaymentRequested(independent);
+        });
+
+    var claimed = service.claim(8, 240000, 10);
+
+    assertThat(claimed)
+        .extracting(OutboxStore.Delivery::id, OutboxStore.Delivery::successorWaiting)
+        .containsExactly(
+            org.assertj.core.groups.Tuple.tuple(predecessor.eventId(), true),
+            org.assertj.core.groups.Tuple.tuple(independent.eventId(), false));
+  }
+
+  @Test
   @DisplayName("마지막 시도에서 중단된 작업은 원본을 보존하고 수동 확인으로 전환한다")
   void stopsExpiredFinalAttemptWithoutDroppingOriginal() throws Exception {
     var event = event(UUID.randomUUID(), 0);
@@ -333,6 +355,9 @@ class OutboxIntegrationTest {
         "UPDATE commerce.outbox SET lease_until=clock_timestamp()-interval '1 second' WHERE id=?",
         event.eventId());
     assertThat(service.claim(1, 240000, 1)).isEmpty();
+    assertThat(jdbc.queryForObject("SELECT status FROM commerce.outbox", String.class))
+        .isEqualTo("RUNNING");
+    assertThat(service.expireExhausted(1, 1)).isEqualTo(1);
     assertThat(jdbc.queryForObject("SELECT status FROM commerce.outbox", String.class))
         .isEqualTo("REVIEW_REQUIRED");
     assertThat(jdbc.queryForObject("SELECT raw_body FROM commerce.outbox", byte[].class))
@@ -361,6 +386,8 @@ class OutboxIntegrationTest {
         var holder = dataSource.getConnection()) {
       lockRow(holder, exhausted.eventId());
       try {
+        assertThat(executor.submit(() -> service.expireExhausted(1, 1)).get(5, TimeUnit.SECONDS))
+            .isZero();
         var claimed = executor.submit(() -> service.claim(1, 240000, 1)).get(5, TimeUnit.SECONDS);
         assertThat(claimed)
             .extracting(OutboxStore.Delivery::id)
@@ -382,6 +409,7 @@ class OutboxIntegrationTest {
       }
     }
 
+    assertThat(service.expireExhausted(1, 1)).isEqualTo(1);
     assertThat(service.claim(1, 240000, 1)).isEmpty();
     assertThat(
             jdbc.queryForObject(
@@ -405,7 +433,7 @@ class OutboxIntegrationTest {
     service.claim(3, 240000, 1);
     jdbc.update("UPDATE commerce.outbox SET lease_until=clock_timestamp()-interval '1 second'");
 
-    assertThat(service.claim(1, 240000, 1)).isEmpty();
+    assertThat(service.expireExhausted(1, 1)).isEqualTo(1);
     assertThat(
             jdbc.queryForObject(
                 "SELECT count(*) FROM commerce.outbox WHERE status='REVIEW_REQUIRED'", Long.class))
