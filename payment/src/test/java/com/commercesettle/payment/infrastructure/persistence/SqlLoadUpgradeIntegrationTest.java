@@ -21,7 +21,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers
 @Timeout(60)
 class SqlLoadUpgradeIntegrationTest {
-  private static final List<String> INDEXES = List.of("ix_outbox_reconciliation");
+  private static final List<String> INDEXES =
+      List.of("ix_outbox_reconciliation", "ix_payment_jobs_lease");
   private static final String DEFINITIONS =
       "SELECT string_agg(pg_get_indexdef(to_regclass('payment.'||name)), E'\\n' ORDER BY name)"
           + " FROM unnest(?::text[]) AS name";

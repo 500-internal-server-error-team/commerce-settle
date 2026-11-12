@@ -741,7 +741,7 @@
 
 임대 소유자·token·만료는 함께 설정/해제하며 선점·회수 때 버전을 증가합니다. 결과 반영은 유효한 token·실행자·Job/금융 상태·회차·예상 버전을 같은 트랜잭션에서 검사합니다. 만료 RUNNING도 회수하며 원대역 조회부터 재개합니다. [금융 Worker 정책](policies.md#금융-worker-임대와-결과-반영)을 따릅니다. 운영 재처리는 같은 행의 원업무 키를 유지한 채 상태를 PENDING으로, `attempts`를 0으로 바꾸고 버전을 올립니다. DONE이거나 유효한 임대 중인 행은 바꾸지 않으며, 이 변경과 `idempotency_records`·`audit_logs`(`PAYMENT_JOB_REPLAYED`) 행을 같은 트랜잭션에 저장합니다.
 
-**인덱스:** (status,next_run_at,lease_until,id); (created_at,id).
+**인덱스:** (status,next_run_at,lease_until,id); (created_at,id); 선점용 (operation,next_run_at,id) WHERE status IN (PENDING,RETRY,RUNNING).
 
 ### payment_attempts
 
