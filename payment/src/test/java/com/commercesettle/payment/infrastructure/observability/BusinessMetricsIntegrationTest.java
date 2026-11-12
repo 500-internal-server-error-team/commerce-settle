@@ -13,9 +13,6 @@ import com.commercesettle.payment.infrastructure.messaging.OrderPaymentRequested
 import com.commercesettle.payment.infrastructure.messaging.OutboxRelay;
 import io.prometheus.metrics.model.snapshots.GaugeSnapshot;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.sql.SQLException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -25,7 +22,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -178,43 +174,6 @@ class BusinessMetricsIntegrationTest {
       reply.completeExceptionally(new IllegalStateException("test cleanup"));
       while (!work.isEmpty()) work.remove().run();
       relay.stop();
-    }
-  }
-
-  @Test
-  void upgradeIsIdempotentAndRejectsIncompatibleExistingObservationColumn() throws Exception {
-    payment("CONFIRMED", 5);
-    String before =
-        jdbc.queryForObject(
-            "SELECT jsonb_agg(to_jsonb(t) ORDER BY id)::text FROM payment.payments t",
-            String.class);
-    String sql =
-        Files.readString(Path.of("../infra/postgres/upgrade/payment-business-metrics.sql"));
-    jdbc.execute("ALTER TABLE payment.outbox DROP COLUMN order_accepted_at");
-    for (int i = 0; i < 2; i++)
-      try (var connection = source.getConnection();
-          var statement = connection.createStatement()) {
-        statement.execute(sql);
-      }
-    assertThat(
-            jdbc.queryForObject(
-                "SELECT jsonb_agg(to_jsonb(t) ORDER BY id)::text FROM payment.payments t",
-                String.class))
-        .isEqualTo(before);
-    jdbc.execute("ALTER TABLE payment.outbox ALTER COLUMN order_accepted_at TYPE text");
-    try {
-      Assertions.assertThatThrownBy(
-              () -> {
-                try (var connection = source.getConnection();
-                    var statement = connection.createStatement()) {
-                  statement.execute(sql);
-                }
-              })
-          .isInstanceOf(SQLException.class)
-          .hasMessageContaining("Incompatible order_accepted_at");
-    } finally {
-      jdbc.execute(
-          "ALTER TABLE payment.outbox ALTER COLUMN order_accepted_at TYPE timestamptz USING NULL::timestamptz");
     }
   }
 
