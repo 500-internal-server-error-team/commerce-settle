@@ -177,7 +177,7 @@ ECS 안정화 후 앱 호스트에서 세 사설 포트 도달 여부, 서비스
 
 앱 보안 그룹의 `8080–8085`는 앱 측 사설 통신에, `9091–9096`은 데이터 보안 그룹의 메트릭 수집에만 허용합니다. 데이터의 `5432/6379/9092/9411`과 Commerce가 조회하는 Prometheus `9090`은 앱 보안 그룹만 허용합니다. 공개 진입은 Caddy의 `80/443`을 유지합니다. 실제 EC2·포트 도달 여부를 확인하며 Compose 이름이나 루프백 주소를 다른 호스트에 사용하지 않습니다.
 
-생성 Task의 메모리는 앱마다 512MiB입니다. 앱 전체·Caddy·ECS 에이전트·운영체제의 CPU·메모리 여유를 확인하고 실측에 따라 조정합니다. Task 전체 CPU·메모리 제한은 넣지 않으며 기존 EC2의 cgroup driver를 바꾸지 않습니다. 로그 그룹 `/ecs/commerce-settle/<접미사>` 여섯 개와 7일 보존, 실행 역할의 ECR pull·SSM·KMS·로그 전송 권한을 준비합니다. 호스트 속성·실행 역할·에이전트 조건은 [데이터 서비스](#ecs-ec2-데이터-서비스)와 [HTTPS 네트워크 준비](#네트워크와-저장소-준비)를 함께 확인합니다.
+생성 Task의 컨테이너 메모리는 Commerce 1GiB·나머지 앱 512MiB입니다. 컨테이너 상한에는 JVM heap 외에 Metaspace·코드 캐시·스레드 등도 포함됩니다. 기존 Task의 메모리를 조정할 때는 현재 Task 정의를 바탕으로 해당 컨테이너의 `memory`만 바꾼 개정을 등록하고, 기존 이미지·환경·자격 참조·배치·볼륨을 보존합니다. 앱 전체·Caddy·ECS 에이전트·운영체제의 CPU·메모리 여유와 실제 사용량·OOM을 확인한 뒤 서비스를 갱신하며, 정상 기동만으로 부하 처리를 검증했다고 판단하지 않습니다. Task 전체 CPU·메모리 제한은 넣지 않으며 기존 EC2의 cgroup driver를 바꾸지 않습니다. 로그 그룹 `/ecs/commerce-settle/<접미사>` 여섯 개와 7일 보존, 실행 역할의 ECR pull·SSM·KMS·로그 전송 권한을 준비합니다. 호스트 속성·실행 역할·에이전트 조건은 [데이터 서비스](#ecs-ec2-데이터-서비스)와 [HTTPS 네트워크 준비](#네트워크와-저장소-준비)를 함께 확인합니다.
 
 SSM의 `SecureString`은 `APP_SSM_PARAMETER_ARN_PREFIX=arn:aws:ssm:<리전>:<계정>:parameter/commerce-settle/app/` 아래에 준비합니다. DB·Redis 자격은 데이터 서비스와 같아야 합니다. Gateway·Commerce의 `AUTH_SESSION_EPOCH`·`AUTH_REDIS_RUN_ID`는 같은 승인값을 쓰며 임의 생성하거나 오래된 값을 재사용하지 않습니다. 필요한 ARN 전체는 생성 JSON의 `secrets`에서 확인합니다.
 
