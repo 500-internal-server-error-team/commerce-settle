@@ -56,7 +56,7 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
   @Transactional
   public Optional<LeasedJob> leaseNext(
       PaymentJobOperation operation, String owner, Duration leaseDuration) {
-    limits();
+    TransactionLimits.apply(jdbc.getJdbcTemplate());
     return jdbc
         .query(
             """
@@ -120,7 +120,7 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
   @Override
   public boolean releaseLease(
       UUID jobId, UUID leaseToken, PaymentJobStatus status, Duration runAfter, String errorCode) {
-    limits();
+    TransactionLimits.apply(jdbc.getJdbcTemplate());
     // 임대 만료는 실제 현재 시각으로 본다. now()는 트랜잭션 시작 시각이라 잠금 대기 중 만료된 임대도 통과시킨다.
     return jdbc.update(
             """
@@ -159,7 +159,7 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
 
   @Override
   public ReplayResult replay(UUID jobId, long expectedVersion) {
-    limits();
+    TransactionLimits.apply(jdbc.getJdbcTemplate());
     var params = new MapSqlParameterSource().addValue("id", jobId);
     var current =
         jdbc.query(
@@ -197,20 +197,6 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
   }
 
   private record Current(PaymentJobStatus status, long version, boolean leased) {}
-
-  /** 다른 트랜잭션의 작업 잠금은 1초, SQL 한 문장은 5초까지만 기다린다. 호출자의 더 짧은 상한은 유지한다. */
-  private void limits() {
-    jdbc.getJdbcTemplate()
-        .queryForList(
-            """
-            SELECT set_config(budget.name,
-                least(coalesce(nullif(settings.setting::integer,0),budget.timeout_ms),
-                    budget.timeout_ms)::text,true)
-            FROM (VALUES ('lock_timeout',1000),('statement_timeout',5000))
-                AS budget(name,timeout_ms)
-            JOIN pg_settings settings ON settings.name=budget.name
-            """);
-  }
 
   private static double seconds(Duration duration) {
     return duration.toMillis() / 1000.0;
