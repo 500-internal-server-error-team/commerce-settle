@@ -174,6 +174,21 @@ class PaymentOutboxIntegrationTest {
   }
 
   @Test
+  @DisplayName("선점은 시도 상한을 넘긴 행을 건너뛰기만 하고 확인 대상 전환은 주기 정리에서 한다")
+  void reviewsExhaustedRowsOnlyInPeriodicCleanup() {
+    inTransaction(() -> outbox.appendPaymentAccepted(event(UUID.randomUUID(), 3)));
+    jdbc.update(
+        "UPDATE payment.outbox SET status='RETRY',attempts=10,next_run_at=clock_timestamp()");
+
+    assertThat(delivery.claim(10, 240000, 10)).isEmpty();
+    assertThat(jdbc.queryForObject("SELECT status FROM payment.outbox", String.class))
+        .isEqualTo("RETRY");
+    assertThat(delivery.reviewExhausted(100, 10)).isEqualTo(1);
+    assertThat(jdbc.queryForObject("SELECT status FROM payment.outbox", String.class))
+        .isEqualTo("REVIEW_REQUIRED");
+  }
+
+  @Test
   @DisplayName("이벤트 종류·버전·집계 ID가 계약과 다르면 저장하지 않는다")
   void rejectsInvalidEnvelope() {
     var payload = new PaymentAcceptedPayload(PAYMENT_ID, ORDER_ID, 3, CYCLE_ID);
