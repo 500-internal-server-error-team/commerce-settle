@@ -287,6 +287,28 @@ class OutboxIntegrationTest {
   }
 
   @Test
+  @DisplayName("같은 집계의 낮은 버전 신규 저장은 거절하고 기존 ID의 같은 본문 재저장은 버전과 관계없이 인정한다")
+  void rejectsBackwardVersionButAcceptsReplayOfEarlierEvent() throws Exception {
+    var first = event(UUID.randomUUID(), 1);
+    var later = event(UUID.randomUUID(), 2);
+    var backwards = event(UUID.randomUUID(), 0);
+    tx.executeWithoutResult(
+        status -> {
+          writer.appendPaymentRequested(first);
+          writer.appendPaymentRequested(later);
+        });
+
+    assertThat(tx.<UUID>execute(status -> writer.appendPaymentRequested(first)))
+        .isEqualTo(first.eventId());
+    assertThatThrownBy(
+            () -> tx.executeWithoutResult(status -> writer.appendPaymentRequested(backwards)))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("backwards");
+    assertThat(jdbc.queryForObject("SELECT count(*) FROM commerce.outbox", Long.class))
+        .isEqualTo(2);
+  }
+
+  @Test
   @DisplayName("재시도 대기와 수동 확인인 선행 이벤트를 후행이 추월하지 않는다")
   void blocksSuccessorBehindRetryAndReview() throws Exception {
     var first = event(UUID.randomUUID(), 0);
