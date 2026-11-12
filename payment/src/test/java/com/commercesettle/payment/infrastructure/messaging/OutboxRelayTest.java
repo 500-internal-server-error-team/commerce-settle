@@ -256,6 +256,23 @@ class OutboxRelayTest {
   }
 
   @Test
+  @DisplayName("시도 상한 정리는 복구 주기에만 실행하고 커밋 신호의 선점에서는 하지 않는다")
+  void reviewsExhaustedRowsOnlyOnRecoveryTick() {
+    when(service.claim(1, 240000, 10)).thenReturn(List.of());
+    var relay = relay();
+
+    relay.recover();
+    coordinator.remove().run();
+    relay.wakeUp();
+    coordinator.remove().run();
+    relay.stop();
+    relay.recover();
+
+    verify(service, times(1)).reviewExhausted(100, 10);
+    verify(service, times(2)).claim(1, 240000, 10);
+  }
+
+  @Test
   @DisplayName("시작 때 대기 작업을 찾고 종료 후에는 새 신호를 받지 않는다")
   void startsRecoveryAndStopsNewWakeups() {
     when(service.claim(1, 240000, 10)).thenReturn(List.of());
