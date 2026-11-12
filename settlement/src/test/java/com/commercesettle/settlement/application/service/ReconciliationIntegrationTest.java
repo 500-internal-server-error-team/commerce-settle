@@ -362,6 +362,35 @@ class ReconciliationIntegrationTest {
   }
 
   @Test
+  @DisplayName("미검사 이벤트가 남은 호출은 원장 전체 검사를 건너뛰고 모두 검사한 뒤 한 번 기록한다")
+  void runsLocalChecksOnlyAfterAllEventsChecked() {
+    for (int i = 0; i < 150; i++) feed.items.add(payment(false));
+    UUID id = service.request(cutoff, "operator:ops");
+    String pending = "SELECT count(*) FROM settlement.reconciliation_events WHERE status='PENDING'";
+    for (int i = 0; i < 10; i++) {
+      service.tick();
+      long checked =
+          jdbc.queryForObject(
+              "SELECT count(*) FROM settlement.reconciliation_events WHERE status<>'PENDING'",
+              Long.class);
+      if (checked > 0) break;
+    }
+    assertThat(jdbc.queryForObject(pending, Long.class)).isEqualTo(50);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM settlement.reconciliation_checks", Long.class))
+        .isZero();
+
+    service.tick();
+    assertThat(status(id)).isEqualTo("WAITING");
+    assertThat(jdbc.queryForObject(pending, Long.class)).isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM settlement.reconciliation_checks", Long.class))
+        .isEqualTo(14);
+  }
+
+  @Test
   @DisplayName("원장의 금액·참조 결함과 실제 DB 고아 참조를 탐지한다")
   void detectsLedgerAndReferenceDefects() throws Exception {
     var e = payment(false);
