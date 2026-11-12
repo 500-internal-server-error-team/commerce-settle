@@ -2,6 +2,7 @@ package com.commercesettle.commerce.infrastructure.config;
 
 import com.commercesettle.commerce.application.service.OrderResultService;
 import com.commercesettle.commerce.application.service.OrderWorkflowService;
+import com.commercesettle.commerce.infrastructure.messaging.PaymentAcceptedProcessor;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -61,7 +62,7 @@ public class OrderWorkflowConfiguration {
         fixedDelayString = "${app.order-result-processor.interval-ms:1000}")
     public void run() {
       try {
-        for (int i = 0; i < 100; i++) if (!results.processNext()) return;
+        PaymentAcceptedProcessor.drain(results::processNext, 100);
       } catch (RuntimeException e) {
         LoggerFactory.getLogger(OrderResults.class)
             .warn("Order result processing paused: errorCode=INBOX_UNAVAILABLE");
