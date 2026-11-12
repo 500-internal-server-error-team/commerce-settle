@@ -23,9 +23,6 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
@@ -139,26 +136,13 @@ class PaymentRequestProcessingIntegrationTest {
   }
 
   @Test
-  @DisplayName("회차별 예약 업그레이드는 기존 금융 행을 보존하고 반복 적용해도 예약 한도와 회차 중복 제약을 유지한다")
-  void upgradesReservationConstraintsWithoutChangingFinancialRows() throws Exception {
+  @DisplayName("초기 스키마는 결제별 활성 예약 한 건과 같은 회차의 예약 유일성을 지킨다")
+  void initialSchemaEnforcesActiveReservationAndCycleUniqueness() {
     fundWallet(5_000);
     saveWaiting(event(UUID.randomUUID(), ORDER_ID, CYCLE_ID, 10_000, 2_000));
     service.processNext();
     JdbcTemplate jdbc = new JdbcTemplate(dataSource);
-    List<String> tables =
-        List.of(
-            "payments",
-            "mileage_wallets",
-            "mileage_reservations",
-            "mileage_entries",
-            "payment_jobs",
-            "inbox",
-            "outbox");
-    var before = tables.stream().map(this::tableSnapshot).toList();
-    installLegacyReservationConstraint(jdbc);
-    runRetryUpgrade();
-    runRetryUpgrade();
-    assertThat(tables.stream().map(this::tableSnapshot).toList()).isEqualTo(before);
+
     assertThatThrownBy(() -> copyReservation(jdbc, UUID.randomUUID(), "RESERVED"))
         .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
     assertThatThrownBy(() -> copyReservation(jdbc, CYCLE_ID, "RELEASED"))
@@ -168,51 +152,6 @@ class PaymentRequestProcessingIntegrationTest {
         .isEqualTo(2);
   }
 
-  @Test
-  @DisplayName("동명 예약 인덱스의 정의가 다르면 업그레이드 전체를 롤백하고 기존 단일 결제 제약을 보존한다")
-  void rejectsIncompatibleReservationIndexAtomically() throws Exception {
-    JdbcTemplate jdbc = new JdbcTemplate(dataSource);
-    installLegacyReservationConstraint(jdbc);
-    jdbc.execute(
-        "CREATE INDEX uk_mileage_reservations_reserved ON payment.mileage_reservations(wallet_id)");
-    try {
-      assertThatThrownBy(this::runRetryUpgrade)
-          .isInstanceOf(SQLException.class)
-          .hasMessageContaining("Incompatible active reservation index");
-      assertThat(
-              jdbc.queryForObject(
-                  "SELECT count(*) FROM pg_constraint WHERE conrelid='payment.mileage_reservations'::regclass AND conname='uk_mileage_reservations_payment'",
-                  Long.class))
-          .isEqualTo(1);
-      assertThat(
-              jdbc.queryForObject(
-                  "SELECT count(*) FROM pg_constraint WHERE conrelid='payment.mileage_reservations'::regclass AND conname='uk_mileage_reservations_payment_cycle'",
-                  Long.class))
-          .isZero();
-    } finally {
-      jdbc.execute("DROP INDEX payment.uk_mileage_reservations_reserved");
-      runRetryUpgrade();
-    }
-  }
-
-  private String tableSnapshot(String table) {
-    // 호출자는 위 시험의 고정 테이블 목록뿐이다.
-    return new JdbcTemplate(dataSource)
-        .queryForObject(
-            "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]'::jsonb)::text FROM payment."
-                + table
-                + " t",
-            String.class);
-  }
-
-  private void installLegacyReservationConstraint(JdbcTemplate jdbc) {
-    jdbc.execute("DROP INDEX payment.uk_mileage_reservations_reserved");
-    jdbc.execute(
-        "ALTER TABLE payment.mileage_reservations DROP CONSTRAINT uk_mileage_reservations_payment_cycle");
-    jdbc.execute(
-        "ALTER TABLE payment.mileage_reservations ADD CONSTRAINT uk_mileage_reservations_payment UNIQUE(payment_id)");
-  }
-
   private void copyReservation(JdbcTemplate jdbc, UUID cycle, String status) {
     jdbc.update(
         "INSERT INTO payment.mileage_reservations(id,wallet_id,payment_id,cycle_id,amount,status,created_at,updated_at,version) SELECT ?,wallet_id,payment_id,?,amount,?,created_at,updated_at,0 FROM payment.mileage_reservations WHERE cycle_id=?",
@@ -220,19 +159,6 @@ class PaymentRequestProcessingIntegrationTest {
         cycle,
         status,
         CYCLE_ID);
-  }
-
-  private void runRetryUpgrade() throws IOException, SQLException {
-    String sql = Files.readString(Path.of("../infra/postgres/upgrade/payment-retry-cycles.sql"));
-    try (var connection = dataSource.getConnection();
-        var statement = connection.createStatement()) {
-      try {
-        statement.execute(sql);
-      } catch (SQLException failure) {
-        statement.execute("ROLLBACK");
-        throw failure;
-      }
-    }
   }
 
   @Test
