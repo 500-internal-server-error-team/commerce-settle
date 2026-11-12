@@ -78,6 +78,88 @@ class BusinessMetricsIntegrationTest {
   }
 
   @Test
+  void factsSelectTheSameOriginsAsTheLegacyPerLegJoin() {
+    fact(12);
+    fact(30);
+    fact(-5);
+    // 최초 leg가 없는 항목, 원 Inbox가 운영 확인으로 남은 항목, 집계 구간 밖 항목.
+    UUID bare = fact(7);
+    jdbc.update("DELETE FROM settlement.settlement_entries WHERE item_id=?", bare);
+    UUID reviewed = fact(9);
+    jdbc.update(
+        "UPDATE settlement.inbox SET status='REVIEW_REQUIRED' WHERE result_ref=? AND event_id IN "
+            + "(SELECT source_event_id FROM settlement.settlement_entries WHERE item_id=?)",
+        reviewed,
+        reviewed);
+    UUID old = fact(3);
+    jdbc.update(
+        "UPDATE settlement.settlement_items SET created_at=created_at-interval '2000 seconds'"
+            + " WHERE id=?",
+        old);
+    // 환불 상쇄 leg는 다른 이벤트에서 오며 원 이벤트 판정에 쓰지 않는다.
+    UUID refunded = fact(20);
+    jdbc.update(
+        """
+        INSERT INTO settlement.settlement_entries (id,item_id,payment_id,side,leg,amount,business_ref,
+          source_event_id,source_occurred_at,reversal_of,policy_version,created_at)
+        SELECT gen_random_uuid(),item_id,payment_id,side,leg,-amount,gen_random_uuid(),
+          gen_random_uuid(),source_occurred_at,id,policy_version,created_at-interval '1 second'
+        FROM settlement.settlement_entries WHERE item_id=?
+        """,
+        refunded);
+    // 다른 consumer가 같은 이벤트를 더 먼저 기록했으면 먼저 기록한 행을 고른다.
+    UUID shared = fact(15);
+    jdbc.update(
+        """
+        INSERT INTO settlement.inbox (id,consumer,event_id,event_type,event_version,occurred_at,
+          payload,raw_body,body_hash,source_topic,source_partition,source_offset,aggregate_id,
+          aggregate_version,status,result_ref,order_accepted_at,created_at,updated_at)
+        SELECT gen_random_uuid(),'settlement.other',event_id,event_type,event_version,occurred_at,
+          payload,raw_body,body_hash,source_topic,source_partition,source_offset,aggregate_id,
+          aggregate_version,status,result_ref,order_accepted_at-interval '40 seconds',
+          created_at-interval '1 second',updated_at
+        FROM settlement.inbox WHERE result_ref=? AND event_id IN
+          (SELECT source_event_id FROM settlement.settlement_entries WHERE item_id=?)
+        """,
+        shared,
+        shared);
+    String legacy =
+        """
+        SELECT DISTINCT ON (s.id) s.created_at AS completed_at, i.order_accepted_at,
+            (i.payload->'payload'->>'confirmedAt')::timestamptz AS confirmed_at
+        FROM settlement.settlement_items s
+        LEFT JOIN settlement.settlement_entries e ON e.item_id=s.id AND e.reversal_of IS NULL
+        LEFT JOIN settlement.inbox i ON i.event_id=e.source_event_id
+          AND i.result_ref=s.id AND i.event_type='PaymentConfirmed' AND i.status='APPLIED'
+        WHERE s.created_at >= statement_timestamp() - interval '900 seconds'
+          AND s.created_at < statement_timestamp()
+        ORDER BY s.id, i.created_at NULLS LAST, e.created_at, e.id, i.id
+        """;
+    var expected =
+        java.util.Map.of(
+            "order.settlement.applied",
+            "SELECT completed_at, order_accepted_at AS started_at FROM (" + legacy + ") facts",
+            "payment.settlement.applied",
+            "SELECT completed_at, confirmed_at AS started_at FROM (" + legacy + ") facts");
+    var sources = BusinessMetricsConfiguration.sources();
+    assertThat(sources).containsOnlyKeys(expected.keySet());
+    for (var operation : expected.keySet()) {
+      var before = rows(expected.get(operation));
+      assertThat(before).hasSize(7).anyMatch(row -> row.endsWith("|null"));
+      assertThat(before.stream().filter(row -> !row.endsWith("|null"))).hasSizeGreaterThan(3);
+      assertThat(rows(sources.get(operation))).as(operation).isEqualTo(before);
+    }
+  }
+
+  private java.util.List<String> rows(String source) {
+    return jdbc.query(
+        "SELECT completed_at::text || '|' || coalesce(started_at::text,'null') FROM ("
+            + source
+            + ") facts ORDER BY 1",
+        (rs, row) -> rs.getString(1));
+  }
+
+  @Test
   void missingOrReversedOriginKeepsCompletionCountButExcludesLatency() {
     fact(12);
     fact(-5);
@@ -196,7 +278,7 @@ class BusinessMetricsIntegrationTest {
     }
   }
 
-  private void fact(int duration) {
+  private UUID fact(int duration) {
     Instant at =
         jdbc.queryForObject("SELECT statement_timestamp()", Timestamp.class)
             .toInstant()
@@ -228,6 +310,7 @@ class BusinessMetricsIntegrationTest {
         event,
         Timestamp.from(at.minusSeconds(5)),
         Timestamp.from(at));
+    return item;
   }
 
   private void inbox(UUID item, UUID payment, UUID event, Instant at, int duration) {
