@@ -52,6 +52,10 @@ Commerce·Payment·Settlement의 Outbox·Inbox, Payment의 payment_jobs, Settlem
 
 스크립트는 DB별 한 트랜잭션이며 잠금 2초·실행 15초 상한, 기존 동명 컬럼의 타입·nullable 검사를 유지합니다. 상한 내 인덱스를 만들 수 없거나 동명 인덱스 정의가 다르면 배포를 중단하고 해당 DB의 실제 정의와 계획을 확인합니다. 인덱스 이름만으로 적용 완료를 판단하지 않습니다. 적용 전후 컬럼·인덱스 정의, 기존 행/원문 보존, 선택 거래의 시각 전달과 실제 metric을 검증합니다. 세 DB의 적용 결과를 따로 기록합니다. 이전 이미지로 복구할 때 추가 nullable 컬럼·인덱스는 남기며 DROP으로 되돌리지 않습니다.
 
+## 기존 DB의 정산 이벤트 경로 인덱스
+
+[settlement-event-path-sql-load.sql](../infra/postgres/upgrade/settlement-event-path-sql-load.sql)은 결제확정마다 실행하는 구매확정 되살리기 조회용 `inbox_purchase_revival` 부분 표현식 인덱스만 추가합니다. Settlement 소유 역할로 새 앱 배포 전에 `psql --set ON_ERROR_STOP=1 --file ...`을 한 번 적용하며 한 트랜잭션·잠금 2초·실행 15초 상한입니다. 인덱스 생성 중 Inbox 쓰기가 막히므로 Inbox 크기를 확인하고 수신이 적을 때 적용합니다. 상한을 넘거나 동명 인덱스 정의가 다르면 전체를 롤백하고 배포를 중단합니다. 행·원문·상태는 바꾸지 않으며 이전 이미지로 복구해도 인덱스는 남깁니다.
+
 ## 기존 DB의 결제 회차별 예약
 
 [payment-retry-cycles.sql](../infra/postgres/upgrade/payment-retry-cycles.sql)은 기존 단일 Payment 예약 제약을 `(payment_id,cycle_id)` 유일 제약과 결제별 RESERVED 부분 유일 인덱스로 바꿉니다. Payment 소유 역할로 `psql --set ON_ERROR_STOP=1 --file ...`을 실행하며 한 트랜잭션·잠금 2초·실행 15초 상한입니다. 동명 제약·인덱스 정의가 다르거나 기존 행이 새 제약을 위반하면 전체를 롤백하고 배포를 중단합니다. 금융 행·원장·원문을 수정하거나 삭제하지 않습니다.

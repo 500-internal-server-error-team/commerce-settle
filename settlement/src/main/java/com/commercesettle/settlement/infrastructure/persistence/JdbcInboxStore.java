@@ -41,6 +41,20 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 @Transactional(propagation = Propagation.MANDATORY)
 class JdbcInboxStore implements InboxStore {
+  /** 조건은 inbox_purchase_revival 부분 표현식 인덱스의 조건·표현식과 맞춰야 한다. */
+  static final String REVIVE_EXHAUSTED_PURCHASES =
+      """
+      UPDATE settlement.inbox
+      SET status = 'WAITING', attempts = 0, last_error_code = 'PAYMENT_ARRIVED_LATE',
+          next_run_at = clock_timestamp(), updated_at = :now, version = version + 1
+      WHERE consumer = :consumer AND event_type = 'PurchaseConfirmed'
+        AND (status = 'WAITING'
+          OR (status = 'REVIEW_REQUIRED' AND last_error_code = 'PAYMENT_NOT_ARRIVED'
+            AND attempts >= :max))
+        AND (payload->'payload'->>'paymentId')::uuid = :paymentId
+      RETURNING id
+      """;
+
   private final NamedParameterJdbcOperations jdbc;
   private final ObjectMapper mapper;
   private final String consumer;
@@ -249,17 +263,7 @@ class JdbcInboxStore implements InboxStore {
     // WAITING도 대상이다. 처리기가 잠근 마지막 판정 행은 커밋 전까지 WAITING으로 보이므로 이 문장이 잠금을 기다리고, 처리기가
     // REVIEW_REQUIRED로 커밋하면 바뀐 행으로 조건을 다시 검사해 되살린다. 수신 때 형식을 검사한 UUID라 값으로 비교한다.
     return jdbc.query(
-        """
-        UPDATE settlement.inbox
-        SET status = 'WAITING', attempts = 0, last_error_code = 'PAYMENT_ARRIVED_LATE',
-            next_run_at = clock_timestamp(), updated_at = :now, version = version + 1
-        WHERE consumer = :consumer AND event_type = 'PurchaseConfirmed'
-          AND (status = 'WAITING'
-            OR (status = 'REVIEW_REQUIRED' AND last_error_code = 'PAYMENT_NOT_ARRIVED'
-              AND attempts >= :max))
-          AND (payload->'payload'->>'paymentId')::uuid = :paymentId
-        RETURNING id
-        """,
+        REVIVE_EXHAUSTED_PURCHASES,
         new MapSqlParameterSource("consumer", consumer)
             .addValue("paymentId", paymentId)
             .addValue("max", maxAttempts)
