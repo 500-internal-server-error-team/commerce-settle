@@ -459,8 +459,36 @@ class OrderWorkflowIntegrationTest {
     receive("PaymentDeclined", result(id, payment, uuid(context, "paymentCycleId")), true);
     assertStock(f, 2, 0, 0);
     var declined = buyer(f, id);
+    clock.now.set(NOW.plusSeconds(120));
     var retry =
         call("BUYER", f.buyer(), "/api/orders/" + id + "/payment-retries", version(declined), 202);
+    assertThat(
+            number(
+                """
+                SELECT count(*) FROM commerce.outbox o JOIN commerce.orders c ON c.id=o.aggregate_id
+                WHERE o.aggregate_id=? AND o.event_type='OrderPaymentRequested'
+                  AND o.order_accepted_at=c.created_at
+                """,
+                id))
+        .isEqualTo(2);
+    assertThat(
+            number(
+                """
+                SELECT count(DISTINCT payload->'payload'->>'paymentCycleId') FROM commerce.outbox
+                WHERE aggregate_id=? AND event_type='OrderPaymentRequested'
+                """,
+                id))
+        .isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                """
+                SELECT max(o.occurred_at)>min(c.created_at)
+                FROM commerce.outbox o JOIN commerce.orders c ON c.id=o.aggregate_id
+                WHERE o.aggregate_id=? AND o.event_type='OrderPaymentRequested'
+                """,
+                Boolean.class,
+                id))
+        .isTrue();
     assertStock(f, 1, 1, 0);
     receive("PaymentDeclined", result(id, payment, uuid(context, "paymentCycleId")), true);
     assertStock(f, 1, 1, 0);

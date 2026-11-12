@@ -219,7 +219,7 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
             "addressLine1": "test", "addressLine2": "", "isDefault": True})
         assert status == 201, (status, address)
 
-        def paid_order(mileage=MILEAGE, method="CREDIT_CARD", account="test-card", *, recover_admission=True, retry_after_decline=False):
+        def paid_order(mileage=MILEAGE, method="CREDIT_CARD", account="test-card", *, recover_admission=True):
             body = {
                 "productId": product, "quantity": 1, "eventId": None, "buyerCouponId": None, "mileageAmount": mileage,
                 "addressId": address["id"], "expectedProductVersion": 0, "expectedEventVersion": None,
@@ -240,23 +240,6 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
                 return result
 
             order = until(create_when_admitted, "order was not admitted within the recovery budget", 300)
-            if retry_after_decline:
-                until(lambda: sql("commerce", f"select status from commerce.orders where id='{order['id']}'") == "DECLINED",
-                      "first approval did not reach confirmed decline")
-                worker_settings()
-                until(gate_open,"retry admission did not recover",300)
-                status,current=request("GET","/api/orders/"+order["id"])
-                assert status==200,(status,current)
-                retry_key=str(uuid.uuid4())
-                trace_id=uuid.uuid4().hex
-                retry_headers={"Idempotency-Key":retry_key,**trace_headers(trace_id)}
-                def retry_when_admitted():
-                    status,result=gateway_json(base,"POST",f"/api/orders/{order['id']}/payment-retries",
-                        {"expectedVersion":current["version"]},token,retry_headers)
-                    if status==503 and result.get("code")=="COMMON_CAPACITY_EXCEEDED":return None
-                    assert status==202,(status,result)
-                    return result
-                until(retry_when_admitted,"actual payment retry API was not accepted",300)
             until(lambda: sql("commerce", f"select status from commerce.orders where id='{order['id']}'") == "PAID",
                   "order was not paid through Payment")
             payment = sql("commerce", f"select payment_id from commerce.orders where id='{order['id']}'")
@@ -269,12 +252,6 @@ VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
             received = sql("settlement", f"select extract(epoch from order_accepted_at)::text from settlement.inbox where event_type='PaymentConfirmed' and aggregate_id='{payment}' and status='APPLIED'")
             captured=sql("payment",f"select extract(epoch from order_accepted_at)::text from payment.inbox where event_type='OrderPaymentRequested' and aggregate_id='{order['id']}' order by created_at desc,id desc limit 1")
             assert accepted and accepted == captured == persisted == received, (accepted,captured,persisted,received)
-            if retry_after_decline:
-                count,cycles=sql("commerce",f"select count(*) || '/' || count(distinct payload->'payload'->>'paymentCycleId') from commerce.outbox where event_type='OrderPaymentRequested' and aggregate_id='{order['id']}'").split('/')
-                assert (count,cycles)==('2','2'),(count,cycles)
-                waited=float(sql("commerce",f"select extract(epoch from max(o.occurred_at)-min(c.created_at)) from commerce.outbox o join commerce.orders c on c.id=o.aggregate_id where o.event_type='OrderPaymentRequested' and c.id='{order['id']}'"))
-                assert waited>0,waited
-                print(json.dumps({"orderRetryOrigin":"PASS","waitBeforeRetrySeconds":waited}),flush=True)
             required = {"commerce.outbox.send", "payment.inbox.process", "payment.outbox.send",
                         "commerce.inbox.accepted", "commerce.inbox.result"}
             services = {"gateway", "commerce", "payment", "settlement"}
@@ -511,11 +488,6 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
             worker_settings()
             returns(paid_order, request, seller_token, completed, inventory, reservation, compose)
 
-            worker_settings("fixture-pg-reject-v1")
-            retry_order,retry_payment=paid_order(0,retry_after_decline=True)
-            cancel(retry_order)
-            completed(retry_order,retry_payment,0)
-
             for database in ["commerce", "payment", "settlement"]:
                 assert sql(database, f"select count(*) from {database}.inbox where status='REVIEW_REQUIRED'") == "0", database
                 until(lambda: sql(database, f"select count(*) from {database}.outbox where status<>'PUBLISHED'") == "0",
@@ -542,6 +514,22 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
                 histogram=json.load(response)["data"]["result"]
             assert histogram and float(histogram[0]["value"][1])>0, histogram
             print(json.dumps({"businessCompletions":counts,"orderToSettlementLatencySamples":samples[0]["value"][1],"httpHistogram":"observed"}),flush=True)
+            dashboard = json.loads((ROOT / "infra/grafana/dashboards/business-performance.json").read_text())
+            evaluations = 0
+            for window in (60, 300, 900):
+                for application in ("gateway", ".*"):
+                    for panel in dashboard["panels"]:
+                        for target in panel["targets"]:
+                            expression = (target["expr"].replace("${window}", str(window))
+                                          .replace("$window", str(window)).replace("$comparison_offset", "1h")
+                                          .replace("$application", application))
+                            with urlopen(prometheus + "/api/v1/query?" + urlencode({"query": expression}), timeout=5) as response:
+                                result = json.load(response)
+                            assert result["status"] == "success" and result["data"]["resultType"] == "vector", (panel["id"], result)
+                            if window == 900 and application == "gateway" and target["refId"] == "A" and panel["id"] in (1, 4, 6, 9):
+                                assert any(float(row["value"][1]) > 0 for row in result["data"]["result"]), (panel["id"], result)
+                            evaluations += 1
+            print(json.dumps({"businessDashboardPanels": len(dashboard["panels"]), "queryEvaluations": evaluations}), flush=True)
             print(json.dumps({"result": "PASS", "refunds": [first_refund, second_refund],
                               "externalRefund": PRICE - MILEAGE, "mileageRestored": MILEAGE,
                               "scope": "actual HTTP Finance Mock approval/refund and Commerce, Payment, Settlement over Kafka/Inbox/Outbox"}),
