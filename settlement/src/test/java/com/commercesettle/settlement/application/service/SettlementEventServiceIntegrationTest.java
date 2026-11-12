@@ -82,6 +82,7 @@ class SettlementEventServiceIntegrationTest {
   @Autowired MutableClock clock;
   @Autowired InboxStore inbox;
   @Autowired TransactionTemplate transactions;
+  @Autowired jakarta.persistence.EntityManagerFactory entityManagerFactory;
 
   private final AtomicLong offsets = new AtomicLong();
   private UUID paymentId;
@@ -111,6 +112,30 @@ class SettlementEventServiceIntegrationTest {
             "outbox")) {
       jdbc.update("DELETE FROM settlement." + table);
     }
+  }
+
+  @Test
+  @DisplayName("결제확정의 원장 5 leg INSERT는 JDBC 배치 한 번으로 보낸다")
+  void paymentConfirmedBatchesLedgerInserts() {
+    var event = payment(UUID.randomUUID(), 12_000, 2_000, 1_000, 9_000, 0);
+    var statistics =
+        entityManagerFactory.unwrap(org.hibernate.SessionFactory.class).getStatistics();
+    statistics.clear();
+    statistics.setStatisticsEnabled(true);
+    try {
+      service.receivePaymentConfirmed(event, source("commerce-settle.payment.v1", event));
+    } finally {
+      statistics.setStatisticsEnabled(false);
+    }
+    // 항목 조회 1 + 항목 INSERT 1 + 원장 INSERT 배치 1. 배치가 없으면 원장 INSERT만 5번 준비한다.
+    assertThat(statistics.getEntityInsertCount()).isEqualTo(6);
+    assertThat(statistics.getPrepareStatementCount()).isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM settlement.settlement_entries WHERE payment_id = ?",
+                Long.class,
+                paymentId))
+        .isEqualTo(5);
   }
 
   @Test
