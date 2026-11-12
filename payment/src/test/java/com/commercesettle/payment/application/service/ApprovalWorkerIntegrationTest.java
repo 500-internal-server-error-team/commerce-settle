@@ -6,11 +6,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.commercesettle.payment.application.dto.ApprovalWorkerSettings;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
+import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.PaymentGateway;
 import com.commercesettle.payment.application.port.PaymentGateway.ApprovalRequest;
 import com.commercesettle.payment.application.port.PaymentGateway.Result;
+import com.commercesettle.payment.domain.repository.MileageReservationRepository;
+import com.commercesettle.payment.domain.repository.PaymentJobRepository;
 import com.commercesettle.payment.support.PaymentObservationsTestConfiguration;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -40,6 +43,8 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
@@ -83,6 +88,9 @@ class ApprovalWorkerIntegrationTest {
   @Autowired private ObjectMapper mapper;
   @Autowired private DataSource dataSource;
   @Autowired private PlatformTransactionManager manager;
+  @Autowired private MileageReservationRepository reservations;
+  @Autowired private PaymentJobRepository jobs;
+  @Autowired private ApprovalResultRecorder recorder;
 
   private JdbcTemplate jdbc() {
     return new JdbcTemplate(dataSource);
@@ -201,6 +209,225 @@ class ApprovalWorkerIntegrationTest {
                     BUYER_ID))
         .isZero();
     assertThat(outbox()).containsExactly("PaymentAccepted:0", "PaymentDeclined:2");
+  }
+
+  @Test
+  @DisplayName("혼합 결제를 두 번 거절한 뒤 새 회차로 승인해도 이전 시도·예약·원장은 보존되고 한 번만 차감된다")
+  void preservesHistoryAcrossRepeatedMixedRetries() throws Exception {
+    fundWallet(5_000);
+    request(10_000, 2_000, "CREDIT_CARD");
+    gateway.approve = r -> new Result.Declined(UUID.randomUUID());
+    worker.runOnce();
+    var identity = jdbc().queryForMap("SELECT id, created_at FROM payment.payments");
+    var firstAttempt = jdbc().queryForMap("SELECT * FROM payment.payment_attempts");
+    var firstReservation = jdbc().queryForMap("SELECT * FROM payment.mileage_reservations");
+
+    retry(UUID.randomUUID(), 2);
+    worker.runOnce();
+    UUID finalCycle = UUID.randomUUID();
+    UUID finalEvent = retry(finalCycle, 4);
+    gateway.approve = r -> new Result.Succeeded(UUID.randomUUID(), NOW);
+    worker.runOnce();
+    assertThat(requests.processEvent(finalEvent)).isFalse();
+    assertThat(worker.runOnce()).isFalse();
+
+    assertThat(jdbc().queryForMap("SELECT id, created_at FROM payment.payments"))
+        .isEqualTo(identity);
+    assertThat(status()).isEqualTo("CONFIRMED");
+    assertThat(jdbc().queryForMap("SELECT * FROM payment.payment_attempts WHERE attempt_no=1"))
+        .isEqualTo(firstAttempt);
+    assertThat(
+            jdbc()
+                .queryForMap(
+                    "SELECT * FROM payment.mileage_reservations WHERE id=?",
+                    firstReservation.get("id")))
+        .isEqualTo(firstReservation);
+    assertThat(
+            jdbc()
+                .queryForList(
+                    "SELECT attempt_no || ':' || status FROM payment.payment_attempts ORDER BY attempt_no",
+                    String.class))
+        .containsExactly("1:DECLINED", "2:DECLINED", "3:APPROVED");
+    assertThat(
+            jdbc()
+                .queryForList(
+                    "SELECT status FROM payment.mileage_reservations ORDER BY status",
+                    String.class))
+        .containsExactly("CONSUMED", "RELEASED", "RELEASED");
+    assertThat(reservations.findByPaymentId((UUID) identity.get("id")).orElseThrow().getCycleId())
+        .isEqualTo(finalCycle);
+    assertThat(jdbc().queryForMap("SELECT balance, reserved_amount FROM payment.mileage_wallets"))
+        .containsEntry("balance", 3_000L)
+        .containsEntry("reserved_amount", 0L);
+    assertThat(
+            jdbc()
+                .queryForList(
+                    "SELECT kind FROM payment.mileage_entries ORDER BY kind", String.class))
+        .containsExactly("DEBIT", "RELEASE", "RELEASE", "RESERVE", "RESERVE", "RESERVE");
+    assertThat(outbox())
+        .containsExactly(
+            "PaymentAccepted:0",
+            "PaymentDeclined:2",
+            "PaymentAccepted:3",
+            "PaymentDeclined:5",
+            "PaymentAccepted:6",
+            "PaymentConfirmed:8",
+            "PaymentNoticeRequested:8");
+    assertThat(gateway.approvals).hasSize(3);
+    assertThat(new HashSet<>(gateway.approvals.stream().map(ApprovalRequest::businessKey).toList()))
+        .hasSize(3);
+  }
+
+  @Test
+  @DisplayName("이전 회차 작업을 인위적으로 다시 대기시켜도 새 회차를 승인하지 않고 늦은 결과도 반영하지 않는다")
+  void fencesSupersededJobsAndLateResults() throws Exception {
+    request(10_000, 0, "CREDIT_CARD");
+    var oldJob =
+        jobs.leaseNext(
+                com.commercesettle.payment.domain.model.PaymentJobOperation.APPROVE,
+                "old-worker",
+                Duration.ofSeconds(30))
+            .orElseThrow();
+    recorder.prepare(oldJob).orElseThrow();
+    recorder.record(oldJob, new Result.Declined(UUID.randomUUID()));
+    retry(UUID.randomUUID(), 2);
+    assertThatThrownBy(() -> recorder.record(oldJob, new Result.Succeeded(UUID.randomUUID(), NOW)))
+        .isInstanceOf(ApprovalResultRecorder.ApprovalLeaseLostException.class);
+    // 정상 운영 replay는 DONE을 거절한다. 과거 작업이 재등장하는 방어 경계는 DB 시험 입력으로 만든다.
+    jdbc()
+        .update(
+            "UPDATE payment.payment_jobs SET status='PENDING', next_run_at=clock_timestamp()-interval '2s' WHERE id=?",
+            oldJob.jobId());
+    assertThat(worker.runOnce()).isTrue();
+    assertThat(gateway.approvals).isEmpty();
+    assertThat(
+            jdbc()
+                .queryForObject(
+                    "SELECT last_error_code FROM payment.payment_jobs WHERE id=?",
+                    String.class,
+                    oldJob.jobId()))
+        .isEqualTo("PAYMENT_CYCLE_SUPERSEDED");
+    assertThat(status()).isEqualTo("DECLINED");
+    assertThat(worker.runOnce()).isTrue();
+    assertThat(status()).isEqualTo("CONFIRMED");
+    assertThat(gateway.approvals).hasSize(1);
+    assertThat(
+            jdbc()
+                .queryForList(
+                    "SELECT status FROM payment.payment_attempts ORDER BY attempt_no",
+                    String.class))
+        .containsExactly("DECLINED", "APPROVED");
+  }
+
+  @Test
+  @DisplayName("미확정 회차에서 새 회차 요청은 거절하고 기존 예약·거래 조회를 유지한다")
+  void rejectsNewCycleWhileApprovalIsUnknown() throws Exception {
+    fundWallet(5_000);
+    request(10_000, 2_000, "CREDIT_CARD");
+    gateway.approve = r -> new Result.Unconfirmed("timeout");
+    worker.runOnce();
+    UUID currentCycle =
+        jdbc().queryForObject("SELECT current_cycle_id FROM payment.payments", UUID.class);
+    UUID retryEvent = retry(UUID.randomUUID(), 2);
+    assertThat(
+            jdbc()
+                .queryForObject(
+                    "SELECT status FROM payment.inbox WHERE event_id=?", String.class, retryEvent))
+        .isEqualTo("REVIEW_REQUIRED");
+    assertThat(jdbc().queryForObject("SELECT current_cycle_id FROM payment.payments", UUID.class))
+        .isEqualTo(currentCycle);
+    assertThat(
+            jdbc()
+                .queryForObject("SELECT reserved_amount FROM payment.mileage_wallets", Long.class))
+        .isEqualTo(2_000);
+    gateway.lookup = r -> new Result.Succeeded(UUID.randomUUID(), NOW);
+    worker.runOnce();
+    assertThat(status()).isEqualTo("CONFIRMED");
+    assertThat(gateway.approvals).hasSize(1);
+    assertThat(gateway.lookups).hasSize(1);
+    assertThat(jdbc().queryForObject("SELECT count(*) FROM payment.payment_jobs", Long.class))
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("새 회차 예약 가용액이 부족하면 회차·기존 이력·작업을 바꾸지 않는다")
+  void doesNotAdoptRetryWhenMileageIsUnavailable() throws Exception {
+    fundWallet(5_000);
+    request(10_000, 2_000, "CREDIT_CARD");
+    gateway.approve = r -> new Result.Declined(UUID.randomUUID());
+    worker.runOnce();
+    var payment = jdbc().queryForMap("SELECT * FROM payment.payments");
+    jdbc().update("UPDATE payment.mileage_wallets SET balance=1000, version=version+1");
+    UUID event = retry(UUID.randomUUID(), 2);
+    assertThat(jdbc().queryForMap("SELECT * FROM payment.payments")).isEqualTo(payment);
+    assertThat(
+            jdbc()
+                .queryForMap(
+                    "SELECT status, last_error_code FROM payment.inbox WHERE event_id=?", event))
+        .containsEntry("status", "REVIEW_REQUIRED")
+        .containsEntry("last_error_code", "PAYMENT_REQUEST_MILEAGE_INSUFFICIENT");
+    assertThat(
+            jdbc().queryForObject("SELECT count(*) FROM payment.mileage_reservations", Long.class))
+        .isEqualTo(1);
+    assertThat(jdbc().queryForObject("SELECT count(*) FROM payment.payment_jobs", Long.class))
+        .isEqualTo(1);
+    assertThat(jdbc().queryForObject("SELECT count(*) FROM payment.mileage_entries", Long.class))
+        .isEqualTo(2);
+    assertThat(worker.runOnce()).isFalse();
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  @DisplayName("새 회차 취소가 요청보다 먼저 와도, 재예약 뒤 먼저 처리돼도 추가 승인 없이 취소하고 원이력을 보존한다")
+  void cancelsRetryBeforeApprovalInEitherDeliveryOrder(boolean cancelFirst) throws Exception {
+    fundWallet(5_000);
+    UUID order = request(10_000, 2_000, "CREDIT_CARD");
+    UUID oldCycle =
+        jdbc().queryForObject("SELECT current_cycle_id FROM payment.payments", UUID.class);
+    gateway.approve = r -> new Result.Declined(UUID.randomUUID());
+    worker.runOnce();
+    UUID cycle = UUID.randomUUID();
+    if (cancelFirst) cancellation(order, cycle, 3);
+    retry(cycle, 2);
+    if (!cancelFirst) {
+      cancellation(order, oldCycle, 1);
+      assertThat(status()).isEqualTo("DECLINED");
+      assertThat(jdbc().queryForObject("SELECT current_cycle_id FROM payment.payments", UUID.class))
+          .isEqualTo(cycle);
+      cancellation(order, cycle, 3);
+    }
+    assertThat(status()).isEqualTo("CANCELLED");
+    assertThat(worker.runOnce()).isFalse();
+    assertThat(gateway.approvals).hasSize(1);
+    assertThat(jdbc().queryForMap("SELECT balance, reserved_amount FROM payment.mileage_wallets"))
+        .containsEntry("balance", 5_000L)
+        .containsEntry("reserved_amount", 0L);
+    assertThat(jdbc().queryForObject("SELECT count(*) FROM payment.payment_attempts", Long.class))
+        .isEqualTo(1);
+    assertThat(
+            jdbc()
+                .queryForObject(
+                    "SELECT count(*) FROM payment.mileage_reservations WHERE status='RELEASED'",
+                    Long.class))
+        .isEqualTo(cancelFirst ? 1 : 2);
+    assertThat(
+            jdbc()
+                .queryForObject(
+                    "SELECT count(*) FROM payment.outbox WHERE event_type='PaymentCancelled'",
+                    Long.class))
+        .isEqualTo(1);
+    assertThat(
+            jdbc()
+                .queryForObject(
+                    "SELECT count(*) FROM payment.outbox WHERE event_type='PaymentAccepted'",
+                    Long.class))
+        .isEqualTo(2);
+    assertThat(
+            jdbc()
+                .queryForObject(
+                    "SELECT count(*) FROM payment.inbox WHERE event_type='OrderPaymentRequested' AND (status<>'APPLIED' OR result_ref IS NULL)",
+                    Long.class))
+        .isZero();
   }
 
   @Test
@@ -555,6 +782,59 @@ class ApprovalWorkerIntegrationTest {
             UUID.randomUUID(),
             BUYER_ID,
             balance);
+  }
+
+  /** 첫 요청의 불변 합의를 그대로 두고 회차·주문 버전·이벤트 식별자만 바꾼다. */
+  private UUID retry(UUID cycle, long version) throws IOException {
+    var event =
+        (com.fasterxml.jackson.databind.node.ObjectNode)
+            mapper.readTree(
+                jdbc()
+                    .queryForObject(
+                        "SELECT payload::text FROM payment.inbox WHERE event_type='OrderPaymentRequested' ORDER BY created_at, id LIMIT 1",
+                        String.class));
+    UUID eventId = UUID.randomUUID();
+    event.put("eventId", eventId.toString());
+    event.put("aggregateVersion", version);
+    var payload = (com.fasterxml.jackson.databind.node.ObjectNode) event.path("payload");
+    payload.put("paymentCycleId", cycle.toString());
+    payload.put("orderVersion", version);
+    byte[] body = mapper.writeValueAsBytes(event);
+    EventEnvelope<OrderPaymentRequestedPayload> parsed =
+        mapper.readValue(body, new TypeReference<>() {});
+    new TransactionTemplate(manager)
+        .executeWithoutResult(
+            s ->
+                inbox.saveWaiting(
+                    parsed, new Source("commerce-settle.commerce.v1", 0, version, body)));
+    assertThat(requests.processEvent(eventId)).isTrue();
+    makeJobDue();
+    return eventId;
+  }
+
+  private void cancellation(UUID order, UUID cycle, long version) throws IOException {
+    UUID eventId = UUID.randomUUID();
+    var event = mapper.createObjectNode();
+    event.put("eventId", eventId.toString());
+    event.put("eventType", "PaymentCancellationRequested");
+    event.put("eventVersion", 1);
+    event.put("occurredAt", "2026-01-01T00:05:00Z");
+    event.put("aggregateId", order.toString());
+    event.put("aggregateVersion", version);
+    var payload = event.putObject("payload");
+    payload.put("orderId", order.toString());
+    payload.put("paymentCycleId", cycle.toString());
+    payload.put("orderVersion", version);
+    payload.put("requestId", UUID.randomUUID().toString());
+    byte[] body = mapper.writeValueAsBytes(event);
+    EventEnvelope<PaymentCancellationRequestedPayload> parsed =
+        mapper.readValue(body, new TypeReference<>() {});
+    new TransactionTemplate(manager)
+        .executeWithoutResult(
+            s ->
+                inbox.saveWaiting(
+                    parsed, new Source("commerce-settle.commerce.v1", 0, version + 100, body)));
+    assertThat(requests.processEvent(eventId)).isTrue();
   }
 
   /** 쿠폰 없는 결제 요청을 Inbox에 넣고 처리해 결제·승인 작업을 만든다. */

@@ -116,7 +116,7 @@ class ApplyOrderPaymentRequestServiceTest {
   }
 
   @Test
-  @DisplayName("새 결제를 만들면 결제 ID로 고정한 PaymentAccepted를 Outbox에 남긴다")
+  @DisplayName("새 결제를 만들면 결제·회차 ID로 고정한 PaymentAccepted를 Outbox에 남긴다")
   void appendsPaymentAcceptedForNewPayment() {
     UUID orderId = UUID.randomUUID();
     UUID cycleId = UUID.randomUUID();
@@ -132,7 +132,8 @@ class ApplyOrderPaymentRequestServiceTest {
               assertThat(event.eventId())
                   .isEqualTo(
                       UUID.nameUUIDFromBytes(
-                          ("PaymentAccepted:" + payment.getId()).getBytes(StandardCharsets.UTF_8)));
+                          ("PaymentAccepted:" + payment.getId() + ":" + cycleId)
+                              .getBytes(StandardCharsets.UTF_8)));
               assertThat(event.eventType()).isEqualTo("PaymentAccepted");
               assertThat(event.eventVersion()).isEqualTo(1);
               assertThat(event.occurredAt().toInstant()).isEqualTo(NOW);
@@ -858,6 +859,187 @@ class ApplyOrderPaymentRequestServiceTest {
     assertThat(outbox.cancellations).isEmpty();
   }
 
+  @Test
+  @DisplayName("거절 뒤 새 카드 회차는 같은 결제에 작업·접수를 한 번만 추가하고 이전 회차를 막는다")
+  void acceptsANewerCardCycleOnce() {
+    var original = card(UUID.randomUUID(), UUID.randomUUID());
+    inbox.add(original);
+    service.processNext();
+    Payment payment = payments.all().getFirst();
+    UUID id = payment.getId();
+    payment.startProcessing(NOW);
+    payment.decline(NOW);
+    var retry = nextCycle(original, UUID.randomUUID(), 3);
+
+    UUID acceptedRetry = inbox.add(retry);
+    service.processNext();
+    inbox.add(retry);
+    service.processNext();
+    UUID stale = inbox.add(original);
+    service.processNext();
+    UUID reused = inbox.add(nextCycle(original, original.paymentCycleId(), 4));
+    service.processNext();
+
+    assertThat(payments.all())
+        .singleElement()
+        .satisfies(
+            p -> {
+              assertThat(p.getId()).isEqualTo(id);
+              assertThat(p.getCurrentCycleId()).isEqualTo(retry.paymentCycleId());
+              assertThat(p.getOrderVersion()).isEqualTo(3);
+              assertThat(p.getStatus()).isEqualTo(PaymentStatus.DECLINED);
+            });
+    assertThat(inbox.applied).containsEntry(acceptedRetry, id);
+    assertThat(inbox.reviewRequired).containsEntry(stale, "PAYMENT_REQUEST_ORDER_CONFLICT");
+    assertThat(inbox.reviewRequired).containsEntry(reused, "PAYMENT_REQUEST_ORDER_CONFLICT");
+    assertThat(jobs.saved)
+        .extracting(PaymentJob::getBusinessKey)
+        .containsExactly(original.paymentCycleId(), retry.paymentCycleId());
+    assertThat(outbox.accepted).hasSize(2);
+    assertThat(outbox.accepted.get(0).eventId()).isNotEqualTo(outbox.accepted.get(1).eventId());
+    assertThat(outbox.accepted.get(1).payload().orderVersion()).isEqualTo(3);
+    assertThat(reservations.saved).isEmpty();
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.EnumSource(
+      value = PaymentStatus.class,
+      names = {"PENDING", "PROCESSING", "UNKNOWN", "CONFIRMED", "CANCELLED"})
+  @DisplayName("미확정·진행·종결 상태의 새 회차는 승인 작업을 늘리지 않는다")
+  void rejectsNewCyclesUnlessDeclined(PaymentStatus status) {
+    var original = card(UUID.randomUUID(), UUID.randomUUID());
+    inbox.add(original);
+    service.processNext();
+    Payment payment = payments.all().getFirst();
+    if (status == PaymentStatus.CANCELLED) payment.cancel(NOW);
+    if (status == PaymentStatus.PROCESSING
+        || status == PaymentStatus.UNKNOWN
+        || status == PaymentStatus.CONFIRMED) payment.startProcessing(NOW);
+    if (status == PaymentStatus.UNKNOWN) payment.markUnknown(NOW);
+    if (status == PaymentStatus.CONFIRMED) payment.confirm(NOW);
+    UUID rejected = inbox.add(nextCycle(original, UUID.randomUUID(), 3));
+
+    service.processNext();
+
+    assertThat(inbox.reviewRequired).containsEntry(rejected, "PAYMENT_REQUEST_ORDER_CONFLICT");
+    assertThat(payment.getStatus()).isEqualTo(status);
+    assertThat(payment.getCurrentCycleId()).isEqualTo(original.paymentCycleId());
+    assertThat(jobs.saved).hasSize(1);
+    assertThat(outbox.accepted).hasSize(1);
+  }
+
+  @Test
+  @DisplayName("혼합 재시도는 과거 해제 예약·원장을 보존하고 현재 회차만 다시 예약한다")
+  void reacquiresMileageWithoutReplacingHistory() {
+    var wallet = wallets.fund(BUYER_ID, 5000);
+    var original = mixed(UUID.randomUUID(), UUID.randomUUID());
+    inbox.add(original);
+    service.processNext();
+    Payment payment = payments.all().getFirst();
+    var old = reservations.saved.getFirst();
+    payment.startProcessing(NOW);
+    payment.decline(NOW);
+    wallet.releaseReserved(old.getAmount(), NOW);
+    old.release(NOW);
+    entries.save(MileageEntry.release(wallet, old, NOW));
+    var retry = nextCycle(original, UUID.randomUUID(), 3);
+
+    inbox.add(retry);
+    service.processNext();
+    inbox.add(retry);
+    service.processNext();
+
+    assertThat(reservations.saved).hasSize(2);
+    assertThat(old.getStatus()).isEqualTo(MileageReservationStatus.RELEASED);
+    assertThat(old.getCycleId()).isEqualTo(original.paymentCycleId());
+    assertThat(reservations.findByPaymentId(payment.getId()).orElseThrow().getCycleId())
+        .isEqualTo(retry.paymentCycleId());
+    assertThat(wallet.getBalance()).isEqualTo(5000);
+    assertThat(wallet.getReservedAmount()).isEqualTo(2000);
+    assertThat(entries.saved)
+        .extracting(MileageEntry::getKind)
+        .containsExactly(
+            MileageEntryKind.RESERVE, MileageEntryKind.RELEASE, MileageEntryKind.RESERVE);
+    assertThat(jobs.saved).hasSize(2);
+  }
+
+  @Test
+  @DisplayName("재예약 잔액 부족은 회차·작업·예약·원장을 바꾸지 않는다")
+  void rejectsInsufficientRetryBalanceBeforeAdoptingCycle() {
+    var wallet = wallets.fund(BUYER_ID, 5000);
+    var original = mixed(UUID.randomUUID(), UUID.randomUUID());
+    inbox.add(original);
+    service.processNext();
+    Payment payment = payments.all().getFirst();
+    var old = reservations.saved.getFirst();
+    payment.startProcessing(NOW);
+    payment.decline(NOW);
+    wallet.releaseReserved(old.getAmount(), NOW);
+    old.release(NOW);
+    wallet.reserve(4000, NOW);
+    UUID rejected = inbox.add(nextCycle(original, UUID.randomUUID(), 3));
+
+    service.processNext();
+
+    assertThat(inbox.reviewRequired)
+        .containsEntry(rejected, "PAYMENT_REQUEST_MILEAGE_INSUFFICIENT");
+    assertThat(payment.getCurrentCycleId()).isEqualTo(original.paymentCycleId());
+    assertThat(wallet.getReservedAmount()).isEqualTo(4000);
+    assertThat(reservations.saved).hasSize(1);
+    assertThat(entries.saved).hasSize(1);
+    assertThat(jobs.saved).hasSize(1);
+    assertThat(outbox.accepted).hasSize(1);
+  }
+
+  @Test
+  @DisplayName("새 회차 원문보다 취소가 먼저 오면 승인·재예약 없이 그 회차를 취소한다")
+  void preservesEarlyCancellationForRetry() {
+    var original = card(UUID.randomUUID(), UUID.randomUUID());
+    inbox.add(original);
+    service.processNext();
+    Payment payment = payments.all().getFirst();
+    payment.startProcessing(NOW);
+    payment.decline(NOW);
+    UUID cycle = UUID.randomUUID();
+    UUID cancellation = inbox.addCancellation(original.orderId(), cycle, 4);
+    service.processNext();
+    inbox.add(nextCycle(original, cycle, 3));
+
+    service.processNext();
+
+    assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CANCELLED);
+    assertThat(payment.getCurrentCycleId()).isEqualTo(cycle);
+    assertThat(inbox.linked).containsEntry(cancellation, payment.getId());
+    assertThat(jobs.saved).hasSize(1);
+    assertThat(outbox.cancellations)
+        .singleElement()
+        .satisfies(event -> assertThat(event.payload().paymentCycleId()).isEqualTo(cycle));
+  }
+
+  private static OrderPaymentRequestedPayload nextCycle(
+      OrderPaymentRequestedPayload source, UUID cycle, long version) {
+    return new OrderPaymentRequestedPayload(
+        source.orderId(),
+        source.buyerId(),
+        source.sellerId(),
+        cycle,
+        source.productId(),
+        version,
+        source.status(),
+        source.policyVersion(),
+        source.paymentWaitUntil(),
+        source.externalMethod(),
+        source.methodAccountRef(),
+        source.grossAmount(),
+        source.couponAmount(),
+        source.totalAmount(),
+        source.mileageAmount(),
+        source.externalAmount(),
+        source.sellerCouponAmount(),
+        source.platformCouponAmount(),
+        source.settlementBaseAmount());
+  }
+
   private static OrderPaymentRequestedPayload mixed(UUID orderId, UUID cycleId) {
     return payload(
         orderId,
@@ -996,6 +1178,10 @@ class ApplyOrderPaymentRequestServiceTest {
     }
 
     UUID addCancellation(UUID orderId, UUID cycleId) {
+      return addCancellation(orderId, cycleId, 1);
+    }
+
+    UUID addCancellation(UUID orderId, UUID cycleId, long version) {
       UUID inboxId = UUID.randomUUID();
       waiting.add(
           new InboxClaim.Claimed(
@@ -1012,7 +1198,7 @@ class ApplyOrderPaymentRequestServiceTest {
                       orderId,
                       1,
                       new PaymentCancellationRequestedPayload(
-                          orderId, 1, cycleId, UUID.randomUUID())))));
+                          orderId, version, cycleId, UUID.randomUUID())))));
       cancellations.put(inboxId, new UUID[] {orderId, cycleId});
       return inboxId;
     }
@@ -1261,7 +1447,7 @@ class ApplyOrderPaymentRequestServiceTest {
     }
   }
 
-  private static final class FakeReservations implements MileageReservationRepository {
+  private final class FakeReservations implements MileageReservationRepository {
     private final List<MileageReservation> saved = new ArrayList<>();
 
     @Override
@@ -1274,7 +1460,15 @@ class ApplyOrderPaymentRequestServiceTest {
 
     @Override
     public Optional<MileageReservation> findByPaymentId(UUID paymentId) {
-      return saved.stream().filter(r -> r.getPaymentId().equals(paymentId)).findFirst();
+      return saved.stream()
+          .filter(r -> r.getPaymentId().equals(paymentId))
+          .filter(
+              r ->
+                  payments
+                      .findById(paymentId)
+                      .filter(p -> p.getCurrentCycleId().equals(r.getCycleId()))
+                      .isPresent())
+          .findFirst();
     }
   }
 

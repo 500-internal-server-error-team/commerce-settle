@@ -261,12 +261,16 @@ public class ApplyOrderPaymentRequestService {
 
     Optional<Payment> existing = payments.findByOrderId(payload.orderId());
     if (existing.isPresent()) {
-      observations.identify("payment.id", existing.get().getId());
-      if (!isSameRequest(existing.get(), payload, amounts.get())) {
-        return review(claimed.get(), "PAYMENT_REQUEST_ORDER_CONFLICT", now);
+      Payment payment = payments.findByIdForUpdate(existing.get().getId()).orElseThrow();
+      observations.identify("payment.id", payment.getId());
+      if (isSameRequest(payment, payload, amounts.get())) {
+        inbox.markApplied(inboxId, payment.getId(), now);
+        return true;
       }
-      inbox.markApplied(inboxId, existing.get().getId(), now);
-      return true;
+      if (isRetryRequest(payment, payload, amounts.get())) {
+        return retry(claimed.get(), payment, payload, now);
+      }
+      return review(claimed.get(), "PAYMENT_REQUEST_ORDER_CONFLICT", now);
     }
 
     Optional<UUID> earlyCancellation =
@@ -318,6 +322,50 @@ public class ApplyOrderPaymentRequestService {
     return true;
   }
 
+  private boolean retry(
+      WaitingInboxEvent claimed,
+      Payment payment,
+      OrderPaymentRequestedPayload request,
+      Instant now) {
+    if (!previousMileageWasReleased(payment)) {
+      return review(claimed, "PAYMENT_RETRY_RESERVATION_CONFLICT", now);
+    }
+    Optional<UUID> cancellation =
+        inbox.findEarlyCancellation(request.orderId(), request.paymentCycleId());
+    if (cancellation.isPresent()) {
+      cancelRetry(payment, request, now);
+      inbox.linkResult(cancellation.get(), payment.getId(), now);
+      inbox.markApplied(claimed.inboxId(), payment.getId(), now);
+      return true;
+    }
+    long mileage = payment.getAmounts().mileageAmount();
+    Optional<MileageWallet> wallet = Optional.empty();
+    if (mileage > 0) {
+      wallet = wallets.findByBuyerIdForUpdate(payment.getBuyerId());
+      if (wallet.isEmpty() || wallet.get().available() < mileage) {
+        return review(claimed, "PAYMENT_REQUEST_MILEAGE_INSUFFICIENT", now);
+      }
+    }
+    long version = Math.addExact(Objects.requireNonNullElse(payment.getVersion(), 0L), 1);
+    payment.acceptRetryCycle(request.paymentCycleId(), request.orderVersion(), now);
+    payments.save(payment);
+    if (mileage > 0) reserveMileage(wallet.orElseThrow(), payment, now);
+    jobs.save(PaymentJob.approvalFor(payment, now));
+    appendAccepted(payment, request, now, version);
+    inbox.markApplied(claimed.inboxId(), payment.getId(), now);
+    return true;
+  }
+
+  private boolean previousMileageWasReleased(Payment payment) {
+    Optional<MileageReservation> previous = reservations.findByPaymentId(payment.getId());
+    if (payment.getAmounts().mileageAmount() == 0) return previous.isEmpty();
+    return previous
+        .filter(row -> row.getCycleId().equals(payment.getCurrentCycleId()))
+        .filter(row -> row.getAmount() == payment.getAmounts().mileageAmount())
+        .filter(row -> row.getStatus() == MileageReservationStatus.RELEASED)
+        .isPresent();
+  }
+
   /**
    * 결제의 사용 마일리지를 예약하고 원장에 남긴다. 외부 결제액이 0원이면 PG 승인이 필요 없으므로 같은 트랜잭션에서 바로 차감하고 결제를 확정한다. 차감 원장은 지갑에서
    * 차감한 뒤 기록해야 차감 후 잔액이 남는다.
@@ -339,22 +387,28 @@ public class ApplyOrderPaymentRequestService {
 
   /** 새 결제를 만든 같은 트랜잭션에서 PaymentAccepted를 Outbox에 남긴다. 기존 결제를 돌려주는 재요청에서는 호출하지 않는다. */
   private void appendAccepted(Payment payment, OrderPaymentRequestedPayload request, Instant now) {
+    appendAccepted(payment, request, now, 0);
+  }
+
+  private void appendAccepted(
+      Payment payment, OrderPaymentRequestedPayload request, Instant now, long version) {
     PaymentAcceptedPayload payload =
         new PaymentAcceptedPayload(
             payment.getId(),
             request.orderId(),
             request.orderVersion(),
             payment.getCurrentCycleId());
-    // 결제 ID에서 고정 eventId를 만들어 같은 결제의 중복 append를 Outbox가 한 건으로 합치게 한다.
+    // 같은 회차는 같은 ID, 새 회차는 다른 ID로 원문·멱등 이력을 보존한다.
     EventEnvelope<PaymentAcceptedPayload> envelope =
         new EventEnvelope<>(
             UUID.nameUUIDFromBytes(
-                ("PaymentAccepted:" + payment.getId()).getBytes(StandardCharsets.UTF_8)),
+                ("PaymentAccepted:" + payment.getId() + ":" + payment.getCurrentCycleId())
+                    .getBytes(StandardCharsets.UTF_8)),
             "PaymentAccepted",
             1,
             now.atOffset(ZoneOffset.UTC),
             payment.getId(),
-            0,
+            version,
             payload);
     outbox.appendPaymentAccepted(envelope);
   }
@@ -401,10 +455,26 @@ public class ApplyOrderPaymentRequestService {
    */
   private boolean isSameRequest(
       Payment existing, OrderPaymentRequestedPayload payload, PaymentAmounts amounts) {
+    return existing.getCurrentCycleId().equals(payload.paymentCycleId())
+        && existing.getOrderVersion() == payload.orderVersion()
+        && isSameAgreement(existing, payload, amounts);
+  }
+
+  private boolean isRetryRequest(
+      Payment existing, OrderPaymentRequestedPayload payload, PaymentAmounts amounts) {
+    return existing.getStatus() == PaymentStatus.DECLINED
+        && existing.getAmounts().externalAmount() > 0
+        && !existing.getCurrentCycleId().equals(payload.paymentCycleId())
+        && payload.orderVersion() > existing.getOrderVersion()
+        && jobs.findByOperationAndBusinessKey(PaymentJobOperation.APPROVE, payload.paymentCycleId())
+            .isEmpty()
+        && isSameAgreement(existing, payload, amounts);
+  }
+
+  private boolean isSameAgreement(
+      Payment existing, OrderPaymentRequestedPayload payload, PaymentAmounts amounts) {
     boolean samePayment =
-        existing.getCurrentCycleId().equals(payload.paymentCycleId())
-            && existing.getOrderVersion() == payload.orderVersion()
-            && existing.getBuyerId().equals(payload.buyerId())
+        existing.getBuyerId().equals(payload.buyerId())
             && existing.getSellerId().equals(payload.sellerId())
             && existing.getProductId().equals(payload.productId())
             && existing.getAmounts().equals(amounts)
@@ -453,10 +523,14 @@ public class ApplyOrderPaymentRequestService {
     if (found.isEmpty()) {
       return cancelWithoutPayment(claimed, request, now);
     }
-    Payment payment = found.get();
+    Payment payment = payments.findByIdForUpdate(found.get().getId()).orElseThrow();
     // 저장된 결제는 항상 버전이 있다. 저장 전 결제는 처음 저장될 때 0이 된다.
     long version = Objects.requireNonNullElse(payment.getVersion(), 0L);
     if (!payment.getCurrentCycleId().equals(request.paymentCycleId())) {
+      if (payment.getStatus() == PaymentStatus.DECLINED
+          && request.orderVersion() > payment.getOrderVersion()) {
+        return cancelFutureRetry(claimed, payment, request, now);
+      }
       reject(claimed, payment, PAYMENT_CYCLE_MISMATCH, version, now);
     } else {
       switch (payment.getStatus()) {
@@ -486,6 +560,49 @@ public class ApplyOrderPaymentRequestService {
     }
     inbox.markApplied(claimed.inboxId(), payment.getId(), now);
     return true;
+  }
+
+  private boolean cancelFutureRetry(
+      WaitingInboxEvent claimed,
+      Payment payment,
+      PaymentCancellationRequestedPayload request,
+      Instant now) {
+    Optional<InboxStore.PaymentRequest> original =
+        inbox.findPaymentRequest(request.orderId(), request.paymentCycleId());
+    if (original.isEmpty()) {
+      // 새 회차의 원문이 아직 없으면 채택·승인하지 않고 선행 취소로 보존한다.
+      inbox.markApplied(claimed.inboxId(), null, now);
+      return true;
+    }
+    var payload = original.get().payload();
+    Optional<PaymentAmounts> amounts = toAmounts(payload);
+    if (payload.status() != OrderPaymentRequestedPayload.Status.PAYMENT_PENDING
+        || amounts.isEmpty()
+        || !matchesCommerceAmounts(payload, amounts.get())
+        || !isRetryRequest(payment, payload, amounts.get())
+        || payload.orderVersion() > request.orderVersion()
+        || !previousMileageWasReleased(payment)) {
+      return review(claimed, PAYMENT_CANCELLATION_REQUEST_INVALID, now);
+    }
+    cancelRetry(payment, payload, now);
+    inbox.linkPaymentRequest(original.get().inboxId(), payment.getId(), now);
+    inbox.markApplied(claimed.inboxId(), payment.getId(), now);
+    return true;
+  }
+
+  private void cancelRetry(Payment payment, OrderPaymentRequestedPayload request, Instant now) {
+    long version = Math.addExact(Objects.requireNonNullElse(payment.getVersion(), 0L), 1);
+    payment.acceptRetryCycle(request.paymentCycleId(), request.orderVersion(), now);
+    payment.cancel(now);
+    payments.save(payment);
+    appendAccepted(payment, request, now, version);
+    appendCancellationResult(
+        PAYMENT_CANCELLED,
+        payment,
+        CANCELLED_BEFORE_PAYMENT,
+        cancelledEventId(payment),
+        version,
+        now);
   }
 
   /**
