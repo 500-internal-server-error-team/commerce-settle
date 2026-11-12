@@ -62,3 +62,7 @@ Commerce·Payment·Settlement의 Outbox·Inbox, Payment의 payment_jobs, Settlem
 4. 새 회차 수용 후 문제가 생기면 Worker만 2단계의 새 이미지·접수 중단 Task Definition으로 되돌립니다. 회차별 조회 코드·확장 제약·금융 이력은 유지하고 전진 수정합니다. 구 단일 예약 조회 이미지로 일괄 역배포하거나 과거 예약 행을 지우지 않습니다. 구 이미지 복구는 접수·처리를 멈춘 상태에서 **새 회차 기록이 전혀 없음을 입증한 활성화 이전**에만 판단합니다.
 
 새 회차 유무는 여러 회차의 `PaymentAccepted`, 승인 시도·예약 이력, 현재 회차와 최초 요청 회차 차이를 함께 검사합니다. 카드 결제는 예약 행이 없으므로 예약 개수만으로 구 이미지 복구 가능 여부를 판단하지 않습니다.
+
+## 기존 DB의 Payment 조회 부하 인덱스
+
+[payment-sql-load.sql](../infra/postgres/upgrade/payment-sql-load.sql)은 부하 시험 SQL 점검에서 나온 Payment 조회 인덱스만 추가합니다. 대상은 정산 대조 피드의 Outbox 금융 이벤트 `ix_outbox_reconciliation`입니다. Payment 소유 역할로 새 앱 배포 전에 `psql --set ON_ERROR_STOP=1 --file ...`을 실행하며 한 트랜잭션·잠금 2초·실행 15초 상한입니다. 기존 행·원문·상태는 바꾸지 않습니다. 동명 인덱스의 정의가 다르거나 유효하지 않으면 전체를 롤백하고 배포를 중단합니다. 상한 안에 인덱스를 만들 수 없으면 실제 행 수와 계획을 확인한 뒤 별도 절차를 정하며, 상한을 끄고 강행하지 않습니다. 이전 이미지로 복구할 때 추가 인덱스는 남깁니다.
