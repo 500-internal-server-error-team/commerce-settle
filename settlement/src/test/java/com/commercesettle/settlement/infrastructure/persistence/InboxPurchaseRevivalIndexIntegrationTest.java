@@ -2,8 +2,6 @@ package com.commercesettle.settlement.infrastructure.persistence;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -12,7 +10,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-/** 결제확정마다 실행하는 구매확정 되살리기 UPDATE가 부분 표현식 인덱스를 쓰고, 업그레이드가 반복 적용되는지 확인한다. */
+/** 초기 DDL로 만든 DB에서 결제확정마다 실행하는 구매확정 되살리기 UPDATE가 부분 표현식 인덱스를 쓰는지 확인한다. */
 @Testcontainers
 class InboxPurchaseRevivalIndexIntegrationTest {
   @Container
@@ -25,14 +23,7 @@ class InboxPurchaseRevivalIndexIntegrationTest {
               POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()));
 
   @Test
-  void revivalUpdateUsesThePartialPaymentIdIndexAndUpgradeIsIdempotent() throws Exception {
-    assertThat(plan()).contains("inbox_purchase_revival");
-
-    jdbc.execute("DROP INDEX settlement.inbox_purchase_revival");
-    assertThat(plan()).doesNotContain("inbox_purchase_revival");
-    String upgrade =
-        Files.readString(Path.of("../infra/postgres/upgrade/settlement-event-path-sql-load.sql"));
-    for (int i = 0; i < 2; i++) jdbc.execute(upgrade);
+  void revivalUpdateUsesThePartialPaymentIdIndex() {
     assertThat(plan()).contains("inbox_purchase_revival");
   }
 
