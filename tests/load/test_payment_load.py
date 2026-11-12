@@ -462,5 +462,41 @@ class WorkerSettingsTest(unittest.TestCase):
         self.assertIn("final", summary)
 
 
+class NamespaceTest(unittest.TestCase):
+    def test_empty_namespace_keeps_existing_identifiers(self):
+        self.assertEqual(load.buyer(0, ""), "00000000-0000-4000-8000-100000000000")
+        self.assertEqual(load.buyer(199, ""), "00000000-0000-4000-8000-1000000000c7")
+        self.assertEqual(load.product_id(""), load.PRODUCT)
+        self.assertEqual(load.wallet_ref(3, ""), "load-wallet-3")
+        self.assertEqual(load.wallet_prefix(""), "load-wallet-")
+
+    def test_named_namespaces_do_not_share_buyers_product_or_wallets(self):
+        a, b = "r1", "r2"
+        buyers_a = {load.buyer(n, a) for n in range(load.BUYER_POOL)}
+        buyers_b = {load.buyer(n, b) for n in range(load.BUYER_POOL)}
+        default = {load.buyer(n, "") for n in range(load.BUYER_POOL)}
+        self.assertEqual(len(buyers_a), load.BUYER_POOL)
+        self.assertFalse(buyers_a & buyers_b)
+        self.assertFalse(buyers_a & default)
+        self.assertNotEqual(load.product_id(a), load.product_id(b))
+        self.assertNotIn(load.product_id(a), buyers_a)
+        self.assertEqual(load.wallet_ref(5, a), "load-wallet-r1-5")
+        self.assertTrue(load.wallet_ref(5, a).startswith(load.wallet_prefix(a)))
+
+    def test_buyer_sql_uses_the_same_base_as_python(self):
+        for namespace in ("", "r7"):
+            base = load.namespace_base(namespace)
+            self.assertIn(f"to_hex({base} + n)", load.buyer_sql("n", namespace))
+            self.assertEqual(load.buyer(0, namespace)[-12:], f"{base:012x}")
+
+    def test_rejects_invalid_namespace_at_import(self):
+        env = dict(os.environ, LOAD_NAMESPACE="Bad_Name")
+        with patch.dict(os.environ, env, clear=False):
+            spec = importlib.util.spec_from_file_location("payment_load_bad", SOURCE)
+            module = importlib.util.module_from_spec(spec)
+            with self.assertRaises(SystemExit):
+                spec.loader.exec_module(module)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -211,3 +211,21 @@ python3 -B -m unittest discover -s tests/load -p test_performance.py
 ```
 
 인증된 HTTPS Prometheus에는 `PERFORMANCE_AUTH_USER`·`PERFORMANCE_AUTH_PASSWORD` 환경 변수를 사용합니다. 자격은 결과에 기록하지 않으며 redirect를 따르지 않습니다. 결과 파일은 덮어쓰지 않습니다. 수집 실패·45초 초과 표본·미래 표본·중복 source는 수집을 실패시킵니다. 완료 수는 있지만 시작 시각이 없거나 역전된 지연은 별도 건수로 남깁니다. 비교는 조건이 다르면 거부하며, 누락 지연·무표본·1만 건 미만 p99는 `unavailable`와 종료 코드 2로 남깁니다. TPS 증가나 지연 감소를 관측하지 않은 상태에서 개선됐다고 판정하지 않습니다. HTTP는 서버 분포이고 업무 지연 bucket은 DB의 rolling-window Gauge이므로 `rate()`·`increase()`를 다시 적용하지 않습니다.
+
+## 병렬도 단일 변수 시험 절차
+
+[ADR 0015](../../docs/decisions/0015-parallelism-decision-and-load-scope.md)의 판정 순서를 따릅니다. 값과 반복 횟수는 시험 전에 고정하고, 결과를 본 뒤 바꾸지 않습니다.
+
+- **실행 번호**: 실험마다 `LOAD_NAMESPACE`(소문자·숫자 1~12자)를 지정합니다. 상품 ID, 구매자 풀(200명), EASY_PAY 지갑 계정명이 번호별로 나뉩니다. 비우면 기존 ID를 씁니다. `prepare`·`ramp`·`reconcile`은 같은 번호로 실행합니다.
+- **고정 값**: payment Outbox `PAYMENT_OUTBOX_MAX_IN_FLIGHT` 기본 32, 승인 `LOAD_PAYMENT_APPROVAL_CONCURRENCY` 6, 결제 요청 `LOAD_PAYMENT_REQUEST_CONCURRENCY` 3, Kafka 리스너 3(파티션 3이 상한).
+- **변수 값**: Outbox 16·64, 승인 12·24, 결제 요청 6. 한 번에 한 변수만 바꿉니다. 병목 판정으로 대상이 아니라고 확인된 구간은 시험하지 않습니다.
+- **부하**: 이벤트 시나리오 300건/초 × 30초(`--stages 300:30`)를 유지합니다.
+- **도구**: 기준선과 변수 실험 모두 `payment_load.py`를 씁니다. 공개 경로 확인은 `order_load.py`로 기준선에 한 번 더 실행합니다.
+- **반복**: 기준선 3회, 변수 값마다 3회입니다. 쌍이 모자라 ADR 0005 판정이 불가하면 판정을 보류하고 그대로 기록합니다.
+- **자원 기록**: 두 EC2에서 시험과 같은 시간 동안 `python3 -B tests/load/resource_sample.py --out-dir tests/load/work/resources-<실행 ID> --interval 5 --seconds <시간>`을 실행합니다. 스크립트는 [#310](https://github.com/500-internal-server-error-team/commerce-settle/issues/310)에서 추가합니다.
+- **판정**: ADR 0015 §6 기준입니다. 거절은 성공과 분리해 집계합니다. 주입률이 목표에 못 미친 회차(`dropped_iterations`, 발생기 자원으로 확인)는 서버 판정에서 뺍니다.
+
+```bash
+LOAD_NAMESPACE=r1 python3 -B tests/load/payment_load.py ramp --run r1-baseline-1   --stages 300:30 --mix card,mixed,easy,mileage --drain 300
+LOAD_NAMESPACE=r1 python3 -B tests/load/payment_load.py reconcile --runs r1-baseline-1
+```

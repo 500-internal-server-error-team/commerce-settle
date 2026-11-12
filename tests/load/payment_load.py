@@ -18,6 +18,7 @@ finance-mock 승인과 결과 Outbox 발행까지다. 순서와 해석은 tests/
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -37,6 +38,10 @@ REDIS_PLACEHOLDER = "0" * 40
 SELLER = "00000000-0000-4000-8000-0000000005e1"
 PRODUCT = "00000000-0000-4000-8000-0000000005a1"
 BUYER_POOL = 200
+# 실험 실행 번호. 비우면 기존 ID를 쓰고, 지정하면 상품·구매자 풀·지갑이 실행마다 분리된다.
+NAMESPACE = os.environ.get("LOAD_NAMESPACE", "")
+if NAMESPACE and not re.fullmatch(r"[a-z0-9]{1,12}", NAMESPACE):
+    raise SystemExit("LOAD_NAMESPACE는 소문자와 숫자 1~12자여야 합니다")
 # 반복 부하 시험에 여유를 두되, 이미 생성한 지갑 잔액은 바꾸지 않는다.
 WALLET_BALANCE = 10_000_000_000
 PROVIDERS = ("PG_A", "PG_B", "PG_C", "EASY_PAY")
@@ -152,7 +157,7 @@ def cmd_prepare(args):
     psql("finance_mock", f"""
         INSERT INTO finance_mock.mock_accounts (id, provider_id, account_ref, purpose,
             opening_balance, balance, reserved_amount, created_at, updated_at)
-        SELECT gen_random_uuid(), 'EASY_PAY', 'load-wallet-' || n, 'WALLET', {WALLET_BALANCE},
+        SELECT gen_random_uuid(), 'EASY_PAY', '{wallet_prefix()}' || n, 'WALLET', {WALLET_BALANCE},
             {WALLET_BALANCE}, 0, clock_timestamp(), clock_timestamp()
         FROM generate_series(0, {BUYER_POOL - 1}) n
         ON CONFLICT (provider_id, account_ref, purpose) DO NOTHING""")
@@ -167,12 +172,36 @@ def cmd_prepare(args):
           f"EASY_PAY test wallets are ready. Next: enable")
 
 
-def buyer(n):
-    return f"00000000-0000-4000-8000-{0x100000000000 + n:012x}"
+def namespace_base(namespace=NAMESPACE):
+    """실행 번호별 ID 구간의 시작 값. 빈 번호는 기존 구간(0x100000000000)을 쓴다."""
+    if not namespace:
+        return 0x100000000000
+    digest = int(hashlib.sha256(namespace.encode()).hexdigest()[:8], 16)
+    return 0x200000000000 + (digest % 0x10000) * 0x1000
 
 
-def buyer_sql(column):
-    return f"('00000000-0000-4000-8000-' || lpad(to_hex(17592186044416 + {column}), 12, '0'))::uuid"
+def buyer(n, namespace=NAMESPACE):
+    return f"00000000-0000-4000-8000-{namespace_base(namespace) + n:012x}"
+
+
+def buyer_sql(column, namespace=NAMESPACE):
+    base = namespace_base(namespace)
+    return f"('00000000-0000-4000-8000-' || lpad(to_hex({base} + {column}), 12, '0'))::uuid"
+
+
+def product_id(namespace=NAMESPACE):
+    # 구매자 구간 뒤쪽 4096개 ID는 쓰지 않으므로 상품 ID로 쓴다.
+    if not namespace:
+        return PRODUCT
+    return f"00000000-0000-4000-8000-{namespace_base(namespace) + 0xFFF:012x}"
+
+
+def wallet_ref(n, namespace=NAMESPACE):
+    return f"load-wallet-{namespace}-{n}" if namespace else f"load-wallet-{n}"
+
+
+def wallet_prefix(namespace=NAMESPACE):
+    return f"load-wallet-{namespace}-" if namespace else "load-wallet-"
 
 
 def cmd_enable(args):
@@ -198,7 +227,7 @@ def request_event(index, mix):
     elif kind == "mileage":
         mileage, method, account = gross, None, None
     elif kind == "easy":
-        method, account = "EASY_PAY", f"load-wallet-{n}"
+        method, account = "EASY_PAY", wallet_ref(n)
     now = datetime.now(timezone.utc)
     envelope = {
         "eventId": str(event_id),
@@ -212,7 +241,7 @@ def request_event(index, mix):
             "buyerId": buyer(n),
             "sellerId": SELLER,
             "paymentCycleId": str(cycle_id),
-            "productId": PRODUCT,
+            "productId": product_id(),
             "orderVersion": 0,
             "status": "PAYMENT_PENDING",
             "policyVersion": "load-v1",
@@ -618,7 +647,7 @@ def cmd_reconcile(args):
             FROM finance_mock.mock_accounts
             WHERE provider_id = 'EASY_PAY' AND purpose = 'WALLET' AND account_ref LIKE 'load-wallet-%'""")
     opening = {account_ref: int(amount) for _, account_ref, _, _, amount in mock_wallets}
-    initial_balances = {buyer(n): opening.get(f"load-wallet-{n}") for n in range(BUYER_POOL)}
+    initial_balances = {buyer(n): opening.get(wallet_ref(n)) for n in range(BUYER_POOL)}
     debited = {}
     for order, (_, _, buyer_id, status, _, mileage, _) in payments.items():
         if status == "CONFIRMED" and mileage:
