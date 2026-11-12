@@ -59,9 +59,30 @@ Grafana의 **Financial processing**, Zipkin, Kafka UI에서 같은 측정 구간
 Commerce가 발행하는 것과 같은 `OrderPaymentRequested` v1을 `commerce-settle.commerce.v1`에 직접 넣고, Payment 수신부터 finance-mock 승인과 결과 Outbox 발행까지 측정합니다. 주문 API·Gateway 구간과 Commerce·Settlement의 결과 반영은 포함하지 않습니다.
 
 - **결제 확정 TPS:** Payment DB에서 `CONFIRMED`가 된 결제의 초당 건수
-- **수신→확정 지연:** Inbox 저장 시각(DB)부터 결제 확정 시각까지. 같은 Docker VM의 시계라 호스트 시계 오차가 들어가지 않습니다.
+- **지연:** 아래 [집계 기준](#지연적체-집계-기준)을 따릅니다. 발행→확정 지연은 Kafka 대기를 포함하고, 수신→확정 지연은 Payment 수신 뒤만 잽니다.
 - **미완료:** `PENDING`·`PROCESSING`·`UNKNOWN` 결제. 처리 대기 결제 요청(Inbox `WAITING`), Kafka lag, 미발행 Outbox는 따로 셉니다.
 - 아래 `ramp --mix` 예제는 카드·혼합(마일리지 1,000점)·간편결제·전액 마일리지를 같은 비율로 섞습니다. `--mix`를 생략하면 카드만 주입합니다.
+
+### 지연·적체 집계 기준
+
+`ramp`·`scenario`의 `summary.json`은 `aggregation`(현재 `version` 2)에 아래 기준을 함께 남깁니다. [#254](https://github.com/500-internal-server-error-team/commerce-settle/issues/254) 전 결과에는 이 필드가 없으며, 그 결과와는 기존 지표끼리만 비교합니다.
+
+| 필드 | 집계 대상 | 시작 → 종료 | 시계 |
+| --- | --- | --- | --- |
+| `stages[].injected`, `injected` | 이번 실행의 주입 원장에 기록한 요청. 원장의 단계 번호로 나누며 수신·확정이 다음 단계나 drain이어도 주입한 단계에 넣습니다. `injected`는 전체 단계입니다. | 아래 세 지연 | 아래 참고 |
+| `publishToConfirmed` | 위 요청 중 확정된 요청 | 주입 원장 기록 시각 → `payments.confirmed_at` | 발생기 호스트 → Payment DB |
+| `publishToReceipt` | 위 요청 중 Payment가 수신한 요청 | 주입 원장 기록 시각 → `inbox.created_at` | 발생기 호스트 → Payment DB |
+| `receiptToConfirmed` | 위 요청 중 확정된 요청 | `inbox.created_at` → `payments.confirmed_at` | Payment DB |
+| `stages[].latency` (기존) | 단계 구간 `[start, end)` 안에 Inbox에 저장된 확정 결제. 구간 밖에 수신된 요청은 빠집니다. | `inbox.created_at` → `payments.confirmed_at` | Payment DB |
+| `stages[].maxKafkaLag` (기존) | 단계 구간에 기록한 표본 | — | — |
+| `peaks` | 초기·주입·drain의 모든 표본. `kafkaLag`·`waiting`·`unfinished`·`outboxPending`의 최댓값과 그 경과 시각·단계 | — | — |
+
+- **발행 시각:** 주입 원장(`requests.csv`)의 기록 시각입니다. 발생기 호스트 시계(UTC)로 producer 표준 입력에 쓴 직후에 기록하므로 Kafka acks보다 조금 이릅니다.
+- **시계 차이:** 발행 시각과 DB 시각은 시계가 다르므로 차이를 보정하지 않고 `clock`에 남깁니다. 표본마다 상태 조회 직전·직후의 호스트 시각과 그 사이에 읽은 DB `clock_timestamp()`로 `DB − 호스트` 범위(ms)를 잽니다. 조회 왕복 시간만큼 불확실하므로, 발행 기준 지연을 이 범위보다 작은 차이로 비교하지 않습니다.
+- **미완료 요청:** 요약 시점(적체가 비거나 `--drain` 제한 시간 도달)에 확정·거절되지 않은 요청은 `unresolved`로 세고 지연 분포에서 뺍니다. `unresolved`가 0보다 크면 `complete=false`이며 지연 분포는 하한입니다. 거절은 `declined`로 세고 확정 지연에서 뺍니다.
+- **백분위수:** 기존 지표의 PostgreSQL `percentile_cont`와 같은 선형 보간이며 ms 단위, 소수 첫째 자리까지입니다.
+- **Kafka lag 미관측:** 그룹 재조정 중처럼 `kafka-consumer-groups --describe`에서 파티션 lag를 읽지 못한 표본은 0이 아니라 `null`로 남기고, `peaks.kafkaLag.unobservedSamples`로 셉니다. 이런 표본이 있으면 적체가 빈 것으로 보지 않습니다.
+- 상태 표본은 `--interval`(`scenario`는 5초) 간격이므로 `peaks`는 표본 사이의 순간 최댓값을 놓칠 수 있습니다.
 
 ## 실행
 
