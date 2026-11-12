@@ -601,6 +601,44 @@ class OrderWorkflowIntegrationTest {
   }
 
   @Test
+  @DisplayName("기한 도래 조회는 세 기한 조건의 주문을 ID 순서로 이어서 찾고 기한 전·미발송 주문은 제외한다")
+  void findsDueOrdersOfEachDeadlineInIdOrder() {
+    var unpaid = uuid(create(fixture()), "id");
+    var shipped = uuid(create(fixture()), "id");
+    var delivered = uuid(create(fixture()), "id");
+    var unshipped = uuid(create(fixture()), "id");
+    var notYet = uuid(create(fixture()), "id");
+    jdbc.update(
+        "update commerce.orders set status='PAID',fulfillment_status='SHIPPED',shipped_at=?,delivery_due_at=? where id=?",
+        java.sql.Timestamp.from(NOW),
+        java.sql.Timestamp.from(NOW.plusSeconds(100)),
+        shipped);
+    jdbc.update(
+        "update commerce.orders set status='PAID',fulfillment_status='DELIVERED',shipped_at=?,delivery_due_at=?,delivered_at=?,refund_deadline_at=? where id=?",
+        java.sql.Timestamp.from(NOW.minusSeconds(900_000)),
+        java.sql.Timestamp.from(NOW.minusSeconds(800_000)),
+        java.sql.Timestamp.from(NOW.minusSeconds(800_000)),
+        java.sql.Timestamp.from(NOW.minusSeconds(800_000 - 604_800)),
+        delivered);
+    jdbc.update("update commerce.orders set status='PAID' where id=?", unshipped);
+    jdbc.update(
+        "update commerce.orders set status='PAID',fulfillment_status='SHIPPED',shipped_at=?,delivery_due_at=? where id=?",
+        java.sql.Timestamp.from(NOW),
+        java.sql.Timestamp.from(NOW.plusSeconds(3600)),
+        notYet);
+    clock.now.set(NOW.plusSeconds(601));
+
+    var all = workflow.due(100, null);
+    var first = workflow.due(1, null);
+    var rest = workflow.due(100, first.getFirst());
+
+    assertThat(all).contains(unpaid, shipped, delivered).doesNotContain(unshipped, notYet);
+    assertThat(all).isSortedAccordingTo(java.util.Comparator.comparing(UUID::toString));
+    assertThat(first).containsExactly(all.getFirst());
+    assertThat(rest).isEqualTo(all.subList(1, all.size()));
+  }
+
+  @Test
   @DisplayName("미결제 기한 작업은 취소 요청만 저장하고 중복 실행으로 예약을 해제하지 않는다")
   void expiresByRequestingCancellationOnce() {
     var f = fixture();
