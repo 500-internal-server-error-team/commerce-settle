@@ -228,6 +228,8 @@ services:
     environment:
       <<: *app-env
       PAYMENT_ROLE: api
+      # 시연 계정 fixture와 함께 구매자 A/B 마일리지 지갑을 준비한다. 금융 스냅샷은 APP_DEV_FIXTURES_ENABLED로 따로 켠다.
+      APP_DEMO_WALLETS_ENABLED: ${COMMERCE_DEV_FIXTURES_ENABLED:-true}
       FINANCE_MOCK_PAYMENT_CREDENTIAL: ${FINANCE_MOCK_PAYMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
       SPRING_APPLICATION_JSON: '{"app":{"internal-auth":{"senders":{"[service:settlement]":{"current":"${PAYMENT_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}","previous":"${PAYMENT_SETTLEMENT_CREDENTIAL_PREVIOUS:-}"}}}}}'
       DB_URL: jdbc:postgresql://postgres:5432/payment
