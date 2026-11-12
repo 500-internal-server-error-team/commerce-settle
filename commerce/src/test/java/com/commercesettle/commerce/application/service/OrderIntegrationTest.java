@@ -129,7 +129,7 @@ class OrderIntegrationTest {
     problem(conflict.result(), 409, "COMMON_IDEMPOTENCY_CONFLICT");
     assertThat(created.inventoryLocks()).isEqualTo(1);
     assertThat(created.timeoutSettings()).isEqualTo(1);
-    assertThat(created.executions()).hasSizeLessThanOrEqualTo(17);
+    assertThat(created.executions()).hasSizeLessThanOrEqualTo(15);
     assertThat(replay.executions()).hasSizeLessThanOrEqualTo(4);
     assertThat(conflict.executions()).hasSizeLessThanOrEqualTo(3);
     assertThat(replay.inventoryLocks()).isZero();
