@@ -495,6 +495,10 @@ main {
 .learning-start p {
   font-size:13px
 }
+.mileage-guide dl { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:6px 16px; font-size:13px; line-height:1.7 }
+.mileage-guide dt { color:var(--muted) }
+.mileage-guide code { overflow-wrap:anywhere }
+@media (max-width:640px) { .mileage-guide dl { grid-template-columns:minmax(0,1fr) } .mileage-guide dd + dt { margin-top:6px } }
 .steps span {
   grid-row:1/3;
   padding-top:3px;
