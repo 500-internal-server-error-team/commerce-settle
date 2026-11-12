@@ -13,6 +13,7 @@ import static org.mockito.Mockito.when;
 
 import com.commercesettle.settlement.application.port.OutboxStore.Delivery;
 import com.commercesettle.settlement.application.port.OutboxStore.Publication;
+import com.commercesettle.settlement.application.port.OutboxStore.PublishResult;
 import com.commercesettle.settlement.application.service.OutboxDeliveryService;
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -265,6 +266,63 @@ class OutboxRelayTest {
 
     verify(service).claim(1, 240000, 10);
     assertThat(coordinator).isEmpty();
+  }
+
+  @Test
+  @DisplayName("슬롯이 남고 같은 집계의 뒤 이벤트가 없으면 결과 저장 뒤 다시 선점하지 않는다")
+  void doesNotClaimAfterEachResultWhenNothingWasLeftBehind() {
+    var delivery = delivery();
+    var reply = new CompletableFuture<SendResult<String, byte[]>>();
+    when(service.claim(2, 240000, 10)).thenReturn(List.of(delivery));
+    when(template.send(anyString(), anyString(), any(byte[].class))).thenReturn(reply);
+    when(service.markPublished(any(), any())).thenReturn(PublishResult.PUBLISHED);
+    var relay = new OutboxRelay(service, template, 2, 240000, 10, coordinator::add, work::add);
+
+    relay.wakeUp();
+    coordinator.remove().run();
+    work.remove().run();
+    reply.complete(result(delivery, 73));
+    work.remove().run();
+
+    verify(service).markPublished(delivery, new Publication("topic", 2, 73));
+    verify(service, times(1)).claim(2, 240000, 10);
+    assertThat(coordinator).isEmpty();
+  }
+
+  @Test
+  @DisplayName("발행으로 같은 집계의 뒤 이벤트가 풀리면 복구 주기를 기다리지 않고 선점한다")
+  void claimsWhenPublishReleasesSuccessor() {
+    var delivery = delivery();
+    var reply = new CompletableFuture<SendResult<String, byte[]>>();
+    when(service.claim(2, 240000, 10)).thenReturn(List.of(delivery), List.of());
+    when(template.send(anyString(), anyString(), any(byte[].class))).thenReturn(reply);
+    when(service.markPublished(any(), any())).thenReturn(PublishResult.PUBLISHED_WITH_SUCCESSOR);
+    var relay = new OutboxRelay(service, template, 2, 240000, 10, coordinator::add, work::add);
+
+    relay.wakeUp();
+    coordinator.remove().run();
+    work.remove().run();
+    reply.complete(result(delivery, 73));
+    work.remove().run();
+    coordinator.remove().run();
+
+    verify(service, times(2)).claim(2, 240000, 10);
+  }
+
+  @Test
+  @DisplayName("시도를 다 쓴 행 정리는 커밋 신호가 아니라 복구 주기에만 한다")
+  void reviewsExhaustedOnlyOnRecoveryTick() {
+    when(service.claim(1, 240000, 10)).thenReturn(List.of());
+    var relay = relay();
+
+    relay.wakeUp();
+    coordinator.remove().run();
+    verify(service, never()).reviewExhausted(anyInt(), anyInt());
+
+    relay.recover();
+    coordinator.remove().run();
+    verify(service).reviewExhausted(100, 10);
+    verify(service, times(2)).claim(1, 240000, 10);
   }
 
   private OutboxRelay relay() {

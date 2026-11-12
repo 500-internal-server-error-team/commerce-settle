@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.port.OutboxStore.Delivery;
+import com.commercesettle.settlement.application.port.OutboxStore.Publication;
+import com.commercesettle.settlement.application.port.OutboxStore.PublishResult;
 import com.commercesettle.settlement.application.port.SettlementEventOutbox;
 import com.commercesettle.settlement.application.service.OutboxDeliveryService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -167,8 +169,86 @@ class SettlementOutboxIntegrationTest {
     jdbc.update(
         "UPDATE settlement.outbox SET attempts = 10, lease_until = now() - interval '1 second'");
     assertThat(deliveries.claim(1, LEASE_MS, 10)).isEmpty();
+    // 시도를 다 쓴 행의 전환은 선점마다가 아니라 복구 주기의 정리에서 한다.
+    assertThat(jdbc.queryForObject("SELECT status FROM settlement.outbox", String.class))
+        .isEqualTo("RUNNING");
+    assertThat(deliveries.reviewExhausted(100, 10)).isEqualTo(1);
     assertThat(jdbc.queryForObject("SELECT status FROM settlement.outbox", String.class))
         .isEqualTo("REVIEW_REQUIRED");
+    assertThat(deliveries.reviewExhausted(100, 10)).isZero();
+  }
+
+  @Test
+  @DisplayName("발행 결과 저장은 같은 집계의 뒤 이벤트가 기다리는지 함께 알린다")
+  void publishReportsWaitingSuccessor() {
+    UUID aggregate = UUID.randomUUID();
+    var first = event(UUID.randomUUID(), "RefundReservationResult", aggregate, 1);
+    var second = event(UUID.randomUUID(), "RefundLedgerReversed", aggregate, 2);
+    transactions.executeWithoutResult(
+        status -> {
+          outbox.append(first, aggregate);
+          outbox.append(second, aggregate);
+        });
+    Delivery head = deliveries.claim(10, LEASE_MS, 10).getFirst();
+    assertThat(head.id()).isEqualTo(first.eventId());
+    assertThat(deliveries.markPublished(head, publication(head, 1)))
+        .isEqualTo(PublishResult.PUBLISHED_WITH_SUCCESSOR);
+    assertThat(deliveries.markPublished(head, publication(head, 1))).isEqualTo(PublishResult.STALE);
+
+    Delivery tail = deliveries.claim(10, LEASE_MS, 10).getFirst();
+    assertThat(tail.id()).isEqualTo(second.eventId());
+    assertThat(deliveries.markPublished(tail, publication(tail, 2)))
+        .isEqualTo(PublishResult.PUBLISHED);
+  }
+
+  @Test
+  @DisplayName("결과 저장이 잠금을 기다리는 동안 다른 선점이 행을 가져가면 결과를 저장하지 않는다")
+  void resultWaitingOnLockIsFencedByReclaim() throws Exception {
+    var event = event(UUID.randomUUID(), "RefundReservationResult", UUID.randomUUID(), 0);
+    transactions.executeWithoutResult(status -> outbox.append(event, UUID.randomUUID()));
+    Delivery stale = deliveries.claim(1, LEASE_MS, 10).getFirst();
+    var locked = new java.util.concurrent.CountDownLatch(1);
+    var release = new java.util.concurrent.CountDownLatch(1);
+    try (var executor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+      // 다른 실행이 행을 잡고 임대 만료 뒤 재선점하는 상황을 같은 트랜잭션에서 재현한다.
+      var reclaim =
+          executor.submit(
+              () ->
+                  transactions.execute(
+                      status -> {
+                        jdbc.update(
+                            "UPDATE settlement.outbox SET lease_until = clock_timestamp()"
+                                + " - interval '1 second'");
+                        locked.countDown();
+                        try {
+                          release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                          Thread.currentThread().interrupt();
+                        }
+                        return deliveries.claim(1, LEASE_MS, 10);
+                      }));
+      assertThat(locked.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+      var result =
+          java.util.concurrent.CompletableFuture.supplyAsync(
+              () -> deliveries.markFailed(stale, 10));
+      // 결과 저장이 실제로 행 잠금을 기다리기 시작한 뒤 재선점을 커밋한다.
+      long deadline = System.nanoTime() + 5_000_000_000L;
+      while (jdbc.queryForObject("SELECT count(*) FROM pg_locks WHERE NOT granted", Long.class) == 0
+          && System.nanoTime() < deadline) {
+        Thread.onSpinWait();
+      }
+      release.countDown();
+      assertThat(reclaim.get(10, java.util.concurrent.TimeUnit.SECONDS)).hasSize(1);
+      assertThat(result.get(10, java.util.concurrent.TimeUnit.SECONDS)).isFalse();
+    }
+    assertThat(jdbc.queryForObject("SELECT status FROM settlement.outbox", String.class))
+        .isEqualTo("RUNNING");
+    assertThat(jdbc.queryForObject("SELECT attempts FROM settlement.outbox", Integer.class))
+        .isEqualTo(2);
+  }
+
+  private static Publication publication(Delivery delivery, long offset) {
+    return new Publication(delivery.topic(), 0, offset);
   }
 
   private long count() {

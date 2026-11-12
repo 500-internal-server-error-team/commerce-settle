@@ -3,6 +3,7 @@ package com.commercesettle.settlement.infrastructure.messaging;
 import com.commercesettle.observability.AsyncObservation;
 import com.commercesettle.settlement.application.port.OutboxStore.Delivery;
 import com.commercesettle.settlement.application.port.OutboxStore.Publication;
+import com.commercesettle.settlement.application.port.OutboxStore.PublishResult;
 import com.commercesettle.settlement.application.service.OutboxDeliveryService;
 import jakarta.annotation.PreDestroy;
 import java.util.List;
@@ -22,8 +23,8 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
- * Payment {@code OutboxRelay}와 같은 방식이다. 커밋 후·결과 저장 후·기동 시 깨우고 1초 복구 조회로 신호 누락·재시도·만료 임대를 처리한다. 빈
- * 슬롯만 선점하며 전송은 전용 실행기에서 한다.
+ * Payment {@code OutboxRelay}를 바탕으로 한다. 커밋 후·기동 시와, 결과 저장으로 같은 집계의 다음 이벤트가 풀리거나 슬롯이 모자랐을 때 깨우고 1초
+ * 복구 조회로 신호 누락·재시도·만료 임대를 처리한다. 빈 슬롯만 선점하며 전송은 전용 실행기에서 한다.
  */
 public class OutboxRelay {
   private static final Logger LOG = LoggerFactory.getLogger(OutboxRelay.class);
@@ -34,6 +35,10 @@ public class OutboxRelay {
   private final Executor coordinator;
   private final AtomicBoolean requested = new AtomicBoolean();
   private final AtomicBoolean scheduled = new AtomicBoolean();
+  // 마지막 선점이 빈 슬롯을 다 채웠거나 슬롯이 없어 기한이 지난 행이 더 남았을 수 있다. 결과 저장 뒤 다시 선점할지 정한다.
+  private final AtomicBoolean saturated = new AtomicBoolean();
+  // 시도를 다 쓴 행 정리는 복구 주기에만 한다.
+  private final AtomicBoolean reviewDue = new AtomicBoolean();
   private final int maxInFlight;
   private final long leaseMs;
   private final int maxAttempts;
@@ -95,6 +100,7 @@ public class OutboxRelay {
       initialDelayString = "${app.outbox.recovery-interval-ms:1000}",
       fixedDelayString = "${app.outbox.recovery-interval-ms:1000}")
   public void recover() {
+    reviewDue.set(true);
     wakeUp();
   }
 
@@ -136,8 +142,19 @@ public class OutboxRelay {
   }
 
   private void publishDue() {
+    if (!accepting) {
+      return;
+    }
+    if (reviewDue.getAndSet(false)) {
+      try {
+        service.reviewExhausted(100, maxAttempts);
+      } catch (RuntimeException exception) {
+        LOG.atWarn().addKeyValue("event", "outbox.review-exhausted").log("Outbox review failed");
+      }
+    }
     int available = Math.min(100, maxInFlight - inFlight.get());
-    if (!accepting || available <= 0) {
+    if (available <= 0) {
+      saturated.set(true);
       return;
     }
     List<Delivery> deliveries;
@@ -147,6 +164,7 @@ public class OutboxRelay {
       LOG.atWarn().addKeyValue("event", "outbox.claim").log("Outbox claim failed");
       return;
     }
+    saturated.set(deliveries.size() >= available);
     for (var delivery : deliveries) {
       inFlight.incrementAndGet();
       try {
@@ -194,14 +212,17 @@ public class OutboxRelay {
 
   private void persistResult(
       Delivery delivery, SendResult<String, byte[]> result, Throwable failure) {
+    boolean successorWaiting = false;
     try {
       boolean updated;
       if (failure == null) {
         var metadata = result.getRecordMetadata();
-        updated =
+        var published =
             service.markPublished(
                 delivery,
                 new Publication(metadata.topic(), metadata.partition(), metadata.offset()));
+        updated = published != PublishResult.STALE;
+        successorWaiting = published == PublishResult.PUBLISHED_WITH_SUCCESSOR;
       } else {
         updated = service.markFailed(delivery, maxAttempts);
       }
@@ -218,7 +239,11 @@ public class OutboxRelay {
           .log("Outbox result persistence failed; the original event remains recoverable");
     } finally {
       inFlight.decrementAndGet();
-      wakeUp();
+      // 결과마다 선점하지 않는다. 같은 집계의 다음 이벤트가 풀렸거나 슬롯 부족으로 남은 행이 있을 때만 깨운다. 실패 결과의 재시도는
+      // 1초 이상 뒤라 새 Outbox 커밋 신호와 복구 주기가 처리한다.
+      if (successorWaiting || saturated.get()) {
+        wakeUp();
+      }
     }
   }
 

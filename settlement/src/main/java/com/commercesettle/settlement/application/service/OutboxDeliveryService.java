@@ -25,7 +25,15 @@ public class OutboxDeliveryService {
   }
 
   @Transactional
-  public boolean markPublished(Delivery delivery, Publication publication) {
+  public int reviewExhausted(int limit, int maxAttempts) {
+    if (limit < 1 || limit > 100 || maxAttempts < 1 || maxAttempts > 10) {
+      throw new IllegalArgumentException("Invalid outbox review limits");
+    }
+    return store.reviewExhausted(limit, maxAttempts);
+  }
+
+  @Transactional
+  public OutboxStore.PublishResult markPublished(Delivery delivery, Publication publication) {
     if (!delivery.topic().equals(publication.topic())
         || publication.partition() < 0
         || publication.offset() < 0) {
