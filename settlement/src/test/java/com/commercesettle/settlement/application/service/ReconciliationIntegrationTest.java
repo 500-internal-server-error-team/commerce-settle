@@ -417,7 +417,11 @@ class ReconciliationIntegrationTest {
     var event = feed.items.getFirst();
 
     assertThatThrownBy(
-            () -> store.result(old, event, ReconciliationStore.Finding.of("x", "DEFECT", "STALE")))
+            () ->
+                store.record(
+                    old,
+                    Map.of(
+                        event.eventId(), ReconciliationStore.Finding.of("x", "DEFECT", "STALE"))))
         .hasMessageContaining("lease lost");
     assertThat(
             jdbc.queryForObject(
@@ -425,6 +429,56 @@ class ReconciliationIntegrationTest {
                 String.class,
                 event.eventId()))
         .isEqualTo("WAIT_PUBLICATION");
+  }
+
+  @Test
+  @DisplayName("한 호출의 여러 이벤트를 묶어 조회·기록해도 이벤트별 판정과 변경 이력은 같다")
+  void batchesCheckWithSameFindings() throws Exception {
+    var matched = payment(false);
+    var defect = payment(false);
+    var unpublished = payment(false);
+    var quarantined = payment(false);
+    apply(matched);
+    apply(defect);
+    jdbc.update(
+        "DELETE FROM settlement.settlement_entries WHERE source_event_id=? AND leg='FEE'",
+        defect.eventId());
+    jdbc.update(
+        "INSERT INTO settlement.inbox_quarantines(id,consumer,source_topic,source_partition,source_offset,raw_body,error_code,created_at) VALUES(?,'settlement.v1',?,0,5,?,'UNSUPPORTED_VERSION',clock_timestamp())",
+        UUID.randomUUID(),
+        quarantined.topic(),
+        ("{\"eventId\":\"" + quarantined.eventId() + "\"}")
+            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    feed.items.addAll(List.of(matched, defect, unpublished, quarantined));
+    UUID id = service.request(cutoff, "operator:ops");
+    tick(2);
+    track("reconciliation_events", "ROW");
+    track("reconciliation_history", "STATEMENT");
+    try {
+      service.tick();
+
+      assertThat(writes("reconciliation_events", "UPDATE")).isEqualTo(4);
+      assertThat(writes("reconciliation_history", "INSERT")).isEqualTo(3);
+    } finally {
+      untrack("reconciliation_events", "reconciliation_history");
+    }
+    assertThat(status(id)).isEqualTo("REVIEW_REQUIRED");
+    assertThat(
+            jdbc.queryForList(
+                "SELECT event_id::text||':'||status||':'||reason FROM settlement.reconciliation_events WHERE run_id=?",
+                String.class,
+                id))
+        .containsExactlyInAnyOrder(
+            matched.eventId() + ":MATCH:APPLIED_MATCH",
+            defect.eventId() + ":DEFECT:APPLIED_AMOUNT_OR_REFERENCE_MISMATCH",
+            unpublished.eventId() + ":WAIT_PUBLICATION:PUBLICATION_POSITION_UNKNOWN",
+            quarantined.eventId() + ":QUARANTINED:SOURCE_REQUIRES_REVIEW");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM settlement.reconciliation_history WHERE run_id=? AND event_id IS NOT NULL",
+                Long.class,
+                id))
+        .isEqualTo(4);
   }
 
   @Test
