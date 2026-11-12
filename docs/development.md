@@ -707,7 +707,7 @@ Grafana의 `commerce-settle / Runtime overview` 대시보드와 Prometheus 데�
 
 #### 금융 처리 시간과 비동기 추적
 
-`commerce-settle / Financial processing` 대시보드(기존 Payment Worker UID 유지)는 Payment 단계별 평균·p95·p99, 세 서비스의 비동기 처리·대기·재시도·SQL과 대기열을 보여줍니다. 새 Commerce·Payment API/Worker·Settlement·Finance Mock 이미지와 대시보드 설정을 함께 반영합니다. 기존 DB에는 먼저 [추적 컬럼 업그레이드](migrations.md#기존-db의-추적-컬럼-추가)를 적용합니다. 작업이 실행되기 전이나 두 번의 수집이 쌓이기 전에는 데이터가 없을 수 있습니다.
+`commerce-settle / Financial processing` 대시보드(기존 Payment Worker UID 유지)는 Payment 단계별 평균·p95·p99, 세 서비스의 비동기 처리·대기·재시도·SQL과 대기열을 보여줍니다. 새 Commerce·Payment API/Worker·Settlement·Finance Mock 이미지와 대시보드 설정을 함께 반영합니다. 추적 컬럼이 없는 기존 실험 DB는 [DB 적용 정책](migrations.md#최초-배포와-기존-데이터-변경)에 따라 초기화하고 현재 DDL로 구성합니다. 작업이 실행되기 전이나 두 번의 수집이 쌓이기 전에는 데이터가 없을 수 있습니다.
 
 | 지표 | 측정 경계 |
 | --- | --- |
@@ -1078,6 +1078,8 @@ Redis 인증 저장소 장애·재시작·재연결 뒤에는 자동으로 보�
 
 ## 종료·재실행·초기화
 
+스키마 변경과 새 독립 실험은 [DB 초기화 정책](migrations.md#최초-배포와-기존-데이터-변경)을 따릅니다. 같은 거래의 장애 복구·재시작 시험은 데이터를 유지합니다. 아래 삭제 명령은 선택한 로컬 Compose 환경 전용이며 AWS 데이터 디렉터리에 적용하지 않습니다.
+
 ```bash
 # 컨테이너만 종료하고 DB·Kafka·Redis·관측 볼륨을 보존
 docker compose --profile observability --profile tools down
@@ -1248,4 +1250,4 @@ Grafana UID `commerce-settle-business-performance`에서 업무 완료 TPS·주�
 
 왕복 smoke는 확정 거절 뒤 실제 `payment-retries` API로 새 회차를 접수하고 승인·정산항목 생성까지 확인합니다. 이전 DECLINED 시도, 새 APPROVED 시도 번호, 단일 정산항목과 최초 주문 생성 시각 전달을 검사합니다. 재시도 배포에는 [예약 이력 업그레이드와 복구 절차](migrations.md#기존-db의-결제-회차별-예약)를 함께 적용합니다. 코드 검증과 실제 환경 배포·수집 확인은 각각 기록합니다.
 
-기존 DB에는 [업무 지표 관측 컬럼 적용](migrations.md#기존-db의-업무-지표-관측-컬럼)을 먼저 수행합니다. 실제 사용본에는 새 이미지뿐 아니라 `financial.rules.yml`과 `business-performance.json`도 적용한 뒤 rule evaluation·수집 신선도·실제 주문 반영과 지연 coverage를 확인합니다. `app.business-metrics.enabled=false`는 DB 표본 수집을 끄며, 꺼진 환경은 전체 지표 준비 완료로 보고하지 않습니다.
+업무 지표 관측 컬럼·인덱스가 없는 기존 실험 DB는 [DB 적용 정책](migrations.md#최초-배포와-기존-데이터-변경)에 따라 초기화하고 현재 DDL로 구성합니다. 실제 사용본에는 새 이미지뿐 아니라 `financial.rules.yml`과 `business-performance.json`도 적용한 뒤 rule evaluation·수집 신선도·실제 주문 반영과 지연 coverage를 확인합니다. `app.business-metrics.enabled=false`는 DB 표본 수집을 끄며, 꺼진 환경은 전체 지표 준비 완료로 보고하지 않습니다.
