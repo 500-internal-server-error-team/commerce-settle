@@ -73,25 +73,40 @@ def compose_env():
     return env
 
 
-# 배포 모드: 앱·인프라 EC2에 나뉜 서비스를 SSH로 실행한다. 세 값이 모두 비면 로컬 compose 스택을 쓴다.
-# 두 호스트에 같은 경로로 저장소를 체크아웃해 두어야 한다. 인프라 EC2는 프라이빗 IP로 접속할 때 LOAD_SSH_JUMP를 쓴다.
+# 배포 모드: 앱·인프라 EC2의 ECS 컨테이너에서 SSH로 명령을 실행한다. 두 값이 모두 비면 로컬 compose 스택을 쓴다.
+# 컨테이너는 ECS 라벨로 찾는다. 워커 설정(병렬도·시나리오)은 ECS 배포로 고정하고 이 도구는 바꾸지 않는다.
+# 인프라 EC2는 프라이빗 IP로 접속할 때 LOAD_SSH_JUMP를 쓴다.
 SSH_KEY = os.environ.get("LOAD_SSH_KEY", "")
 APP_SSH = os.environ.get("LOAD_APP_SSH", "")
 INFRA_SSH = os.environ.get("LOAD_INFRA_SSH", "")
 SSH_JUMP = os.environ.get("LOAD_SSH_JUMP", "")
-REMOTE_REPO = os.environ.get("LOAD_REMOTE_REPO", "commerce-settle")
+REMOTE_DOCKER = os.environ.get("LOAD_REMOTE_DOCKER", "docker")
 REMOTE = bool(APP_SSH or INFRA_SSH)
 APP_SERVICES = ("payment-api", "payment-worker")
 INFRA_SERVICES = ("postgres", "kafka", "redis")
+ECS_CONTAINER_LABEL = "com.amazonaws.ecs.container-name"
+# 배포 Kafka는 데이터 호스트 프라이빗 IP를 advertised listener로 쓰므로 컨테이너 안에서는 localhost로 붙는다.
+KAFKA_BOOTSTRAP = os.environ.get("LOAD_KAFKA_BOOTSTRAP", "localhost:9092" if REMOTE else "kafka:9092")
 
 
-def compose_argv(args, relative=False):
-    """docker compose 명령. relative면 호스트의 저장소 기준 상대 경로를 쓴다."""
-    if relative:
-        files = ("compose.yml", "tests/load/compose.load.yml")
-    else:
-        files = (str(ROOT / "compose.yml"), str(ROOT / "tests" / "load" / "compose.load.yml"))
-    return ["docker", "compose", "-p", PROJECT, "-f", files[0], "-f", files[1], *args]
+def compose_argv(args):
+    return ["docker", "compose", "-p", PROJECT, "-f", str(ROOT / "compose.yml"),
+            "-f", str(ROOT / "tests" / "load" / "compose.load.yml"), *args]
+
+
+def remote_exec(args):
+    """`exec -T <서비스> 명령…`을 호스트의 ECS 컨테이너 `docker exec`로 바꾼다. 컨테이너가 정확히 1개여야 한다."""
+    if len(args) < 4 or args[0] != "exec" or args[1] != "-T":
+        raise SystemExit("배포 모드에서는 컨테이너 안 명령(exec)만 실행합니다. "
+                         f"워커 재기동·설정 변경은 ECS 배포로 합니다: {' '.join(args[:4])}")
+    service, command = args[2], args[3:]
+    docker = REMOTE_DOCKER.split()
+    find = " ".join(shlex.quote(part) for part in
+                    [*docker, "ps", "-q", "--filter", f"label={ECS_CONTAINER_LABEL}={service}"])
+    run = " ".join(shlex.quote(part) for part in [*docker, "exec", "-i"])
+    return (f'ids=$({find}); n=$(printf "%s\\n" "$ids" | grep -c .); '
+            f'[ "$n" = 1 ] || {{ echo "{service} container count: $n" >&2; exit 3; }}; '
+            f'exec {run} "$ids" ' + " ".join(shlex.quote(part) for part in command))
 
 
 def host_for(args):
@@ -103,11 +118,12 @@ def host_for(args):
     raise SystemExit(f"배포 모드에서는 대상 서비스를 지정해야 합니다: {' '.join(args)}")
 
 
-def command_for(args, env):
-    """실행 명령. 로컬이면 로컬 compose, 배포 모드면 대상 호스트에서 같은 compose를 SSH로 실행한다."""
+def command_for(args):
+    """실행 명령. 로컬이면 로컬 compose, 배포 모드면 대상 호스트의 ECS 컨테이너에서 SSH로 실행한다."""
     if not REMOTE:
         return compose_argv(args)
-    host = host_for(args)
+    remote = remote_exec(args)
+    host = host_for(args[2:3])
     target = APP_SSH if host == "app" else INFRA_SSH
     if not target:
         raise SystemExit(f"LOAD_{host.upper()}_SSH 값이 필요합니다")
@@ -116,18 +132,13 @@ def command_for(args, env):
         ssh += ["-i", SSH_KEY]
     if SSH_JUMP and host == "infra":
         ssh += ["-J", SSH_JUMP]
-    # 호스트로 넘기는 변수는 LOAD_*와 AUTH_REDIS_RUN_ID뿐이다. 나머지 셸 환경은 보내지 않는다.
-    forwarded = [f"{key}={shlex.quote(value)}" for key, value in sorted(env.items())
-                 if key.startswith("LOAD_") or key == "AUTH_REDIS_RUN_ID"]
-    remote = (f"cd {shlex.quote(REMOTE_REPO)} && env {' '.join(forwarded)} "
-              + " ".join(shlex.quote(part) for part in compose_argv(args, relative=True)))
     return ssh + [target, remote]
 
 
 def compose(*args, input_text=None, check=True, capture=True, env=None, timeout=None):
     env = env or compose_env()
     result = subprocess.run(
-        command_for(args, env), cwd=ROOT, env=env, input=input_text, text=True, timeout=timeout,
+        command_for(args), cwd=ROOT, env=env, input=input_text, text=True, timeout=timeout,
         stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE if capture else None,
     )
     if check and result.returncode != 0:
@@ -137,6 +148,9 @@ def compose(*args, input_text=None, check=True, capture=True, env=None, timeout=
 
 def redis_run_id():
     """이 프로젝트의 Redis run_id. 공용 .env의 승인 값은 바꾸지 않고 환경 변수로만 넘긴다."""
+    if REMOTE:
+        # 로컬 compose 보간용 값이다. 배포 모드는 compose를 쓰지 않으므로 조회하지 않는다.
+        return None
     compose("up", "-d", "--wait", "redis")
     info = compose("exec", "-T", "redis", "sh", "-c",
                    'REDISCLI_AUTH="$REDIS_PASSWORD" exec redis-cli INFO server')
@@ -155,7 +169,7 @@ def psql(database, sql):
 
 def kafka(script, *args):
     return compose("exec", "-T", "kafka", f"/opt/kafka/bin/{script}",
-                   "--bootstrap-server", "kafka:9092", *args)
+                   "--bootstrap-server", KAFKA_BOOTSTRAP, *args)
 
 
 def cmd_up(args):
@@ -325,9 +339,9 @@ def produce(stages, mix, directory, offset, marks, stop_file=None, stop_event=No
     env = compose_env()
     producer = subprocess.Popen(
         command_for(["exec", "-T", "kafka", "/opt/kafka/bin/kafka-console-producer.sh",
-                     "--bootstrap-server", "kafka:9092", "--topic", TOPIC,
+                     "--bootstrap-server", KAFKA_BOOTSTRAP, "--topic", TOPIC,
                      "--reader-property", "parse.key=true", "--reader-property", "key.separator=\t",
-                     "--command-property", "acks=all", "--command-property", "linger.ms=5"], env),
+                     "--command-property", "acks=all", "--command-property", "linger.ms=5"]),
         cwd=ROOT, env=env, stdin=subprocess.PIPE, text=True)
     index = offset
     try:
@@ -463,6 +477,8 @@ def cmd_ramp(args):
     import threading
 
     stages = parse_stages(args.stages)
+    if REMOTE and args.kill_after:
+        raise SystemExit("배포 모드에서는 --kill-after(워커 재기동)를 쓰지 않습니다")
     if args.kill_after < 0 or args.kill_after >= sum(seconds for _, seconds in stages):
         raise SystemExit("kill-after must be nonnegative and earlier than the end of injection")
     run = args.run or "ramp-" + datetime.now().strftime("%Y%m%d-%H%M%S")
