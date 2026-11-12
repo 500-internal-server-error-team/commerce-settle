@@ -2,6 +2,7 @@ package com.commercesettle.payment.infrastructure.persistence.outbox;
 
 import com.commercesettle.observability.AsyncObservation.Timing;
 import com.commercesettle.payment.application.port.OutboxStore;
+import com.commercesettle.payment.infrastructure.persistence.TransactionLimits;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -26,7 +27,7 @@ public class JdbcOutboxStore implements OutboxStore {
 
   @Override
   public List<Delivery> claim(int limit, long leaseMs, int maxAttempts) {
-    applyTransactionLimits();
+    TransactionLimits.apply(jdbc.getJdbcTemplate());
     var params =
         new MapSqlParameterSource("limit", limit)
             .addValue("lease", leaseMs)
@@ -91,7 +92,7 @@ public class JdbcOutboxStore implements OutboxStore {
 
   @Override
   public Set<UUID> markPublished(List<Published> results) {
-    applyTransactionLimits();
+    TransactionLimits.apply(jdbc.getJdbcTemplate());
     var params =
         new MapSqlParameterSource("ids", array(results, r -> r.delivery().id()))
             .addValue("versions", array(results, r -> r.delivery().version()))
@@ -135,7 +136,7 @@ public class JdbcOutboxStore implements OutboxStore {
 
   @Override
   public boolean markFailed(Delivery delivery, int maxAttempts) {
-    applyTransactionLimits();
+    TransactionLimits.apply(jdbc.getJdbcTemplate());
     if (!lockCurrentDelivery(delivery)) {
       return false;
     }
@@ -164,18 +165,5 @@ public class JdbcOutboxStore implements OutboxStore {
 
   private static MapSqlParameterSource position(Delivery delivery) {
     return new MapSqlParameterSource("id", delivery.id()).addValue("version", delivery.version());
-  }
-
-  private void applyTransactionLimits() {
-    jdbc.getJdbcTemplate()
-        .queryForList(
-            """
-        SELECT set_config(budget.name,
-            least(coalesce(nullif(settings.setting::integer,0),budget.timeout_ms),
-                budget.timeout_ms)::text,true)
-        FROM (VALUES ('lock_timeout',1000),('statement_timeout',5000))
-            AS budget(name,timeout_ms)
-        JOIN pg_settings settings ON settings.name=budget.name
-        """);
   }
 }
