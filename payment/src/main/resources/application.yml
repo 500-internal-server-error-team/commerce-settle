@@ -121,6 +121,8 @@ app:
   dev-fixtures:
     enabled: ${APP_DEV_FIXTURES_ENABLED:false}
     run-scenarios: ${APP_DEV_FIXTURE_SCENARIOS_ENABLED:false}
+    # 시연 구매자 A/B 지갑만 없을 때 만든다(금융 스냅샷과 별개). Compose는 계정 fixture와 같이 켠다.
+    demo-wallets: ${APP_DEMO_WALLETS_ENABLED:false}
   kafka:
     quarantine:
       # 새 초기 SQL과 격리·DLT·재처리 시험을 확인한 환경에서만 켠다.
