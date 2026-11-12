@@ -656,6 +656,58 @@ class OrderWorkflowIntegrationTest {
         .isEqualTo(1);
   }
 
+  @Test
+  @DisplayName("재시도 회차가 처리 중이라 취소가 거절된 뒤 확정 거절되면 같은 회차 취소를 한 번 더 요청하고 취소 확정까지 예약을 유지한다")
+  void requestsCancellationAgainAfterRetryCycleIsDeclined() throws Exception {
+    var f = fixture();
+    var id = uuid(create(f), "id");
+    var payment = UUID.randomUUID();
+    var first = uuid(context(id), "paymentCycleId");
+    receive("PaymentDeclined", result(id, payment, first), true);
+    clock.now.set(NOW.plusSeconds(120));
+    call("BUYER", f.buyer(), "/api/orders/" + id + "/payment-retries", version(buyer(f, id)), 202);
+    var retry = uuid(context(id), "paymentCycleId");
+    assertThat(retry).isNotEqualTo(first);
+    clock.now.set(NOW.plusSeconds(601));
+    workflow.advance(id);
+    assertThat(buyer(f, id).path("status").asText()).isEqualTo("CANCEL_PENDING");
+    var cancelVersion = buyer(f, id).path("version").asLong();
+    String requests =
+        """
+        select count(*) from commerce.outbox where aggregate_id=? and event_type='PaymentCancellationRequested'
+          and payload->'payload'->>'paymentCycleId'=?
+        """;
+    assertThat(number(requests, id, retry.toString())).isEqualTo(1);
+
+    receive("PaymentCancellationRejected", result(id, payment, retry), true);
+    receive("PaymentDeclined", result(id, payment, retry), true);
+    assertThat(buyer(f, id).path("status").asText()).isEqualTo("CANCEL_PENDING");
+    assertStock(f, 1, 1, 0);
+    assertThat(number(requests, id, retry.toString())).isEqualTo(2);
+    assertThat(
+            number(
+                """
+                select count(*) from commerce.outbox where aggregate_id=?
+                  and event_type='PaymentCancellationRequested'
+                  and (payload->'payload'->>'orderVersion')::bigint=?
+                  and payload->'payload'->>'requestId'=payload->>'eventId'
+                """,
+                id,
+                cancelVersion))
+        .isEqualTo(1);
+
+    // 이전 회차의 늦은 거절은 새 요청을 만들지 않는다.
+    receive("PaymentDeclined", result(id, payment, first), true);
+    assertThat(
+            number(
+                "select count(*) from commerce.outbox where aggregate_id=? and event_type='PaymentCancellationRequested'",
+                id))
+        .isEqualTo(2);
+    receive("PaymentCancelled", result(id, payment, retry), true);
+    assertThat(buyer(f, id).path("status").asText()).isEqualTo("CANCELLED");
+    assertStock(f, 2, 0, 0);
+  }
+
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(ints = {0, 2000})
   @DisplayName("미발송 환불 복구는 선행 접수를 기다리고 재전달에도 재고와 확인 이벤트를 한 번만 저장한다")
