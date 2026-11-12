@@ -269,6 +269,10 @@ CREATE INDEX inbox_waiting ON settlement.inbox(consumer, next_run_at, id) WHERE 
 CREATE INDEX inbox_refund_request_lookup ON settlement.inbox
     (consumer, ((payload->'payload'->>'refundId')::uuid), created_at, id)
     WHERE event_type = 'RefundReservationRequested';
+-- 늦게 도착한 결제확정이 같은 paymentId의 대기·소진 구매확정을 되살리는 조회(JdbcInboxStore.reviveExhaustedPurchases).
+CREATE INDEX inbox_purchase_revival ON settlement.inbox
+    (consumer, ((payload->'payload'->>'paymentId')::uuid))
+    WHERE event_type = 'PurchaseConfirmed' AND status IN ('WAITING', 'REVIEW_REQUIRED');
 
 -- 업무 Inbox의 제한된 재판정. 원문·금융 키는 inbox에만 보존한다.
 CREATE INDEX inbox_review_reason ON settlement.inbox(consumer,last_error_code,event_type,created_at,id)
