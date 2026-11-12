@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -72,14 +73,61 @@ def compose_env():
     return env
 
 
+# 배포 모드: 앱·인프라 EC2에 나뉜 서비스를 SSH로 실행한다. 세 값이 모두 비면 로컬 compose 스택을 쓴다.
+# 두 호스트에 같은 경로로 저장소를 체크아웃해 두어야 한다. 인프라 EC2는 프라이빗 IP로 접속할 때 LOAD_SSH_JUMP를 쓴다.
+SSH_KEY = os.environ.get("LOAD_SSH_KEY", "")
+APP_SSH = os.environ.get("LOAD_APP_SSH", "")
+INFRA_SSH = os.environ.get("LOAD_INFRA_SSH", "")
+SSH_JUMP = os.environ.get("LOAD_SSH_JUMP", "")
+REMOTE_REPO = os.environ.get("LOAD_REMOTE_REPO", "commerce-settle")
+REMOTE = bool(APP_SSH or INFRA_SSH)
+APP_SERVICES = ("payment-api", "payment-worker")
+INFRA_SERVICES = ("postgres", "kafka", "redis")
+
+
+def compose_argv(args, relative=False):
+    """docker compose 명령. relative면 호스트의 저장소 기준 상대 경로를 쓴다."""
+    if relative:
+        files = ("compose.yml", "tests/load/compose.load.yml")
+    else:
+        files = (str(ROOT / "compose.yml"), str(ROOT / "tests" / "load" / "compose.load.yml"))
+    return ["docker", "compose", "-p", PROJECT, "-f", files[0], "-f", files[1], *args]
+
+
+def host_for(args):
+    """서비스 이름으로 실행 호스트를 고른다. 배포 모드에서 서비스를 알 수 없으면 실행하지 않는다."""
+    if any(arg in APP_SERVICES for arg in args):
+        return "app"
+    if any(arg in INFRA_SERVICES for arg in args):
+        return "infra"
+    raise SystemExit(f"배포 모드에서는 대상 서비스를 지정해야 합니다: {' '.join(args)}")
+
+
+def command_for(args, env):
+    """실행 명령. 로컬이면 로컬 compose, 배포 모드면 대상 호스트에서 같은 compose를 SSH로 실행한다."""
+    if not REMOTE:
+        return compose_argv(args)
+    host = host_for(args)
+    target = APP_SSH if host == "app" else INFRA_SSH
+    if not target:
+        raise SystemExit(f"LOAD_{host.upper()}_SSH 값이 필요합니다")
+    ssh = ["ssh", "-o", "BatchMode=yes"]
+    if SSH_KEY:
+        ssh += ["-i", SSH_KEY]
+    if SSH_JUMP and host == "infra":
+        ssh += ["-J", SSH_JUMP]
+    # 호스트로 넘기는 변수는 LOAD_*와 AUTH_REDIS_RUN_ID뿐이다. 나머지 셸 환경은 보내지 않는다.
+    forwarded = [f"{key}={shlex.quote(value)}" for key, value in sorted(env.items())
+                 if key.startswith("LOAD_") or key == "AUTH_REDIS_RUN_ID"]
+    remote = (f"cd {shlex.quote(REMOTE_REPO)} && env {' '.join(forwarded)} "
+              + " ".join(shlex.quote(part) for part in compose_argv(args, relative=True)))
+    return ssh + [target, remote]
+
+
 def compose(*args, input_text=None, check=True, capture=True, env=None, timeout=None):
-    command = [
-        "docker", "compose", "-p", PROJECT,
-        "-f", str(ROOT / "compose.yml"), "-f", str(ROOT / "tests" / "load" / "compose.load.yml"),
-        *args,
-    ]
+    env = env or compose_env()
     result = subprocess.run(
-        command, cwd=ROOT, env=env or compose_env(), input=input_text, text=True, timeout=timeout,
+        command_for(args, env), cwd=ROOT, env=env, input=input_text, text=True, timeout=timeout,
         stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE if capture else None,
     )
     if check and result.returncode != 0:
@@ -274,14 +322,13 @@ def parse_stages(text):
 
 def produce(stages, mix, directory, offset, marks, stop_file=None, stop_event=None):
     """단계별 도착률로 요청을 넣는다. 각 단계의 시작·끝 시각을 marks에 남긴다."""
+    env = compose_env()
     producer = subprocess.Popen(
-        ["docker", "compose", "-p", PROJECT, "-f", str(ROOT / "compose.yml"),
-         "-f", str(ROOT / "tests" / "load" / "compose.load.yml"),
-         "exec", "-T", "kafka", "/opt/kafka/bin/kafka-console-producer.sh",
-         "--bootstrap-server", "kafka:9092", "--topic", TOPIC,
-         "--reader-property", "parse.key=true", "--reader-property", "key.separator=\t",
-         "--command-property", "acks=all", "--command-property", "linger.ms=5"],
-        cwd=ROOT, env=compose_env(), stdin=subprocess.PIPE, text=True)
+        command_for(["exec", "-T", "kafka", "/opt/kafka/bin/kafka-console-producer.sh",
+                     "--bootstrap-server", "kafka:9092", "--topic", TOPIC,
+                     "--reader-property", "parse.key=true", "--reader-property", "key.separator=\t",
+                     "--command-property", "acks=all", "--command-property", "linger.ms=5"], env),
+        cwd=ROOT, env=env, stdin=subprocess.PIPE, text=True)
     index = offset
     try:
         with open(directory / "requests.csv", "a", newline="", encoding="utf-8") as ledger:
