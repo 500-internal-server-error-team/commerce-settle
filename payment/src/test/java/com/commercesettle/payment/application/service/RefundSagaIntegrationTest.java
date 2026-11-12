@@ -50,6 +50,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
@@ -661,6 +662,62 @@ class RefundSagaIntegrationTest {
             status);
 
     assertThat(integrity.checks()).containsEntry("financialInboxPending", expected);
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "OrderPaymentRequested",
+        "PaymentCancellationRequested",
+        "RefundApproved",
+        "RefundReservationResult",
+        "RefundLedgerReversed",
+        "RefundReservationReleased",
+        "RefundOrderRestored"
+      })
+  @DisplayName("결제·취소·환불 SAGA 수신 이벤트의 수신·대기·확인 대상은 금융 미처리로 집계하고 반영 완료만 제외한다")
+  void countsUnappliedFinancialEvents(String type) {
+    for (String status : List.of("RECEIVED", "WAITING", "REVIEW_REQUIRED", "APPLIED")) {
+      insertInbox(type, status);
+    }
+
+    assertThat(integrity.checks()).containsEntry("financialInboxPending", 3L);
+  }
+
+  private void insertInbox(String type, String status) {
+    jdbc()
+        .update(
+            """
+            WITH e AS (
+              SELECT jsonb_build_object(
+                  'eventId', ?::text, 'eventType', ?::text, 'eventVersion', 1,
+                  'occurredAt', '2026-11-12T00:00:00Z', 'aggregateId', ?::text,
+                  'aggregateVersion', 0, 'payload', '{}'::jsonb) AS body)
+            INSERT INTO payment.inbox (
+              id, consumer, event_id, event_type, event_version, occurred_at, payload, raw_body,
+              body_hash, source_topic, source_partition, source_offset, aggregate_id,
+              aggregate_version, status, next_run_at, last_error_code)
+            SELECT ?, 'payment', ?, ?, 1, '2026-11-12T00:00:00Z', body,
+              convert_to(body::text, 'UTF8'), encode(sha256(convert_to(body::text, 'UTF8')), 'hex'),
+              'test', 0, 0, ?, 0, ?,
+              CASE WHEN ? = 'WAITING' THEN clock_timestamp() END,
+              CASE WHEN ? = 'REVIEW_REQUIRED' THEN 'TEST_REVIEW' END
+            FROM e
+            """,
+            ps -> {
+              UUID eventId = UUID.randomUUID();
+              UUID aggregateId = UUID.randomUUID();
+              ps.setString(1, eventId.toString());
+              ps.setString(2, type);
+              ps.setString(3, aggregateId.toString());
+              ps.setObject(4, UUID.randomUUID());
+              ps.setObject(5, eventId);
+              ps.setString(6, type);
+              ps.setObject(7, aggregateId);
+              ps.setString(8, status);
+              ps.setString(9, status);
+              ps.setString(10, status);
+            });
   }
 
   @Test
