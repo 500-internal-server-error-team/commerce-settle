@@ -155,3 +155,72 @@ tests:
       - eval_time: 1m
         alertname: SettlementReconciliationDefect
         exp_alerts: []
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="order.settlement.applied",window="300",job="apps",instance="one"}'
+        values: '50x4'
+      - series: 'commerce_settle_business_completions{operation="order.settlement.applied",window="300",job="apps",instance="one"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_duration_seconds_count{operation="order.settlement.applied",window="300",job="apps",instance="one"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_duration_seconds_sum{operation="order.settlement.applied",window="300",job="apps",instance="one"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_duration_bucket_records{operation="order.settlement.applied",window="300",job="apps",instance="one",le="1.0"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_duration_bucket_records{operation="order.settlement.applied",window="300",job="apps",instance="one",le="+Inf"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="order.settlement.applied",window="300",job="apps",instance="two"}'
+        values: '50x4'
+      - series: 'commerce_settle_business_completions{operation="order.settlement.applied",window="300",job="apps",instance="two"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_duration_seconds_count{operation="order.settlement.applied",window="300",job="apps",instance="two"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_duration_seconds_sum{operation="order.settlement.applied",window="300",job="apps",instance="two"}'
+        values: '10x4'
+      - series: 'commerce_settle_business_duration_bucket_records{operation="order.settlement.applied",window="300",job="apps",instance="two",le="1.0"}'
+        values: '0x4'
+      - series: 'commerce_settle_business_duration_bucket_records{operation="order.settlement.applied",window="300",job="apps",instance="two",le="+Inf"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="order.settlement.applied",window="300",job="apps",instance="stale"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_completions{operation="order.settlement.applied",window="300",job="apps",instance="stale"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_duration_seconds_count{operation="order.settlement.applied",window="300",job="apps",instance="stale"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_duration_seconds_sum{operation="order.settlement.applied",window="300",job="apps",instance="stale"}'
+        values: '999x4'
+      - series: 'commerce_settle_business_duration_bucket_records{operation="order.settlement.applied",window="300",job="apps",instance="stale",le="1.0"}'
+        values: '0x4'
+      - series: 'commerce_settle_business_duration_bucket_records{operation="order.settlement.applied",window="300",job="apps",instance="stale",le="+Inf"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="order.settlement.applied",window="300",job="apps",instance="future"}'
+        values: '999x4'
+      - series: 'commerce_settle_business_completions{operation="order.settlement.applied",window="300",job="apps",instance="future"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_duration_seconds_count{operation="order.settlement.applied",window="300",job="apps",instance="future"}'
+        values: '1x4'
+      - series: 'commerce_settle_business_duration_seconds_sum{operation="order.settlement.applied",window="300",job="apps",instance="future"}'
+        values: '999x4'
+      - series: 'commerce_settle_business_duration_bucket_records{operation="order.settlement.applied",window="300",job="apps",instance="future",le="1.0"}'
+        values: '0x4'
+      - series: 'commerce_settle_business_duration_bucket_records{operation="order.settlement.applied",window="300",job="apps",instance="future",le="+Inf"}'
+        values: '1x4'
+    promql_expr_test:
+      - expr: count(business:source)
+        eval_time: 1m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - expr: business:duration_sum_seconds + ignoring(le) (9 * business:duration_bucket{le="1.0"})
+        eval_time: 1m
+        exp_samples:
+          - labels: '{operation="order.settlement.applied",window="300"}'
+            value: 10
+      - expr: business:duration_count - ignoring(le) business:duration_bucket{le="+Inf"}
+        eval_time: 1m
+        exp_samples:
+          - labels: '{operation="order.settlement.applied",window="300"}'
+            value: 0
+      - expr: business:completions
+        eval_time: 2m
+        exp_samples: []

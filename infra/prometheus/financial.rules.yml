@@ -181,3 +181,20 @@ groups:
         annotations:
           summary: 전달·반영·격리·미확정 대기는 금액 결함과 구분해 복구하세요.
           runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#정산-대조-실행과-재개
+
+  - name: business-performance
+    interval: 15s
+    rules:
+      # Choose one complete source snapshot, including tied observation timestamps.
+      - record: business:source
+        expr: topk by (operation, window) (1, (commerce_settle_business_observed_timestamp_seconds > 0) and (commerce_settle_business_observed_timestamp_seconds <= time()) and (time() - commerce_settle_business_observed_timestamp_seconds <= 45))
+      - record: business:completions
+        expr: max by (operation, window) (commerce_settle_business_completions and on (job, instance, operation, window) business:source)
+      - record: business:duration_count
+        expr: max by (operation, window) (commerce_settle_business_duration_seconds_count and on (job, instance, operation, window) business:source)
+      - record: business:duration_sum_seconds
+        expr: max by (operation, window) (commerce_settle_business_duration_seconds_sum and on (job, instance, operation, window) business:source)
+      - record: business:duration_missing
+        expr: max by (operation, window) (commerce_settle_business_duration_missing and on (job, instance, operation, window) business:source)
+      - record: business:duration_bucket
+        expr: max by (operation, window, le) (commerce_settle_business_duration_bucket_records and on (job, instance, operation, window) business:source)

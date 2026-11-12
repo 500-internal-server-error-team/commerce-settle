@@ -2,6 +2,7 @@ package com.commercesettle.payment.infrastructure.messaging;
 
 import static com.commercesettle.payment.infrastructure.messaging.StrictEventJson.requireUuid;
 
+import com.commercesettle.observability.infrastructure.BusinessMetrics;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload.ExternalMethod;
@@ -18,6 +19,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
 import java.io.IOException;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Set;
@@ -32,6 +34,13 @@ import org.springframework.kafka.support.Acknowledgment;
  * ACK하지 않는다).
  */
 public class OrderPaymentRequestedListener {
+
+  private static Instant orderAcceptedAt(ConsumerRecord<String, byte[]> record) {
+    var headers = record.headers().headers(BusinessMetrics.ORDER_ACCEPTED_AT_HEADER).iterator();
+    if (!headers.hasNext()) return null;
+    byte[] value = headers.next().value();
+    return headers.hasNext() ? null : BusinessMetrics.parseOrderAcceptedAt(value);
+  }
 
   private static final Set<String> HANDLED_EVENT_TYPES =
       Set.of(
@@ -98,7 +107,13 @@ public class OrderPaymentRequestedListener {
       acknowledgment.acknowledge();
       return;
     }
-    Source source = new Source(record.topic(), record.partition(), record.offset(), record.value());
+    Source source =
+        new Source(
+            record.topic(),
+            record.partition(),
+            record.offset(),
+            record.value(),
+            orderAcceptedAt(record));
     if (event.payload() instanceof RefundApprovedPayload
         || event.payload() instanceof RefundOrderRestoredPayload) {
       acceptor.acceptRefundEvent(event, source);

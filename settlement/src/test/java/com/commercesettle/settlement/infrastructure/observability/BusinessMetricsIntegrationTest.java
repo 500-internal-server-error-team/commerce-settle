@@ -1,0 +1,271 @@
+package com.commercesettle.settlement.infrastructure.observability;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import com.commercesettle.observability.infrastructure.BusinessMetrics;
+import com.commercesettle.settlement.application.event.EventEnvelope;
+import com.commercesettle.settlement.application.event.PaymentConfirmedPayload;
+import com.commercesettle.settlement.application.port.InboxStore.Source;
+import com.commercesettle.settlement.application.service.RefundEventService;
+import com.commercesettle.settlement.application.service.SettlementEventService;
+import com.commercesettle.settlement.infrastructure.config.BusinessMetricsConfiguration;
+import com.commercesettle.settlement.infrastructure.messaging.SettlementEventListener;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import io.prometheus.metrics.model.snapshots.GaugeSnapshot;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.UUID;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
+import org.mockito.Mockito;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+@Testcontainers
+class BusinessMetricsIntegrationTest {
+  @Container
+  static final PostgreSQLContainer<?> POSTGRES =
+      new PostgreSQLContainer<>("postgres:18.3").withInitScript("db/settlement.sql");
+
+  private final DriverManagerDataSource source =
+      new DriverManagerDataSource(
+          POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+  private final JdbcTemplate jdbc = new JdbcTemplate(source);
+
+  @BeforeEach
+  void clear() {
+    jdbc.execute(
+        "TRUNCATE settlement.settlement_items,settlement.settlement_entries,settlement.inbox");
+  }
+
+  @Test
+  void countsOneCanonicalInitialFactAfterCommitDespiteDuplicateInboxAndMultipleLedgerLegs() {
+    try (var metrics = metrics()) {
+      new TransactionTemplate(new DataSourceTransactionManager(source))
+          .executeWithoutResult(
+              tx -> {
+                fact(12);
+                metrics.refresh();
+                assertThat(value(metrics, "completions", "order.settlement.applied")).isZero();
+              });
+      metrics.refresh();
+      metrics.refresh();
+      assertThat(value(metrics, "completions", "order.settlement.applied")).isEqualTo(1);
+      assertThat(value(metrics, "duration_seconds_count", "order.settlement.applied")).isEqualTo(1);
+      assertThat(value(metrics, "duration_seconds_sum", "order.settlement.applied")).isEqualTo(12);
+      assertThat(value(metrics, "duration_seconds_sum", "payment.settlement.applied")).isEqualTo(5);
+    }
+    try (var restarted = metrics()) {
+      restarted.refresh();
+      assertThat(value(restarted, "completions", "order.settlement.applied")).isEqualTo(1);
+    }
+  }
+
+  @Test
+  void missingOrReversedOriginKeepsCompletionCountButExcludesLatency() {
+    fact(12);
+    fact(-5);
+    jdbc.update(
+        "UPDATE settlement.inbox SET order_accepted_at=NULL WHERE "
+            + "order_accepted_at<statement_timestamp() AND event_id IN "
+            + "(SELECT source_event_id FROM settlement.settlement_entries)");
+    try (var metrics = metrics()) {
+      metrics.refresh();
+      assertThat(value(metrics, "completions", "order.settlement.applied")).isEqualTo(2);
+      assertThat(value(metrics, "duration_seconds_count", "order.settlement.applied")).isZero();
+      assertThat(value(metrics, "duration_missing", "order.settlement.applied")).isEqualTo(2);
+      assertThat(value(metrics, "duration_seconds_count", "payment.settlement.applied"))
+          .isEqualTo(2);
+    }
+  }
+
+  @Test
+  void listenerTreatsMissingMalformedAndDuplicateObservationHeadersAsMissingNotBusinessFailures()
+      throws Exception {
+    var mapper =
+        new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+    UUID payment = UUID.randomUUID(), order = UUID.randomUUID();
+    var now = OffsetDateTime.now(ZoneOffset.UTC);
+    var payload =
+        new PaymentConfirmedPayload(
+            1000,
+            0,
+            1000,
+            0,
+            1000,
+            payment,
+            order,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            0,
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            150,
+            850,
+            now,
+            "v1",
+            0,
+            0,
+            1000);
+    var event =
+        new EventEnvelope<>(UUID.randomUUID(), "PaymentConfirmed", 1, now, payment, 0, payload);
+    byte[] body = mapper.writeValueAsBytes(event);
+    String accepted = "2026-11-12T00:00:00Z";
+    String[][] cases = {
+      {}, {"bad"}, {"+999999999-01-01T00:00:00Z"}, {accepted, accepted}, {accepted}
+    };
+    for (String[] headers : cases) {
+      var service = Mockito.mock(SettlementEventService.class);
+      var refunds = Mockito.mock(RefundEventService.class);
+      var listener = new SettlementEventListener(mapper, service, refunds, null, "settlement.v1");
+      var record =
+          new ConsumerRecord<String, byte[]>(
+              "commerce-settle.payment.v1", 0, 1, payment.toString(), body);
+      for (String header : headers)
+        record
+            .headers()
+            .add(
+                BusinessMetrics.ORDER_ACCEPTED_AT_HEADER,
+                header.getBytes(StandardCharsets.US_ASCII));
+      var ack = Mockito.mock(Acknowledgment.class);
+      listener.receive(record, ack);
+      var argument = ArgumentCaptor.forClass(Source.class);
+      Mockito.verify(service).receivePaymentConfirmed(ArgumentMatchers.any(), argument.capture());
+      Mockito.verify(ack).acknowledge();
+      assertThat(argument.getValue().body()).containsExactly(body);
+      assertThat(argument.getValue().orderAcceptedAt())
+          .isEqualTo(
+              headers.length == 1 && headers[0].equals(accepted) ? Instant.parse(accepted) : null);
+    }
+  }
+
+  @Test
+  void upgradePreservesExistingFactsAndIsIdempotent() throws Exception {
+    fact(12);
+    String before =
+        jdbc.queryForObject(
+            "SELECT jsonb_agg(to_jsonb(t) ORDER BY id)::text FROM settlement.settlement_items t",
+            String.class);
+    jdbc.execute("ALTER TABLE settlement.inbox DROP COLUMN order_accepted_at");
+    String sql =
+        Files.readString(Path.of("../infra/postgres/upgrade/settlement-business-metrics.sql"));
+    for (int i = 0; i < 2; i++)
+      try (var connection = source.getConnection();
+          var statement = connection.createStatement()) {
+        statement.execute(sql);
+      }
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT jsonb_agg(to_jsonb(t) ORDER BY id)::text FROM settlement.settlement_items t",
+                String.class))
+        .isEqualTo(before);
+    try (var metrics = metrics()) {
+      metrics.refresh();
+      assertThat(value(metrics, "completions", "order.settlement.applied")).isEqualTo(1);
+      assertThat(value(metrics, "duration_missing", "order.settlement.applied")).isEqualTo(1);
+    }
+  }
+
+  @Test
+  void legacyOrRetainedFactWithoutInboxStillCountsCompletionWithMissingDuration() {
+    fact(12);
+    jdbc.execute("DELETE FROM settlement.inbox");
+    try (var metrics = metrics()) {
+      metrics.refresh();
+      assertThat(value(metrics, "completions", "order.settlement.applied")).isEqualTo(1);
+      assertThat(value(metrics, "duration_seconds_count", "order.settlement.applied")).isZero();
+      assertThat(value(metrics, "duration_missing", "order.settlement.applied")).isEqualTo(1);
+    }
+  }
+
+  private void fact(int duration) {
+    Instant at =
+        jdbc.queryForObject("SELECT statement_timestamp()", Timestamp.class)
+            .toInstant()
+            .minusSeconds(3);
+    UUID item = UUID.randomUUID(), payment = UUID.randomUUID(), event = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO settlement.settlement_items (id,payment_id,order_id,product_id,seller_id,
+          total_amount,platform_coupon_amount,settlement_base_amount,external_amount,mileage_amount,
+          fee_amount,net_amount,status,order_version,created_at,updated_at,version)
+        VALUES (?,?,gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),10000,0,10000,10000,0,
+          1500,8500,'WAITING_CONFIRMATION',0,?,?,0)
+        """,
+        item,
+        payment,
+        Timestamp.from(at),
+        Timestamp.from(at));
+    inbox(item, payment, event, at, duration);
+    inbox(item, payment, UUID.randomUUID(), at, 1000); // same fact under another event ID
+    jdbc.update(
+        """
+        INSERT INTO settlement.settlement_entries (id,item_id,payment_id,side,leg,amount,business_ref,
+          source_event_id,source_occurred_at,policy_version,created_at)
+        SELECT gen_random_uuid(),?,?,'ALLOCATION',leg,0,gen_random_uuid(),?,?, 'v1',?
+        FROM (VALUES ('SELLER'),('FEE')) legs(leg)
+        """,
+        item,
+        payment,
+        event,
+        Timestamp.from(at.minusSeconds(5)),
+        Timestamp.from(at));
+  }
+
+  private void inbox(UUID item, UUID payment, UUID event, Instant at, int duration) {
+    jdbc.update(
+        """
+        INSERT INTO settlement.inbox (id,consumer,event_id,event_type,event_version,occurred_at,
+          payload,raw_body,body_hash,source_topic,source_partition,source_offset,aggregate_id,
+          aggregate_version,status,result_ref,order_accepted_at,created_at,updated_at)
+        SELECT gen_random_uuid(),'settlement.v1',?,'PaymentConfirmed',1,?,body,
+          convert_to(body::text,'UTF8'),encode(sha256(convert_to(body::text,'UTF8')),'hex'),
+          'commerce-settle.payment.v1',0,1,?,0,'APPLIED',?,?,?,?
+        FROM (SELECT jsonb_build_object('eventId',?::text,'eventType','PaymentConfirmed',
+          'eventVersion',1,'occurredAt',?::text,'aggregateId',?::text,'aggregateVersion',0,
+          'payload',jsonb_build_object('confirmedAt',?::text)) AS body) json
+        """,
+        event,
+        Timestamp.from(at.minusSeconds(5)),
+        payment,
+        item,
+        Timestamp.from(at.minusSeconds(duration)),
+        Timestamp.from(at),
+        Timestamp.from(at),
+        event,
+        at.minusSeconds(5).toString(),
+        payment,
+        at.minusSeconds(5).toString());
+  }
+
+  private BusinessMetrics metrics() {
+    return new BusinessMetrics(source, null, BusinessMetricsConfiguration.sources());
+  }
+
+  private static double value(BusinessMetrics metrics, String suffix, String operation) {
+    for (var metric : metrics.collect())
+      if (metric.getMetadata().getName().equals("commerce_settle_business_" + suffix))
+        for (var point : ((GaugeSnapshot) metric).getDataPoints())
+          if (operation.equals(point.getLabels().get("operation"))
+              && "300".equals(point.getLabels().get("window"))) return point.getValue();
+    throw new AssertionError(suffix);
+  }
+}

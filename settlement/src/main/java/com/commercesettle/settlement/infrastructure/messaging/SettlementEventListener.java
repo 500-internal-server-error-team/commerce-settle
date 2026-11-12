@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.infrastructure.messaging;
 
+import com.commercesettle.observability.infrastructure.BusinessMetrics;
 import com.commercesettle.settlement.application.event.EventEnvelope;
 import com.commercesettle.settlement.application.event.PaymentConfirmedPayload;
 import com.commercesettle.settlement.application.event.PurchaseConfirmedPayload;
@@ -20,6 +21,7 @@ import com.fasterxml.jackson.databind.cfg.CoercionAction;
 import com.fasterxml.jackson.databind.cfg.CoercionInputShape;
 import com.fasterxml.jackson.databind.type.LogicalType;
 import java.io.IOException;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -37,6 +39,14 @@ import org.springframework.kafka.support.Acknowledgment;
 public class SettlementEventListener {
   static final String PAYMENT_TOPIC = "commerce-settle.payment.v1";
   static final String COMMERCE_TOPIC = "commerce-settle.commerce.v1";
+
+  private static Instant orderAcceptedAt(ConsumerRecord<String, byte[]> record) {
+    var headers = record.headers().headers(BusinessMetrics.ORDER_ACCEPTED_AT_HEADER).iterator();
+    if (!headers.hasNext()) return null;
+    byte[] value = headers.next().value();
+    return headers.hasNext() ? null : BusinessMetrics.parseOrderAcceptedAt(value);
+  }
+
   private static final String PAYMENT_CONFIRMED = "PaymentConfirmed";
   private static final String PURCHASE_CONFIRMED = "PurchaseConfirmed";
   private static final String REFUND_RESERVATION_REQUESTED = "RefundReservationRequested";
@@ -113,7 +123,13 @@ public class SettlementEventListener {
       idIsGroup = false,
       topics = {PAYMENT_TOPIC, COMMERCE_TOPIC})
   public void receive(ConsumerRecord<String, byte[]> record, Acknowledgment acknowledgment) {
-    Source source = new Source(record.topic(), record.partition(), record.offset(), record.value());
+    Source source =
+        new Source(
+            record.topic(),
+            record.partition(),
+            record.offset(),
+            record.value(),
+            orderAcceptedAt(record));
     try {
       String eventType = eventType(record);
       if (PAYMENT_CONFIRMED.equals(eventType)) {

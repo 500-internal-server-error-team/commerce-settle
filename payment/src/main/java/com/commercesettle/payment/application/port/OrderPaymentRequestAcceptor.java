@@ -3,6 +3,7 @@ package com.commercesettle.payment.application.port;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentCancellationRequestedPayload;
+import java.time.Instant;
 
 public interface OrderPaymentRequestAcceptor {
 
@@ -19,7 +20,11 @@ public interface OrderPaymentRequestAcceptor {
    */
   void acceptRefundEvent(EventEnvelope<?> event, Source source);
 
-  record Source(String topic, int partition, long offset, byte[] body) {
+  record Source(String topic, int partition, long offset, byte[] body, Instant orderAcceptedAt) {
+    public Source(String topic, int partition, long offset, byte[] body) {
+      this(topic, partition, offset, body, null);
+    }
+
     public Source {
       body = body.clone();
     }

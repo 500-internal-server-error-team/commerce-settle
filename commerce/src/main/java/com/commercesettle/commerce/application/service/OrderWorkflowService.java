@@ -349,7 +349,8 @@ public class OrderWorkflowService {
             time(clock.instant()),
             o.getId(),
             o.getVersion(),
-            payload));
+            payload),
+        o.getCreatedAt());
   }
 
   void emit(Order order, String type, UUID key, Object payload) {

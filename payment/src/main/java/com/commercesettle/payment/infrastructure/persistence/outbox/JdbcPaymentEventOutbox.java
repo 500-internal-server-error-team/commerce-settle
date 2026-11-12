@@ -135,6 +135,17 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
             .addValue("body", body)
             .addValue("json", new String(body, StandardCharsets.UTF_8))
             .addValue("traceParent", observations.capture())
+            .addValue(
+                "orderId",
+                event.payload() instanceof PaymentConfirmedPayload confirmed
+                    ? confirmed.orderId()
+                    : null)
+            .addValue(
+                "cycleId",
+                event.payload() instanceof PaymentConfirmedPayload confirmed
+                        && confirmed.paymentCycleId() != null
+                    ? confirmed.paymentCycleId().toString()
+                    : null)
             .addValue("type", event.eventType())
             .addValue("key", paymentId.toString());
     // 집계별 append를 커밋까지 직렬화하여 늦은 낮은 버전의 삽입을 막는다.
@@ -162,9 +173,14 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
         jdbc.update(
             """
             INSERT INTO payment.outbox (id,event_type,event_version,aggregate_id,aggregate_version,
-                topic,occurred_at,message_key,payload,raw_body,trace_parent)
+                topic,occurred_at,message_key,payload,raw_body,trace_parent,order_accepted_at)
             VALUES (:id,:type,1,:aggregate,:version,'commerce-settle.payment.v1',
-                CAST(:occurred AS timestamptz),:key,CAST(:json AS jsonb),:body,:traceParent)
+                CAST(:occurred AS timestamptz),:key,CAST(:json AS jsonb),:body,:traceParent,
+                (SELECT i.order_accepted_at FROM payment.inbox i
+                 WHERE :type='PaymentConfirmed' AND i.event_type='OrderPaymentRequested'
+                   AND i.aggregate_id=CAST(:orderId AS uuid) AND i.status IN ('WAITING','APPLIED')
+                   AND i.payload->'payload'->>'paymentCycleId'=:cycleId
+                 ORDER BY i.created_at,i.id LIMIT 1))
             ON CONFLICT (id) DO NOTHING
             """,
             params);

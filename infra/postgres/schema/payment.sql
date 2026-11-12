@@ -59,6 +59,7 @@ CREATE INDEX ix_payments_buyer_created ON payment.payments (buyer_id, created_at
 CREATE INDEX ix_payments_status_updated ON payment.payments (status, updated_at, id);
 
 CREATE TABLE payment.inbox (
+    order_accepted_at timestamptz,
     trace_parent varchar(55),
     observation_state varchar(16),
     id uuid PRIMARY KEY,
@@ -306,6 +307,7 @@ CREATE TABLE payment.refund_sagas (
 CREATE INDEX ix_refund_sagas_step_updated ON payment.refund_sagas (step, updated_at, id);
 
 CREATE TABLE payment.outbox (
+    order_accepted_at timestamptz,
     trace_parent varchar(55),
     id uuid PRIMARY KEY,
     sequence_no bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
@@ -450,3 +452,12 @@ CREATE INDEX ix_audit_logs_aggregate
     ON payment.audit_logs (aggregate_type, aggregate_id, occurred_at, id);
 CREATE INDEX ix_audit_logs_actor ON payment.audit_logs (actor_kind, actor_ref, occurred_at, id);
 CREATE INDEX ix_audit_logs_correlation ON payment.audit_logs (correlation_id);
+
+-- Bounded committed-completion observation; confirmed facts survive later refunds.
+CREATE INDEX ix_payments_observation_confirmed ON payment.payments (confirmed_at, id)
+    WHERE confirmed_at IS NOT NULL;
+CREATE INDEX ix_refund_sagas_observation_completed ON payment.refund_sagas (order_restored_at, id)
+    WHERE step='COMPLETED' AND order_restored_at IS NOT NULL;
+CREATE INDEX ix_inbox_observation_order_cycle ON payment.inbox
+    (aggregate_id, (payload->'payload'->>'paymentCycleId'), created_at, id)
+    WHERE event_type='OrderPaymentRequested';

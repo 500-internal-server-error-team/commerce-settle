@@ -8,6 +8,7 @@ import com.commercesettle.observability.AsyncObservation;
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
+import com.commercesettle.payment.application.event.PaymentConfirmedPayload;
 import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor;
@@ -17,9 +18,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
@@ -100,7 +103,12 @@ class DurableTraceIntegrationTest {
           status -> {
             inbox.saveWaiting(
                 event,
-                new OrderPaymentRequestAcceptor.Source("commerce-settle.commerce.v1", 0, 1, body));
+                new OrderPaymentRequestAcceptor.Source(
+                    "commerce-settle.commerce.v1",
+                    0,
+                    1,
+                    body,
+                    Instant.parse("2026-11-01T00:00:00Z")));
           });
       when(observations.capture()).thenReturn(OTHER);
       transaction.executeWithoutResult(
@@ -110,6 +118,13 @@ class DurableTraceIntegrationTest {
                 new OrderPaymentRequestAcceptor.Source("commerce-settle.commerce.v1", 0, 1, body));
           });
       var jdbc = context.getBean(JdbcTemplate.class);
+      assertThat(
+              jdbc.queryForObject(
+                      "SELECT order_accepted_at FROM payment.inbox WHERE event_id=?",
+                      java.sql.Timestamp.class,
+                      eventId)
+                  .toInstant())
+          .isEqualTo(Instant.parse("2026-11-01T00:00:00Z"));
       assertThat(
               jdbc.queryForObject(
                   "SELECT trace_parent FROM payment.inbox WHERE event_id=?", String.class, eventId))
@@ -122,6 +137,13 @@ class DurableTraceIntegrationTest {
     try (var restarted = new AnnotationConfigApplicationContext(Config.class)) {
       var inbox = restarted.getBean(InboxStore.class);
       var jdbc = restarted.getBean(JdbcTemplate.class);
+      assertThat(
+              jdbc.queryForObject(
+                      "SELECT order_accepted_at FROM payment.inbox WHERE event_id=?",
+                      java.sql.Timestamp.class,
+                      eventId)
+                  .toInstant())
+          .isEqualTo(Instant.parse("2026-11-01T00:00:00Z"));
       var transaction =
           new TransactionTemplate(restarted.getBean(PlatformTransactionManager.class));
       transaction.executeWithoutResult(
@@ -152,7 +174,7 @@ class DurableTraceIntegrationTest {
       var inbox = context.getBean(InboxStore.class);
       var jdbc = context.getBean(JdbcTemplate.class);
       var tx = new TransactionTemplate(context.getBean(PlatformTransactionManager.class));
-      var now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+      var now = Instant.now().truncatedTo(ChronoUnit.MICROS);
       UUID eventId = UUID.randomUUID();
       var event =
           new EventEnvelope<>(
@@ -172,9 +194,7 @@ class DurableTraceIntegrationTest {
                   new OrderPaymentRequestAcceptor.Source(
                       "commerce-settle.commerce.v1", 0, 77, body)));
       jdbc.update(
-          "UPDATE payment.inbox SET next_run_at=? WHERE event_id=?",
-          java.sql.Timestamp.from(now),
-          eventId);
+          "UPDATE payment.inbox SET next_run_at=? WHERE event_id=?", Timestamp.from(now), eventId);
       var first =
           tx.execute(
                   status ->
@@ -240,6 +260,105 @@ class DurableTraceIntegrationTest {
               .event();
       assertThat(legacy.timing().previousStatus()).isNull();
       assertThat(legacy.timing().attempts()).isEqualTo(4);
+    }
+  }
+
+  @Test
+  void persistsOrderOriginBeforeImmediateConfirmationAndKeepsItAfterInboxRetentionAndRestart()
+      throws Exception {
+    UUID eventId;
+    byte[] original;
+    Instant accepted = Instant.now().minusSeconds(20).truncatedTo(ChronoUnit.MICROS);
+    try (var context = new AnnotationConfigApplicationContext(Config.class)) {
+      var mapper = context.getBean(ObjectMapper.class);
+      var transaction = new TransactionTemplate(context.getBean(PlatformTransactionManager.class));
+      UUID order = UUID.randomUUID(), cycle = UUID.randomUUID(), payment = UUID.randomUUID();
+      var request =
+          new EventEnvelope<>(
+              UUID.randomUUID(),
+              "OrderPaymentRequested",
+              1,
+              accepted.atOffset(ZoneOffset.UTC),
+              order,
+              0,
+              new OrderPaymentRequestedPayload(
+                  order,
+                  UUID.randomUUID(),
+                  UUID.randomUUID(),
+                  cycle,
+                  UUID.randomUUID(),
+                  0,
+                  OrderPaymentRequestedPayload.Status.PAYMENT_PENDING,
+                  "v1",
+                  OffsetDateTime.now(ZoneOffset.UTC).plusMinutes(30),
+                  null,
+                  null,
+                  1000,
+                  0,
+                  1000,
+                  1000,
+                  0,
+                  0,
+                  0,
+                  1000));
+      var confirmed =
+          new EventEnvelope<>(
+              UUID.randomUUID(),
+              "PaymentConfirmed",
+              1,
+              OffsetDateTime.now(ZoneOffset.UTC),
+              payment,
+              0,
+              new PaymentConfirmedPayload(
+                  1000,
+                  0,
+                  1000,
+                  1000,
+                  0,
+                  payment,
+                  order,
+                  UUID.randomUUID(),
+                  UUID.randomUUID(),
+                  0,
+                  cycle,
+                  UUID.randomUUID(),
+                  150,
+                  850,
+                  OffsetDateTime.now(ZoneOffset.UTC),
+                  "v1",
+                  0,
+                  0,
+                  1000));
+      eventId = confirmed.eventId();
+      original = mapper.writeValueAsBytes(confirmed);
+      byte[] requestBody = mapper.writeValueAsBytes(request);
+      transaction.executeWithoutResult(
+          tx -> {
+            context
+                .getBean(InboxStore.class)
+                .saveWaiting(
+                    request,
+                    new OrderPaymentRequestAcceptor.Source(
+                        "commerce-settle.commerce.v1", 0, 999, requestBody, accepted));
+            context.getBean(PaymentEventOutbox.class).appendPaymentConfirmed(confirmed);
+            context.getBean(PaymentEventOutbox.class).appendPaymentConfirmed(confirmed);
+          });
+      context
+          .getBean(JdbcTemplate.class)
+          .update("DELETE FROM payment.inbox WHERE event_id=?", request.eventId());
+    }
+    try (var restarted = new AnnotationConfigApplicationContext(Config.class)) {
+      new TransactionTemplate(restarted.getBean(PlatformTransactionManager.class))
+          .executeWithoutResult(
+              tx -> {
+                var delivery =
+                    restarted.getBean(OutboxStore.class).claim(100, 240000, 10).stream()
+                        .filter(row -> row.id().equals(eventId))
+                        .findFirst()
+                        .orElseThrow();
+                assertThat(delivery.orderAcceptedAt()).isEqualTo(accepted);
+                assertThat(delivery.body()).containsExactly(original);
+              });
     }
   }
 

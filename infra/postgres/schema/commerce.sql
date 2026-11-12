@@ -149,6 +149,7 @@ CREATE TABLE commerce.order_addresses (
 );
 
 CREATE TABLE commerce.outbox (
+    order_accepted_at timestamptz,
     trace_parent varchar(55),
     id uuid PRIMARY KEY,
     sequence_no bigint GENERATED ALWAYS AS IDENTITY UNIQUE,

@@ -15,6 +15,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
@@ -76,7 +78,14 @@ class DurableTraceIntegrationTest {
       when(observations.capture()).thenReturn(PARENT);
       transaction.executeWithoutResult(
           status -> {
-            inbox.receive(event, new InboxStore.Source("commerce-settle.commerce.v1", 0, 1, body));
+            inbox.receive(
+                event,
+                new InboxStore.Source(
+                    "commerce-settle.commerce.v1",
+                    0,
+                    1,
+                    body,
+                    Instant.parse("2026-11-01T00:00:00Z")));
           });
       when(observations.capture()).thenReturn(OTHER);
       transaction.executeWithoutResult(
@@ -84,6 +93,13 @@ class DurableTraceIntegrationTest {
             inbox.receive(event, new InboxStore.Source("commerce-settle.commerce.v1", 0, 1, body));
           });
       var jdbc = context.getBean(JdbcTemplate.class);
+      assertThat(
+              jdbc.queryForObject(
+                      "SELECT order_accepted_at FROM settlement.inbox WHERE event_id=?",
+                      Timestamp.class,
+                      eventId)
+                  .toInstant())
+          .isEqualTo(Instant.parse("2026-11-01T00:00:00Z"));
       assertThat(
               jdbc.queryForObject(
                   "SELECT trace_parent FROM settlement.inbox WHERE event_id=?",
@@ -98,6 +114,13 @@ class DurableTraceIntegrationTest {
     try (var restarted = new AnnotationConfigApplicationContext(Config.class)) {
       var inbox = restarted.getBean(InboxStore.class);
       var jdbc = restarted.getBean(JdbcTemplate.class);
+      assertThat(
+              jdbc.queryForObject(
+                      "SELECT order_accepted_at FROM settlement.inbox WHERE event_id=?",
+                      Timestamp.class,
+                      eventId)
+                  .toInstant())
+          .isEqualTo(Instant.parse("2026-11-01T00:00:00Z"));
       var transaction =
           new TransactionTemplate(restarted.getBean(PlatformTransactionManager.class));
       transaction.executeWithoutResult(

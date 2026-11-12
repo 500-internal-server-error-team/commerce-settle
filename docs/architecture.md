@@ -328,7 +328,7 @@ Gateway는 빌드에 포함한 [OpenAPI](openapi.json)의 `/api/` 작업을 HTTP
 
 서비스 관리 포트 9091은 컨테이너 내부 전용입니다. Gateway 업무 포트와 분리해 `/actuator/**`·`finance-mock`·내부 API를 외부 경로에 연결하지 않습니다. 기본 호스트 포트는 Gateway `127.0.0.1:8080`, Zipkin `127.0.0.1:9411`, Prometheus `127.0.0.1:9090`입니다. 선택 `observability` 프로필은 Alertmanager·Grafana·Kafka-UI 포트를 루프백에 추가합니다. 데이터 파일시스템 수집기는 호스트 포트를 게시하지 않습니다.
 
-수집 대상과 전달 경계는 위 [관측 구성](#관측-구성)을 따릅니다. 금융 지표·접수 복구는 [금융 관측](development.md#금융-관측과-접수-복구), 격리 지표·조치는 [DLT 관측](development.md#dlt-관측과-조치)에서 확인합니다. 승인 완료 TPS와 정산 전체 지연은 별도 업무 시나리오로 계측합니다.
+수집 대상과 전달 경계는 위 [관측 구성](#관측-구성)을 따릅니다. 금융 지표·접수 복구는 [금융 관측](development.md#금융-관측과-접수-복구), 격리 지표·조치는 [DLT 관측](development.md#dlt-관측과-조치)에서 확인합니다. 업무 완료 TPS와 주문 결제 접수→정산 최초 반영 지연은 각 소유 DB의 커밋된 이력으로 최근 60/300/900초 창을 집계합니다. Payment API·Worker의 중복 표본은 단일 source selector로 제거하고, bucket·sum·count는 같은 snapshot을 사용합니다. 최초 주문 `created_at`은 Commerce Outbox → Payment Inbox/Outbox → Settlement Inbox의 별도 `order_accepted_at`과 Kafka 관측 헤더에 보존합니다. 재시도 cycle의 이벤트 `occurredAt`은 별도로 유지하며 전체 지연의 시작점을 바꾸지 않습니다. 원문·해시·업무 이벤트 버전은 바꾸지 않으며, 누락된 과거 시각은 소급 추정하지 않습니다. 정산 최초 반영은 일배치·실제 지급 완료가 아닙니다. HTTP 서버 histogram과 업무 지연 분포는 [전후 비교](../tests/load/README.md#업무-완료전구간-지연의-전후-비교)로 연결합니다.
 
 ### 로그 수집
 

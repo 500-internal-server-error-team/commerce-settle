@@ -316,7 +316,8 @@ public class OrderService {
             saved.getCreatedAt().atZone(SEOUL).toOffsetDateTime(),
             saved.getId(),
             saved.getVersion(),
-            payload));
+            payload),
+        saved.getCreatedAt());
   }
 
   @Transactional(readOnly = true)

@@ -61,7 +61,7 @@ public class JdbcOutboxStore implements OutboxStore {
             lease_until=clock_timestamp()+(:lease * interval '1 millisecond'),
             updated_at=clock_timestamp(),version=version+1
         FROM candidates WHERE o.id=candidates.id
-        RETURNING o.id,o.version,o.topic,o.message_key,o.raw_body,o.trace_parent,o.attempts,
+        RETURNING o.id,o.version,o.topic,o.message_key,o.raw_body,o.trace_parent,o.order_accepted_at,o.attempts,
             candidates.queued_created,candidates.queued_changed,candidates.queued_status,
             CASE WHEN candidates.queued_status='RUNNING' THEN candidates.queued_lease
               ELSE candidates.queued_due END AS queued_eligible
@@ -80,7 +80,10 @@ public class JdbcOutboxStore implements OutboxStore {
                     rs.getTimestamp("queued_changed").toInstant(),
                     rs.getTimestamp("queued_eligible").toInstant(),
                     rs.getString("queued_status"),
-                    rs.getInt("attempts"))));
+                    rs.getInt("attempts")),
+                rs.getTimestamp("order_accepted_at") == null
+                    ? null
+                    : rs.getTimestamp("order_accepted_at").toInstant()));
   }
 
   @Override
