@@ -496,6 +496,40 @@ class ReconciliationIntegrationTest {
   }
 
   @Test
+  @DisplayName("마감 전 미완료 지급은 전체 건수·대상·최초 생성 시각을 진행 중 검사로 남긴다")
+  void recordsInProgressPayoutMembers() {
+    var created = cutoff.minusSeconds(60).atOffset(ZoneOffset.UTC);
+    UUID payout = UUID.randomUUID();
+    jdbc.update(
+        """
+      INSERT INTO settlement.payouts(id,batch_id,seller_id,recipient_account_ref,recipient_account_version,funding_account_ref,scenario_version,amount,business_key,status,created_at,updated_at,version)
+      VALUES(?,?,?,'recipient',0,'funding','normal',8500,?,'PENDING',?,?,0)
+      """,
+        payout,
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        UUID.randomUUID(),
+        created,
+        created);
+    UUID id = service.request(cutoff, "operator:ops");
+
+    tick(3);
+
+    var check =
+        jdbc.queryForMap(
+            "SELECT status,count,evidence::text AS evidence FROM settlement.reconciliation_checks WHERE run_id=? AND check_key='PAYOUT_IN_PROGRESS'",
+            id);
+    assertThat(check).containsEntry("status", "IN_PROGRESS").containsEntry("count", 1L);
+    assertThat(check.get("evidence").toString())
+        .contains(payout.toString())
+        .contains(
+            "\"oldestCreatedAt\": \""
+                + created.atZoneSameInstant(java.time.ZoneId.of("Asia/Seoul")).toOffsetDateTime()
+                + "\"")
+        .contains("\"truncated\": false");
+  }
+
+  @Test
   @DisplayName("운영자만 회차를 요청하며 Gateway 자격과 미인증은 거절한다")
   void enforcesHttpOwnership() throws Exception {
     String body = "{\"cutoffAt\":\"" + cutoff + "\"}";

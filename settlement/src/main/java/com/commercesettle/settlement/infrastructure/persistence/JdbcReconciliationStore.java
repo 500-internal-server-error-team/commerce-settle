@@ -381,27 +381,24 @@ public class JdbcReconciliationStore implements ReconciliationStore {
           ? new LocalEvent(null, false, 0, false, 0, false, false, null, null, 0, 0, Map.of())
           : rows.getFirst();
     }
-    List<String> inbox =
-        jdbc.queryForList(
-            "SELECT status FROM settlement.inbox WHERE consumer=? AND event_id=?",
-            String.class,
+    var receipt =
+        jdbc.queryForMap(
+            """
+      SELECT (SELECT status FROM settlement.inbox WHERE consumer=? AND event_id=?) AS status,
+        EXISTS(SELECT 1 FROM settlement.inbox_quarantines WHERE consumer=? AND source_topic=? AND source_partition=? AND source_offset=?)
+        OR EXISTS(SELECT 1 FROM settlement.inbox_conflicts WHERE consumer=? AND event_id=?) AS quarantined
+      """,
+            consumer,
+            e.eventId(),
+            consumer,
+            e.topic(),
+            e.partition(),
+            e.offset(),
             consumer,
             e.eventId());
-    boolean quarantined =
-        Boolean.TRUE.equals(
-            jdbc.queryForObject(
-                """
-      SELECT EXISTS(SELECT 1 FROM settlement.inbox_quarantines WHERE consumer=? AND source_topic=? AND source_partition=? AND source_offset=?)
-        OR EXISTS(SELECT 1 FROM settlement.inbox_conflicts WHERE consumer=? AND event_id=?)
-      """,
-                Boolean.class,
-                consumer,
-                e.topic(),
-                e.partition(),
-                e.offset(),
-                consumer,
-                e.eventId()));
-    if (inbox.isEmpty() && !quarantined) {
+    String inbox = (String) receipt.get("status");
+    boolean quarantined = Boolean.TRUE.equals(receipt.get("quarantined"));
+    if (inbox == null && !quarantined) {
       var candidates =
           jdbc.queryForList(
               "SELECT raw_body FROM settlement.inbox_quarantines WHERE consumer=? AND source_topic=? AND raw_body IS NOT NULL AND position(convert_to(?::text,'UTF8') in raw_body)>0 LIMIT 101",
@@ -424,23 +421,17 @@ public class JdbcReconciliationStore implements ReconciliationStore {
         }
       }
     }
-    long items =
-        jdbc.queryForObject(
-            "SELECT count(*) FROM settlement.settlement_items WHERE payment_id=?",
-            Long.class,
-            e.paymentId());
-    long matching =
-        jdbc.queryForObject(
+    var itemCounts =
+        jdbc.queryForMap(
             """
-      SELECT count(*) FROM settlement.settlement_items WHERE payment_id=? AND external_amount=? AND mileage_amount=?
+      SELECT count(*) AS items, count(*) FILTER(WHERE external_amount=? AND mileage_amount=?
        AND platform_coupon_amount=? AND settlement_base_amount=? AND fee_amount=? AND net_amount=?
        AND (?<>'PaymentConfirmed' OR EXISTS(SELECT 1 FROM settlement.inbox n WHERE n.consumer=? AND n.event_id=?
          AND n.payload->'payload'->>'sellerId'=settlement_items.seller_id::text
          AND n.payload->'payload'->>'orderId'=settlement_items.order_id::text
-         AND n.payload->'payload'->>'productId'=settlement_items.product_id::text))
+         AND n.payload->'payload'->>'productId'=settlement_items.product_id::text))) AS matching
+      FROM settlement.settlement_items WHERE payment_id=?
       """,
-            Long.class,
-            e.paymentId(),
             e.externalAmount(),
             e.mileageAmount(),
             e.platformCouponAmount(),
@@ -449,7 +440,10 @@ public class JdbcReconciliationStore implements ReconciliationStore {
             e.sellerNetAmount(),
             e.eventType(),
             consumer,
-            e.eventId());
+            e.eventId(),
+            e.paymentId());
+    long items = ((Number) itemCounts.get("items")).longValue();
+    long matching = ((Number) itemCounts.get("matching")).longValue();
     int sign = "RefundFinancialCompleted".equals(e.eventType()) ? -1 : 1;
     var legs =
         jdbc.queryForList(
@@ -495,7 +489,7 @@ public class JdbcReconciliationStore implements ReconciliationStore {
                     .multiply(java.math.BigInteger.valueOf(2L * sign)))
             .longValueExact();
     return new LocalEvent(
-        inbox.isEmpty() ? null : inbox.getFirst(),
+        inbox,
         quarantined,
         items,
         matching == 1,
@@ -631,11 +625,23 @@ public class JdbcReconciliationStore implements ReconciliationStore {
   }
 
   private void progress(List<Finding> checks, String key, String sql, Instant cutoff) {
-    long count =
-        jdbc.queryForObject("SELECT count(*) FROM (" + sql + ") progress", Long.class, at(cutoff));
+    // 전체 건수·최초 시각을 창 함수로 같은 읽기에서 구해 대상 집합을 한 번만 평가한다.
+    var rows =
+        jdbc.queryForList(
+            "SELECT p.*,count(*) OVER() AS progress_total,min(\"createdAt\") OVER() AS progress_oldest FROM ("
+                + sql
+                + ") p ORDER BY id LIMIT 100",
+            at(cutoff));
+    long count = rows.isEmpty() ? 0 : ((Number) rows.getFirst().get("progress_total")).longValue();
     var members =
-        jdbc.queryForList(sql + " ORDER BY id LIMIT 100", at(cutoff)).stream()
-            .map(this::view)
+        rows.stream()
+            .map(
+                row -> {
+                  var member = new java.util.LinkedHashMap<>(row);
+                  member.remove("progress_total");
+                  member.remove("progress_oldest");
+                  return view(member);
+                })
             .toList();
     checks.add(
         new Finding(
@@ -652,11 +658,9 @@ public class JdbcReconciliationStore implements ReconciliationStore {
                 "oldestCreatedAt",
                 count == 0
                     ? ""
-                    : jdbc.queryForObject(
-                            "SELECT min(\"createdAt\") FROM (" + sql + ") progress",
-                            OffsetDateTime.class,
-                            at(cutoff))
-                        .atZoneSameInstant(java.time.ZoneId.of("Asia/Seoul"))
+                    : ((java.sql.Timestamp) rows.getFirst().get("progress_oldest"))
+                        .toInstant()
+                        .atZone(java.time.ZoneId.of("Asia/Seoul"))
                         .toOffsetDateTime()
                         .toString())));
   }
@@ -669,20 +673,16 @@ public class JdbcReconciliationStore implements ReconciliationStore {
   @Override
   public void result(Run run, Event event, Finding f) {
     limits();
+    // 회차 행을 이벤트마다 갱신하지 않고 공유 잠금으로 임대를 확인해 만료·교체된 실행자의 기록을 막는다.
     List<String> previous =
         jdbc.queryForList(
-            "SELECT status||':'||coalesce(reason,'') FROM settlement.reconciliation_events WHERE run_id=? AND event_id=?",
-            String.class,
-            run.id(),
-            event.eventId());
-    // 회차 행을 이벤트마다 갱신하지 않고 공유 잠금으로 임대를 확인해 만료·교체된 실행자의 기록을 막는다.
-    int n =
-        jdbc.update(
             """
       UPDATE settlement.reconciliation_events SET status=?,reason=?,difference=?,evidence=?::jsonb,checked_at=clock_timestamp()
       WHERE run_id=? AND event_id=? AND EXISTS(SELECT 1 FROM settlement.reconciliation_runs
         WHERE id=? AND lease_token=? AND lease_until>clock_timestamp() FOR SHARE)
+      RETURNING old.status||':'||coalesce(old.reason,'')
       """,
+            String.class,
             f.status(),
             f.reason(),
             f.difference(),
@@ -691,20 +691,23 @@ public class JdbcReconciliationStore implements ReconciliationStore {
             event.eventId(),
             run.id(),
             run.token());
-    if (n != 1) throw new IllegalStateException("Reconciliation lease lost");
-    if (previous.isEmpty() || !previous.getFirst().equals(f.status() + ":" + f.reason()))
+    if (previous.size() != 1) throw new IllegalStateException("Reconciliation lease lost");
+    if (!previous.getFirst().equals(f.status() + ":" + f.reason()))
       history(run, event.eventId(), f.status(), f.reason(), f.evidence());
   }
 
   @Override
   public void finish(Run run, Supplier<List<Finding>> checks) {
     fence(run);
-    long untouched =
-        jdbc.queryForObject(
-            "SELECT count(*) FROM settlement.reconciliation_events WHERE run_id=? AND status='PENDING'",
-            Long.class,
+    // 이벤트는 임대 보유자만 쓰므로 전체 검사 전후의 건수가 같다. 세 건수를 한 번에 읽는다.
+    var counts =
+        jdbc.queryForMap(
+            """
+      SELECT count(*) FILTER(WHERE status='PENDING') AS untouched,count(*) FILTER(WHERE status<>'MATCH') AS unresolved,
+        count(*) FILTER(WHERE status='DEFECT') AS defects FROM settlement.reconciliation_events WHERE run_id=?
+      """,
             run.id());
-    if (untouched > 0) {
+    if (((Number) counts.get("untouched")).longValue() > 0) {
       release(run, "PENDING", 0);
       return;
     }
@@ -724,16 +727,8 @@ public class JdbcReconciliationStore implements ReconciliationStore {
           f.count(),
           f.difference(),
           json(f.evidence()));
-    long unresolved =
-        jdbc.queryForObject(
-            "SELECT count(*) FROM settlement.reconciliation_events WHERE run_id=? AND status<>'MATCH'",
-            Long.class,
-            run.id());
-    long defects =
-        jdbc.queryForObject(
-            "SELECT count(*) FROM settlement.reconciliation_events WHERE run_id=? AND status='DEFECT'",
-            Long.class,
-            run.id());
+    long unresolved = ((Number) counts.get("unresolved")).longValue();
+    long defects = ((Number) counts.get("defects")).longValue();
     boolean localDefect = local.stream().anyMatch(f -> "DEFECT".equals(f.status()));
     boolean localPending = local.stream().anyMatch(f -> !"MATCH".equals(f.status()));
     String status =
