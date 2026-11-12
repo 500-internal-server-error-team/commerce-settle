@@ -8,7 +8,9 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
+import subprocess
 import unittest
 import tempfile
 from unittest.mock import MagicMock, mock_open, patch
@@ -500,56 +502,95 @@ class NamespaceTest(unittest.TestCase):
 
 class RemoteRoutingTest(unittest.TestCase):
     REMOTE_SETTINGS = dict(REMOTE=True, APP_SSH="ubuntu@13.125.2.200", INFRA_SSH="ubuntu@10.0.1.20",
-                           SSH_JUMP="ubuntu@13.125.2.200", SSH_KEY="key.pem",
-                           REMOTE_REPO="commerce-settle")
+                           SSH_JUMP="ubuntu@13.125.2.200", SSH_KEY="key.pem", REMOTE_DOCKER="docker")
 
     def test_local_mode_keeps_local_compose_paths(self):
         with patch.multiple(load, REMOTE=False):
-            argv = load.command_for(["exec", "-T", "postgres", "psql"], {})
+            argv = load.command_for(["exec", "-T", "postgres", "psql"])
         self.assertEqual(argv[:4], ["docker", "compose", "-p", load.PROJECT])
         self.assertIn(str(load.ROOT / "compose.yml"), argv)
 
     def test_services_map_to_their_hosts(self):
-        self.assertEqual(load.host_for(["up", "-d", "--no-deps", "payment-worker"]), "app")
-        self.assertEqual(load.host_for(["exec", "-T", "payment-api", "curl"]), "app")
-        self.assertEqual(load.host_for(["exec", "-T", "kafka", "/opt/kafka/bin/x"]), "infra")
-        self.assertEqual(load.host_for(["up", "-d", "--wait", "redis"]), "infra")
+        self.assertEqual(load.host_for(["payment-worker"]), "app")
+        self.assertEqual(load.host_for(["payment-api"]), "app")
+        self.assertEqual(load.host_for(["kafka"]), "infra")
+        self.assertEqual(load.host_for(["postgres"]), "infra")
 
-    def test_unknown_service_is_refused_in_remote_mode(self):
+    def test_only_exec_runs_in_remote_mode(self):
         with patch.multiple(load, **self.REMOTE_SETTINGS):
-            with self.assertRaises(SystemExit):
-                load.command_for(["up", "-d", "--build"], {})
+            for args in (["up", "-d", "--build"], ["up", "-d", "--no-deps", "payment-worker"],
+                         ["kill", "payment-worker"], ["exec", "-T", "unknown", "env"]):
+                with self.subTest(args=args), self.assertRaises(SystemExit):
+                    load.command_for(args)
 
-    def test_infra_command_goes_through_jump_host_and_forwards_only_load_vars(self):
-        env = {"LOAD_NAMESPACE": "r1", "AUTH_REDIS_RUN_ID": "a" * 40, "PATH": "/bin",
-               "LOAD_PG_SCENARIO": "load pg"}
+    def test_infra_command_finds_ecs_container_through_jump_host(self):
         with patch.multiple(load, **self.REMOTE_SETTINGS):
-            argv = load.command_for(["exec", "-T", "postgres", "psql"], env)
+            argv = load.command_for(["exec", "-T", "postgres", "psql", "-c", "SELECT 'a b'"])
         self.assertEqual(argv[0], "ssh")
-        self.assertIn("-J", argv)
         self.assertEqual(argv[argv.index("-J") + 1], "ubuntu@13.125.2.200")
         self.assertEqual(argv[argv.index("-i") + 1], "key.pem")
         self.assertEqual(argv[-2], "ubuntu@10.0.1.20")
         remote = argv[-1]
-        self.assertTrue(remote.startswith("cd commerce-settle && env "))
-        self.assertIn("LOAD_NAMESPACE=r1", remote)
-        self.assertIn("LOAD_PG_SCENARIO='load pg'", remote)
-        self.assertIn("AUTH_REDIS_RUN_ID=" + "a" * 40, remote)
-        self.assertNotIn("PATH=", remote)
-        self.assertIn("compose.yml", remote)
-        self.assertNotIn(str(load.ROOT), remote)
+        self.assertIn("--filter label=com.amazonaws.ecs.container-name=postgres", remote)
+        self.assertIn("docker exec -i", remote)
+        self.assertIn("psql -c 'SELECT '\"'\"'a b'\"'\"''", remote)
+        self.assertNotIn("compose", remote)
 
     def test_app_command_skips_jump_host(self):
         with patch.multiple(load, **self.REMOTE_SETTINGS):
-            argv = load.command_for(["up", "-d", "--no-deps", "payment-worker"], {})
+            argv = load.command_for(["exec", "-T", "payment-worker", "env"])
         self.assertNotIn("-J", argv)
         self.assertEqual(argv[-2], "ubuntu@13.125.2.200")
 
     def test_missing_host_setting_is_refused(self):
         settings = dict(self.REMOTE_SETTINGS, APP_SSH="")
+        with patch.multiple(load, **settings), self.assertRaises(SystemExit):
+            load.command_for(["exec", "-T", "payment-worker", "env"])
+
+    def test_sudo_docker_is_split_into_words(self):
+        settings = dict(self.REMOTE_SETTINGS, REMOTE_DOCKER="sudo docker")
         with patch.multiple(load, **settings):
+            remote = load.command_for(["exec", "-T", "kafka", "true"])[-1]
+        self.assertIn("sudo docker ps -q", remote)
+        self.assertIn("sudo docker exec -i", remote)
+
+    @unittest.skipUnless(shutil.which("sh"), "sh not available")
+    def test_remote_script_requires_exactly_one_container(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "docker"
+            fake.write_text('#!/bin/sh\nif [ "$1" = ps ]; then for id in $FAKE_IDS; do echo "$id"; done; '
+                            'else shift; echo "exec:$*"; fi\n', encoding="utf-8", newline="\n")
+            fake.chmod(0o755)
+            with patch.multiple(load, **self.REMOTE_SETTINGS):
+                script = load.command_for(["exec", "-T", "kafka", "echo", "a b"])[-1]
+            path = tmp + os.pathsep + os.environ.get("PATH", "")
+            results = {}
+            for ids in ("", "c1", "c1 c2"):
+                done = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                                      env=dict(os.environ, PATH=path, FAKE_IDS=ids))
+                results[ids] = (done.returncode, done.stdout.strip())
+        self.assertEqual(results[""][0], 3)
+        self.assertEqual(results["c1 c2"][0], 3)
+        self.assertEqual(results["c1"], (0, "exec:-i c1 echo a b"))
+
+    def test_remote_mode_skips_redis_run_id_and_rejects_worker_restart(self):
+        with patch.multiple(load, **self.REMOTE_SETTINGS), patch.object(load, "compose") as compose:
+            self.assertIsNone(load.redis_run_id())
+            compose.assert_not_called()
+            args = argparse.Namespace(stages="300:30", kill_after=5)
             with self.assertRaises(SystemExit):
-                load.command_for(["up", "-d", "--no-deps", "payment-worker"], {})
+                load.cmd_ramp(args)
+            compose.assert_not_called()
+
+    def test_kafka_bootstrap_uses_localhost_in_remote_mode(self):
+        env = dict(os.environ, LOAD_INFRA_SSH="ubuntu@10.0.1.20")
+        env.pop("LOAD_KAFKA_BOOTSTRAP", None)
+        with patch.dict(os.environ, env, clear=True):
+            spec = importlib.util.spec_from_file_location("payment_load_remote", SOURCE)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        self.assertEqual(module.KAFKA_BOOTSTRAP, "localhost:9092")
+        self.assertEqual(load.KAFKA_BOOTSTRAP, "kafka:9092")
 
 
 if __name__ == "__main__":
