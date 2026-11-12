@@ -53,22 +53,24 @@ class ReconciliationFixture(unittest.TestCase):
             CREATE TABLE finance_mock.mock_transactions (provider_id TEXT, business_key TEXT,
                 amount INT, status TEXT, account_id TEXT, operation TEXT);
             CREATE TABLE finance_mock.mock_accounts (id TEXT, balance INT, reserved_amount INT,
-                opening_balance INT, provider_id TEXT, account_ref TEXT);
+                opening_balance INT, provider_id TEXT, account_ref TEXT, purpose TEXT);
         """)
 
-    def payment(self, mileage=0, status="CONFIRMED"):
+    def payment(self, mileage=0, status="CONFIRMED", opening_balance=load.WALLET_BALANCE):
         self.expected = {"order": ("mixed" if mileage else "card", 10000, mileage)}
         self.db.execute("INSERT INTO payment.payments VALUES (?,?,?,?,?,?,?,?)",
-                        ("order", "payment", "cycle", "buyer", status, 10000, mileage, 10000-mileage))
+                        ("order", "payment", "cycle", load.buyer(0), status, 10000, mileage, 10000-mileage))
         self.db.execute("INSERT INTO payment.payment_attempts VALUES (?,?,?,?,?)",
                         ("payment", "PG_A", "cycle", 10000-mileage,
                          "APPROVED" if status == "CONFIRMED" else "DECLINED"))
         self.db.execute("INSERT INTO finance_mock.mock_transactions VALUES (?,?,?,?,?,?)",
                         ("PG_A", "cycle", 10000-mileage,
                          "SUCCEEDED" if status == "CONFIRMED" else "DECLINED", None, "APPROVE"))
+        self.db.execute("INSERT INTO finance_mock.mock_accounts VALUES (?,?,0,?,'EASY_PAY','load-wallet-0','WALLET')",
+                        ("wallet", opening_balance, opening_balance))
+        balance = opening_balance - (mileage if status == "CONFIRMED" else 0)
+        self.db.execute("INSERT INTO payment.mileage_wallets VALUES (?,?,0)", (load.buyer(0), balance))
         if mileage:
-            balance = load.WALLET_BALANCE - (mileage if status == "CONFIRMED" else 0)
-            self.db.execute("INSERT INTO payment.mileage_wallets VALUES (?,?,0)", ("buyer", balance))
             for kind in ("RESERVE", "DEBIT" if status == "CONFIRMED" else "RELEASE"):
                 self.db.execute("INSERT INTO payment.mileage_entries VALUES ('payment',?)", (kind,))
         for event in ("PaymentAccepted", "PaymentConfirmed" if status == "CONFIRMED" else "PaymentDeclined"):
@@ -111,6 +113,26 @@ class ReconciliationNormalTest(ReconciliationFixture):
     def test_accepts_complete_mixed_payment_journal(self):
         self.payment(mileage=1000)
         self.assertEqual({}, self.reconcile()["problems"])
+
+    def test_accepts_previous_initial_balance_without_changing_the_wallet(self):
+        self.payment(mileage=1000, opening_balance=100_000_000)
+        self.assertEqual({}, self.reconcile()["problems"])
+        self.assertEqual(99_999_000, self.db.execute("SELECT balance FROM payment.mileage_wallets").fetchone()[0])
+
+    def test_detects_balance_difference_from_the_stored_initial_balance(self):
+        self.payment(mileage=1000, opening_balance=100_000_000)
+        self.db.execute("UPDATE payment.mileage_wallets SET balance=balance+1")
+        self.assertIn("마일리지 잔액 불일치", self.reconcile()["problems"])
+
+    def test_rejects_missing_initial_balance_without_using_the_current_default(self):
+        self.payment(mileage=1000)
+        self.db.execute("DELETE FROM finance_mock.mock_accounts")
+        self.assertIn("마일리지 초기 잔액 누락", self.reconcile()["problems"])
+
+    def test_does_not_use_payout_funds_as_the_mileage_initial_balance(self):
+        self.payment(mileage=1000)
+        self.db.execute("UPDATE finance_mock.mock_accounts SET purpose='PAYOUT'")
+        self.assertIn("마일리지 초기 잔액 누락", self.reconcile()["problems"])
 
     def test_accepts_declined_payment_with_released_mileage(self):
         self.payment(mileage=1000, status="DECLINED")

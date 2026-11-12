@@ -37,7 +37,8 @@ REDIS_PLACEHOLDER = "0" * 40
 SELLER = "00000000-0000-4000-8000-0000000005e1"
 PRODUCT = "00000000-0000-4000-8000-0000000005a1"
 BUYER_POOL = 200
-WALLET_BALANCE = 100_000_000
+# 반복 부하 시험에 여유를 두되, 이미 생성한 지갑 잔액은 바꾸지 않는다.
+WALLET_BALANCE = 10_000_000_000
 PROVIDERS = ("PG_A", "PG_B", "PG_C", "EASY_PAY")
 # 이름 → (승인 지연 ms 최소·최대, 확정 거절률, 응답 유실률, 조회 실패율)
 SCENARIOS = {
@@ -611,6 +612,13 @@ def cmd_reconcile(args):
     for key in mock.keys() - used:
         problem("결제에 연결되지 않은 대역 거래", "/".join(key))
 
+    # prepare가 두 지갑을 같은 초기 금액으로 만든다. 기존 스택의 초기값은 현재 상수와 다를 수 있다.
+    mock_wallets = psql("finance_mock", """
+            SELECT id, account_ref, balance, reserved_amount, opening_balance
+            FROM finance_mock.mock_accounts
+            WHERE provider_id = 'EASY_PAY' AND purpose = 'WALLET' AND account_ref LIKE 'load-wallet-%'""")
+    opening = {account_ref: int(amount) for _, account_ref, _, _, amount in mock_wallets}
+    initial_balances = {buyer(n): opening.get(f"load-wallet-{n}") for n in range(BUYER_POOL)}
     debited = {}
     for order, (_, _, buyer_id, status, _, mileage, _) in payments.items():
         if status == "CONFIRMED" and mileage:
@@ -619,7 +627,10 @@ def cmd_reconcile(args):
             SELECT buyer_id, balance, reserved_amount FROM payment.mileage_wallets"""):
         if int(reserved) != 0:
             problem("마일리지 예약 잔존", f"{buyer_id} {reserved}")
-        if int(balance) != WALLET_BALANCE - debited.get(buyer_id, 0):
+        initial = initial_balances.get(buyer_id)
+        if initial is None:
+            problem("마일리지 초기 잔액 누락", buyer_id)
+        elif int(balance) != initial - debited.get(buyer_id, 0):
             problem("마일리지 잔액 불일치", f"{buyer_id} {balance}")
     entry_rows = psql("payment", """
             SELECT p.id, p.status,
@@ -640,10 +651,8 @@ def cmd_reconcile(args):
             WHERE provider_id = 'EASY_PAY' AND operation = 'APPROVE' AND status = 'SUCCEEDED'
             GROUP BY 1"""):
         spent[account] = int(amount)
-    for account, balance, reserved, opening in psql("finance_mock", """
-            SELECT id, balance, reserved_amount, opening_balance FROM finance_mock.mock_accounts
-            WHERE provider_id = 'EASY_PAY' AND account_ref LIKE 'load-wallet-%'"""):
-        if int(reserved) != 0 or int(balance) != int(opening) - spent.get(account, 0):
+    for account, _, balance, reserved, initial in mock_wallets:
+        if int(reserved) != 0 or int(balance) != int(initial) - spent.get(account, 0):
             problem("간편결제 지갑 불일치", f"{account} {balance}/{reserved}")
 
     events = {}
