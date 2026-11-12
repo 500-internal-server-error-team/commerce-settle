@@ -57,6 +57,8 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
   public Optional<LeasedJob> leaseNext(
       PaymentJobOperation operation, String owner, Duration leaseDuration) {
     TransactionLimits.apply(jdbc.getJdbcTemplate());
+    // ix_payment_jobs_lease를 next_run_at 순서로 읽다가 첫 후보에서 멈춘다. 임대는 next_run_at이 지난 작업에만
+    // 걸리므로 RUNNING 작업도 next_run_at이 현재 이전이다. 고정 시각 조건만 인덱스 범위로 쓸 수 있다.
     return jdbc
         .query(
             """
@@ -64,8 +66,8 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
               SELECT id,created_at AS queued_created,updated_at AS queued_changed,
                   next_run_at AS queued_due,lease_until AS queued_lease,status AS queued_status
               FROM payment.payment_jobs WHERE operation = :operation
-                AND ((status IN ('PENDING', 'RETRY') AND next_run_at <= clock_timestamp())
-                  OR (status = 'RUNNING' AND lease_until < clock_timestamp()))
+                AND status IN ('PENDING', 'RETRY', 'RUNNING') AND next_run_at <= statement_timestamp()
+                AND (status <> 'RUNNING' OR lease_until < clock_timestamp())
               ORDER BY next_run_at, id LIMIT 1 FOR UPDATE SKIP LOCKED)
             UPDATE payment.payment_jobs j
             SET status = 'RUNNING', lease_owner = :owner, lease_token = :token,

@@ -154,6 +154,9 @@ CREATE TABLE payment.payment_jobs (
 );
 CREATE INDEX ix_payment_jobs_status_next_run ON payment.payment_jobs (status, next_run_at, lease_until, id);
 CREATE INDEX ix_payment_jobs_created ON payment.payment_jobs (created_at, id);
+-- 작업 선점은 종류별 대기·재시도·임대 작업만 next_run_at 순서로 본다.
+CREATE INDEX ix_payment_jobs_lease ON payment.payment_jobs (operation, next_run_at, id)
+    WHERE status IN ('PENDING','RETRY','RUNNING');
 
 -- 외부 승인 시도. 외부 호출 전에 provider·결제수단·계정·재원·금액·시나리오를 고정해 재전송·조회에 같은 값을 쓴다.
 CREATE TABLE payment.payment_attempts (
