@@ -957,7 +957,7 @@ Payment 격리 발행은 한 번에 하나만 임대하며 Kafka 응답 대기 �
 
 Settlement 원문 격리도 같은 테이블 구조와 `app.kafka.quarantine.enabled`(기본 false)를 사용합니다. `PaymentConfirmed`·`PurchaseConfirmed`의 해석 실패만 격리하고, 반영 중 DB 오류와 격리 저장 실패는 ACK 없이 Listener를 중단합니다. Settlement 격리 발행은 공통 예약 스레드(4개)에서 Kafka 응답을 기다리며 주기·묶음·임대·결과 대기·재시도 규칙은 Payment와 같습니다. 대상 토픽은 `commerce-settle.settlement.v1.dlt`입니다. 운영 재처리·재개도 Payment와 같은 검사·기록으로 원래 수신 토픽(`commerce-settle.payment.v1`·`commerce-settle.commerce.v1`)에 재발행합니다. 이 토픽은 Commerce·Payment·알림 소비 그룹도 읽으므로, 다른 그룹이 같은 원문을 이미 처리했는지 확인한 뒤 요청합니다. 같은 eventId·bytes 재전달은 각 Inbox가 중복으로 끝냅니다.
 
-Settlement 발행 Outbox는 Payment와 같은 Relay 규칙(커밋 후·결과 반영 후·시작 시 깨움, 1초 복구 조회, 미완료 발행 최대 8건, 임대 240초, 10회 소진 REVIEW_REQUIRED)을 따르며 `app.outbox.enabled`(`APP_OUTBOX_ENABLED`, 기본 false)로 켭니다. 환불 SAGA 응답과 판매자 알림 요청은 스위치와 관계없이 업무 트랜잭션에서 저장합니다. 일배치와 지급 결과 반영도 Outbox에 쓰므로 `settlement.outbox`가 없는 기존 개발 DB에서는 일배치가 실패합니다. 새 초기 SQL을 적용한 DB에서 실행합니다.
+Settlement 발행 Outbox는 Payment Relay를 바탕으로 커밋 후·시작 시 깨우고 1초 복구 조회, 미완료 발행 최대 8건, 임대 240초, 10회 소진 REVIEW_REQUIRED를 따르며 `app.outbox.enabled`(`APP_OUTBOX_ENABLED`, 기본 false)로 켭니다. 결과를 반영할 때마다 다시 조회하지 않고, 발행 결과 저장이 같은 집계의 뒤 미발행 이벤트를 보고했거나 저장 중 같은 프로세스의 Outbox 커밋 신호가 왔거나 직전 조회가 빈 슬롯을 다 채웠을 때(슬롯이 없던 경우 포함)만 커밋 뒤 다시 조회합니다. 앞 이벤트 발행 중 커밋된 뒤 이벤트는 그 신호의 조회에서 건너뛰어도 이 규칙으로 바로 다시 조회하지만, 다른 인스턴스가 저장한 뒤 이벤트와 실패 결과의 재시도는 복구 조회(최대 1초 지연)가 찾습니다. 시도를 다 쓴 행의 REVIEW_REQUIRED 전환은 조회마다가 아니라 복구 조회에서 주기당 최대 100건씩 합니다. 환불 SAGA 응답과 판매자 알림 요청은 스위치와 관계없이 업무 트랜잭션에서 저장합니다. 일배치와 지급 결과 반영도 Outbox에 쓰므로 `settlement.outbox`가 없는 기존 개발 DB에서는 일배치가 실패합니다. 새 초기 SQL을 적용한 DB에서 실행합니다.
 
 ### 업무 Inbox 관측과 재판정
 
