@@ -668,21 +668,30 @@ public class JdbcReconciliationStore implements ReconciliationStore {
 
   @Override
   public void result(Run run, Event event, Finding f) {
-    fence(run);
+    limits();
     List<String> previous =
         jdbc.queryForList(
             "SELECT status||':'||coalesce(reason,'') FROM settlement.reconciliation_events WHERE run_id=? AND event_id=?",
             String.class,
             run.id(),
             event.eventId());
-    jdbc.update(
-        "UPDATE settlement.reconciliation_events SET status=?,reason=?,difference=?,evidence=?::jsonb,checked_at=clock_timestamp() WHERE run_id=? AND event_id=?",
-        f.status(),
-        f.reason(),
-        f.difference(),
-        json(f.evidence()),
-        run.id(),
-        event.eventId());
+    // 회차 행을 이벤트마다 갱신하지 않고 공유 잠금으로 임대를 확인해 만료·교체된 실행자의 기록을 막는다.
+    int n =
+        jdbc.update(
+            """
+      UPDATE settlement.reconciliation_events SET status=?,reason=?,difference=?,evidence=?::jsonb,checked_at=clock_timestamp()
+      WHERE run_id=? AND event_id=? AND EXISTS(SELECT 1 FROM settlement.reconciliation_runs
+        WHERE id=? AND lease_token=? AND lease_until>clock_timestamp() FOR SHARE)
+      """,
+            f.status(),
+            f.reason(),
+            f.difference(),
+            json(f.evidence()),
+            run.id(),
+            event.eventId(),
+            run.id(),
+            run.token());
+    if (n != 1) throw new IllegalStateException("Reconciliation lease lost");
     if (previous.isEmpty() || !previous.getFirst().equals(f.status() + ":" + f.reason()))
       history(run, event.eventId(), f.status(), f.reason(), f.evidence());
   }
