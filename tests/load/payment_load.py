@@ -403,11 +403,15 @@ def produce(stages, mix, directory, offset, marks, stop_file=None, stop_event=No
 
 
 def snapshot():
-    lag = 0
+    lag, partitions = 0, 0
     for line in kafka("kafka-consumer-groups.sh", "--describe", "--group", GROUP).splitlines():
         parts = line.split()
         if len(parts) > 5 and parts[0] == GROUP and parts[1] == TOPIC and parts[5].isdigit():
             lag += int(parts[5])
+            partitions += 1
+    # 재조정 중 등으로 파티션 행을 읽지 못하면 0이 아니라 미관측(None)으로 남긴다.
+    lag = lag if partitions else None
+    before = datetime.now(timezone.utc).timestamp()
     row = psql("payment", """
         SELECT clock_timestamp(),
           (SELECT count(*) FROM payment.inbox WHERE event_type = 'OrderPaymentRequested'),
@@ -419,11 +423,17 @@ def snapshot():
             WHERE status IN ('PENDING', 'PROCESSING', 'UNKNOWN')),
           (SELECT count(*) FROM payment.payment_jobs WHERE status = 'REVIEW_REQUIRED'),
           (SELECT count(*) FROM payment.inbox WHERE status = 'REVIEW_REQUIRED'),
-          (SELECT count(*) FROM payment.outbox WHERE status <> 'PUBLISHED')""")[0]
+          (SELECT count(*) FROM payment.outbox WHERE status <> 'PUBLISHED'),
+          extract(epoch FROM clock_timestamp())""")[0]
+    after = datetime.now(timezone.utc).timestamp()
     names = ("at", "received", "waiting", "confirmed", "declined", "unfinished",
              "jobsReview", "inboxReview", "outboxPending")
     values = dict(zip(names, row))
-    return {"kafkaLag": lag, **{k: (v if k == "at" else int(v)) for k, v in values.items()}}
+    database = float(row[len(names)])
+    # 조회 왕복 동안 DB 시계를 읽었으므로 시계 차이는 이 범위 안에 있다. 지연 계산에는 보정하지 않는다.
+    clock = {"minMs": round((database - after) * 1000, 1), "maxMs": round((database - before) * 1000, 1)}
+    return {"kafkaLag": lag, **{k: (v if k == "at" else int(v)) for k, v in values.items()},
+            "dbMinusHostMs": clock}
 
 
 def cmd_inject(args):
@@ -441,7 +451,10 @@ def cmd_status(args):
 
 
 def latency(start, end):
-    """수신(Inbox 저장, DB 시각)부터 결제 확정까지. 같은 Docker VM의 시계라 호스트 시계 오차가 들어가지 않는다."""
+    """기존 지표: 단계 구간 안에 Inbox에 저장된 요청의 수신(Inbox 저장)→결제 확정. 이전 결과와 비교하려고 유지한다.
+
+    두 시각 모두 DB 시계다. 구간 밖에 수신된 요청(Kafka 대기·drain)은 빠지므로 장애 지연은 injected_stats로 본다.
+    """
     row = psql("payment", f"""
         SELECT count(*),
           round(percentile_cont(0.50) WITHIN GROUP (ORDER BY ms)::numeric, 1),
@@ -454,6 +467,124 @@ def latency(start, end):
                 AND i.created_at >= '{start}' AND i.created_at < '{end}') t""")[0]
     return dict(zip(("count", "p50Ms", "p95Ms", "p99Ms", "maxMs"),
                     [int(row[0])] + [float(v) if v else None for v in row[1:]]))
+
+
+# summary.json의 집계 기준. 기준을 바꾸면 version을 올려 이전 결과와 섞어 비교하지 않게 한다.
+AGGREGATION = {
+    "version": 2,
+    "population": "이번 실행에서 주입 원장(requests.csv)에 기록한 요청. 단계는 원장의 단계 번호이며, 수신·확정 시각이 "
+                  "단계 구간 밖(다음 단계·drain)이어도 주입한 단계에 넣는다.",
+    "publishedAt": "주입 원장 기록 시각. 발생기 호스트 시계(UTC)로 producer stdin에 쓴 직후이며 Kafka acks 전이다.",
+    "receivedAt": "payment.inbox.created_at (Payment DB 시계)",
+    "confirmedAt": "payment.payments.confirmed_at (Payment DB 시계)",
+    "metrics": {
+        "injected.publishToConfirmed": "publishedAt → confirmedAt, 확정된 요청만. 호스트·DB 시계 차이가 들어간다(clock 참고).",
+        "injected.publishToReceipt": "publishedAt → receivedAt, 수신된 요청만. Kafka 대기와 Worker 중단 시간이 들어간다.",
+        "injected.receiptToConfirmed": "receivedAt → confirmedAt, 확정된 요청만. DB 시계 하나로 잰다.",
+        "latency": "기존 지표(version 1과 같음): 단계 구간 [start, end) 안에 Inbox에 저장된 확정 결제의 receivedAt → "
+                   "confirmedAt. 구간 밖에 수신된 요청은 빠진다.",
+        "maxKafkaLag": "기존 지표: 단계 구간에 기록한 표본만의 최대 lag.",
+        "peaks": "초기·주입·drain의 모든 표본에서 본 최댓값과 그 경과 시각·단계. 표본 간격 사이의 순간값은 놓칠 수 있다.",
+    },
+    "unresolved": "요약 시점(적체가 비거나 drain 제한 시간 도달)에 확정·거절되지 않은 요청. 지연 분포에서 빠지므로 "
+                  "unresolved > 0이면 complete=false이고 지연 분포는 하한이다. 거절 요청은 확정 지연에서 뺀다.",
+    "clock": "표본마다 상태 조회 직전·직후의 호스트 시각과 그 사이의 DB clock_timestamp()로 잰 DB − 호스트 범위(ms). "
+             "지연 값은 보정하지 않는다.",
+    "percentiles": "선형 보간(PostgreSQL percentile_cont와 같음), ms, 소수 첫째 자리 반올림",
+}
+
+
+def percentile(values, q):
+    """정렬된 값의 선형 보간 백분위수. 기존 지표의 percentile_cont와 같은 방식이다."""
+    position = q * (len(values) - 1)
+    low = int(position)
+    high = min(low + 1, len(values) - 1)
+    return values[low] + (values[high] - values[low]) * (position - low)
+
+
+def distribution(values_ms):
+    values = sorted(values_ms)
+    if not values:
+        return {"count": 0, "p50Ms": None, "p95Ms": None, "p99Ms": None, "maxMs": None}
+    return {"count": len(values),
+            **{key: round(percentile(values, q), 1)
+               for key, q in (("p50Ms", .50), ("p95Ms", .95), ("p99Ms", .99))},
+            "maxMs": round(values[-1], 1)}
+
+
+def injected_requests(path, since):
+    """이번 실행의 주입 원장. [(orderId, 단계 번호, 발행 epoch 초)]. 같은 실행 이름의 이전 기록은 since로 뺀다."""
+    if not Path(path).exists():
+        return []
+    since = datetime.fromisoformat(since).timestamp()
+    rows = []
+    with open(path, newline="", encoding="utf-8") as source:
+        for row in csv.reader(source):
+            published = datetime.fromisoformat(row[5]).timestamp()
+            if published >= since:
+                rows.append((row[0], int(row[4]), published))
+    return rows
+
+
+def request_outcomes():
+    """orderId → (Inbox 저장 epoch 초, 결제 상태, 확정 epoch 초). 없는 값은 None. 시각은 모두 DB 시계다."""
+    outcomes = {}
+    for order, received, status, confirmed in psql("payment", """
+            SELECT i.aggregate_id, extract(epoch FROM min(i.created_at)), coalesce(p.status, ''),
+                   extract(epoch FROM p.confirmed_at)
+            FROM payment.inbox i LEFT JOIN payment.payments p ON p.order_id = i.aggregate_id
+            WHERE i.event_type = 'OrderPaymentRequested'
+            GROUP BY i.aggregate_id, p.status, p.confirmed_at"""):
+        outcomes[order] = (float(received), status or None, float(confirmed) if confirmed else None)
+    return outcomes
+
+
+def injected_stats(requests, outcomes):
+    """주입한 요청 집합의 결과와 지연. 수신·확정 시각이 단계 구간 밖이어도 포함한다."""
+    publish_to_confirmed, publish_to_receipt, receipt_to_confirmed = [], [], []
+    confirmed = declined = received = 0
+    for order, _, published in requests:
+        outcome = outcomes.get(order)
+        if outcome is None:
+            continue
+        received_at, status, confirmed_at = outcome
+        received += 1
+        publish_to_receipt.append((received_at - published) * 1000)
+        if status == "DECLINED":
+            declined += 1
+        elif status == "CONFIRMED" and confirmed_at is not None:
+            confirmed += 1
+            publish_to_confirmed.append((confirmed_at - published) * 1000)
+            receipt_to_confirmed.append((confirmed_at - received_at) * 1000)
+    unresolved = len(requests) - confirmed - declined
+    return {"injected": len(requests), "received": received, "confirmed": confirmed,
+            "declined": declined, "unresolved": unresolved, "complete": unresolved == 0,
+            "publishToConfirmed": distribution(publish_to_confirmed),
+            "publishToReceipt": distribution(publish_to_receipt),
+            "receiptToConfirmed": distribution(receipt_to_confirmed)}
+
+
+def peaks(samples):
+    """모든 표본(초기·주입·drain)의 최댓값. 미관측(None) 표본은 건너뛰고 그 수를 남긴다."""
+    result = {}
+    for key in ("kafkaLag", "waiting", "unfinished", "outboxPending"):
+        observed = [s for s in samples if s.get(key) is not None]
+        top = max(observed, key=lambda s: s[key], default=None)
+        result[key] = {"value": top[key] if top else None,
+                       "elapsed": top.get("elapsed") if top else None,
+                       "stage": top.get("stage") if top else None,
+                       "unobservedSamples": len(samples) - len(observed)}
+    return result
+
+
+def clock_summary(samples):
+    """표본마다 잰 Payment DB 시계 − 발생기 호스트 시계 범위(ms)의 처음·마지막과 전체 범위."""
+    ranges = [s["dbMinusHostMs"] for s in samples if s.get("dbMinusHostMs")]
+    if not ranges:
+        return None
+    return {"first": ranges[0], "last": ranges[-1],
+            "minMs": min(r["minMs"] for r in ranges), "maxMs": max(r["maxMs"] for r in ranges),
+            "samples": len(ranges)}
 
 
 WORKER_SETTINGS = ("PAYMENT_REQUEST_CONCURRENCY", "PAYMENT_APPROVAL_CONCURRENCY", "PAYMENT_DB_POOL_SIZE")
@@ -580,7 +711,9 @@ def cmd_ramp(args):
             raise SystemExit("worker restart did not complete")
 
     summary = {"run": run, "mix": args.mix, "scenario": args.scenario, "fault": fault,
-               "workerSettings": worker_settings(), "stages": []}
+               "workerSettings": worker_settings(), "aggregation": AGGREGATION, "stages": []}
+    requests = injected_requests(directory / "requests.csv", marks[0]["start"]) if marks else []
+    outcomes = request_outcomes() if requests else {}
     for mark in marks:
         in_stage = [s for s in samples[1:] if s.get("stage") == mark["stage"]]
         steady = in_stage[1:] or in_stage  # 첫 구간은 warm-up으로 뺀다
@@ -590,9 +723,14 @@ def cmd_ramp(args):
                 sum(s["confirmedPerSecond"] for s in steady) / max(1, len(steady)), 1),
             "unfinishedStart": in_stage[0]["unfinished"] if in_stage else None,
             "unfinishedEnd": in_stage[-1]["unfinished"] if in_stage else None,
-            "maxKafkaLag": max((s["kafkaLag"] for s in in_stage), default=None),
+            "maxKafkaLag": max((s["kafkaLag"] for s in in_stage if s["kafkaLag"] is not None),
+                               default=None),
             "latency": latency(mark["start"], mark["end"]),
+            "injected": injected_stats([r for r in requests if r[1] == mark["stage"]], outcomes),
         })
+    summary["injected"] = injected_stats(requests, outcomes)
+    summary["peaks"] = peaks(samples)
+    summary["clock"] = clock_summary(samples)
     drain = [s for s in samples[1:] if s.get("stage") == "drain"]
     summary["drainSeconds"] = round(samples[-1]["elapsed"] - drain[0]["elapsed"], 1) if drain else 0
     summary["injectionEndedAt"] = drain[0]["elapsed"] if drain else None
