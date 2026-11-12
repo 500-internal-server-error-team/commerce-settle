@@ -1,0 +1,12 @@
+.gradle/
+**/build/
+.env
+.env.*
+!.env.example
+.idea/
+/.ssh/
+*.iml
+.DS_Store
+__pycache__/
+*.py[cod]
+work/

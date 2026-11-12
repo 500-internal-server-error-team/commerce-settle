@@ -1,0 +1,218 @@
+package com.commercesettle.payment.infrastructure.persistence.outbox;
+
+import com.commercesettle.observability.AsyncObservation;
+import com.commercesettle.payment.application.event.EventEnvelope;
+import com.commercesettle.payment.application.event.PaymentAcceptedPayload;
+import com.commercesettle.payment.application.event.PaymentCancellationResultPayload;
+import com.commercesettle.payment.application.event.PaymentConfirmedPayload;
+import com.commercesettle.payment.application.event.PaymentDeclinedPayload;
+import com.commercesettle.payment.application.event.PaymentNoticeRequestedPayload;
+import com.commercesettle.payment.application.event.RefundAcceptedPayload;
+import com.commercesettle.payment.application.event.RefundCompletedPayload;
+import com.commercesettle.payment.application.event.RefundEventPayload;
+import com.commercesettle.payment.application.event.RefundFailedPayload;
+import com.commercesettle.payment.application.event.RefundFinancialCompletedPayload;
+import com.commercesettle.payment.application.event.RefundReleaseRequestedPayload;
+import com.commercesettle.payment.application.event.RefundReservationRequestedPayload;
+import com.commercesettle.payment.application.port.PaymentEventOutbox;
+import com.commercesettle.payment.infrastructure.messaging.OutboxAppended;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+
+@Repository
+public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
+  /** 발행하는 환불 이벤트 종류와 본문 타입. */
+  private static final Map<String, Class<? extends RefundEventPayload>> REFUND_EVENTS =
+      Map.of(
+          "RefundAccepted", RefundAcceptedPayload.class,
+          "RefundReservationRequested", RefundReservationRequestedPayload.class,
+          "RefundFinancialCompleted", RefundFinancialCompletedPayload.class,
+          "RefundReleaseRequested", RefundReleaseRequestedPayload.class,
+          "RefundCompleted", RefundCompletedPayload.class,
+          "RefundFailed", RefundFailedPayload.class);
+
+  private final NamedParameterJdbcTemplate jdbc;
+  private final ObjectMapper mapper;
+  private AsyncObservation observations = AsyncObservation.NOOP;
+  private final ApplicationEventPublisher events;
+
+  public JdbcPaymentEventOutbox(
+      NamedParameterJdbcTemplate jdbc, ObjectMapper mapper, ApplicationEventPublisher events) {
+    this.jdbc = jdbc;
+    this.mapper = mapper;
+    this.events = events;
+  }
+
+  @Autowired(required = false)
+  void asyncObservation(AsyncObservation observation) {
+    this.observations = observation;
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID appendNoticeRequested(EventEnvelope<PaymentNoticeRequestedPayload> event) {
+    if (!"PaymentNoticeRequested".equals(event.eventType())) {
+      throw new IllegalArgumentException("Invalid payment notice event");
+    }
+    return append(event, event.payload().paymentId());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID appendPaymentAccepted(EventEnvelope<PaymentAcceptedPayload> event) {
+    // aggregateVersion은 결제 버전이므로 payload의 주문 버전과 비교하지 않는다.
+    if (!"PaymentAccepted".equals(event.eventType())) {
+      throw new IllegalArgumentException("Invalid payment outbox event");
+    }
+    return append(event, event.payload().paymentId());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID appendCancellationResult(EventEnvelope<PaymentCancellationResultPayload> event) {
+    if (!"PaymentCancelled".equals(event.eventType())
+        && !"PaymentCancellationRejected".equals(event.eventType())) {
+      throw new IllegalArgumentException("Invalid payment outbox event");
+    }
+    return append(event, event.payload().paymentId());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID appendPaymentConfirmed(EventEnvelope<PaymentConfirmedPayload> event) {
+    if (!"PaymentConfirmed".equals(event.eventType())) {
+      throw new IllegalArgumentException("Invalid payment outbox event");
+    }
+    return append(event, event.payload().paymentId());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID appendPaymentDeclined(EventEnvelope<PaymentDeclinedPayload> event) {
+    if (!"PaymentDeclined".equals(event.eventType())) {
+      throw new IllegalArgumentException("Invalid payment outbox event");
+    }
+    return append(event, event.payload().paymentId());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public UUID appendRefundEvent(EventEnvelope<? extends RefundEventPayload> event) {
+    Class<?> payload = REFUND_EVENTS.get(event.eventType());
+    if (payload == null || !payload.isInstance(event.payload())) {
+      throw new IllegalArgumentException("Invalid payment outbox event");
+    }
+    return append(event, event.payload().paymentId());
+  }
+
+  private UUID append(EventEnvelope<?> event, UUID paymentId) {
+    if (event.eventVersion() != 1 || !event.aggregateId().equals(paymentId)) {
+      throw new IllegalArgumentException("Invalid payment outbox event");
+    }
+    byte[] body;
+    try {
+      body = mapper.writeValueAsBytes(event);
+    } catch (JsonProcessingException exception) {
+      throw new IllegalArgumentException("Cannot serialize payment outbox event");
+    }
+    applyTransactionLimits();
+    var params =
+        new MapSqlParameterSource("id", event.eventId())
+            .addValue("aggregate", event.aggregateId())
+            .addValue("version", event.aggregateVersion())
+            .addValue("occurred", event.occurredAt().toString())
+            .addValue("body", body)
+            .addValue("json", new String(body, StandardCharsets.UTF_8))
+            .addValue("traceParent", observations.capture())
+            .addValue(
+                "orderId",
+                event.payload() instanceof PaymentConfirmedPayload confirmed
+                    ? confirmed.orderId()
+                    : null)
+            .addValue(
+                "cycleId",
+                event.payload() instanceof PaymentConfirmedPayload confirmed
+                        && confirmed.paymentCycleId() != null
+                    ? confirmed.paymentCycleId().toString()
+                    : null)
+            .addValue("type", event.eventType())
+            .addValue("key", paymentId.toString());
+    // 집계별 append를 커밋까지 직렬화하여 늦은 낮은 버전의 삽입을 막는다.
+    jdbc.queryForList(
+        "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:aggregate AS text), 0))", params);
+    var existing =
+        jdbc.query(
+            "SELECT raw_body FROM payment.outbox WHERE id = :id",
+            params,
+            (rs, row) -> rs.getBytes(1));
+    if (!existing.isEmpty()) {
+      requireSameBody(existing.getFirst(), body);
+      return event.eventId();
+    }
+    Long latest =
+        jdbc.queryForObject(
+            "SELECT coalesce(max(aggregate_version), -1) FROM payment.outbox WHERE aggregate_id ="
+                + " :aggregate",
+            params,
+            Long.class);
+    if (latest != null && event.aggregateVersion() < latest) {
+      throw new IllegalArgumentException("Payment outbox version moved backwards");
+    }
+    int inserted =
+        jdbc.update(
+            """
+            INSERT INTO payment.outbox (id,event_type,event_version,aggregate_id,aggregate_version,
+                topic,occurred_at,message_key,payload,raw_body,trace_parent,order_accepted_at)
+            VALUES (:id,:type,1,:aggregate,:version,'commerce-settle.payment.v1',
+                CAST(:occurred AS timestamptz),:key,CAST(:json AS jsonb),:body,:traceParent,
+                (SELECT i.order_accepted_at FROM payment.inbox i
+                 WHERE :type='PaymentConfirmed' AND i.event_type='OrderPaymentRequested'
+                   AND i.aggregate_id=CAST(:orderId AS uuid) AND i.status IN ('WAITING','APPLIED')
+                   AND i.payload->'payload'->>'paymentCycleId'=:cycleId
+                 ORDER BY i.created_at,i.id LIMIT 1))
+            ON CONFLICT (id) DO NOTHING
+            """,
+            params);
+    if (inserted == 0) {
+      byte[] original =
+          jdbc.queryForObject(
+              "SELECT raw_body FROM payment.outbox WHERE id = :id",
+              Map.of("id", event.eventId()),
+              byte[].class);
+      requireSameBody(original, body);
+    } else {
+      events.publishEvent(new OutboxAppended());
+    }
+    return event.eventId();
+  }
+
+  private static void requireSameBody(byte[] original, byte[] body) {
+    if (!Arrays.equals(original, body)) {
+      throw new IllegalArgumentException("Outbox event ID has a different body");
+    }
+  }
+
+  private void applyTransactionLimits() {
+    jdbc.getJdbcTemplate()
+        .queryForList(
+            """
+        SELECT set_config(budget.name,
+            least(coalesce(nullif(settings.setting::integer,0),budget.timeout_ms),
+                budget.timeout_ms)::text,true)
+        FROM (VALUES ('lock_timeout',1000),('statement_timeout',5000))
+            AS budget(name,timeout_ms)
+        JOIN pg_settings settings ON settings.name=budget.name
+        """);
+  }
+}

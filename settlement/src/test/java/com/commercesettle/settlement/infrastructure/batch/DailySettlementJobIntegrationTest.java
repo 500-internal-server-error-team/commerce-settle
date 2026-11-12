@@ -1,0 +1,502 @@
+package com.commercesettle.settlement.infrastructure.batch;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.commercesettle.settlement.application.exception.ProductSettlementContextUnavailableException;
+import com.commercesettle.settlement.application.port.ProductSettlementContextReader;
+import com.commercesettle.settlement.domain.model.ProductSettlementContext;
+import com.commercesettle.settlement.domain.model.SettlementAmounts;
+import com.commercesettle.settlement.domain.model.SettlementBatch;
+import com.commercesettle.settlement.domain.model.SettlementItem;
+import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
+import com.commercesettle.settlement.support.EventContract;
+import com.zaxxer.hikari.HikariDataSource;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
+import javax.sql.DataSource;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.batch.core.BatchStatus;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.annotation.DirtiesContext;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
+/** 실제 PostgreSQL에서 Spring Batch 일배치의 판매자 단위 커밋·건너뛰기·재실행·재시작을 확인한다. */
+@SpringBootTest(
+    properties = {
+      "management.tracing.enabled=false",
+      "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123",
+      "app.internal-auth.senders[service\\:commerce].current=test-commerce-retention-credential-0123456789abcdef",
+      "settlement.payout.mock-credential=test-settlement-credential-0123456789abcdef0123",
+      "spring.kafka.admin.auto-create=false",
+      "settlement.daily-batch.schedule-enabled=false",
+      "settlement.payout-worker.enabled=false",
+      "settlement.inbox-processor.enabled=false"
+    })
+@Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+class DailySettlementJobIntegrationTest {
+  @Container @ServiceConnection
+  static final PostgreSQLContainer<?> POSTGRES =
+      new PostgreSQLContainer<>("postgres:18.3").withInitScript("db/settlement.sql");
+
+  @Autowired DailySettlementLauncher launcher;
+  @Autowired SettlementItemRepository items;
+  @Autowired JdbcTemplate jdbc;
+  @Autowired FakeContextReader contexts;
+  @Autowired DataSource dataSource;
+
+  @AfterEach
+  void deleteBusinessRows() {
+    for (String table :
+        List.of(
+            "settlement_items",
+            "settlement_batches",
+            "payouts",
+            "payout_jobs",
+            "settlement_reservations",
+            "outbox")) {
+      jdbc.update("DELETE FROM settlement." + table);
+    }
+    contexts.reset();
+  }
+
+  @Test
+  @DisplayName("마감 전 지급 대상만 선점해 배치·지급·지급 작업·지급 예약을 한 번에 만든다")
+  void reservesPayableItemsBeforeCutoff() {
+    LocalDate batchDate = LocalDate.of(2026, 9, 1);
+    Instant cutoff = SettlementBatch.cutoffOf(batchDate);
+    UUID seller = UUID.randomUUID();
+    SettlementItem justBefore = payable(seller, 10_000, cutoff.minusNanos(1_000));
+    SettlementItem earlier = payable(seller, 20_000, cutoff.minusSeconds(86_400 * 3));
+    SettlementItem atCutoff = payable(seller, 30_000, cutoff);
+    SettlementItem refundReserved = payable(seller, 40_000, cutoff.minusSeconds(60));
+    refundReserved.reserveRefund(cutoff.minusSeconds(30));
+    items.save(refundReserved);
+
+    BatchStatus status = launcher.run(batchDate);
+
+    assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(lastExitCode()).isEqualTo("COMPLETED");
+    Map<String, Object> batch = single("settlement_batches WHERE seller_id = ?", seller);
+    assertThat(batch)
+        .containsEntry("status", "RESERVED")
+        .containsEntry("net_amount", 8_500L + 17_000L)
+        .containsEntry("policy_version", "delivery-daily-v1");
+    Map<String, Object> payout = single("payouts WHERE batch_id = ?", batch.get("id"));
+    assertThat(payout)
+        .containsEntry("status", "PENDING")
+        .containsEntry("amount", 25_500L)
+        .containsEntry("recipient_account_ref", "account-" + seller)
+        .containsEntry("funding_account_ref", "payout-funding-default")
+        .containsEntry("scenario_version", "payout-normal-v1");
+    Map<String, Object> job = single("payout_jobs WHERE payout_id = ?", payout.get("id"));
+    assertThat(job)
+        .containsEntry("status", "PENDING")
+        .containsEntry("attempts", 0)
+        .containsEntry("business_key", payout.get("business_key"));
+    assertThat(statusOf(justBefore)).isEqualTo("PAYOUT_RESERVED");
+    assertThat(statusOf(earlier)).isEqualTo("PAYOUT_RESERVED");
+    assertThat(statusOf(atCutoff)).isEqualTo("PAYABLE");
+    assertThat(statusOf(refundReserved)).isEqualTo("REFUND_RESERVED");
+    assertThat(
+            jdbc.queryForList(
+                "SELECT amount FROM settlement.settlement_reservations"
+                    + " WHERE payout_id = ? AND kind = 'PAYOUT' AND status = 'ACTIVE'",
+                Long.class,
+                payout.get("id")))
+        .containsExactlyInAnyOrder(8_500L, 17_000L);
+    byte[] notice =
+        jdbc.queryForObject(
+            "SELECT raw_body FROM settlement.outbox WHERE message_key = ?",
+            byte[].class,
+            batch.get("id").toString());
+    EventContract.assertValid(notice);
+    assertThat(new String(notice, java.nio.charset.StandardCharsets.UTF_8))
+        .contains("\"kind\":\"SETTLEMENT_READY\"")
+        .contains("\"amount\":25500")
+        .contains("\"batchDate\":\"2026-09-01\"")
+        .contains("\"payoutId\":\"" + payout.get("id") + "\"");
+  }
+
+  @Test
+  @DisplayName("같은 날짜로 다시 실행해도 배치·지급·예약을 늘리지 않고 닫힌 배치에 항목을 더하지 않는다")
+  void rerunDoesNotDuplicateOrExtendBatch() {
+    LocalDate batchDate = LocalDate.of(2026, 9, 2);
+    Instant cutoff = SettlementBatch.cutoffOf(batchDate);
+    UUID seller = UUID.randomUUID();
+    payable(seller, 10_000, cutoff.minusSeconds(60));
+    launcher.run(batchDate);
+    SettlementItem late = payable(seller, 20_000, cutoff.minusSeconds(30));
+
+    BatchStatus rerun = launcher.run(batchDate);
+
+    assertThat(rerun).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(count("settlement_batches")).isEqualTo(1);
+    assertThat(count("payouts")).isEqualTo(1);
+    assertThat(count("payout_jobs")).isEqualTo(1);
+    assertThat(count("settlement_reservations")).isEqualTo(1);
+    assertThat(statusOf(late)).isEqualTo("PAYABLE");
+  }
+
+  @Test
+  @DisplayName("지급 전 검증에 실패한 판매자는 선점까지 롤백하고 건너뛰며 다른 판매자는 커밋한다")
+  void skipsSellerRejectedByPayoutValidation() {
+    LocalDate batchDate = LocalDate.of(2026, 9, 3);
+    Instant cutoff = SettlementBatch.cutoffOf(batchDate);
+    UUID rejected = UUID.randomUUID();
+    UUID accepted = UUID.randomUUID();
+    SettlementItem rejectedItem = payable(rejected, 10_000, cutoff.minusSeconds(60));
+    payable(accepted, 20_000, cutoff.minusSeconds(60));
+    contexts.notAllowed.add(rejected);
+
+    BatchStatus status = launcher.run(batchDate);
+
+    assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(lastExitCode()).isEqualTo("COMPLETED_WITH_SKIPS");
+    assertThat(count("settlement_batches WHERE seller_id = ?", accepted)).isEqualTo(1);
+    assertThat(count("settlement_batches WHERE seller_id = ?", rejected)).isZero();
+    assertThat(statusOf(rejectedItem)).isEqualTo("PAYABLE");
+    assertThat(count("settlement_reservations WHERE item_id = ?", rejectedItem.getId())).isZero();
+    // 롤백한 판매자의 알림 요청은 남지 않는다.
+    assertThat(count("outbox")).isEqualTo(1);
+    assertThat(
+            count(
+                "outbox WHERE message_key = (SELECT id::text FROM settlement.settlement_batches"
+                    + " WHERE seller_id = ?)",
+                accepted))
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("커머스 지급 컨텍스트를 기다리는 동안 DB 트랜잭션·연결을 쥐지 않는다")
+  void readsContextsWithoutHoldingConnection() {
+    LocalDate batchDate = LocalDate.of(2026, 9, 9);
+    UUID seller = UUID.randomUUID();
+    SettlementItem item =
+        payable(seller, 10_000, SettlementBatch.cutoffOf(batchDate).minusSeconds(60));
+    HikariDataSource pool;
+    try {
+      pool = dataSource.unwrap(HikariDataSource.class);
+    } catch (SQLException e) {
+      throw new IllegalStateException(e);
+    }
+    List<Integer> activeDuringRead = new ArrayList<>();
+    contexts.duringRead =
+        (s, products) -> activeDuringRead.add(pool.getHikariPoolMXBean().getActiveConnections());
+
+    BatchStatus status = launcher.run(batchDate);
+
+    assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    // 실행자 잠금의 전용 연결만 남는다. chunk·지급 트랜잭션이 연결을 쥐면 2가 된다.
+    assertThat(activeDuringRead).containsExactly(1);
+    assertThat(statusOf(item)).isEqualTo("PAYOUT_RESERVED");
+  }
+
+  @Test
+  @DisplayName("조회와 선점 사이에 검증하지 않은 상품의 항목이 준비되면 그 판매자를 롤백하고 건너뛴다")
+  void skipsSellerWhoseNewProductWasNotVerified() {
+    LocalDate batchDate = LocalDate.of(2026, 9, 10);
+    Instant cutoff = SettlementBatch.cutoffOf(batchDate);
+    UUID seller = UUID.randomUUID();
+    SettlementItem verified = payable(seller, 10_000, cutoff.minusSeconds(60));
+    List<SettlementItem> arrived = new ArrayList<>();
+    contexts.duringRead =
+        (s, products) -> arrived.add(payable(seller, 20_000, cutoff.minusSeconds(30)));
+
+    BatchStatus status = launcher.run(batchDate);
+
+    assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(lastExitCode()).isEqualTo("COMPLETED_WITH_SKIPS");
+    assertThat(count("settlement_batches WHERE seller_id = ?", seller)).isZero();
+    assertThat(statusOf(verified)).isEqualTo("PAYABLE");
+    assertThat(statusOf(arrived.get(0))).isEqualTo("PAYABLE");
+    assertThat(count("settlement_reservations")).isZero();
+  }
+
+  @Test
+  @DisplayName("커머스 지급 컨텍스트 조회 실패는 Step을 실패시키고, 재시작하면 남은 판매자만 처리한다")
+  void contextUnavailableFailsStepAndRestartContinues() {
+    LocalDate batchDate = LocalDate.of(2026, 9, 11);
+    Instant cutoff = SettlementBatch.cutoffOf(batchDate);
+    UUID first = new UUID(0, 1);
+    UUID second = new UUID(0, 2);
+    UUID third = new UUID(0, 3);
+    payable(first, 10_000, cutoff.minusSeconds(60));
+    SettlementItem secondItem = payable(second, 20_000, cutoff.minusSeconds(60));
+    payable(third, 30_000, cutoff.minusSeconds(60));
+    contexts.unavailableOnce.add(second);
+
+    BatchStatus failed = launcher.run(batchDate);
+
+    assertThat(failed).isEqualTo(BatchStatus.FAILED);
+    assertThat(count("settlement_batches WHERE seller_id = ?", first)).isEqualTo(1);
+    assertThat(statusOf(secondItem)).isEqualTo("PAYABLE");
+    assertThat(count("settlement_batches WHERE seller_id = ?", third)).isZero();
+    // skip 판정의 재시도 없이 첫 실패에서 멈춘다.
+    assertThat(contexts.calls.get(second)).isEqualTo(1);
+
+    BatchStatus restarted = launcher.run(batchDate);
+
+    assertThat(restarted).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(count("settlement_batches")).isEqualTo(3);
+    assertThat(contexts.calls.get(first)).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("항목 잠금 대기가 상한을 넘은 판매자는 롤백하고 건너뛰며 뒤의 판매자는 커밋한다")
+  void skipsSellerWhoseItemsAreLocked() throws SQLException {
+    LocalDate batchDate = LocalDate.of(2026, 9, 7);
+    Instant cutoff = SettlementBatch.cutoffOf(batchDate);
+    // reader가 seller_id 순으로 읽으므로 잠긴 판매자를 먼저 처리한다.
+    UUID locked = new UUID(0, 1);
+    UUID accepted = new UUID(0, 2);
+    SettlementItem lockedItem = payable(locked, 10_000, cutoff.minusSeconds(60));
+    SettlementItem acceptedItem = payable(accepted, 20_000, cutoff.minusSeconds(60));
+
+    BatchStatus status;
+    try (Connection holder = dataSource.getConnection()) {
+      holder.setAutoCommit(false);
+      try (Statement timeout = holder.createStatement();
+          PreparedStatement lock =
+              holder.prepareStatement(
+                  "SELECT id FROM settlement.settlement_items WHERE id = ? FOR UPDATE")) {
+        // lock_timeout이 빠지는 회귀에도 테스트가 멈추지 않고 잠금이 풀려 단언에서 실패하게 한다.
+        timeout.execute("SET idle_in_transaction_session_timeout = '10s'");
+        lock.setObject(1, lockedItem.getId());
+        lock.executeQuery().close();
+        status = launcher.run(batchDate);
+      } finally {
+        holder.rollback();
+      }
+    }
+
+    assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(statusOf(lockedItem)).isEqualTo("PAYABLE");
+    assertThat(count("settlement_items WHERE id = ? AND payout_id IS NULL", lockedItem.getId()))
+        .isEqualTo(1);
+    assertThat(count("settlement_batches WHERE seller_id = ?", locked)).isZero();
+    assertThat(count("payouts WHERE seller_id = ?", locked)).isZero();
+    assertThat(
+            count(
+                "payout_jobs j JOIN settlement.payouts p ON p.id = j.payout_id"
+                    + " WHERE p.seller_id = ?",
+                locked))
+        .isZero();
+    assertThat(count("settlement_reservations WHERE item_id = ?", lockedItem.getId())).isZero();
+    assertThat(count("settlement_batches WHERE seller_id = ?", accepted)).isEqualTo(1);
+    assertThat(count("payouts WHERE seller_id = ?", accepted)).isEqualTo(1);
+    assertThat(count("payout_jobs")).isEqualTo(1);
+    assertThat(statusOf(acceptedItem)).isEqualTo("PAYOUT_RESERVED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT s.write_skip_count FROM settlement.batch_step_execution s"
+                    + " ORDER BY s.step_execution_id DESC LIMIT 1",
+                Long.class))
+        .isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("한 판매자에서 매번 같은 오류가 나도 그 판매자만 건너뛰고 뒤 판매자는 같은 실행에서 처리한다")
+  void skipsSellerFailingEveryTime() {
+    LocalDate batchDate = LocalDate.of(2026, 9, 6);
+    Instant cutoff = SettlementBatch.cutoffOf(batchDate);
+    UUID first = new UUID(0, 1);
+    UUID failing = new UUID(0, 2);
+    UUID last = new UUID(0, 3);
+    payable(first, 10_000, cutoff.minusSeconds(60));
+    SettlementItem failingItem = payable(failing, 20_000, cutoff.minusSeconds(60));
+    payable(last, 30_000, cutoff.minusSeconds(60));
+    contexts.failAlways.add(failing);
+
+    BatchStatus status = launcher.run(batchDate);
+
+    assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(lastExitCode()).isEqualTo("COMPLETED_WITH_SKIPS");
+    assertThat(count("settlement_batches WHERE seller_id = ?", first)).isEqualTo(1);
+    assertThat(count("settlement_batches WHERE seller_id = ?", last)).isEqualTo(1);
+    assertThat(count("settlement_batches WHERE seller_id = ?", failing)).isZero();
+    assertThat(statusOf(failingItem)).isEqualTo("PAYABLE");
+    assertThat(count("settlement_reservations WHERE item_id = ?", failingItem.getId())).isZero();
+  }
+
+  @Test
+  @DisplayName("DB 자원 오류로 실패한 뒤 재시작하면 이미 커밋한 판매자는 다시 처리하지 않는다")
+  void restartContinuesAfterCommittedSellers() {
+    LocalDate batchDate = LocalDate.of(2026, 9, 4);
+    Instant cutoff = SettlementBatch.cutoffOf(batchDate);
+    UUID first = new UUID(0, 1);
+    UUID second = new UUID(0, 2);
+    payable(first, 10_000, cutoff.minusSeconds(60));
+    SettlementItem secondItem = payable(second, 20_000, cutoff.minusSeconds(60));
+    contexts.failOnce.add(second);
+
+    BatchStatus failed = launcher.run(batchDate);
+
+    assertThat(failed).isEqualTo(BatchStatus.FAILED);
+    assertThat(count("settlement_batches WHERE seller_id = ?", first)).isEqualTo(1);
+    assertThat(statusOf(secondItem)).isEqualTo("PAYABLE");
+
+    BatchStatus restarted = launcher.run(batchDate);
+
+    assertThat(restarted).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(count("settlement_batches WHERE seller_id = ?", second)).isEqualTo(1);
+    assertThat(contexts.calls.get(first)).isEqualTo(1);
+    assertThat(statusOf(secondItem)).isEqualTo("PAYOUT_RESERVED");
+  }
+
+  @Test
+  @DisplayName("같은 날짜를 다른 실행자가 실행 중이면(잠금 보유) Job을 시작하지 않고 실행 중으로 돌려준다")
+  void doesNotStartWhileAnotherExecutorHoldsLock() throws SQLException {
+    LocalDate batchDate = LocalDate.of(2026, 9, 8);
+    SettlementItem item =
+        payable(UUID.randomUUID(), 10_000, SettlementBatch.cutoffOf(batchDate).minusSeconds(60));
+    long executions = count("batch_job_execution");
+
+    try (Connection other =
+            DriverManager.getConnection(
+                POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+        PreparedStatement lock = other.prepareStatement("SELECT pg_advisory_lock(?, ?)")) {
+      lock.setInt(1, DailySettlementLock.NAMESPACE);
+      lock.setInt(2, DailySettlementLock.key(batchDate));
+      lock.executeQuery().close();
+
+      assertThat(launcher.run(batchDate)).isEqualTo(BatchStatus.STARTED);
+    }
+
+    assertThat(count("batch_job_execution")).isEqualTo(executions);
+    assertThat(statusOf(item)).isEqualTo("PAYABLE");
+    assertThat(launcher.run(batchDate)).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(statusOf(item)).isEqualTo("PAYOUT_RESERVED");
+  }
+
+  @Test
+  @DisplayName("대상이 없으면 배치를 만들지 않는다")
+  void createsNothingWithoutPayableItems() {
+    BatchStatus status = launcher.run(LocalDate.of(2026, 9, 5));
+
+    assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(count("settlement_batches")).isZero();
+  }
+
+  @Test
+  @DisplayName("마감이 지나지 않은 날짜는 실행하지 않는다")
+  void rejectsDateBeforeCutoff() {
+    assertThatThrownBy(() -> launcher.run(LocalDate.now().plusDays(2)))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  private SettlementItem payable(UUID seller, long base, Instant readyAt) {
+    long fee = base * 15 / 100;
+    SettlementItem item =
+        SettlementItem.create(
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            UUID.randomUUID(),
+            seller,
+            new SettlementAmounts(base, 0, base, base, 0, fee, base - fee),
+            0,
+            readyAt.minusSeconds(600));
+    item.markPayable(readyAt, readyAt.minusSeconds(300), readyAt);
+    return items.save(item);
+  }
+
+  private String lastExitCode() {
+    return jdbc.queryForObject(
+        "SELECT exit_code FROM settlement.batch_job_execution"
+            + " ORDER BY job_execution_id DESC LIMIT 1",
+        String.class);
+  }
+
+  private String statusOf(SettlementItem item) {
+    return jdbc.queryForObject(
+        "SELECT status FROM settlement.settlement_items WHERE id = ?", String.class, item.getId());
+  }
+
+  private Map<String, Object> single(String tableAndWhere, Object arg) {
+    return jdbc.queryForMap("SELECT * FROM settlement." + tableAndWhere, arg);
+  }
+
+  private long count(String tableAndWhere, Object... args) {
+    return jdbc.queryForObject(
+        "SELECT count(*) FROM settlement." + tableAndWhere, Long.class, args);
+  }
+
+  /** 판매자별로 지급 불가·일회성 DB 자원 장애·일회성 조회 실패·매번 나는 오류를 주입하고 호출 횟수를 센다. 계정은 판매자마다 하나다. */
+  static class FakeContextReader implements ProductSettlementContextReader {
+    final Set<UUID> notAllowed = ConcurrentHashMap.newKeySet();
+    final Set<UUID> failOnce = ConcurrentHashMap.newKeySet();
+    final Set<UUID> failAlways = ConcurrentHashMap.newKeySet();
+    final Set<UUID> unavailableOnce = ConcurrentHashMap.newKeySet();
+    final Map<UUID, Integer> calls = new ConcurrentHashMap<>();
+    volatile BiConsumer<UUID, Set<UUID>> duringRead = (sellerId, productIds) -> {};
+
+    @Override
+    public List<ProductSettlementContext> read(UUID sellerId, Set<UUID> productIds) {
+      calls.merge(sellerId, 1, Integer::sum);
+      duringRead.accept(sellerId, productIds);
+      if (unavailableOnce.remove(sellerId)) {
+        throw new ProductSettlementContextUnavailableException("injected failure");
+      }
+      if (failOnce.remove(sellerId)) {
+        throw new DataAccessResourceFailureException("injected failure");
+      }
+      if (failAlways.contains(sellerId)) {
+        throw new IllegalStateException("injected failure");
+      }
+      return new HashSet<>(productIds)
+          .stream()
+              .map(
+                  productId ->
+                      new ProductSettlementContext(
+                          productId,
+                          sellerId,
+                          !notAllowed.contains(sellerId),
+                          "account-" + sellerId,
+                          1))
+              .toList();
+    }
+
+    void reset() {
+      notAllowed.clear();
+      failOnce.clear();
+      failAlways.clear();
+      unavailableOnce.clear();
+      calls.clear();
+      duringRead = (sellerId, productIds) -> {};
+    }
+  }
+
+  @TestConfiguration
+  static class Contexts {
+    @Bean
+    @Primary
+    FakeContextReader fakeContextReader() {
+      return new FakeContextReader();
+    }
+  }
+}

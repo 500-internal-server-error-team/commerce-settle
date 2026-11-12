@@ -1,0 +1,190 @@
+jdbc:
+  includes: CONNECTION,QUERY,FETCH
+  datasource-proxy:
+    include-parameter-values: false
+    query:
+      enable-logging: false
+    slow-query:
+      enable-logging: false
+  resultset-operations:
+    enabled: false
+
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  jackson:
+    time-zone: Asia/Seoul
+    serialization:
+      write-dates-as-timestamps: false
+      write-dates-with-context-time-zone: true
+  application:
+    name: settlement
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      # JDBC를 쓰는 JVM당 10. 지급 Worker 8건은 외부 호출 중에는 연결을 쥐지 않는다.
+      maximum-pool-size: 10
+      minimum-idle: 1
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.default_schema: settlement
+  sql:
+    init:
+      mode: never
+  task:
+    scheduling:
+      pool:
+        # 지급 Worker·대기 Inbox 폴링·격리 DLT 발행이 스레드를 오래 잡아도 10:00 일배치 cron이 제시간에 돈다.
+        size: 4
+  batch:
+    job:
+      # 기동 시 자동 실행하지 않고 스케줄러가 batchDate로 실행한다.
+      enabled: false
+    jdbc:
+      # 메타데이터 테이블은 settlement 초기 SQL이 만든다.
+      initialize-schema: never
+      table-prefix: settlement.BATCH_
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+    template:
+      observation-enabled: true
+    producer:
+      acks: all
+      retries: 2147483647
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 120000
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+    consumer:
+      group-id: settlement.v1
+      enable-auto-commit: false
+      auto-offset-reset: none
+      max-poll-records: 100
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+    listener:
+      observation-enabled: true
+      ack-mode: manual_immediate
+      concurrency: 1
+      missing-topics-fatal: true
+
+settlement:
+  reconciliation:
+    enabled: ${SETTLEMENT_RECONCILIATION_ENABLED:false}
+    poll-ms: 1000
+    payment-url: ${PAYMENT_API_URL:http://payment-api:8080}
+    payment-credential: ${PAYMENT_SETTLEMENT_CREDENTIAL:}
+  commerce:
+    # 지급 생성 전 상품·판매자 지급 컨텍스트를 조회하는 커머스 내부 API.
+    base-url: ${COMMERCE_URL:http://commerce:8080}
+    # 커머스가 service:settlement로 확인하는 내부 호출 자격. 없거나 43자 미만이면 기동하지 않는다.
+    credential: ${COMMERCE_SETTLEMENT_CREDENTIAL}
+    # 지급 생성 트랜잭션 안에서 호출하므로 짧게 둔다. 넘기면 그 판매자는 이번 실행에서 건너뛴다.
+    http-timeout: 5s
+  daily-batch:
+    policy-version: delivery-daily-v1
+    schedule-enabled: ${SETTLEMENT_DAILY_BATCH_ENABLED:true}
+    # 실행 중으로 남은 실행을 강제 종료 잔류로 볼 마지막 갱신 경과 시간. 판매자 한 명 처리보다 충분히 길게 둔다.
+    stale-after: 10m
+  payout:
+    # finance-mock 지급 대역의 재원 계정·금융 실행 시나리오. 지급 생성 때 지급에 고정한다.
+    funding-account-ref: ${PAYOUT_FUNDING_ACCOUNT_REF:payout-funding-default}
+    scenario-version: ${PAYOUT_SCENARIO_VERSION:payout-normal-v1}
+    # 원거래 조회에 쓰는 조회 통신 시나리오. 원거래의 금융 실행 버전과 별개다.
+    lookup-scenario-version: ${PAYOUT_LOOKUP_SCENARIO_VERSION:payout-normal-v1}
+    mock-base-url: ${FINANCE_MOCK_URL:http://finance-mock:8080}
+    # Finance Mock이 service:settlement로 확인하는 내부 호출 자격. 없거나 43자 미만이면 기동하지 않는다.
+    mock-credential: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL}
+  payout-worker:
+    enabled: ${SETTLEMENT_PAYOUT_WORKER_ENABLED:true}
+    # 금융 Worker 임대 기준: 조회 1초, 임대 30초, HTTP 5초(policies.md). 미확정은 5분마다 원거래를 조회한다.
+    poll-interval-ms: 1000
+    lease-duration: 30s
+    http-timeout: 5s
+    unconfirmed-retry-delay: 5m
+    max-attempts: 10
+    # 인스턴스당 동시 실행 상한과 그중 결과 조회·중단 복구 전용 슬롯. 새 지급은 나머지만 쓴다.
+    max-concurrency: 8
+    recovery-slots: 2
+  inbox-rejudgement:
+    enabled: ${SETTLEMENT_INBOX_REJUDGEMENT_ENABLED:true}
+    interval-ms: 1000
+    lease: 30s
+  inbox-processor:
+    # 선행 결제를 기다리는 구매확정(WAITING)을 짧은 주기로 다시 판정한다.
+    enabled: ${SETTLEMENT_INBOX_PROCESSOR_ENABLED:true}
+    interval-ms: 1000
+    batch-size: 100
+
+springdoc:
+  paths-to-match: /api/**
+
+management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9091}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        async.work: true
+        async.stage: true
+        jdbc.query: true
+    tags:
+      application: ${spring.application.name}
+      role: ${PAYMENT_ROLE:app}
+
+logging:
+  pattern:
+    dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Seoul"
+
+app:
+  kafka:
+    quarantine:
+      # 해석할 수 없는 대상 이벤트의 원문 격리와 DLT 발행. 초기 SQL의 격리 테이블을 적용한 환경에서만 켠다.
+      # 결과 대기와 producer max.block.ms(기본 60초)의 합은 임대보다 짧아야 한다.
+      enabled: ${APP_KAFKA_QUARANTINE_ENABLED:false}
+      interval-ms: 1000
+      batch-size: 32
+      lease-ms: 240000
+      result-timeout-ms: 125000
+    settlement-events:
+      # PaymentConfirmed·PurchaseConfirmed 수신. 개발용 초기 SQL 적용과 신규 그룹 offset 초기화 후에만 활성화한다.
+      enabled: ${APP_KAFKA_SETTLEMENT_EVENTS_ENABLED:false}
+  outbox:
+    # 커밋된 Settlement 발행 이벤트(환불 SAGA 응답·판매자 알림 요청)를 Kafka로 보낸다. 저장은 항상 하고 Relay만 이 스위치로 켠다.
+    # 임대는 producer max.block.ms와 delivery.timeout.ms의 합보다 길어야 한다.
+    enabled: ${APP_OUTBOX_ENABLED:false}
+    recovery-interval-ms: 1000
+    max-in-flight: 8
+    lease-ms: 240000
+    max-attempts: 10
+  internal-auth:
+    service: settlement
+    # Gateway의 내부 호출 자격. 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
+    senders:
+      "[service:commerce]":
+        current: ${SETTLEMENT_COMMERCE_CREDENTIAL}
+        previous: ${SETTLEMENT_COMMERCE_CREDENTIAL_PREVIOUS:}
+      gateway:
+        current: ${SETTLEMENT_GATEWAY_CREDENTIAL}
+        previous: ${SETTLEMENT_GATEWAY_CREDENTIAL_PREVIOUS:}
+  dev-fixtures:
+    enabled: ${APP_DEV_FIXTURES_ENABLED:false}
+    run-scenarios: ${APP_DEV_FIXTURE_SCENARIOS_ENABLED:false}

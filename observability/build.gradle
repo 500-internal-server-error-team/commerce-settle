@@ -1,0 +1,12 @@
+// DB에 인계한 작업의 추적 문맥과 대기·실행 계측. 업무 타입과 저장소는 공유하지 않는다.
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-autoconfigure'
+    implementation 'org.springframework:spring-tx'
+    implementation 'io.micrometer:micrometer-core'
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+    implementation 'org.slf4j:slf4j-api'
+    implementation 'io.micrometer:micrometer-tracing'
+    runtimeOnly 'net.ttddyy.observation:datasource-micrometer-spring-boot:1.5.0'
+    testImplementation 'io.micrometer:micrometer-tracing-bridge-otel'
+    testImplementation 'io.opentelemetry:opentelemetry-sdk-trace'
+}

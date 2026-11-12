@@ -1,0 +1,102 @@
+jdbc:
+  includes: CONNECTION,QUERY,FETCH
+  datasource-proxy:
+    include-parameter-values: false
+    query:
+      enable-logging: false
+    slow-query:
+      enable-logging: false
+  resultset-operations:
+    enabled: false
+
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  jackson:
+    time-zone: Asia/Seoul
+    serialization:
+      write-dates-as-timestamps: false
+      write-dates-with-context-time-zone: true
+    # 정수 금액에 소수가 오면 버림 변환 대신 400으로 거절한다.
+    deserialization:
+      accept-float-as-int: false
+  application:
+    name: finance-mock
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.default_schema: finance_mock
+  sql:
+    init:
+      mode: never
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+
+finance-mock:
+  pg:
+    calendar-version: ${PG_CALENDAR_VERSION:weekdays-v1}
+    holidays: ${PG_CALENDAR_HOLIDAYS:}
+    receipts-enabled: ${PG_RECEIPTS_ENABLED:true}
+  # 시험 시작 때 준비하는 지급 재원 계정과 정상 지급 시나리오. 기존 행은 바꾸지 않는다.
+  payout-fixture:
+    account-ref: ${PAYOUT_FUNDING_ACCOUNT_REF:payout-funding-default}
+    opening-balance: ${PAYOUT_FUNDING_OPENING_BALANCE:100000000}
+    scenario-version: ${PAYOUT_SCENARIO_VERSION:payout-normal-v1}
+    seed: ${PAYOUT_SCENARIO_SEED:20261030}
+
+springdoc:
+  paths-to-match: /api/**,/mock/**
+
+management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9091}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        async.work: true
+        async.stage: true
+        jdbc.query: true
+    tags:
+      application: ${spring.application.name}
+      role: ${PAYMENT_ROLE:app}
+
+logging:
+  pattern:
+    dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Seoul"
+
+app:
+  internal-auth:
+    service: finance-mock
+    # 발신자별 내부 호출 자격. 현재 자격이 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
+    # Gateway를 거치는 사용자 요청은 없으므로 gateway 자격은 두지 않는다.
+    required-sender: service:settlement
+    senders:
+      "[service:settlement]":
+        current: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL}
+        previous: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL_PREVIOUS:}
+      "[service:payment]":
+        current: ${FINANCE_MOCK_PAYMENT_CREDENTIAL}
+        previous: ${FINANCE_MOCK_PAYMENT_CREDENTIAL_PREVIOUS:}
+  dev-fixtures:
+    enabled: ${APP_DEV_FIXTURES_ENABLED:false}
+    run-scenarios: ${APP_DEV_FIXTURE_SCENARIOS_ENABLED:false}

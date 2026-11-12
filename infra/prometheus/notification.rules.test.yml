@@ -1,0 +1,216 @@
+rule_files: [notification.rules.yml]
+evaluation_interval: 15s
+tests:
+  - name: delay-exactly-300
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "300+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "NotificationDeliveryOverdue", "exp_alerts": []}
+  - name: delay-301
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "301+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "NotificationDeliveryOverdue", "exp_alerts": [{"exp_labels": {"application": "commerce", "severity": "warning"}, "exp_annotations": {"summary": "거래 알림이 준비된 뒤 5분 넘게 대기합니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연"}}]}
+  - name: delay-exactly-900
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "900+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "NotificationDeliveryOverdue", "exp_alerts": [{"exp_labels": {"application": "commerce", "severity": "warning"}, "exp_annotations": {"summary": "거래 알림이 준비된 뒤 5분 넘게 대기합니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연"}}]}
+  - name: delay-901
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "901+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "NotificationDeliveryOverdue", "exp_alerts": [{"exp_labels": {"application": "commerce", "severity": "warning"}, "exp_annotations": {"summary": "거래 알림이 준비된 뒤 5분 넘게 대기합니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연"}}, {"exp_labels": {"application": "commerce", "severity": "critical"}, "exp_annotations": {"summary": "거래 알림이 준비된 뒤 15분 넘게 대기합니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연"}}]}
+  - name: review
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "NotificationReviewRequired", "exp_alerts": [{"exp_labels": {"application": "commerce", "severity": "critical"}, "exp_annotations": {"summary": "발송 여부나 확정 거절을 수동으로 확인해야 합니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연"}}]}
+  - name: review-zero
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "NotificationReviewRequired", "exp_alerts": []}
+  - name: exhausted
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "NotificationRetryExhausted", "exp_alerts": [{"exp_labels": {"application": "commerce", "severity": "critical"}, "exp_annotations": {"summary": "거래 알림의 재시도 상한을 소진했습니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연"}}]}
+  - name: exhausted-zero
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "NotificationRetryExhausted", "exp_alerts": []}
+  - name: financial-action
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "NotificationFinancialActionRequired", "exp_alerts": [{"exp_labels": {"application": "commerce", "severity": "critical"}, "exp_annotations": {"summary": "최근 확정된 환불·지급 실패에 운영 조치가 필요합니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연"}}]}
+  - name: financial-action-zero
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "NotificationFinancialActionRequired", "exp_alerts": []}
+  - name: reauthentication
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "KakaoReauthenticationRequired", "exp_alerts": [{"exp_labels": {"application": "commerce", "severity": "critical"}, "exp_annotations": {"summary": "본인 카카오 시연 계정의 재인증이 필요합니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연"}}]}
+  - name: reauthentication-zero
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "KakaoReauthenticationRequired", "exp_alerts": []}
+  - name: stale-no-stale-delay
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "9999+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "NotificationDeliveryOverdue", "exp_alerts": []}
+  - name: stale-observation-alert
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "2m", "alertname": "NotificationObservationFailed", "exp_alerts": [{"exp_labels": {"application": "commerce", "severity": "critical"}, "exp_annotations": {"summary": "거래 알림 DB 관측에 실패했거나 표본이 오래됐습니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연"}}]}
+  - name: failed-no-stale-delay
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "9999+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "NotificationDeliveryOverdue", "exp_alerts": []}
+  - name: failed-observation-alert
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+    alert_rule_test:
+      - {"eval_time": "2m", "alertname": "NotificationObservationFailed", "exp_alerts": [{"exp_labels": {"application": "commerce", "severity": "critical"}, "exp_annotations": {"summary": "거래 알림 DB 관측에 실패했거나 표본이 오래됐습니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연"}}]}
+  - name: duplicate-db-observers-use-max
+    interval: 15s
+    input_series:
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "901+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"a\",application=\"commerce\"}", "values": "1+0x12"}
+      - {"series": "commerce_notification_overdue_seconds{job=\"commerce-settle\",instance=\"b\",application=\"commerce\"}", "values": "901+0x12"}
+      - {"series": "commerce_notification_review_required{job=\"commerce-settle\",instance=\"b\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_retry_exhausted{job=\"commerce-settle\",instance=\"b\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_financial_action_recent{job=\"commerce-settle\",instance=\"b\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_kakao_reauthentication_required{job=\"commerce-settle\",instance=\"b\",application=\"commerce\"}", "values": "0+0x12"}
+      - {"series": "commerce_notification_observed_timestamp_seconds{job=\"commerce-settle\",instance=\"b\",application=\"commerce\"}", "values": "0+15x12"}
+      - {"series": "commerce_notification_collection_success{job=\"commerce-settle\",instance=\"b\",application=\"commerce\"}", "values": "1+0x12"}
+    alert_rule_test:
+      - {"eval_time": "1m", "alertname": "NotificationDeliveryOverdue", "exp_alerts": [{"exp_labels": {"application": "commerce", "severity": "warning"}, "exp_annotations": {"summary": "거래 알림이 준비된 뒤 5분 넘게 대기합니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연"}}, {"exp_labels": {"application": "commerce", "severity": "critical"}, "exp_annotations": {"summary": "거래 알림이 준비된 뒤 15분 넘게 대기합니다.", "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#본인-카카오톡-시연"}}]}
+    promql_expr_test:
+      - {"expr": "commerce:notification_overdue_seconds:max", "eval_time": "1m", "exp_samples": [{"labels": "{__name__=\"commerce:notification_overdue_seconds:max\",application=\"commerce\"}", "value": 901}]}

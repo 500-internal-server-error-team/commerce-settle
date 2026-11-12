@@ -1,0 +1,70 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  jackson:
+    time-zone: Asia/Seoul
+    serialization:
+      write-dates-as-timestamps: false
+      write-dates-with-context-time-zone: true
+  application:
+    name: gateway
+  reactor:
+    context-propagation: auto
+
+gateway:
+  services:
+    commerce: ${COMMERCE_URL:http://commerce:8080}
+    payment: ${PAYMENT_URL:http://payment-api:8080}
+    settlement: ${SETTLEMENT_URL:http://settlement:8080}
+  auth:
+    # 세션 키의 인증 세대. 커머스와 같은 UUID를 쓰며 없으면 기동하지 않는다.
+    session-epoch: ${AUTH_SESSION_EPOCH}
+    # 승인한 Redis 실행 식별자(INFO server의 run_id). 커머스와 같은 값이며 없거나 형식이 틀리면 기동하지 않는다.
+    redis-run-id: ${AUTH_REDIS_RUN_ID}
+  # 상류 Authorization을 대신하는 대상별 Gateway 내부 호출 자격. 없거나 43자 미만이면 기동하지 않는다.
+  internal-credentials:
+    commerce: ${COMMERCE_GATEWAY_CREDENTIAL}
+    payment: ${PAYMENT_GATEWAY_CREDENTIAL}
+    settlement: ${SETTLEMENT_GATEWAY_CREDENTIAL}
+
+springdoc:
+  swagger-ui:
+    disable-swagger-default-url: true
+    persist-authorization: false
+    urls:
+      - name: Commerce
+        url: /v3/api-docs/commerce
+      - name: Payment
+        url: /v3/api-docs/payment
+      - name: Settlement
+        url: /v3/api-docs/settlement
+
+app:
+  dev-fixtures:
+    enabled: ${APP_DEV_FIXTURES_ENABLED:false}
+    password: ${DEV_FIXTURE_PASSWORD:}
+
+management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9091}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+    tags:
+      application: ${spring.application.name}
+      role: gateway
+
+logging:
+  pattern:
+    dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Seoul"

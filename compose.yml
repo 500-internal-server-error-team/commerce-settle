@@ -1,0 +1,408 @@
+name: commerce-settle
+
+x-app: &app
+  restart: unless-stopped
+  environment: &app-env
+    JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=65 -XX:ActiveProcessorCount=2 -Duser.timezone=Asia/Seoul
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    SPRING_DATA_REDIS_HOST: redis
+    SPRING_DATA_REDIS_TIMEOUT: 2s
+    SPRING_DATA_REDIS_CONNECT_TIMEOUT: 2s
+    SPRING_DATA_REDIS_REPOSITORIES_ENABLED: 'false'
+    MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+    MANAGEMENT_TRACING_SAMPLING_PROBABILITY: ${TRACING_SAMPLING_PROBABILITY:-0.1}
+    SPRING_REACTOR_CONTEXT_PROPAGATION: auto
+    TZ: Asia/Seoul
+    APP_DEV_FIXTURES_ENABLED: ${APP_DEV_FIXTURES_ENABLED:-false}
+    APP_DEV_FIXTURE_SCENARIOS_ENABLED: ${APP_DEV_FIXTURE_SCENARIOS_ENABLED:-false}
+  depends_on: &app-deps
+    redis:
+      condition: service_healthy
+    zipkin:
+      condition: service_healthy
+  mem_limit: 512m
+  healthcheck:
+    test: [CMD, curl, --fail, --silent, http://localhost:9091/actuator/health]
+    interval: 10s
+    timeout: 5s
+    retries: 18
+    start_period: 45s
+  networks: [backend]
+
+services:
+  redis:
+    image: redis:8.10.2-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      GATEWAY_REDIS_PASSWORD: ${GATEWAY_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      COMMERCE_REDIS_PASSWORD: ${COMMERCE_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      PAYMENT_REDIS_PASSWORD: ${PAYMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      SETTLEMENT_REDIS_PASSWORD: ${SETTLEMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      FINANCE_MOCK_REDIS_PASSWORD: ${FINANCE_MOCK_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+    # default is the operator account. Apps get their own users: Gateway reads auth sessions only,
+    # Commerce writes auth keys, and the others have no key access until they own a key pattern.
+    # Keyless commands bypass key patterns, so Commerce gets EVAL/EVALSHA without SCRIPT/FUNCTION
+    # and loses key listing and database switching.
+    command:
+      - sh
+      - -c
+      - >-
+        exec redis-server --requirepass "$$REDIS_PASSWORD"
+        --user gateway on ">$$GATEWAY_REDIS_PASSWORD" resetkeys
+        "%R~commerce-settle:auth:session:*" "%R~commerce-settle:auth:subject:*"
+        resetchannels -@all +evalsha_ro +eval_ro +hmget +time +info
+        --user commerce on ">$$COMMERCE_REDIS_PASSWORD" resetkeys "~commerce-settle:auth:*"
+        resetchannels -@all +@connection +@read +@write +eval +evalsha -@dangerous -@admin
+        -function -scan -randomkey -dbsize -select +info +time
+        --user payment on ">$$PAYMENT_REDIS_PASSWORD" resetkeys resetchannels -@all +@connection -@dangerous +info
+        --user settlement on ">$$SETTLEMENT_REDIS_PASSWORD" resetkeys resetchannels -@all +@connection -@dangerous +info
+        --user finance-mock on ">$$FINANCE_MOCK_REDIS_PASSWORD" resetkeys resetchannels -@all +@connection -@dangerous +info
+        --appendonly yes --maxmemory 128mb --maxmemory-policy noeviction
+    mem_limit: 256m
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -qx PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+
+  zipkin:
+    image: openzipkin/zipkin:3.6.1
+    environment:
+      STORAGE_TYPE: mem
+      MEM_MAX_SPANS: 10000
+      JAVA_OPTS: -Xms64m -Xmx192m
+    mem_limit: 384m
+    ports:
+      - 127.0.0.1:${ZIPKIN_PORT:-9411}:9411
+    networks: [backend]
+
+  k6:
+    image: grafana/k6:2.3.0
+    profiles: [tools]
+    command: [run, /scripts/bootstrap.js]
+    environment:
+      BASE_URL: http://gateway:8080
+      RATE: ${K6_RATE:-10}
+      DURATION_SECONDS: ${K6_DURATION_SECONDS:-10}
+      PRE_ALLOCATED_VUS: ${K6_PRE_ALLOCATED_VUS:-20}
+      MAX_VUS: ${K6_MAX_VUS:-20}
+    mem_limit: 256m
+    volumes:
+      - ./tests/load:/scripts:ro
+    networks: [backend]
+
+  postgres:
+    command: [postgres, -c, timezone=Asia/Seoul, -c, log_timezone=Asia/Seoul]
+    build:
+      context: .
+      dockerfile: infra/postgres/Dockerfile
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run python3 scripts/init_env.py}
+      COMMERCE_DB_PASSWORD: ${COMMERCE_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      PAYMENT_DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      SETTLEMENT_DB_PASSWORD: ${SETTLEMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      FINANCE_MOCK_DB_PASSWORD: ${FINANCE_MOCK_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      TZ: Asia/Seoul
+    mem_limit: 512m
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -h 127.0.0.1 -U postgres -d postgres]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+
+  kafka:
+    image: apache/kafka:4.2.2
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+    mem_limit: 1g
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: [CMD-SHELL, /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 20s
+    networks: [backend]
+
+  gateway:
+    <<: *app
+    build:
+      context: .
+      args:
+        MODULE: gateway
+    environment:
+      <<: *app-env
+      # 로컬·팀 배포는 같은 시연 계정과 Swagger 로그인을 사용한다.
+      APP_DEV_FIXTURES_ENABLED: ${COMMERCE_DEV_FIXTURES_ENABLED:-true}
+      SPRING_DATA_REDIS_USERNAME: gateway
+      SPRING_DATA_REDIS_PASSWORD: ${GATEWAY_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      AUTH_SESSION_EPOCH: ${AUTH_SESSION_EPOCH:?Run python3 scripts/init_env.py}
+      AUTH_REDIS_RUN_ID: ${AUTH_REDIS_RUN_ID:?Run python3 scripts/sync_redis_run_id.py}
+      COMMERCE_GATEWAY_CREDENTIAL: ${COMMERCE_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
+      PAYMENT_GATEWAY_CREDENTIAL: ${PAYMENT_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
+      SETTLEMENT_GATEWAY_CREDENTIAL: ${SETTLEMENT_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
+      DEV_FIXTURE_PASSWORD: ${DEV_FIXTURE_PASSWORD:-}
+    ports:
+      - 127.0.0.1:${GATEWAY_PORT:-8080}:8080
+    depends_on:
+      <<: *app-deps
+      commerce:
+        condition: service_healthy
+      payment-api:
+        condition: service_healthy
+      settlement:
+        condition: service_healthy
+
+  commerce:
+    <<: *app
+    build:
+      context: .
+      args:
+        MODULE: commerce
+    environment:
+      <<: *app-env
+      SETTLEMENT_COMMERCE_CREDENTIAL: ${SETTLEMENT_COMMERCE_CREDENTIAL:?Run python3 scripts/init_env.py}
+      SETTLEMENT_URL: ${SETTLEMENT_URL:-http://settlement:8080}
+      COMMERCE_RETENTION_ENABLED: ${COMMERCE_RETENTION_ENABLED:-false}
+      COMMERCE_RETENTION_BATCH_SIZE: ${COMMERCE_RETENTION_BATCH_SIZE:-100}
+      COMMERCE_RETENTION_MAX_BATCHES: ${COMMERCE_RETENTION_MAX_BATCHES:-10}
+      COMMERCE_RETENTION_CRON: ${COMMERCE_RETENTION_CRON:-0 0 3 * * *}
+      DB_URL: jdbc:postgresql://postgres:5432/commerce
+      DB_USERNAME: commerce
+      DB_PASSWORD: ${COMMERCE_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      SPRING_DATA_REDIS_USERNAME: commerce
+      SPRING_DATA_REDIS_PASSWORD: ${COMMERCE_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      AUTH_SESSION_EPOCH: ${AUTH_SESSION_EPOCH:?Run python3 scripts/init_env.py}
+      AUTH_REDIS_RUN_ID: ${AUTH_REDIS_RUN_ID:?Run python3 scripts/sync_redis_run_id.py}
+      AUTH_RATE_LIMIT_HMAC_KEY: ${AUTH_RATE_LIMIT_HMAC_KEY:?Run python3 scripts/init_env.py}
+      AUTH_RESET_DELIVERY_KEY: ${AUTH_RESET_DELIVERY_KEY:?Run python3 scripts/init_env.py}
+      ADDRESS_ENCRYPTION_KEY: ${ADDRESS_ENCRYPTION_KEY:?Run python3 scripts/init_env.py}
+      COMMERCE_GATEWAY_CREDENTIAL: ${COMMERCE_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
+      COMMERCE_GATEWAY_CREDENTIAL_PREVIOUS: ${COMMERCE_GATEWAY_CREDENTIAL_PREVIOUS:-}
+      COMMERCE_SETTLEMENT_CREDENTIAL: ${COMMERCE_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
+      COMMERCE_SETTLEMENT_CREDENTIAL_PREVIOUS: ${COMMERCE_SETTLEMENT_CREDENTIAL_PREVIOUS:-}
+      APP_DEV_FIXTURES_ENABLED: ${COMMERCE_DEV_FIXTURES_ENABLED:-true}
+      DEV_FIXTURE_PASSWORD: ${DEV_FIXTURE_PASSWORD:-}
+      APP_NOTIFICATIONS_CONSUMER_ENABLED: ${APP_NOTIFICATIONS_CONSUMER_ENABLED:-false}
+      APP_NOTIFICATIONS_WORKER_ENABLED: ${APP_NOTIFICATIONS_WORKER_ENABLED:-false}
+      APP_NOTIFICATIONS_MOCK_SEED: ${APP_NOTIFICATIONS_MOCK_SEED:-67}
+      APP_NOTIFICATIONS_MOCK_DELAY_MS: ${APP_NOTIFICATIONS_MOCK_DELAY_MS:-0}
+      APP_NOTIFICATIONS_MOCK_TEMPORARY_FAILURE_PERMILLE: ${APP_NOTIFICATIONS_MOCK_TEMPORARY_FAILURE_PERMILLE:-0}
+      APP_NOTIFICATIONS_MOCK_PERMANENT_FAILURE_PERMILLE: ${APP_NOTIFICATIONS_MOCK_PERMANENT_FAILURE_PERMILLE:-0}
+      APP_NOTIFICATIONS_MOCK_RESPONSE_LOSS_PERMILLE: ${APP_NOTIFICATIONS_MOCK_RESPONSE_LOSS_PERMILLE:-0}
+    depends_on:
+      <<: *app-deps
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  payment-api:
+    <<: *app
+    build:
+      context: .
+      args:
+        MODULE: payment
+    environment:
+      <<: *app-env
+      PAYMENT_ROLE: api
+      FINANCE_MOCK_PAYMENT_CREDENTIAL: ${FINANCE_MOCK_PAYMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
+      SPRING_APPLICATION_JSON: '{"app":{"internal-auth":{"senders":{"[service:settlement]":{"current":"${PAYMENT_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}","previous":"${PAYMENT_SETTLEMENT_CREDENTIAL_PREVIOUS:-}"}}}}}'
+      DB_URL: jdbc:postgresql://postgres:5432/payment
+      DB_USERNAME: payment
+      DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      SPRING_DATA_REDIS_USERNAME: payment
+      SPRING_DATA_REDIS_PASSWORD: ${PAYMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      PAYMENT_GATEWAY_CREDENTIAL: ${PAYMENT_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
+      PAYMENT_GATEWAY_CREDENTIAL_PREVIOUS: ${PAYMENT_GATEWAY_CREDENTIAL_PREVIOUS:-}
+    depends_on:
+      <<: *app-deps
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  payment-worker:
+    <<: *app
+    build:
+      context: .
+      args:
+        MODULE: payment
+    environment:
+      <<: *app-env
+      PAYMENT_ROLE: worker
+      APP_OUTBOX_ENABLED: ${APP_OUTBOX_ENABLED:-false}
+      FINANCE_MOCK_PAYMENT_CREDENTIAL: ${FINANCE_MOCK_PAYMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
+      SPRINGDOC_API_DOCS_ENABLED: 'false'
+      DB_URL: jdbc:postgresql://postgres:5432/payment
+      DB_USERNAME: payment
+      DB_PASSWORD: ${PAYMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      SPRING_DATA_REDIS_USERNAME: payment
+      SPRING_DATA_REDIS_PASSWORD: ${PAYMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      PAYMENT_GATEWAY_CREDENTIAL: ${PAYMENT_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
+      PAYMENT_GATEWAY_CREDENTIAL_PREVIOUS: ${PAYMENT_GATEWAY_CREDENTIAL_PREVIOUS:-}
+    depends_on:
+      <<: *app-deps
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  settlement:
+    <<: *app
+    build:
+      context: .
+      args:
+        MODULE: settlement
+    environment:
+      <<: *app-env
+      SETTLEMENT_RECONCILIATION_ENABLED: ${SETTLEMENT_RECONCILIATION_ENABLED:-false}
+      PAYMENT_SETTLEMENT_CREDENTIAL: ${PAYMENT_SETTLEMENT_CREDENTIAL:-}
+      SETTLEMENT_DAILY_BATCH_ENABLED: ${SETTLEMENT_DAILY_BATCH_ENABLED:-true}
+      SETTLEMENT_PAYOUT_WORKER_ENABLED: ${SETTLEMENT_PAYOUT_WORKER_ENABLED:-true}
+      DB_URL: jdbc:postgresql://postgres:5432/settlement
+      DB_USERNAME: settlement
+      DB_PASSWORD: ${SETTLEMENT_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      SPRING_DATA_REDIS_USERNAME: settlement
+      SPRING_DATA_REDIS_PASSWORD: ${SETTLEMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      SETTLEMENT_GATEWAY_CREDENTIAL: ${SETTLEMENT_GATEWAY_CREDENTIAL:?Run python3 scripts/init_env.py}
+      SETTLEMENT_GATEWAY_CREDENTIAL_PREVIOUS: ${SETTLEMENT_GATEWAY_CREDENTIAL_PREVIOUS:-}
+      SETTLEMENT_COMMERCE_CREDENTIAL: ${SETTLEMENT_COMMERCE_CREDENTIAL:?Run python3 scripts/init_env.py}
+      SETTLEMENT_COMMERCE_CREDENTIAL_PREVIOUS: ${SETTLEMENT_COMMERCE_CREDENTIAL_PREVIOUS:-}
+      FINANCE_MOCK_SETTLEMENT_CREDENTIAL: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
+      COMMERCE_SETTLEMENT_CREDENTIAL: ${COMMERCE_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
+    depends_on:
+      <<: *app-deps
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      # 기동 직후 fixture 일배치가 커머스 지급 컨텍스트를 조회한다.
+      commerce:
+        condition: service_healthy
+
+  finance-mock:
+    <<: *app
+    build:
+      context: .
+      args:
+        MODULE: finance-mock
+    environment:
+      <<: *app-env
+      DB_URL: jdbc:postgresql://postgres:5432/finance_mock
+      DB_USERNAME: finance_mock
+      DB_PASSWORD: ${FINANCE_MOCK_DB_PASSWORD:?Run python3 scripts/init_env.py}
+      SPRING_DATA_REDIS_USERNAME: finance-mock
+      SPRING_DATA_REDIS_PASSWORD: ${FINANCE_MOCK_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
+      FINANCE_MOCK_SETTLEMENT_CREDENTIAL: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
+      FINANCE_MOCK_SETTLEMENT_CREDENTIAL_PREVIOUS: ${FINANCE_MOCK_SETTLEMENT_CREDENTIAL_PREVIOUS:-}
+      FINANCE_MOCK_PAYMENT_CREDENTIAL: ${FINANCE_MOCK_PAYMENT_CREDENTIAL:?Run python3 scripts/init_env.py}
+      FINANCE_MOCK_PAYMENT_CREDENTIAL_PREVIOUS: ${FINANCE_MOCK_PAYMENT_CREDENTIAL_PREVIOUS:-}
+    depends_on:
+      <<: *app-deps
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/quarantine.rules.yml:/etc/prometheus/quarantine.rules.yml:ro
+      - ./infra/prometheus/notification.rules.yml:/etc/prometheus/notification.rules.yml:ro
+      - ./infra/prometheus/financial.rules.yml:/etc/prometheus/financial.rules.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - 127.0.0.1:${PROMETHEUS_PORT:-9090}:9090
+    networks: [backend]
+
+  data-storage-metrics:
+    image: python:3.13.7-alpine
+    restart: unless-stopped
+    command: [python, -B, /storage_metrics.py]
+    environment:
+      DATA_FILESYSTEM_PATHS_JSON: '{"kafka":["/data/kafka"],"postgres":["/data/postgres"]}'
+    volumes:
+      - ./infra/observability/storage_metrics.py:/storage_metrics.py:ro
+      - kafka-data:/data/kafka:ro
+      - postgres-data:/data/postgres:ro
+    read_only: true
+    cap_drop: [ALL]
+    mem_limit: 64m
+    networks: [backend]
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    profiles: [observability]
+    command: [--config.file=/etc/alertmanager/alertmanager.yml, --storage.path=/alertmanager]
+    volumes:
+      - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - 127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093
+    networks: [backend]
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    profiles: [observability]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Run python3 scripts/init_env.py}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - 127.0.0.1:${GRAFANA_PORT:-3000}:3000
+    depends_on: [prometheus]
+    networks: [backend]
+
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:v1.5.0@sha256:7cda86a33344160309fdb65146332e4da65db81a945614f2fe32e210803f6fd1
+    profiles: [observability]
+    environment:
+      KAFKA_CLUSTERS_0_NAME: commerce-settle-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_READONLY: 'true'
+      DYNAMIC_CONFIG_ENABLED: 'false'
+    ports:
+      - 127.0.0.1:${KAFKA_UI_PORT:-8081}:8080
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks: [backend]
+
+networks:
+  backend:
+
+volumes:
+  redis-data:
+  postgres-data:
+  kafka-data:
+  prometheus-data:
+  alertmanager-data:
+  grafana-data:

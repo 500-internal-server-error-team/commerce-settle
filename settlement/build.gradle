@@ -1,0 +1,25 @@
+dependencies {
+    implementation project(':observability')
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+    implementation project(':internal-auth')
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-batch'
+    implementation 'org.springframework.kafka:spring-kafka'
+    runtimeOnly 'org.postgresql:postgresql'
+    implementation "org.springdoc:springdoc-openapi-starter-webmvc-api:${rootProject.springdocVersion}"
+    testImplementation 'io.opentelemetry:opentelemetry-sdk-trace'
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'com.networknt:json-schema-validator:2.0.4'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
+    testImplementation 'org.testcontainers:kafka'
+    // 발행 이벤트를 OpenAPI EventEnvelope 계약으로 검사한다.
+    testImplementation 'com.networknt:json-schema-validator:2.0.4'
+}
+
+// 내부 호출 자격 판정이 요청을 명세 작업과 대조한다.
+tasks.named('processResources') {
+    from(rootProject.file('docs/openapi.json')) { into 'contracts' }
+}

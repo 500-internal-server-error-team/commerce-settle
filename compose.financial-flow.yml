@@ -1,0 +1,31 @@
+# 주문·결제·정산·환불 왕복을 켜는 덮어쓰기 설정. 기본 compose.yml 위에 얹어 씁니다.
+#   docker compose -f compose.yml -f compose.financial-flow.yml up -d commerce payment-worker settlement finance-mock
+# 기본 스택 기동 후 python3 -B scripts/prepare_financial_kafka.py로 소비 위치를 준비합니다(docs/development.md#주문결제정산환불-왕복).
+# Finance Mock의 실제 HTTP 승인·환불을 사용합니다. 알림 소비·발송은 켜지 않습니다.
+services:
+  commerce:
+    environment:
+      APP_OUTBOX_ENABLED: 'true'
+      APP_KAFKA_PAYMENT_ACCEPTED_ENABLED: 'true'
+      APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED: 'true'
+      APP_ORDER_RESULT_PROCESSOR_ENABLED: 'true'
+  payment-worker:
+    environment:
+      APP_OUTBOX_ENABLED: 'true'
+      APP_KAFKA_ORDER_PAYMENT_REQUESTED_ENABLED: 'true'
+      APP_PAYMENT_REQUEST_PROCESSOR_ENABLED: 'true'
+      APP_PAYMENT_APPROVAL_ENABLED: 'true'
+      APP_REFUND_ENABLED: 'true'
+      PAYMENT_APPROVAL_GATEWAY: http
+      PAYMENT_REFUND_GATEWAY: http
+      PAYMENT_FUNDING_ACCOUNT_REF: fixture-payout-funding
+      PAYMENT_SCENARIO_VERSION: fixture-pg-normal-v1
+      APP_KAFKA_SETTLEMENT_REPLIES_ENABLED: 'true'
+  settlement:
+    environment:
+      APP_OUTBOX_ENABLED: 'true'
+      APP_KAFKA_SETTLEMENT_EVENTS_ENABLED: 'true'
+      SETTLEMENT_INBOX_PROCESSOR_ENABLED: 'true'
+  finance-mock:
+    environment:
+      APP_DEV_FIXTURES_ENABLED: 'true'

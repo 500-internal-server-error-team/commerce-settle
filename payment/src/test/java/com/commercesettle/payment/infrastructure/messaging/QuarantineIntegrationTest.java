@@ -1,0 +1,638 @@
+package com.commercesettle.payment.infrastructure.messaging;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.commercesettle.payment.application.port.QuarantineStore.Source;
+import com.commercesettle.payment.application.service.QuarantineOperationService;
+import com.commercesettle.payment.application.service.QuarantineService;
+import com.commercesettle.payment.domain.exception.QuarantineOperationRejectedException;
+import com.commercesettle.payment.domain.exception.QuarantineOperationRejectedException.Reason;
+import com.commercesettle.payment.infrastructure.observability.QuarantineMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import javax.sql.DataSource;
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.admin.OffsetSpec;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.kafka.KafkaContainer;
+
+@SpringBootTest(
+    webEnvironment = SpringBootTest.WebEnvironment.NONE,
+    properties = {
+      "app.kafka.order-payment-requested.enabled=true",
+      "app.kafka.quarantine.enabled=true",
+      "app.dev-fixtures.enabled=false",
+      "app.dev-fixtures.run-scenarios=false",
+      "app.kafka.quarantine.interval-ms=3600000",
+      "app.kafka.quarantine.metrics.interval-ms=3600000",
+      "spring.kafka.listener.auto-startup=false",
+      "spring.task.scheduling.pool.size=1",
+      "spring.threads.virtual.enabled=false",
+      "spring.kafka.consumer.group-id=quarantine-integration",
+      "management.tracing.sampling.probability=0",
+      "spring.kafka.producer.properties.max.block.ms=1000",
+      "spring.kafka.producer.properties.delivery.timeout.ms=2000",
+      "spring.kafka.producer.properties.request.timeout.ms=500"
+    })
+@Testcontainers
+@Timeout(90)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+class QuarantineIntegrationTest {
+  private static final String TOPIC = "commerce-settle.commerce.v1";
+  private static final String GROUP = "quarantine-integration";
+  private static final TopicPartition PARTITION = new TopicPartition(TOPIC, 0);
+
+  @Container
+  static final PostgreSQLContainer<?> POSTGRES =
+      new PostgreSQLContainer<>("postgres:18.3")
+          .withInitScript("db/payment.sql")
+          .withCreateContainerCmdModifier(
+              cmd -> cmd.getHostConfig().withMemory(512L * 1024 * 1024));
+
+  @Container
+  static final KafkaContainer KAFKA =
+      new KafkaContainer("apache/kafka:4.2.2")
+          .withEnv("KAFKA_HEAP_OPTS", "-Xms128m -Xmx256m")
+          .withEnv("KAFKA_AUTO_CREATE_TOPICS_ENABLE", "false")
+          .withCreateContainerCmdModifier(
+              cmd -> cmd.getHostConfig().withMemory(768L * 1024 * 1024));
+
+  @DynamicPropertySource
+  static void properties(DynamicPropertyRegistry registry) {
+    registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+    registry.add("spring.datasource.username", POSTGRES::getUsername);
+    registry.add("spring.datasource.password", POSTGRES::getPassword);
+    registry.add("spring.kafka.bootstrap-servers", KAFKA::getBootstrapServers);
+  }
+
+  @Autowired private JdbcTemplate jdbc;
+  @Autowired private QuarantineService quarantine;
+  @Autowired private QuarantineOperationService operations;
+  @Autowired private QuarantineRelay relay;
+  @Autowired private KafkaTemplate<String, byte[]> kafka;
+  @Autowired private KafkaListenerEndpointRegistry listeners;
+  @Autowired private DataSource dataSource;
+  @Autowired private TaskScheduler scheduler;
+  @Autowired private QuarantineMetrics metrics;
+  @Autowired private MeterRegistry meters;
+  @Autowired private PlatformTransactionManager transactions;
+
+  @Test
+  @DisplayName("관측은 롤백된 격리를 세지 않고 실제 DB 조회 실패에도 마지막 표본을 보존한다")
+  void retainsCommittedSnapshotDuringDatabaseFailure() {
+    quarantine.capture(new Source(GROUP, TOPIC, 0, 9001, "key", new byte[] {1}));
+    new TransactionTemplate(transactions)
+        .executeWithoutResult(
+            status -> {
+              quarantine.capture(new Source(GROUP, TOPIC, 0, 9002, "key", new byte[] {2}));
+              status.setRollbackOnly();
+            });
+    metrics.refresh();
+    assertThat(meters.get("payment.quarantine.originals").gauge().value()).isEqualTo(1);
+    double observed = meters.get("payment.quarantine.observed.timestamp.seconds").gauge().value();
+    jdbc.execute("ALTER TABLE payment.inbox_quarantines RENAME TO quarantines_observation_test");
+    try {
+      metrics.refresh();
+      assertThat(meters.get("payment.quarantine.collection.success").gauge().value()).isZero();
+      assertThat(meters.get("payment.quarantine.originals").gauge().value()).isEqualTo(1);
+      assertThat(meters.get("payment.quarantine.observed.timestamp.seconds").gauge().value())
+          .isEqualTo(observed);
+    } finally {
+      jdbc.execute("ALTER TABLE payment.quarantines_observation_test RENAME TO inbox_quarantines");
+    }
+    metrics.refresh();
+    assertThat(meters.get("payment.quarantine.collection.success").gauge().value()).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("격리 관측은 미래 재시도와 유효 임대를 지연에서 제외하고 소비자별 상태를 집계한다")
+  void observesDueWorkWithoutCountingScheduledWaitAsDelay() {
+    var id = quarantine.capture(new Source(GROUP, TOPIC, 0, 9000, "key", new byte[] {1}));
+    quarantine.requestReplay(id, 0, "test-operator", "TEST_REPLAY");
+    jdbc.update(
+        "UPDATE payment.inbox_quarantine_deliveries SET status='RETRY', next_run_at=clock_timestamp()+interval '10 minutes' WHERE kind='DLT'");
+    jdbc.update(
+        "UPDATE payment.inbox_quarantine_deliveries SET next_run_at=clock_timestamp()-interval '6 minutes' WHERE kind='REPLAY'");
+    metrics.refresh();
+    assertThat(meters.get("payment.quarantine.originals").gauge().value()).isEqualTo(1);
+    assertThat(meters.get("payment.quarantine.captured.recent").gauge().value()).isEqualTo(1);
+    assertThat(
+            meters
+                .get("payment.quarantine.delivery.overdue.seconds")
+                .tag("kind", "DLT")
+                .gauge()
+                .value())
+        .isZero();
+    assertThat(
+            meters
+                .get("payment.quarantine.delivery.overdue.seconds")
+                .tag("kind", "REPLAY")
+                .gauge()
+                .value())
+        .isGreaterThanOrEqualTo(360);
+    jdbc.update(
+        "UPDATE payment.inbox_quarantine_deliveries SET status='RUNNING',lease_until=clock_timestamp()+interval '1 minute' WHERE kind='REPLAY'");
+    metrics.refresh();
+    assertThat(
+            meters
+                .get("payment.quarantine.delivery.overdue.seconds")
+                .tag("kind", "REPLAY")
+                .gauge()
+                .value())
+        .isZero();
+    jdbc.update(
+        "UPDATE payment.inbox_quarantine_deliveries SET lease_until=clock_timestamp()-interval '16 minutes' WHERE kind='REPLAY'");
+    metrics.refresh();
+    assertThat(
+            meters
+                .get("payment.quarantine.delivery.overdue.seconds")
+                .tag("kind", "REPLAY")
+                .gauge()
+                .value())
+        .isGreaterThanOrEqualTo(960);
+  }
+
+  @BeforeEach
+  void reset() throws Exception {
+    var listener = listeners.getListenerContainer("orderPaymentRequested");
+    if (listener.isRunning()) {
+      var stopped = new CountDownLatch(1);
+      listener.stop(stopped::countDown);
+      assertThat(stopped.await(10, TimeUnit.SECONDS)).isTrue();
+    }
+    jdbc.update("DELETE FROM payment.inbox_conflicts");
+    jdbc.update("DELETE FROM payment.inbox");
+    jdbc.update("DELETE FROM payment.inbox_quarantine_resumes");
+    jdbc.update("DELETE FROM payment.inbox_quarantine_deliveries");
+    jdbc.update("DELETE FROM payment.inbox_quarantines");
+    try (var admin = admin()) {
+      if (!admin.listTopics().names().get(10, TimeUnit.SECONDS).contains(TOPIC)) {
+        admin
+            .createTopics(List.of(new NewTopic(TOPIC, 1, (short) 1)))
+            .all()
+            .get(10, TimeUnit.SECONDS);
+      }
+      var end = new AtomicReference<Long>();
+      await()
+          .atMost(Duration.ofSeconds(30))
+          .untilAsserted(
+              () -> {
+                try {
+                  long latest =
+                      admin
+                          .listOffsets(Map.of(PARTITION, OffsetSpec.latest()))
+                          .all()
+                          .get(10, TimeUnit.SECONDS)
+                          .get(PARTITION)
+                          .offset();
+                  assertThat(latest).isNotNegative();
+                  end.set(latest);
+                } catch (java.util.concurrent.ExecutionException exception) {
+                  throw new AssertionError("Kafka topic metadata is not ready", exception);
+                }
+              });
+      admin
+          .alterConsumerGroupOffsets(GROUP, Map.of(PARTITION, new OffsetAndMetadata(end.get())))
+          .all()
+          .get(10, TimeUnit.SECONDS);
+    }
+  }
+
+  @Test
+  @DisplayName("NUL 키와 오류 원문을 격리하고 다음 정상 메시지·DLT·재처리를 이어간다")
+  void quarantinesPublishesAndRevalidatesOriginalBytes() throws Exception {
+    byte[] invalid = "{invalid-json".getBytes(StandardCharsets.UTF_8);
+    String invalidKey = "invalid" + (char) 0 + "key";
+    listeners.start();
+    kafka.send(new ProducerRecord<>(TOPIC, 0, invalidKey, invalid)).get(10, TimeUnit.SECONDS);
+    var valid = OrderPaymentRequestedListenerTest.EVENT_JSON.getBytes(StandardCharsets.UTF_8);
+    kafka
+        .send(new ProducerRecord<>(TOPIC, 0, "00000000-0000-0000-0000-000000000001", valid))
+        .get(10, TimeUnit.SECONDS);
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .untilAsserted(
+            () -> {
+              assertThat(count("inbox_quarantines")).isEqualTo(1);
+              assertThat(count("inbox")).isEqualTo(1);
+            });
+    UUID id = jdbc.queryForObject("SELECT id FROM payment.inbox_quarantines", UUID.class);
+    assertThat(jdbc.queryForObject("SELECT raw_body FROM payment.inbox_quarantines", byte[].class))
+        .containsExactly(invalid);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM payment.inbox_quarantine_deliveries", String.class))
+        .isEqualTo("PENDING");
+
+    relay.run();
+
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM payment.inbox_quarantine_deliveries", String.class))
+        .isEqualTo("PUBLISHED");
+    var config = new HashMap<String, Object>();
+    config.put("bootstrap.servers", KAFKA.getBootstrapServers());
+    config.put("group.id", "inspect-quarantine-" + UUID.randomUUID());
+    config.put("enable.auto.commit", false);
+    config.put("auto.offset.reset", "earliest");
+    try (var consumer =
+        new KafkaConsumer<>(config, new StringDeserializer(), new ByteArrayDeserializer())) {
+      consumer.subscribe(List.of("commerce-settle.payment.v1.dlt"));
+      await()
+          .atMost(Duration.ofSeconds(15))
+          .untilAsserted(
+              () -> {
+                var matching =
+                    java.util.stream.StreamSupport.stream(
+                            consumer
+                                .poll(Duration.ofMillis(250))
+                                .records("commerce-settle.payment.v1.dlt")
+                                .spliterator(),
+                            false)
+                        .filter(
+                            record ->
+                                id.toString()
+                                    .equals(
+                                        new String(
+                                            record.headers().lastHeader("quarantine-id").value(),
+                                            StandardCharsets.UTF_8)))
+                        .toList();
+                assertThat(matching)
+                    .singleElement()
+                    .satisfies(
+                        record -> {
+                          assertThat(record.key()).isEqualTo(invalidKey);
+                          assertThat(record.value()).containsExactly(invalid);
+                        });
+              });
+    }
+    quarantine.requestReplay(id, 0, "test-operator", "PARSER_REVIEWED");
+    assertThatThrownBy(() -> quarantine.requestReplay(id, 0, "test-operator", "PARSER_REVIEWED"))
+        .isInstanceOfSatisfying(
+            QuarantineOperationRejectedException.class,
+            e -> assertThat(e.reason()).isEqualTo(Reason.VERSION_CONFLICT));
+    relay.run();
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .untilAsserted(() -> assertThat(count("inbox_quarantines")).isEqualTo(2));
+    assertThat(count("inbox")).isEqualTo(1);
+    assertThat(jdbc.queryForList("SELECT raw_body FROM payment.inbox_quarantines", byte[].class))
+        .allSatisfy(body -> assertThat(body).containsExactly(invalid));
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT operator_id FROM payment.inbox_quarantine_deliveries WHERE kind='REPLAY'",
+                String.class))
+        .isEqualTo("test-operator");
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  @DisplayName("DLT 응답이 지연돼도 공통 예약 실행이 진행되고 중복 신호는 발행을 늘리지 않는다")
+  void isolatesDelayedDeliveryFromSharedScheduler() throws Exception {
+    quarantine.capture(new Source(GROUP, TOPIC, 0, 980, "key", new byte[] {1}));
+    KafkaTemplate<String, byte[]> delayedKafka = mock(KafkaTemplate.class);
+    var pending = new CompletableFuture<SendResult<String, byte[]>>();
+    var sent = new CountDownLatch(1);
+    var transactionActive = new AtomicReference<Boolean>();
+    when(delayedKafka.send(any(ProducerRecord.class)))
+        .thenAnswer(
+            call -> {
+              transactionActive.set(TransactionSynchronizationManager.isActualTransactionActive());
+              sent.countDown();
+              return pending;
+            });
+    try (var isolated = new QuarantineRelay(quarantine, delayedKafka, 1, 60000, 30000, 1000)) {
+      scheduler.schedule(isolated::signal, Instant.now());
+      assertThat(sent.await(5, TimeUnit.SECONDS)).isTrue();
+      var healthyTask = new CountDownLatch(1);
+      scheduler.schedule(healthyTask::countDown, Instant.now());
+      assertThat(healthyTask.await(3, TimeUnit.SECONDS)).isTrue();
+      assertThat(transactionActive.get()).isFalse();
+      isolated.signal();
+      isolated.signal();
+      verify(delayedKafka, times(1)).send(any(ProducerRecord.class));
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT attempts FROM payment.inbox_quarantine_deliveries", Integer.class))
+          .isEqualTo(1);
+      pending.complete(null);
+      await()
+          .atMost(Duration.ofSeconds(5))
+          .untilAsserted(
+              () ->
+                  assertThat(
+                          jdbc.queryForObject(
+                              "SELECT status FROM payment.inbox_quarantine_deliveries",
+                              String.class))
+                      .isEqualTo("PUBLISHED"));
+    }
+  }
+
+  @Test
+  @DisplayName("같은 원본 위치는 한 번만 격리하며 null과 빈 원문을 구분한다")
+  void deduplicatesSourceAndPreservesNull() {
+    var first = new Source(GROUP, TOPIC, 0, 700, null, null);
+    UUID id = quarantine.capture(first);
+    assertThat(quarantine.capture(first)).isEqualTo(id);
+    quarantine.capture(new Source(GROUP, TOPIC, 0, 701, "", new byte[0]));
+    assertThatThrownBy(
+            () -> quarantine.capture(new Source(GROUP, TOPIC, 0, 700, null, new byte[0])))
+        .isInstanceOf(IllegalStateException.class);
+    assertThat(count("inbox_quarantines")).isEqualTo(2);
+    assertThat(count("inbox_quarantine_deliveries")).isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT raw_body IS NULL FROM payment.inbox_quarantines WHERE id=?",
+                Boolean.class,
+                id))
+        .isTrue();
+    assertThat(quarantine.requestReplay(id, 0, "test-operator", "REVIEWED")).isNotNull();
+    assertThatThrownBy(() -> quarantine.requestReplay(id, 0, "test-operator", "REVIEWED"))
+        .isInstanceOfSatisfying(
+            QuarantineOperationRejectedException.class,
+            e -> assertThat(e.reason()).isEqualTo(Reason.VERSION_CONFLICT));
+  }
+
+  @Test
+  @DisplayName("운영 API 재처리는 원래 topic에 같은 key·bytes로 다시 발행하고, 응답 유실 뒤 같은 키 재요청은 새 발행을 만들지 않는다")
+  void operatorReplayRepublishesOriginalRecordOnce() throws Exception {
+    byte[] body = "{\"operator-replay\":".getBytes(StandardCharsets.UTF_8);
+    String key = "operator-replay-key";
+    UUID id = quarantine.capture(new Source(GROUP, TOPIC, 0, 970, key, body));
+    relay.run();
+
+    var replayed = operations.replay("operator:ops-1", id, "replay-key-0970", 0, "SCHEMA_FIXED");
+    assertThat(replayed.version()).isEqualTo(1);
+    relay.run();
+    // 202 응답을 잃은 운영자가 같은 키·본문으로 다시 보낸다.
+    var retried = operations.replay("operator:ops-1", id, "replay-key-0970", 0, "SCHEMA_FIXED");
+
+    assertThat(retried.deliveries())
+        .filteredOn(d -> d.kind().equals("REPLAY"))
+        .singleElement()
+        .satisfies(d -> assertThat(d.status()).isEqualTo("PUBLISHED"));
+    var config = new HashMap<String, Object>();
+    config.put("bootstrap.servers", KAFKA.getBootstrapServers());
+    config.put("group.id", "inspect-operator-replay-" + UUID.randomUUID());
+    config.put("enable.auto.commit", false);
+    config.put("auto.offset.reset", "earliest");
+    try (var consumer =
+        new KafkaConsumer<>(config, new StringDeserializer(), new ByteArrayDeserializer())) {
+      consumer.subscribe(List.of(TOPIC));
+      var seen = new ArrayList<ConsumerRecord<String, byte[]>>();
+      await()
+          .atMost(Duration.ofSeconds(15))
+          .untilAsserted(
+              () -> {
+                consumer.poll(Duration.ofMillis(250)).records(TOPIC).forEach(seen::add);
+                assertThat(seen)
+                    .filteredOn(record -> key.equals(record.key()))
+                    .singleElement()
+                    .satisfies(record -> assertThat(record.value()).containsExactly(body));
+              });
+    }
+  }
+
+  @Test
+  @DisplayName("DLT 소진 뒤 운영 재개는 이전 시도·요청 이력을 보존하고 같은 작업을 다시 발행한다")
+  void resumesExhaustedDeliveryWithVersionedAudit() throws Exception {
+    UUID raw = quarantine.capture(new Source(GROUP, TOPIC, 0, 950, "key", new byte[] {9}));
+    for (int i = 0; i < 10; i++) {
+      var delivery = quarantine.claim(1, 5000, 10).getFirst();
+      assertThat(quarantine.failed(delivery)).isTrue();
+      jdbc.update(
+          "UPDATE payment.inbox_quarantine_deliveries SET next_run_at=now()-interval '1 second'");
+    }
+    assertThat(quarantine.claim(1, 5000, 10)).isEmpty();
+    UUID id = jdbc.queryForObject("SELECT id FROM payment.inbox_quarantine_deliveries", UUID.class);
+    long version =
+        jdbc.queryForObject("SELECT version FROM payment.inbox_quarantine_deliveries", Long.class);
+    UUID audit = quarantine.resumeDelivery(id, version, "test-operator", "BROKER_RECOVERED");
+    assertThatThrownBy(
+            () -> quarantine.resumeDelivery(id, version, "test-operator", "BROKER_RECOVERED"))
+        .isInstanceOfSatisfying(
+            QuarantineOperationRejectedException.class,
+            e -> assertThat(e.reason()).isEqualTo(Reason.VERSION_CONFLICT));
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT previous_attempts,operator_id FROM payment.inbox_quarantine_resumes WHERE id=?",
+                audit))
+        .containsEntry("previous_attempts", 10)
+        .containsEntry("operator_id", "test-operator");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM payment.inbox_quarantine_resumes", Long.class))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT quarantine_id FROM payment.inbox_quarantine_deliveries", UUID.class))
+        .isEqualTo(raw);
+    relay.run();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM payment.inbox_quarantine_deliveries WHERE id=?",
+                String.class,
+                id))
+        .isEqualTo("PUBLISHED");
+  }
+
+  @Test
+  @DisplayName("결과 저장이 행 잠금을 기다리는 동안 임대가 끝나면 늦은 결과를 거절한다")
+  void rejectsResultWhoseLeaseExpiresWhileWaitingForLock() throws Exception {
+    quarantine.capture(new Source(GROUP, TOPIC, 0, 951, "key", new byte[] {9}));
+    var delivery = quarantine.claim(1, 900, 10).getFirst();
+    var executor = Executors.newSingleThreadExecutor();
+    try (var held = dataSource.getConnection()) {
+      held.setAutoCommit(false);
+      try (var statement =
+          held.prepareStatement(
+              "SELECT id FROM payment.inbox_quarantine_deliveries WHERE id=? FOR UPDATE")) {
+        statement.setObject(1, delivery.id());
+        statement.executeQuery().close();
+      }
+      var result = executor.submit(() -> quarantine.published(delivery));
+      try {
+        await()
+            .pollInterval(Duration.ofMillis(10))
+            .atMost(Duration.ofSeconds(1))
+            .until(
+                () ->
+                    jdbc.queryForObject(
+                            "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%inbox_quarantine_deliveries%'",
+                            Long.class)
+                        > 0);
+        assertThat(
+                jdbc.queryForObject(
+                    "SELECT clock_timestamp()<lease_until FROM payment.inbox_quarantine_deliveries WHERE id=?",
+                    Boolean.class,
+                    delivery.id()))
+            .isTrue();
+        await()
+            .pollInterval(Duration.ofMillis(10))
+            .atMost(Duration.ofSeconds(1))
+            .until(
+                () ->
+                    jdbc.queryForObject(
+                        "SELECT clock_timestamp()>=lease_until FROM payment.inbox_quarantine_deliveries WHERE id=?",
+                        Boolean.class,
+                        delivery.id()));
+      } finally {
+        held.rollback();
+      }
+      assertThat(result.get(2, TimeUnit.SECONDS)).isFalse();
+      var reclaimed = quarantine.claim(1, 5000, 10).getFirst();
+      assertThat(reclaimed.id()).isEqualTo(delivery.id());
+      assertThat(reclaimed.version()).isGreaterThan(delivery.version());
+      assertThat(quarantine.failed(delivery)).isFalse();
+    } finally {
+      executor.shutdownNow();
+      assertThat(executor.awaitTermination(3, TimeUnit.SECONDS)).isTrue();
+    }
+  }
+
+  @Test
+  @DisplayName("DLT 발행 실패는 원문과 재시도 작업을 보존하고 복구 뒤 발행한다")
+  void retriesDltFromDurableRecord() throws Exception {
+    quarantine.capture(new Source(GROUP, TOPIC, 0, 900, "key", new byte[] {7, 8}));
+    String topic = "commerce-settle.payment.v1.dlt";
+    try (var admin = admin()) {
+      admin.deleteTopics(List.of(topic)).all().get(10, TimeUnit.SECONDS);
+      await()
+          .atMost(Duration.ofSeconds(10))
+          .until(() -> !admin.listTopics().names().get(5, TimeUnit.SECONDS).contains(topic));
+      relay.run();
+      assertThat(count("inbox_quarantines")).isEqualTo(1);
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT status FROM payment.inbox_quarantine_deliveries", String.class))
+          .isEqualTo("RETRY");
+      admin
+          .createTopics(List.of(new NewTopic(topic, 3, (short) 1)))
+          .all()
+          .get(10, TimeUnit.SECONDS);
+    }
+    jdbc.update(
+        "UPDATE payment.inbox_quarantine_deliveries SET next_run_at=now()-interval '1 second'");
+    relay.run();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM payment.inbox_quarantine_deliveries", String.class))
+        .isEqualTo("PUBLISHED");
+  }
+
+  @Test
+  @DisplayName("격리 DB 저장 실패는 ACK하지 않고 중단하며 복구 뒤 같은 원문을 다시 처리한다")
+  void stopsWithoutCommitWhenQuarantineDatabaseFails() throws Exception {
+    long before;
+    try (var admin = admin()) {
+      before =
+          admin
+              .listConsumerGroupOffsets(GROUP)
+              .partitionsToOffsetAndMetadata()
+              .get(10, TimeUnit.SECONDS)
+              .get(PARTITION)
+              .offset();
+    }
+    jdbc.execute(
+        "ALTER TABLE payment.inbox_quarantines ADD CONSTRAINT test_capture_failure CHECK(false) NOT VALID");
+    try {
+      listeners.start();
+      kafka
+          .send(new ProducerRecord<>(TOPIC, 0, "invalid", new byte[] {1}))
+          .get(10, TimeUnit.SECONDS);
+      await()
+          .atMost(Duration.ofSeconds(15))
+          .until(() -> !listeners.getListenerContainer("orderPaymentRequested").isRunning());
+      try (var admin = admin()) {
+        assertThat(
+                admin
+                    .listConsumerGroupOffsets(GROUP)
+                    .partitionsToOffsetAndMetadata()
+                    .get(10, TimeUnit.SECONDS)
+                    .get(PARTITION)
+                    .offset())
+            .isEqualTo(before);
+      }
+      assertThat(count("inbox_quarantines")).isZero();
+      assertThat(count("inbox_quarantine_deliveries")).isZero();
+    } finally {
+      jdbc.execute("ALTER TABLE payment.inbox_quarantines DROP CONSTRAINT test_capture_failure");
+    }
+    listeners.start();
+    await()
+        .atMost(Duration.ofSeconds(15))
+        .untilAsserted(() -> assertThat(count("inbox_quarantines")).isEqualTo(1));
+  }
+
+  private long count(String table) {
+    return jdbc.queryForObject("SELECT count(*) FROM payment." + table, Long.class);
+  }
+
+  @AfterEach
+  void stopListener() throws Exception {
+    var listener = listeners.getListenerContainer("orderPaymentRequested");
+    if (listener.isRunning()) {
+      var stopped = new CountDownLatch(1);
+      listener.stop(stopped::countDown);
+      assertThat(stopped.await(10, TimeUnit.SECONDS)).isTrue();
+    }
+  }
+
+  private static Admin admin() {
+    return Admin.create(
+        Map.of(
+            "bootstrap.servers",
+            KAFKA.getBootstrapServers(),
+            "default.api.timeout.ms",
+            10000,
+            "request.timeout.ms",
+            5000));
+  }
+}

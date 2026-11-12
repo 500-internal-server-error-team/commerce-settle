@@ -1,0 +1,359 @@
+package com.commercesettle.commerce.domain.model;
+
+import com.commercesettle.commerce.domain.exception.EventAdmissionClosedException;
+import com.commercesettle.commerce.domain.exception.SaleEventConflictException;
+import com.commercesettle.commerce.domain.exception.SaleEventConflictException.Reason;
+import com.commercesettle.commerce.domain.exception.VersionConflictException;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import jakarta.persistence.Version;
+import java.time.Instant;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+import org.hibernate.annotations.OptimisticLock;
+
+/**
+ * 판매자 상품 하나의 선착순 이벤트. 미공개(DRAFT)일 때만 내용을 바꾸고, 공개 때 한정 수량 Q를 상품 재고에서 배정한다. 공개 후 이름·가격·수량·기간은 고정하며 조기
+ * 종료만 허용한다. 종료는 판매(S)·결제 대기 예약(R)이 아닌 배정분 {@code Q−S−R}만 가용 재고로 돌리고 기존 예약은 해제하지 않는다.
+ *
+ * <p>버전과 updatedAt은 판매자의 변경·공개·종료와 기간 종료·매진처럼 이벤트 정의나 종료를 바꾸는 변경만 나타낸다. S·R과 시각에 따른 SCHEDULED→OPEN
+ * 전이는 이벤트 행 잠금이나 조건부 갱신으로 직렬화하므로 둘을 바꾸지 않는다. 그래서 시작 전에 조회한 구매자의 expectedEventVersion이 시작 뒤에도 맞고,
+ * 참여가 이어져도 판매자의 조기 종료가 충돌하지 않는다. 다른 상태 전이는 공개·종료 시각을 함께 바꾸므로 버전이 오른다.
+ */
+@Entity
+@Table(name = "sale_events")
+public class SaleEvent extends AuditableEntity {
+  public static final int MAX_NAME_LENGTH = 80;
+  public static final long MIN_EVENT_PRICE = 1;
+  public static final long MAX_EVENT_PRICE = 10_000_000;
+  public static final long MAX_QUOTA = 10_000_000;
+  static final String PERIOD_END_REASON = "이벤트 기간 종료";
+
+  /** 게이지 값. percent는 결제 확정 판매량 기준이며 예약만으로 100%가 되지 않는다. */
+  public record Gauge(
+      long quota,
+      long soldCount,
+      long reservedCount,
+      long remainingQuantity,
+      int percent,
+      EventAdmission admission) {}
+
+  @Id private UUID id;
+  private UUID sellerId;
+  private UUID productId;
+  private String name;
+  private long eventPrice;
+  private long quota;
+
+  @OptimisticLock(excluded = true)
+  private long soldCount;
+
+  @OptimisticLock(excluded = true)
+  private long reservedCount;
+
+  private Instant startsAt;
+  private Instant endsAt;
+
+  @OptimisticLock(excluded = true)
+  @Enumerated(EnumType.STRING)
+  private SaleEventStatus status;
+
+  private Instant publishedAt;
+  private Instant closedAt;
+  @Version private Long version;
+
+  protected SaleEvent() {}
+
+  private SaleEvent(UUID id, UUID sellerId, Instant now) {
+    super(now);
+    this.id = Objects.requireNonNull(id, "id");
+    this.sellerId = Objects.requireNonNull(sellerId, "sellerId");
+    this.status = SaleEventStatus.DRAFT;
+  }
+
+  public static SaleEvent register(
+      UUID id,
+      UUID sellerId,
+      UUID productId,
+      String name,
+      long eventPrice,
+      long quota,
+      Instant startsAt,
+      Instant endsAt,
+      Instant now) {
+    SaleEvent event = new SaleEvent(id, sellerId, now);
+    event.apply(productId, name, eventPrice, quota, startsAt, endsAt);
+    return event;
+  }
+
+  /** 미공개 이벤트의 전체 변경. 상품 소유 확인은 응용 서비스가 한다. */
+  public void change(
+      UUID productId,
+      String name,
+      long eventPrice,
+      long quota,
+      Instant startsAt,
+      Instant endsAt,
+      long expectedVersion,
+      Instant now) {
+    requireDraft();
+    requireVersion(expectedVersion);
+    apply(productId, name, eventPrice, quota, startsAt, endsAt);
+    touch(now);
+  }
+
+  /**
+   * 공개하고 한정 수량을 재고에서 배정한다. 시작 전이면 SCHEDULED, 이미 시작했으면 OPEN이다. 상품의 판매 상태와 같은 상품의 기간 중복은 호출자가 같은 재고 행
+   * 잠금 아래에서 확인한다. 가용 수량이 부족하면 상태를 바꾸지 않는다.
+   */
+  public InventoryMovement publish(
+      ProductInventory inventory, long expectedVersion, UUID movementId, Instant now) {
+    requireSameProduct(inventory); // ① 이 이벤트 상품의 재고가 맞는지
+    requireDraft(); // ② 아직 미공개(DRAFT)인지
+    requireVersion(expectedVersion); // ③ 클라이언트가 본 버전과 같은지
+    if (!now.isBefore(endsAt)) { // ④ 종료 시각이 이미 지났는지
+      throw new SaleEventConflictException(Reason.PERIOD_ENDED);
+    }
+    InventoryMovement movement = inventory.allocateToEvent(movementId, id, quota, now); // ⑤ 재고 배정
+    status = now.isBefore(startsAt) ? SaleEventStatus.SCHEDULED : SaleEventStatus.OPEN; // ⑥ 상태 전이
+    publishedAt = truncate(now);
+    touch(now); // updatedAt 갱신
+    return movement; // ⑦ 이동 기록 반환
+  }
+
+  /** 시작 시각이 된 예정 이벤트를 연다. 정의는 그대로라 버전과 updatedAt을 바꾸지 않는다. 바꾸지 않았으면 false다. */
+  public boolean openIfStarted(Instant now) {
+    if (status != SaleEventStatus.SCHEDULED || now.isBefore(startsAt) || !now.isBefore(endsAt)) {
+      return false;
+    }
+    status = SaleEventStatus.OPEN;
+    return true;
+  }
+
+  /** 판매자의 조기 종료. 종료 시각이 지났지만 아직 기간 종료 처리 전인 이벤트도 같은 방식으로 닫는다. */
+  public InventoryMovement close(
+      ProductInventory inventory,
+      long expectedVersion,
+      String reason,
+      UUID movementId,
+      Instant now) {
+    requireSameProduct(inventory);
+    if (!status.isInProgress()) {
+      throw new SaleEventConflictException(Reason.NOT_IN_PROGRESS);
+    }
+    requireVersion(expectedVersion);
+    return finish(inventory, reason, movementId, now);
+  }
+
+  /** 종료 시각이 지난 진행 중 이벤트를 닫는다. 대상이 아니면 아무것도 바꾸지 않는다. */
+  public Optional<InventoryMovement> closeIfEnded(
+      ProductInventory inventory, UUID movementId, Instant now) {
+    requireSameProduct(inventory);
+    if (!status.isInProgress() || now.isBefore(endsAt)) {
+      return Optional.empty();
+    }
+    return Optional.of(finish(inventory, PERIOD_END_REASON, movementId, now));
+  }
+
+  /**
+   * 확정 거절 뒤 재시도의 수량 확보: R+1. 신규 참여는 저장소의 조건부 갱신으로 같은 조건을 검사하고, 재시도는 이벤트 행을 잠근 뒤 이 메서드로 확보한다. 게이지와
+   * 같이 서버 시각으로 기간을 판단하므로 스케줄러가 SCHEDULED를 OPEN으로 바꾸기 전에도 시작 시각부터 받는다. 상태는 바꾸지 않아 version이 참여로 오르지
+   * 않는다.
+   */
+  void reserveSlot(Instant now) {
+    if (!status.isInProgress() || now.isBefore(startsAt) || !now.isBefore(endsAt)) {
+      throw new EventAdmissionClosedException(EventAdmissionClosedException.Reason.NOT_OPEN);
+    }
+    if (soldCount + reservedCount >= quota) {
+      throw new EventAdmissionClosedException(EventAdmissionClosedException.Reason.NO_REMAINING);
+    }
+    reservedCount++;
+  }
+
+  /** 결제 확정: R−1, S+1과 배정 재고 −1·판매 +1. 진행 중에 S=Q가 되면 매진 종료하며, 남은 배정분이 없으므로 반환 이력은 없다. */
+  InventoryMovement confirmSale(
+      ProductInventory inventory, UUID cycleId, UUID movementId, Instant now) {
+    requireSameProduct(inventory);
+    requireReservedSlot();
+    InventoryMovement movement = inventory.consumeFromEvent(movementId, cycleId, now);
+    reservedCount--;
+    soldCount++;
+    if (status.isInProgress() && soldCount == quota) {
+      status = SaleEventStatus.SOLD_OUT;
+      closedAt = truncate(now);
+      touch(now);
+    }
+    return movement;
+  }
+
+  /** 확정 거절·승인 차단된 취소: R−1. 이미 종료된 이벤트면 종료 때 남겨 둔 배정분 1개를 가용 재고로 돌린다. */
+  Optional<InventoryMovement> releaseSlot(
+      ProductInventory inventory, UUID cycleId, UUID movementId, Instant now) {
+    requireSameProduct(inventory);
+    requireReservedSlot();
+    Optional<InventoryMovement> movement =
+        status.isInProgress()
+            ? Optional.empty()
+            : Optional.of(inventory.releaseFromEvent(movementId, cycleId, now));
+    reservedCount--;
+    return movement;
+  }
+
+  public Gauge gauge(Instant now) {
+    return gauge(status, startsAt, endsAt, quota, soldCount, reservedCount, now);
+  }
+
+  /** 저장 상태가 기간 처리 전이어도 서버 시각으로 시작 전·종료를 판단한다. 엔티티 없이 읽은 현재 행에도 같은 규칙을 적용한다. */
+  public static Gauge gauge(
+      SaleEventStatus status,
+      Instant startsAt,
+      Instant endsAt,
+      long quota,
+      long soldCount,
+      long reservedCount,
+      Instant now) {
+    long remaining = quota - soldCount - reservedCount;
+    EventAdmission admission;
+    if (status == SaleEventStatus.SOLD_OUT || soldCount == quota) {
+      admission = EventAdmission.SOLD_OUT;
+    } else if (status == SaleEventStatus.CLOSED || !now.isBefore(endsAt)) {
+      admission = EventAdmission.CLOSED;
+    } else if (status == SaleEventStatus.DRAFT || now.isBefore(startsAt)) {
+      admission = EventAdmission.NOT_STARTED;
+    } else if (remaining == 0) {
+      admission = EventAdmission.WAITING_PAYMENTS;
+    } else {
+      admission = EventAdmission.OPEN;
+    }
+    int percent = (int) (100 * soldCount / quota);
+    return new Gauge(quota, soldCount, reservedCount, remaining, percent, admission);
+  }
+
+  public boolean isOwnedBy(UUID sellerId) {
+    return this.sellerId.equals(sellerId);
+  }
+
+  public boolean isPublished() {
+    return status != SaleEventStatus.DRAFT;
+  }
+
+  private InventoryMovement finish(
+      ProductInventory inventory, String reason, UUID movementId, Instant now) {
+    InventoryMovement movement =
+        inventory.returnFromEvent(movementId, id, quota - soldCount - reservedCount, reason, now);
+    status = SaleEventStatus.CLOSED;
+    closedAt = truncate(now);
+    touch(now);
+    return movement;
+  }
+
+  private void apply(
+      UUID productId, String name, long eventPrice, long quota, Instant startsAt, Instant endsAt) {
+    Objects.requireNonNull(name, "name");
+    if (name.isEmpty() || name.length() > MAX_NAME_LENGTH) {
+      throw new IllegalArgumentException("name length must be 1.." + MAX_NAME_LENGTH);
+    }
+    if (eventPrice < MIN_EVENT_PRICE || eventPrice > MAX_EVENT_PRICE) {
+      throw new IllegalArgumentException("eventPrice out of range");
+    }
+    if (quota < 1 || quota > MAX_QUOTA) {
+      throw new IllegalArgumentException("quota must be 1.." + MAX_QUOTA);
+    }
+    Instant start = truncate(startsAt);
+    Instant end = truncate(endsAt);
+    if (!start.isBefore(end)) {
+      throw new IllegalArgumentException("startsAt must be before endsAt");
+    }
+    this.productId = Objects.requireNonNull(productId, "productId");
+    this.name = name;
+    this.eventPrice = eventPrice;
+    this.quota = quota;
+    this.startsAt = start;
+    this.endsAt = end;
+  }
+
+  private void requireDraft() {
+    if (status != SaleEventStatus.DRAFT) {
+      throw new SaleEventConflictException(Reason.NOT_DRAFT);
+    }
+  }
+
+  private void requireVersion(long expectedVersion) {
+    if (expectedVersion != getVersion()) {
+      throw new VersionConflictException("sale event", expectedVersion, getVersion());
+    }
+  }
+
+  private void requireReservedSlot() {
+    if (reservedCount < 1) {
+      throw new IllegalStateException("sale event has no reserved slot: " + id);
+    }
+  }
+
+  private void requireSameProduct(ProductInventory inventory) {
+    if (!productId.equals(inventory.getProductId())) {
+      throw new IllegalArgumentException(
+          "inventory of another product: " + inventory.getProductId());
+    }
+  }
+
+  public UUID getId() {
+    return id;
+  }
+
+  public UUID getSellerId() {
+    return sellerId;
+  }
+
+  public UUID getProductId() {
+    return productId;
+  }
+
+  public String getName() {
+    return name;
+  }
+
+  public long getEventPrice() {
+    return eventPrice;
+  }
+
+  public long getQuota() {
+    return quota;
+  }
+
+  public long getSoldCount() {
+    return soldCount;
+  }
+
+  public long getReservedCount() {
+    return reservedCount;
+  }
+
+  public Instant getStartsAt() {
+    return startsAt;
+  }
+
+  public Instant getEndsAt() {
+    return endsAt;
+  }
+
+  public SaleEventStatus getStatus() {
+    return status;
+  }
+
+  public Instant getPublishedAt() {
+    return publishedAt;
+  }
+
+  public Instant getClosedAt() {
+    return closedAt;
+  }
+
+  public long getVersion() {
+    return version == null ? 0 : version;
+  }
+}

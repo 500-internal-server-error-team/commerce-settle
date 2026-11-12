@@ -1,0 +1,195 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+jdbc:
+  includes: CONNECTION,QUERY,FETCH
+  datasource-proxy:
+    include-parameter-values: false
+    query:
+      enable-logging: false
+    slow-query:
+      enable-logging: false
+  resultset-operations:
+    enabled: false
+
+spring:
+  jackson:
+    time-zone: Asia/Seoul
+    serialization:
+      write-dates-as-timestamps: false
+      write-dates-with-context-time-zone: true
+  application:
+    name: payment
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      # 승인 슬롯·결제 요청 처리 슬롯·Outbox 발행·수신 Listener가 함께 쓴다. 슬롯 수를 늘리면 함께 늘린다.
+      maximum-pool-size: ${PAYMENT_DB_POOL_SIZE:20}
+      minimum-idle: 1
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.default_schema: payment
+  sql:
+    init:
+      mode: never
+  task:
+    scheduling:
+      pool:
+        # 승인 Worker·결제 요청 처리기·Outbox 복구·격리 DLT 발행이 각자 스레드를 쓴다. 적체가 있으면 승인·처리 폴링은
+        # 쉬지 않고 이어서 실행하므로, 한 스레드를 나눠 쓰면 다른 폴링이 적체가 빌 때까지 멈춘다.
+        size: 4
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+    template:
+      observation-enabled: true
+    producer:
+      acks: all
+      retries: 2147483647
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 120000
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+    consumer:
+      group-id: payment.v1
+      enable-auto-commit: false
+      auto-offset-reset: none
+      max-poll-records: 100
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+    listener:
+      observation-enabled: true
+      ack-mode: manual_immediate
+      # 구독 토픽의 파티션 수(3)만큼 읽는다. 파티션 안의 순서는 그대로 유지된다.
+      concurrency: ${PAYMENT_KAFKA_LISTENER_CONCURRENCY:3}
+      missing-topics-fatal: true
+
+springdoc:
+  paths-to-match: /api/**
+
+management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9091}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        async.work: true
+        async.stage: true
+        payment.processing: true
+        payment.queue.wait: true
+        jdbc.query: true
+      minimum-expected-value:
+        payment.processing: 1ms
+        payment.queue.wait: 1ms
+        jdbc.query: 1ms
+      maximum-expected-value:
+        payment.processing: 30s
+        payment.queue.wait: 5m
+        jdbc.query: 5s
+    tags:
+      application: ${spring.application.name}
+      role: ${PAYMENT_ROLE:app}
+
+logging:
+  pattern:
+    dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Seoul"
+
+app:
+  internal-auth:
+    service: payment
+    # Gateway의 내부 호출 자격. 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
+    senders:
+      gateway:
+        current: ${PAYMENT_GATEWAY_CREDENTIAL}
+        previous: ${PAYMENT_GATEWAY_CREDENTIAL_PREVIOUS:}
+  dev-fixtures:
+    enabled: ${APP_DEV_FIXTURES_ENABLED:false}
+    run-scenarios: ${APP_DEV_FIXTURE_SCENARIOS_ENABLED:false}
+  kafka:
+    quarantine:
+      # 새 초기 SQL과 격리·DLT·재처리 시험을 확인한 환경에서만 켠다.
+      enabled: false
+      interval-ms: 1000
+      batch-size: 32
+      lease-ms: 240000
+      result-timeout-ms: 125000
+    order-payment-requested:
+      # 개발용 초기 SQL 적용과 신규 그룹 offset 초기화 후에만 활성화한다.
+      enabled: false
+    settlement-replies:
+      # Settlement 환불 응답(commerce-settle.settlement.v1) 수신. 토픽이 없으면 기동하지 않으므로
+      # Settlement가 토픽을 만들고 이 그룹의 offset을 준비한 뒤에만 켠다. 반영은 payment-request-processor가 맡는다.
+      enabled: false
+  payment-request-processor:
+    # PAYMENT_ROLE=worker에서만 동작한다. WAITING 결제 요청을 결제·승인 작업으로 처리한다.
+    # 실패는 최대 10회까지 1~60초 간격으로 재시도한 뒤 REVIEW_REQUIRED로 남긴다.
+    enabled: false
+    interval-ms: 1000
+    # 동시에 처리하는 슬롯 수와 슬롯별 한 주기 상한. 상한에 닿으면 기다리지 않고 이어서 처리한다.
+    # 처리 트랜잭션마다 DB 연결을 쓰므로 승인 슬롯·Outbox 발행과 합쳐 DB 연결 풀을 넘지 않게 둔다.
+    concurrency: ${PAYMENT_REQUEST_CONCURRENCY:3}
+    batch-size: 100
+    # 선점 뒤 처리 결과나 실패를 기록하기 전까지 다른 처리기가 같은 요청을 다시 잡지 않는 시간.
+    # 한 건의 처리 트랜잭션보다 충분히 길어야 한다.
+    lease-ms: 30000
+  payment-approval:
+    # PAYMENT_ROLE=worker에서만 동작한다. 외부 결제액이 있는 결제의 승인 작업을 PG 대역에 보내고 결과를 반영한다.
+    enabled: false
+    # stub: 즉시 승인하는 개발용 대역, http: finance-mock PG 대역
+    gateway: ${PAYMENT_APPROVAL_GATEWAY:stub}
+    mock-base-url: ${FINANCE_MOCK_URL:http://finance-mock:8080}
+    # finance-mock에 보내는 service:payment 자격. PG 실행 Worker와 대조 읽기 API에 주입한다.
+    mock-credential: ${FINANCE_MOCK_PAYMENT_CREDENTIAL:}
+    poll-interval-ms: 1000
+    # 동시에 실행하는 슬롯 수. 슬롯마다 한 폴링에 최대 max-jobs-per-poll건을 처리하고, 상한에 닿으면 기다리지 않고 다시 폴링한다.
+    # 외부 호출 동안 DB 연결을 쥐지 않지만 호출 전후 트랜잭션이 연결을 쓰므로 DB 연결 풀보다 작게 둔다.
+    concurrency: ${PAYMENT_APPROVAL_CONCURRENCY:6}
+    max-jobs-per-poll: 20
+    # 호출 제한 시간은 임대보다 짧아야 한다.
+    lease-duration: 30s
+    http-timeout: 5s
+    max-attempts: 10
+    card-provider: PG_A
+    funding-account-ref: ${PAYMENT_FUNDING_ACCOUNT_REF:payout-funding-default}
+    # finance-mock에 이 이름의 PG 시나리오가 있어야 한다. 없으면 대역이 503으로 답하고 승인은 미확정으로 남는다.
+    scenario-version: ${PAYMENT_SCENARIO_VERSION:pg-normal-v1}
+  refund:
+    # PAYMENT_ROLE=worker에서만 동작한다. 정산금 예약이 확인된 환불의 외부 환불·마일리지 복원 Worker를 켠다.
+    # RefundApproved·RefundOrderRestored와 Settlement 환불 응답 반영은 payment-request-processor가 맡는다.
+    enabled: false
+    # stub: 즉시 성공하는 개발용 외부 환불, http: 원승인 Finance Mock 환불·조회.
+    # HTTP 주소·자격은 payment-approval.mock-*와 공유하며 환불 제한 시간을 쓴다.
+    gateway: ${PAYMENT_REFUND_GATEWAY:stub}
+    poll-interval-ms: 1000
+    max-jobs-per-poll: 20
+    # 호출 제한 시간은 임대보다 짧아야 한다.
+    lease-duration: 30s
+    http-timeout: 5s
+    max-attempts: 10
+  payment-reconciliation:
+    # 마감 뒤 이 시간이 지나야 대조 기준선을 고정한다. 결제 업무 트랜잭션의 최대 시간보다 길어야 한다.
+    safety-margin: PT10M
+  outbox:
+    # PAYMENT_ROLE=worker에서만 동작한다. 커밋된 결제 이벤트를 Kafka로 발행한다.
+    enabled: false
+    recovery-interval-ms: 1000
+    # 동시에 보내는 이벤트 수. 전송 결과를 기다리는 동안 DB 연결을 쥐지 않는다.
+    max-in-flight: ${PAYMENT_OUTBOX_MAX_IN_FLIGHT:32}
+    lease-ms: 240000
+    max-attempts: 10

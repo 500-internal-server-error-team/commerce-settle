@@ -1,0 +1,164 @@
+package com.commercesettle.settlement.application.service;
+
+import com.commercesettle.settlement.application.dto.PayoutWorkerSettings;
+import com.commercesettle.settlement.application.exception.LeaseLostException;
+import com.commercesettle.settlement.application.port.PayoutGateway.PayoutRequest;
+import com.commercesettle.settlement.application.port.PayoutGateway.Result;
+import com.commercesettle.settlement.domain.model.Payout;
+import com.commercesettle.settlement.domain.model.PayoutJobStatus;
+import com.commercesettle.settlement.domain.model.PayoutStatus;
+import com.commercesettle.settlement.domain.model.SettlementBatch;
+import com.commercesettle.settlement.domain.repository.PayoutJobRepository;
+import com.commercesettle.settlement.domain.repository.PayoutJobRepository.LeasedJob;
+import com.commercesettle.settlement.domain.repository.PayoutRepository;
+import com.commercesettle.settlement.domain.repository.SettlementBatchRepository;
+import com.commercesettle.settlement.domain.repository.SettlementItemRepository;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * 지급 Worker의 로컬 트랜잭션 단계. 대역 호출 전후로 나눠 외부 호출 중에는 DB 트랜잭션을 열어 두지 않는다. 결과 반영은 유효한 임대에서만 하며, 임대를 잃었으면
+ * 지급·항목·배치·작업 변경을 모두 롤백한다.
+ */
+@Component
+class PayoutResultRecorder {
+  private static final Logger LOGGER = LoggerFactory.getLogger(PayoutResultRecorder.class);
+
+  private final PayoutJobRepository jobs;
+  private final PayoutRepository payouts;
+  private final SettlementBatchRepository batches;
+  private final SettlementItemRepository items;
+  private final PayoutWorkerSettings settings;
+  private final SettlementNoticeService notices;
+  private final Clock clock;
+
+  PayoutResultRecorder(
+      PayoutJobRepository jobs,
+      PayoutRepository payouts,
+      SettlementBatchRepository batches,
+      SettlementItemRepository items,
+      PayoutWorkerSettings settings,
+      SettlementNoticeService notices,
+      Clock clock) {
+    this.jobs = jobs;
+    this.payouts = payouts;
+    this.batches = batches;
+    this.items = items;
+    this.settings = settings;
+    this.notices = notices;
+    this.clock = clock;
+  }
+
+  /**
+   * 호출할 요청을 준비한다. 처음 실행하는 지급이면 지급·배치를 처리 중으로 바꿔 두고 실행(POST)을, 이미 처리 중이었으면 결과를 모르므로 원거래 조회부터 하게 한다.
+   * 임대에 호출 제한 시간만큼 남지 않았거나, 반복 중단으로 회수돼 시도 상한을 넘었으면 호출하지 않는다.
+   */
+  @Transactional
+  public Optional<Prepared> prepare(LeasedJob job) {
+    if (!jobs.holdsLease(job.jobId(), job.leaseToken(), settings.httpTimeout())) {
+      return Optional.empty();
+    }
+    Instant now = clock.instant();
+    Payout payout = payouts.findById(job.payoutId()).orElseThrow();
+    // 임대할 때 시도가 하나 늘었으므로 상한보다 크면 이미 상한만큼 실행한 뒤 다시 회수된 것이다.
+    if (job.attempts() > settings.maxAttempts()) {
+      exhaust(job, payout, now);
+      return Optional.empty();
+    }
+    boolean firstCall = payout.getStatus() == PayoutStatus.PENDING;
+    if (firstCall) {
+      payout.startProcessing(now);
+      batch(payout).startProcessing(now);
+    }
+    return Optional.of(new Prepared(request(payout), firstCall));
+  }
+
+  @Transactional
+  public void record(LeasedJob job, Result result) {
+    Instant now = clock.instant();
+    Payout payout = payouts.findById(job.payoutId()).orElseThrow();
+    switch (result) {
+      case Result.Succeeded succeeded -> {
+        payout.succeed(succeeded.succeededAt(), succeeded.externalRef(), now);
+        if (items.completePayout(payout.getId(), payout.getAmount(), now)) {
+          release(job, PayoutJobStatus.DONE, Duration.ZERO);
+          SettlementBatch batch = batch(payout);
+          batch.complete(now);
+          notices.payoutCompleted(batch, payout, now);
+        } else {
+          // 돈은 나갔지만 완료할 항목이 지급 금액과 맞지 않는다. 성공만 남기고 항목·예약은 운영 확인에 맡긴다.
+          release(job, PayoutJobStatus.REVIEW_REQUIRED, Duration.ZERO);
+          batch(payout).requireReview(now);
+        }
+      }
+      case Result.Declined declined -> {
+        release(job, PayoutJobStatus.REVIEW_REQUIRED, Duration.ZERO);
+        payout.decline(declined.externalRef(), now);
+        SettlementBatch batch = batch(payout);
+        batch.requireReview(now);
+        notices.actionRequired(batch, payout, now);
+      }
+      case Result.Rejected rejected -> {
+        release(job, PayoutJobStatus.REVIEW_REQUIRED, Duration.ZERO);
+        payout.markUnknown(now);
+        batch(payout).requireReview(now);
+      }
+      case Result.Unconfirmed unconfirmed -> keepUnconfirmed(job, payout, now);
+      case Result.NotFound notFound -> keepUnconfirmed(job, payout, now);
+    }
+  }
+
+  /** 예약과 업무 키를 유지한 채 나중에 같은 원거래를 다시 조회한다. 시도 상한을 넘으면 운영 확인으로 넘긴다. */
+  private void keepUnconfirmed(LeasedJob job, Payout payout, Instant now) {
+    if (job.attempts() >= settings.maxAttempts()) {
+      exhaust(job, payout, now);
+      return;
+    }
+    payout.markUnknown(now);
+    release(job, PayoutJobStatus.RETRY, settings.unconfirmedRetryDelay());
+  }
+
+  /** 자동 시도를 다 썼다. 금융 상태·업무 키·예약은 그대로 두고 운영 확인으로 넘긴다. 호출한 적 없는 대기 지급은 대기로 둔다. */
+  private void exhaust(LeasedJob job, Payout payout, Instant now) {
+    release(job, PayoutJobStatus.REVIEW_REQUIRED, Duration.ZERO);
+    if (payout.getStatus() != PayoutStatus.PENDING) {
+      payout.markUnknown(now);
+    }
+    batch(payout).requireReview(now);
+    LOGGER
+        .atWarn()
+        .addKeyValue("event", "settlement.payout")
+        .addKeyValue("payoutId", job.payoutId())
+        .addKeyValue("jobId", job.jobId())
+        .addKeyValue("attempt", job.attempts())
+        .addKeyValue("result", "ATTEMPTS_EXHAUSTED")
+        .log("Payout job requires review after exhausting attempts");
+  }
+
+  private void release(LeasedJob job, PayoutJobStatus status, Duration runAfter) {
+    if (!jobs.releaseLease(job.jobId(), job.leaseToken(), status, runAfter)) {
+      throw new LeaseLostException("payout job lease is no longer held");
+    }
+  }
+
+  private SettlementBatch batch(Payout payout) {
+    return batches.findById(payout.getBatchId()).orElseThrow();
+  }
+
+  private static PayoutRequest request(Payout payout) {
+    return new PayoutRequest(
+        payout.getBusinessKey(),
+        payout.getFundingAccountRef(),
+        payout.getRecipientAccountRef(),
+        payout.getAmount(),
+        payout.getScenarioVersion());
+  }
+
+  record Prepared(PayoutRequest request, boolean firstCall) {}
+}

@@ -1,0 +1,165 @@
+package com.commercesettle.payment.domain.model;
+
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Objects;
+import java.util.UUID;
+
+/**
+ * 마일리지 원장. 지갑에 일어난 일을 추가만 하고 수정하지 않는다. 같은 지갑·종류·업무 키는 한 번만 기록된다. 예약은 결제 회차 ID, 차감·복원은 결제 ID를 업무 키로
+ * 써서 원결제별로 한 번만 남긴다.
+ */
+@Entity
+@Table(name = "mileage_entries")
+public class MileageEntry {
+  @Id private UUID id;
+  private UUID walletId;
+  private UUID paymentId;
+  private UUID refundId;
+
+  @Enumerated(EnumType.STRING)
+  private MileageEntryKind kind;
+
+  private UUID businessRef;
+  private long amount;
+  private long balanceAfter;
+  private Instant createdAt;
+
+  protected MileageEntry() {}
+
+  private MileageEntry(
+      MileageWallet wallet,
+      MileageReservation reservation,
+      MileageEntryKind kind,
+      UUID businessRef,
+      Instant now) {
+    if (!wallet.getId().equals(reservation.getWalletId())) {
+      throw new IllegalArgumentException("다른 지갑의 예약은 기록할 수 없습니다.");
+    }
+    this.id = UUID.randomUUID();
+    this.walletId = wallet.getId();
+    this.paymentId = reservation.getPaymentId();
+    this.kind = kind;
+    this.businessRef = businessRef;
+    this.amount = reservation.getAmount();
+    this.balanceAfter = wallet.getBalance();
+    this.createdAt = Objects.requireNonNull(now, "now").truncatedTo(ChronoUnit.MICROS);
+  }
+
+  /** 사전 지급으로 연 지갑의 최초 잔액. 0점 지갑에는 금액 원장을 만들지 않는다. */
+  public static MileageEntry seed(MileageWallet wallet, Instant now) {
+    if (wallet.getBalance() <= 0 || wallet.getReservedAmount() != 0) {
+      throw new IllegalArgumentException("초기 양수 잔액의 미예약 지갑만 기록할 수 있습니다.");
+    }
+    MileageEntry entry = new MileageEntry();
+    entry.id = UUID.randomUUID();
+    entry.walletId = wallet.getId();
+    entry.kind = MileageEntryKind.SEED;
+    entry.businessRef = wallet.getId();
+    entry.amount = wallet.getBalance();
+    entry.balanceAfter = wallet.getBalance();
+    entry.createdAt = Objects.requireNonNull(now).truncatedTo(ChronoUnit.MICROS);
+    return entry;
+  }
+
+  /** 예약을 기록한다. 잔액은 바뀌지 않으므로 기록 시점의 잔액을 남긴다. 업무 키는 결제 회차 ID. */
+  public static MileageEntry reserve(
+      MileageWallet wallet, MileageReservation reservation, Instant now) {
+    return new MileageEntry(
+        wallet, reservation, MileageEntryKind.RESERVE, reservation.getCycleId(), now);
+  }
+
+  /** 차감을 기록한다. 지갑에서 차감한 뒤 불러 차감 후 잔액을 남긴다. 업무 키는 결제 ID. */
+  public static MileageEntry debit(
+      MileageWallet wallet, MileageReservation reservation, Instant now) {
+    return new MileageEntry(
+        wallet, reservation, MileageEntryKind.DEBIT, reservation.getPaymentId(), now);
+  }
+
+  /** 예약 해제를 기록한다. 잔액은 바뀌지 않는다. 업무 키는 결제 회차 ID. */
+  public static MileageEntry release(
+      MileageWallet wallet, MileageReservation reservation, Instant now) {
+    return new MileageEntry(
+        wallet, reservation, MileageEntryKind.RELEASE, reservation.getCycleId(), now);
+  }
+
+  /**
+   * 환불의 마일리지 복원을 기록한다. 지갑에 복원한 뒤 불러 복원 후 잔액을 남긴다. 업무 키는 원결제 ID라서 새 환불 키나 이벤트 재전달로도 두 번 기록되지 않는다.
+   */
+  public static MileageEntry restore(MileageWallet wallet, Refund refund, Instant now) {
+    Objects.requireNonNull(wallet, "wallet");
+    if (refund.getMileageAmount() <= 0) {
+      throw new IllegalArgumentException("사용 마일리지가 없는 환불은 복원 원장을 만들지 않습니다.");
+    }
+    MileageEntry entry = new MileageEntry();
+    entry.id = UUID.randomUUID();
+    entry.walletId = wallet.getId();
+    entry.paymentId = refund.getPaymentId();
+    entry.refundId = refund.getId();
+    entry.kind = MileageEntryKind.RESTORE;
+    entry.businessRef = refund.getPaymentId();
+    entry.amount = refund.getMileageAmount();
+    entry.balanceAfter = wallet.getBalance();
+    entry.createdAt = Objects.requireNonNull(now, "now").truncatedTo(ChronoUnit.MICROS);
+    return entry;
+  }
+
+  /** 사용 가능해진 구매 적립을 기록한다. 지갑에 더한 뒤 불러 적립 후 잔액을 남긴다. 업무 키는 원결제 ID라서 결제당 한 번만 기록된다. */
+  public static MileageEntry accrual(MileageWallet wallet, MileageAccrual accrual, Instant now) {
+    Objects.requireNonNull(wallet, "wallet");
+    if (!wallet.getBuyerId().equals(accrual.getBuyerId())) {
+      throw new IllegalArgumentException("다른 구매자의 적립은 기록할 수 없습니다.");
+    }
+    MileageEntry entry = new MileageEntry();
+    entry.id = UUID.randomUUID();
+    entry.walletId = wallet.getId();
+    entry.paymentId = accrual.getPaymentId();
+    entry.kind = MileageEntryKind.ACCRUAL;
+    entry.businessRef = accrual.getPaymentId();
+    entry.amount = accrual.getAccrualAmount();
+    entry.balanceAfter = wallet.getBalance();
+    entry.createdAt = Objects.requireNonNull(now, "now").truncatedTo(ChronoUnit.MICROS);
+    return entry;
+  }
+
+  public UUID getId() {
+    return id;
+  }
+
+  public UUID getWalletId() {
+    return walletId;
+  }
+
+  public UUID getPaymentId() {
+    return paymentId;
+  }
+
+  public UUID getRefundId() {
+    return refundId;
+  }
+
+  public MileageEntryKind getKind() {
+    return kind;
+  }
+
+  public UUID getBusinessRef() {
+    return businessRef;
+  }
+
+  public long getAmount() {
+    return amount;
+  }
+
+  public long getBalanceAfter() {
+    return balanceAfter;
+  }
+
+  public Instant getCreatedAt() {
+    return createdAt;
+  }
+}

@@ -1,0 +1,502 @@
+"""부하 도구의 대조 쿼리와 운영 재처리 계약을 외부 서비스 없이 검증한다."""
+
+import argparse
+import csv
+import contextlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import sqlite3
+import unittest
+import tempfile
+from unittest.mock import MagicMock, mock_open, patch
+
+
+SOURCE = Path(os.environ.get("PAYMENT_LOAD_SOURCE", Path(__file__).with_name("payment_load.py")))
+SPEC = importlib.util.spec_from_file_location("payment_load", SOURCE)
+load = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(load)
+
+
+class BoolAnd:
+    def __init__(self):
+        self.value = True
+
+    def step(self, value):
+        self.value = self.value and bool(value)
+
+    def finalize(self):
+        return "t" if self.value else "f"
+
+
+class ReconciliationFixture(unittest.TestCase):
+    def setUp(self):
+        # 동일 JOIN/FILTER 쿼리를 SQLite 메모리 DB에서 실행한다. PostgreSQL 통합 시험은 아니다.
+        self.db = sqlite3.connect(":memory:")
+        self.addCleanup(self.db.close)
+        self.db.create_aggregate("bool_and", 1, BoolAnd)
+        self.db.executescript("""
+            ATTACH DATABASE ':memory:' AS payment;
+            ATTACH DATABASE ':memory:' AS finance_mock;
+            CREATE TABLE payment.payments (order_id TEXT, id TEXT, current_cycle_id TEXT,
+                buyer_id TEXT, status TEXT, total_amount INT, mileage_amount INT, external_amount INT);
+            CREATE TABLE payment.payment_attempts (payment_id TEXT, provider_id TEXT,
+                business_key TEXT, amount INT, status TEXT);
+            CREATE TABLE payment.mileage_wallets (buyer_id TEXT, balance INT, reserved_amount INT);
+            CREATE TABLE payment.mileage_entries (payment_id TEXT, kind TEXT);
+            CREATE TABLE payment.outbox (aggregate_id TEXT, event_type TEXT, status TEXT);
+            CREATE TABLE payment.inbox (status TEXT);
+            CREATE TABLE payment.payment_jobs (status TEXT);
+            CREATE TABLE payment.inbox_conflicts (id TEXT);
+            CREATE TABLE finance_mock.mock_transactions (provider_id TEXT, business_key TEXT,
+                amount INT, status TEXT, account_id TEXT, operation TEXT);
+            CREATE TABLE finance_mock.mock_accounts (id TEXT, balance INT, reserved_amount INT,
+                opening_balance INT, provider_id TEXT, account_ref TEXT, purpose TEXT);
+        """)
+
+    def payment(self, mileage=0, status="CONFIRMED", opening_balance=load.WALLET_BALANCE):
+        self.expected = {"order": ("mixed" if mileage else "card", 10000, mileage)}
+        self.db.execute("INSERT INTO payment.payments VALUES (?,?,?,?,?,?,?,?)",
+                        ("order", "payment", "cycle", load.buyer(0), status, 10000, mileage, 10000-mileage))
+        self.db.execute("INSERT INTO payment.payment_attempts VALUES (?,?,?,?,?)",
+                        ("payment", "PG_A", "cycle", 10000-mileage,
+                         "APPROVED" if status == "CONFIRMED" else "DECLINED"))
+        self.db.execute("INSERT INTO finance_mock.mock_transactions VALUES (?,?,?,?,?,?)",
+                        ("PG_A", "cycle", 10000-mileage,
+                         "SUCCEEDED" if status == "CONFIRMED" else "DECLINED", None, "APPROVE"))
+        self.db.execute("INSERT INTO finance_mock.mock_accounts VALUES (?,?,0,?,'EASY_PAY','load-wallet-0','WALLET')",
+                        ("wallet", opening_balance, opening_balance))
+        balance = opening_balance - (mileage if status == "CONFIRMED" else 0)
+        self.db.execute("INSERT INTO payment.mileage_wallets VALUES (?,?,0)", (load.buyer(0), balance))
+        if mileage:
+            for kind in ("RESERVE", "DEBIT" if status == "CONFIRMED" else "RELEASE"):
+                self.db.execute("INSERT INTO payment.mileage_entries VALUES ('payment',?)", (kind,))
+        for event in ("PaymentAccepted", "PaymentConfirmed" if status == "CONFIRMED" else "PaymentDeclined"):
+            self.db.execute("INSERT INTO payment.outbox VALUES ('payment',?,'PUBLISHED')", (event,))
+        self.db.execute("INSERT INTO payment.inbox VALUES ('APPLIED')")
+        self.db.execute("INSERT INTO payment.payment_jobs VALUES ('DONE')")
+
+    def query(self, database, sql):
+        sql = sql.replace("account_id::text", "CAST(account_id AS TEXT)")
+        return [["" if v is None else str(v) for v in row] for row in self.db.execute(sql)]
+
+    def reconcile(self):
+        output = MagicMock()
+        with patch.object(load, "psql", self.query), patch.object(load, "ledger", return_value=self.expected), \
+                patch.object(load, "WORK", output), contextlib.redirect_stdout(io.StringIO()):
+            try:
+                load.cmd_reconcile(argparse.Namespace(runs="fixture", output="report.json"))
+            except SystemExit:
+                pass
+        return json.loads(output.__truediv__.return_value.write_text.call_args.args[0])
+
+
+class ReconciliationRegressionTest(ReconciliationFixture):
+    def test_detects_missing_entire_mileage_journal(self):
+        self.payment(mileage=1000)
+        self.db.execute("DELETE FROM payment.mileage_entries")
+        self.assertIn("마일리지 원장 불일치", self.reconcile()["problems"])
+
+    def test_detects_declined_payment_without_mock_transaction(self):
+        self.payment(status="DECLINED")
+        self.db.execute("DELETE FROM finance_mock.mock_transactions")
+        self.assertIn("대역 거래 누락", self.reconcile()["problems"])
+
+
+class ReconciliationNormalTest(ReconciliationFixture):
+    def test_accepts_card_payment_without_mileage_journal(self):
+        self.payment()
+        self.assertEqual({}, self.reconcile()["problems"])
+
+    def test_accepts_complete_mixed_payment_journal(self):
+        self.payment(mileage=1000)
+        self.assertEqual({}, self.reconcile()["problems"])
+
+    def test_accepts_previous_initial_balance_without_changing_the_wallet(self):
+        self.payment(mileage=1000, opening_balance=100_000_000)
+        self.assertEqual({}, self.reconcile()["problems"])
+        self.assertEqual(99_999_000, self.db.execute("SELECT balance FROM payment.mileage_wallets").fetchone()[0])
+
+    def test_detects_balance_difference_from_the_stored_initial_balance(self):
+        self.payment(mileage=1000, opening_balance=100_000_000)
+        self.db.execute("UPDATE payment.mileage_wallets SET balance=balance+1")
+        self.assertIn("마일리지 잔액 불일치", self.reconcile()["problems"])
+
+    def test_rejects_missing_initial_balance_without_using_the_current_default(self):
+        self.payment(mileage=1000)
+        self.db.execute("DELETE FROM finance_mock.mock_accounts")
+        self.assertIn("마일리지 초기 잔액 누락", self.reconcile()["problems"])
+
+    def test_does_not_use_payout_funds_as_the_mileage_initial_balance(self):
+        self.payment(mileage=1000)
+        self.db.execute("UPDATE finance_mock.mock_accounts SET purpose='PAYOUT'")
+        self.assertIn("마일리지 초기 잔액 누락", self.reconcile()["problems"])
+
+    def test_accepts_declined_payment_with_released_mileage(self):
+        self.payment(mileage=1000, status="DECLINED")
+        self.assertEqual({}, self.reconcile()["problems"])
+
+    def test_detects_missing_one_mileage_entry(self):
+        self.payment(mileage=1000)
+        self.db.execute("DELETE FROM payment.mileage_entries WHERE kind='DEBIT'")
+        self.assertIn("마일리지 원장 불일치", self.reconcile()["problems"])
+
+
+class ReplayRegressionTest(unittest.TestCase):
+    def test_replays_same_job_again_after_new_exhaustion(self):
+        accepted = {}
+
+        def request(*args):
+            key = next(v for v in args if v.startswith("Idempotency-Key:"))
+            body = args[args.index("-d")+1]
+            if key in accepted and accepted[key] != body:
+                return '{}\n409'
+            accepted[key] = body
+            return '{}\n202'
+
+        with patch.object(load, "psql", side_effect=[[["job", "10"]], [["job", "22"]]]), \
+                patch.object(load, "operator_credential", return_value="test"), \
+                patch.object(load, "compose", side_effect=request), contextlib.redirect_stdout(io.StringIO()):
+            load.cmd_replay(argparse.Namespace(reason="LOAD_TEST_RECOVERY"))
+            load.cmd_replay(argparse.Namespace(reason="LOAD_TEST_RECOVERY"))
+        self.assertEqual(2, len(accepted))
+
+    def test_http_failure_exits_without_reporting_success(self):
+        for status in ("409", "500"):
+            with self.subTest(status=status), patch.object(load, "psql", return_value=[["job", "10"]]), \
+                    patch.object(load, "operator_credential", return_value="test"), \
+                    patch.object(load, "compose", return_value='{}\n'+status), \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                with self.assertRaises(SystemExit):
+                    load.cmd_replay(argparse.Namespace(reason="LOAD_TEST_RECOVERY"))
+                self.assertNotIn("replayed 1 jobs", output.getvalue())
+
+
+class ReplayNormalTest(unittest.TestCase):
+    def test_accepted_replay_reports_success(self):
+        with patch.object(load, "psql", return_value=[["job", "10"]]), \
+                patch.object(load, "operator_credential", return_value="test"), \
+                patch.object(load, "compose", return_value='{}\n202'), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            load.cmd_replay(argparse.Namespace(reason="LOAD_TEST_RECOVERY"))
+        self.assertIn("replayed 1 jobs", output.getvalue())
+
+
+class RestartRegressionTest(unittest.TestCase):
+    def ramp(self, fail_on=None, skip_restart=False, stages="100:60", worker_env="", calls=None):
+        class InlineThread:
+            def __init__(self, target, daemon=False):
+                self.target = target
+
+            def start(self):
+                if skip_restart and self.target.__name__ == "kill_worker":
+                    return
+                try:
+                    self.target()
+                except BaseException:
+                    # 실제 보조 스레드처럼 예외를 호출자에게 직접 전달하지 않는다.
+                    pass
+
+            def is_alive(self):
+                return False
+
+            def join(self):
+                pass
+
+        def compose(*args, **kwargs):
+            if calls is not None:
+                calls.append((args, kwargs))
+            if args[0] == fail_on:
+                raise SystemExit(f"{fail_on} failed")
+            return worker_env if args[0] == "exec" else ""
+
+        sample = {k: 0 for k in ("received", "confirmed", "declined", "unfinished", "waiting",
+                                  "kafkaLag", "outboxPending", "jobsReview", "inboxReview")}
+        sample["at"] = "2026-11-03T00:00:00Z"
+        work = MagicMock()
+        args = argparse.Namespace(stages=stages, run="restart", mix="card", offset=0,
+                                  interval=1, drain=1, kill_after=25, scenario="normal")
+        with patch("threading.Thread", InlineThread), patch("threading.Event") as event, patch("builtins.open", mock_open()), \
+                patch.object(load, "time") as clock, patch.object(load, "WORK", work), \
+                patch.object(load, "produce"), patch.object(load, "remember_run"), \
+                patch.object(load, "snapshot", return_value=sample), \
+                patch.object(load, "compose", side_effect=compose), \
+                patch.object(load, "compose_env", return_value={}), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            event.return_value.wait.return_value = False
+            clock.monotonic.side_effect = range(100)
+            load.cmd_ramp(args)
+        return json.loads(work.__truediv__.return_value.__truediv__.return_value.write_text.call_args.args[0])
+
+    def test_kill_failure_is_propagated(self):
+        with self.assertRaisesRegex(SystemExit, "kill failed"):
+            self.ramp(fail_on="kill")
+
+    def test_restart_failure_is_propagated(self):
+        with self.assertRaisesRegex(SystemExit, "up failed"):
+            self.ramp(fail_on="up")
+
+    def test_missing_restart_completion_is_rejected(self):
+        with self.assertRaisesRegex(SystemExit, "restart did not complete"):
+            self.ramp(skip_restart=True)
+
+    def test_rejects_fault_after_injection_ends(self):
+        with self.assertRaisesRegex(SystemExit, "earlier than the end"):
+            self.ramp(stages="100:10")
+
+    def test_successful_restart_is_recorded(self):
+        fault = self.ramp()["fault"]
+        self.assertIn("killedAt", fault)
+        self.assertIn("restartedAt", fault)
+
+
+class StopInjectionTest(unittest.TestCase):
+    def test_failure_before_injection_leaves_an_empty_reconcilable_ledger(self):
+        for failure in ("snapshot", "producer"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                args = argparse.Namespace(stages="1:1", rate=1, seconds=1, run="failed", mix="card", offset=0,
+                                          interval=.01, drain=.01, kill_after=0, scenario=None, stop_file=None)
+                with patch.object(load, "WORK", root), patch.object(load, "STACK_RUNS", root / "runs"):
+                    with patch.object(load, "snapshot", side_effect=SystemExit("snapshot unavailable")), \
+                            patch.object(load.subprocess, "Popen", side_effect=OSError("producer unavailable")) as producer, \
+                            self.assertRaises((SystemExit, OSError)):
+                        (load.cmd_ramp if failure == "snapshot" else load.cmd_inject)(args)
+                    self.assertEqual(producer.call_count, 0 if failure == "snapshot" else 1)
+                    def psql(database, sql):
+                        return [("0", "0", "0")] if "SELECT (SELECT count(*) FROM payment.inbox" in sql else []
+                    with patch.object(load, "psql", side_effect=psql), contextlib.redirect_stdout(io.StringIO()):
+                        load.cmd_reconcile(argparse.Namespace(runs=None, output="reconcile.json"))
+                    report = json.loads((root / "reconcile.json").read_text())
+                    self.assertEqual(report["requests"], 0)
+                    self.assertEqual(report["problems"], {})
+
+    def test_registration_preserves_existing_ledger_and_rejects_unwritable_ledger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = root / "existing"
+            run.mkdir()
+            ledger = run / "requests.csv"
+            ledger.write_text("original,card,10,0,0,now\n")
+            with patch.object(load, "WORK", root), patch.object(load, "STACK_RUNS", root / "runs"):
+                load.remember_run("existing")
+                self.assertEqual(ledger.read_text(), "original,card,10,0,0,now\n")
+                blocked = root / "blocked/requests.csv"
+                blocked.mkdir(parents=True)
+                with self.assertRaises(IsADirectoryError):
+                    load.remember_run("blocked")
+                self.assertEqual((root / "runs").read_text(), "existing\n")
+
+    def test_snapshot_failure_stops_the_producer_and_flushes_the_ledger(self):
+        import threading
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sent = threading.Event()
+            process = MagicMock()
+            process.returncode = 0
+            process.stdin.write.side_effect = lambda _: sent.set()
+            sample = {k: 0 for k in ("received", "confirmed", "declined", "unfinished", "waiting",
+                                      "kafkaLag", "outboxPending", "jobsReview", "inboxReview")}
+            sample['at'] = '2026-11-04T00:00:00Z'
+            calls = 0
+            def snapshot():
+                nonlocal calls
+                calls += 1
+                if calls > 1:
+                    self.assertTrue(sent.wait(2))
+                    raise SystemExit('snapshot unavailable')
+                return sample
+            args = argparse.Namespace(stages='10:30', run='failure', mix='card', offset=0,
+                                      interval=.01, drain=1, kill_after=25, scenario=None, stop_file=None)
+            with patch.object(load, 'WORK', root), patch.object(load, 'STACK_RUNS', root / 'runs'), \
+                    patch.object(load.subprocess, 'Popen', return_value=process), \
+                    patch.object(load, 'compose_env', return_value={}), \
+                    patch.object(load, 'snapshot', side_effect=snapshot), \
+                    patch.object(load, 'compose') as compose, \
+                    self.assertRaisesRegex(SystemExit, 'snapshot unavailable'):
+                load.cmd_ramp(args)
+            self.assertGreater(process.stdin.write.call_count, 0)
+            with (root / 'failure/requests.csv').open() as ledger:
+                self.assertEqual(len(list(csv.reader(ledger))), process.stdin.write.call_count)
+            process.stdin.close.assert_called_once()
+            process.wait.assert_called_once_with(timeout=10)
+            compose.assert_not_called()
+
+    def test_restart_finishing_after_drain_deadline_still_fails(self):
+        import threading
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entered = threading.Event()
+            release = threading.Event()
+            sample = {k: 0 for k in ("received", "confirmed", "declined", "unfinished", "waiting",
+                                      "kafkaLag", "outboxPending", "jobsReview", "inboxReview")}
+            sample.update(at='2026-11-04T00:00:00Z', unfinished=1)
+            calls = 0
+            def snapshot():
+                nonlocal calls
+                calls += 1
+                if calls > 1:
+                    self.assertTrue(entered.wait(2))
+                return sample
+            def compose(*args, **kwargs):
+                if args[0] == 'up':
+                    entered.set()
+                    self.assertTrue(release.wait(2))
+                return ''
+            timer = threading.Timer(.3, release.set)
+            args = argparse.Namespace(stages='1:1', run='deadline', mix='card', offset=0,
+                                      interval=.01, drain=.01, kill_after=.01, scenario=None, stop_file=None)
+            timer.start()
+            try:
+                with patch.object(load, 'WORK', root), patch.object(load, 'STACK_RUNS', root / 'runs'), \
+                        patch.object(load, 'produce'), patch.object(load, 'compose_env', return_value={}), \
+                        patch.object(load, 'snapshot', side_effect=snapshot), \
+                        patch.object(load, 'compose', side_effect=compose), \
+                        contextlib.redirect_stdout(io.StringIO()), \
+                        self.assertRaisesRegex(SystemExit, 'before drain timeout'):
+                    load.cmd_ramp(args)
+                self.assertFalse((root / 'deadline/summary.json').exists())
+            finally:
+                release.set()
+                timer.join()
+
+    def test_producer_error_reported_during_join_cannot_create_success_summary(self):
+        class DeferredThread:
+            def __init__(self, target):
+                self.target = target
+            def start(self):
+                pass
+            def is_alive(self):
+                return False
+            def join(self):
+                self.target()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sample = {k: 0 for k in ("received", "confirmed", "declined", "unfinished", "waiting",
+                                      "kafkaLag", "outboxPending", "jobsReview", "inboxReview")}
+            sample['at'] = '2026-11-04T00:00:00Z'
+            args = argparse.Namespace(stages='1:1', run='late-failure', mix='card', offset=0,
+                                      interval=0, drain=1, kill_after=0, scenario=None, stop_file=None)
+            with patch('threading.Thread', DeferredThread), patch.object(load, 'WORK', root), \
+                    patch.object(load, 'STACK_RUNS', root / 'runs'), \
+                    patch.object(load, 'produce', side_effect=SystemExit('late producer failure')), \
+                    patch.object(load, 'snapshot', return_value=sample), \
+                    contextlib.redirect_stdout(io.StringIO()), \
+                    self.assertRaisesRegex(SystemExit, 'late producer failure'):
+                load.cmd_ramp(args)
+            self.assertFalse((root / 'late-failure/summary.json').exists())
+
+    def test_stop_during_delay_does_not_inject_the_next_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stop = root / 'stop'
+            process = MagicMock()
+            process.returncode = 0
+            marks = []
+            with patch.object(load.subprocess, 'Popen', return_value=process), \
+                    patch.object(load, 'compose_env', return_value={}), \
+                    patch.object(load.time, 'monotonic', return_value=0), \
+                    patch.object(load.time, 'sleep', side_effect=lambda _: stop.write_text('stop')):
+                end = load.produce([(1, 3)], ['card'], root, 7, marks, stop)
+            self.assertEqual(end, 8)
+            self.assertEqual(marks[0]['sent'], 1)
+            self.assertEqual(process.stdin.write.call_count, 1)
+            process.stdin.close.assert_called_once()
+            process.wait.assert_called_once()
+
+    def test_stop_before_injection_closes_the_producer_and_records_zero_sent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stop = root / 'stop'
+            stop.write_text('stop')
+            process = MagicMock()
+            process.returncode = 0
+            marks = []
+            with patch.object(load.subprocess, 'Popen', return_value=process), patch.object(load, 'compose_env', return_value={}):
+                end = load.produce([(100, 30)], ['card'], root, 7, marks, stop)
+            self.assertEqual(end, 7)
+            self.assertEqual(marks[0]['sent'], 0)
+            self.assertTrue(marks[0]['stopped'])
+            process.stdin.write.assert_not_called()
+            process.stdin.close.assert_called_once()
+            process.wait.assert_called_once()
+
+
+class WorkerSettingsTest(unittest.TestCase):
+    def test_records_only_processing_settings_from_the_running_worker(self):
+        env = "DB_PASSWORD=secret\nPAYMENT_REQUEST_CONCURRENCY=6\nPAYMENT_DB_POOL_SIZE=20\n"
+        with patch.object(load, "compose", return_value=env) as compose:
+            settings = load.worker_settings()
+        compose.assert_called_once_with("exec", "-T", "payment-worker", "env", check=False)
+        self.assertEqual(settings, {"PAYMENT_REQUEST_CONCURRENCY": "6",
+                                    "PAYMENT_APPROVAL_CONCURRENCY": None,
+                                    "PAYMENT_DB_POOL_SIZE": "20"})
+
+    def test_ramp_summary_contains_worker_settings(self):
+        settings = {"PAYMENT_REQUEST_CONCURRENCY": "6"}
+        with patch.object(load, "worker_settings", return_value=settings):
+            summary = RestartRegressionTest().ramp()
+        self.assertEqual(summary["workerSettings"], settings)
+
+    def test_restart_keeps_custom_settings_of_the_running_worker(self):
+        # enable 때만 9·6·30을 지정하고 ramp 셸에는 변수가 없는 상황(compose_env는 {}).
+        worker_env = ("DB_PASSWORD=secret\nPAYMENT_REQUEST_CONCURRENCY=9\n"
+                      "PAYMENT_APPROVAL_CONCURRENCY=6\nPAYMENT_DB_POOL_SIZE=30\n")
+        calls = []
+        summary = RestartRegressionTest().ramp(worker_env=worker_env, calls=calls)
+        names = [args[0] for args, _ in calls]
+        self.assertLess(names.index("exec"), names.index("kill"))
+        up_env = next(kwargs["env"] for args, kwargs in calls if args[0] == "up")
+        self.assertEqual(up_env["LOAD_PAYMENT_REQUEST_CONCURRENCY"], "9")
+        self.assertEqual(up_env["LOAD_PAYMENT_APPROVAL_CONCURRENCY"], "6")
+        self.assertEqual(up_env["LOAD_PAYMENT_DB_POOL_SIZE"], "30")
+        self.assertNotIn("LOAD_DB_PASSWORD", up_env)
+        self.assertEqual(summary["fault"]["workerSettingsBeforeKill"], summary["workerSettings"])
+
+    def test_summary_is_still_written_when_worker_cannot_be_read(self):
+        # Worker가 죽으면 check=False인 exec는 실패해도 예외 없이 빈 출력을 돌려준다.
+        summary = RestartRegressionTest().ramp()
+        self.assertIsNone(summary["workerSettings"])
+        self.assertIn("final", summary)
+
+
+class NamespaceTest(unittest.TestCase):
+    def test_empty_namespace_keeps_existing_identifiers(self):
+        self.assertEqual(load.buyer(0, ""), "00000000-0000-4000-8000-100000000000")
+        self.assertEqual(load.buyer(199, ""), "00000000-0000-4000-8000-1000000000c7")
+        self.assertEqual(load.product_id(""), load.PRODUCT)
+        self.assertEqual(load.wallet_ref(3, ""), "load-wallet-3")
+        self.assertEqual(load.wallet_prefix(""), "load-wallet-")
+
+    def test_named_namespaces_do_not_share_buyers_product_or_wallets(self):
+        a, b = "r1", "r2"
+        buyers_a = {load.buyer(n, a) for n in range(load.BUYER_POOL)}
+        buyers_b = {load.buyer(n, b) for n in range(load.BUYER_POOL)}
+        default = {load.buyer(n, "") for n in range(load.BUYER_POOL)}
+        self.assertEqual(len(buyers_a), load.BUYER_POOL)
+        self.assertFalse(buyers_a & buyers_b)
+        self.assertFalse(buyers_a & default)
+        self.assertNotEqual(load.product_id(a), load.product_id(b))
+        self.assertNotIn(load.product_id(a), buyers_a)
+        self.assertEqual(load.wallet_ref(5, a), "load-wallet-r1-5")
+        self.assertTrue(load.wallet_ref(5, a).startswith(load.wallet_prefix(a)))
+
+    def test_buyer_sql_uses_the_same_base_as_python(self):
+        for namespace in ("", "r7"):
+            base = load.namespace_base(namespace)
+            self.assertIn(f"to_hex({base} + n)", load.buyer_sql("n", namespace))
+            self.assertEqual(load.buyer(0, namespace)[-12:], f"{base:012x}")
+
+    def test_rejects_invalid_namespace_at_import(self):
+        env = dict(os.environ, LOAD_NAMESPACE="Bad_Name")
+        with patch.dict(os.environ, env, clear=False):
+            spec = importlib.util.spec_from_file_location("payment_load_bad", SOURCE)
+            module = importlib.util.module_from_spec(spec)
+            with self.assertRaises(SystemExit):
+                spec.loader.exec_module(module)
+
+
+if __name__ == "__main__":
+    unittest.main()

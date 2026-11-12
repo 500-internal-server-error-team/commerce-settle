@@ -1,0 +1,592 @@
+#!/usr/bin/env python3
+"""Check the running local foundation, not payment business functionality."""
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import time
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+import uuid
+
+ROOT = Path(__file__).resolve().parents[1]
+SERVICES = [
+    "gateway", "commerce", "payment-api", "payment-worker",
+    "settlement", "finance-mock",
+]
+
+
+def require_ci_project():
+    if os.environ.get("CI") != "true" or os.environ.get("COMPOSE_PROJECT_NAME") != "commerce-settle-ci":
+        raise RuntimeError("Stack changes require the disposable commerce-settle-ci project")
+
+
+def compose(*args, input_text=None, check=True):
+    return subprocess.run(
+        ["docker", "compose", *args], cwd=ROOT, input=input_text,
+        text=True, capture_output=True, timeout=60, check=check,
+    )
+
+
+def internal_json(service, path):
+    return json.loads(compose(
+        "exec", "-T", service, "curl", "--fail", "--silent",
+        f"http://localhost:9091{path}",
+    ).stdout)
+
+
+def redis_as(user, password_key, *command):
+    result = compose(
+        "exec", "-T", "redis", "sh", "-c",
+        f'export REDISCLI_AUTH="${password_key}"; '
+        f'exec redis-cli --no-auth-warning --raw --user {user} "$@"',
+        "redis-smoke", *command, check=False,
+    )
+    return (result.stdout + result.stderr).strip()
+
+
+def check_redis_acl(config):
+    redis_users = {
+        "gateway": "gateway", "commerce": "commerce", "payment-api": "payment",
+        "payment-worker": "payment", "settlement": "settlement", "finance-mock": "finance-mock",
+    }
+    admin_password = config["services"]["redis"]["environment"]["REDIS_PASSWORD"]
+    for service, user in redis_users.items():
+        environment = config["services"][service]["environment"]
+        assert environment.get("SPRING_DATA_REDIS_USERNAME") == user, service
+        assert environment.get("SPRING_DATA_REDIS_PASSWORD") not in (None, "", admin_password), service
+
+    gateway = ("gateway", "GATEWAY_REDIS_PASSWORD")
+    commerce = ("commerce", "COMMERCE_REDIS_PASSWORD")
+    session = "commerce-settle:auth:session:smoke:" + uuid.uuid4().hex
+    read_session = "redis.call('TIME'); return redis.call('HMGET', KEYS[1], 'purpose')"
+    read_sha = hashlib.sha1(read_session.encode()).hexdigest()
+    expire_session = "return redis.call('PEXPIRE', KEYS[1], 60000)"
+    try:
+        assert redis_as(*commerce, "HSET", session, "purpose", "SMOKE") == "1"
+        assert redis_as(*commerce, "EVAL", expire_session, "1", session) == "1"
+        assert redis_as(*commerce, "EVALSHA", hashlib.sha1(expire_session.encode()).hexdigest(),
+                        "1", session) == "1"
+        # EVAL_RO caches the script, so the following EVALSHA_RO covers Gateway's usual path.
+        assert redis_as(*gateway, "EVAL_RO", read_session, "1", session) == "SMOKE"
+        assert redis_as(*gateway, "EVALSHA_RO", read_sha, "1", session) == "SMOKE"
+        for command in [
+            ("HSET", session, "purpose", "FORGED"),
+            ("EVAL", read_session, "1", session),
+            ("EVALSHA", "0" * 40, "1", session),
+            ("SCRIPT", "LOAD", read_session),
+            ("SCRIPT", "FLUSH"),
+            ("HMGET", "commerce-settle:auth:rate-limit:smoke", "count"),
+        ]:
+            assert "NOPERM" in redis_as(*gateway, *command), command
+        for command in [
+            ("SET", "commerce-settle:payment:smoke", "1"),
+            ("SCRIPT", "FLUSH"),
+            ("FUNCTION", "FLUSH"),
+            ("SCAN", "0"),
+            ("RANDOMKEY",),
+            ("SELECT", "1"),
+        ]:
+            assert "NOPERM" in redis_as(*commerce, *command), command
+        for user, password_key in [
+            ("payment", "PAYMENT_REDIS_PASSWORD"), ("settlement", "SETTLEMENT_REDIS_PASSWORD"),
+            ("finance-mock", "FINANCE_MOCK_REDIS_PASSWORD"),
+        ]:
+            assert "NOPERM" in redis_as(user, password_key, "HMGET", session, "purpose"), user
+    finally:
+        compose("exec", "-T", "redis", "sh", "-c",
+                'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli DEL "$1"', "redis-smoke", session)
+
+
+def gateway_status(base, method, path, token=None):
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    try:
+        with urlopen(Request(base + path, method=method, headers=headers), timeout=15) as response:
+            return response.status, {}
+    except HTTPError as error:
+        body = error.read()
+        return error.code, json.loads(body) if body.startswith(b"{") else {}
+
+
+def gateway_json(base, method, path, body=None, token=None, headers=None):
+    headers = dict(headers or {})
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = json.dumps(body).encode() if body is not None else None
+    try:
+        with urlopen(Request(base + path, data=data, method=method, headers=headers),
+                     timeout=15) as response:
+            payload = response.read()
+            return response.status, json.loads(payload) if payload else {}
+    except HTTPError as error:
+        payload = error.read()
+        return error.code, json.loads(payload) if payload.startswith(b"{") else {}
+
+
+def check_internal_credentials():
+    # Same network as the backends: only the expected credential passes the caller check.
+    def direct(url, *headers):
+        return compose(
+            "exec", "-T", "gateway", "sh", "-c",
+            'exec curl --silent --output /dev/null --write-out "%{http_code}" "$@"',
+            "smoke", *headers, url,
+        ).stdout.strip()
+
+    targets = [
+        "http://commerce:8080/api/products",
+        "http://payment-api:8080/api/payments",
+        "http://settlement:8080/api/sellers/me/payouts",
+        "http://finance-mock:8080/mock/payouts/" + str(uuid.uuid4()),
+    ]
+    pg_lookup = ("http://finance-mock:8080/mock/providers/PG_A/transactions/" + str(uuid.uuid4())
+                 + "?operation=APPROVE&scenarioVersion=smoke-unconfigured-pg-v1")
+    for url in targets + [pg_lookup]:
+        assert direct(url) == "401", url
+        assert direct(url, "-H", "X-Authenticated-Actor-Kind: SELLER") == "401", url
+        assert direct(url, "-H", "Authorization: Bearer " + "x" * 43) == "401", url
+    passed = compose(
+        "exec", "-T", "gateway", "sh", "-c",
+        'exec curl --silent --output /dev/null --write-out "%{http_code}" '
+        '-H "Authorization: Bearer $COMMERCE_GATEWAY_CREDENTIAL" '
+        "http://commerce:8080/api/products",
+    ).stdout.strip()
+    assert passed == "200", passed
+    # The Gateway's credentials are not valid for Finance Mock.
+    gateway_to_mock = compose(
+        "exec", "-T", "gateway", "sh", "-c",
+        'exec curl --silent --output /dev/null --write-out "%{http_code}" '
+        '-H "Authorization: Bearer $PAYMENT_GATEWAY_CREDENTIAL" "$1"',
+        "smoke", targets[-1] + "?scenarioVersion=payout-normal-v1",
+    ).stdout.strip()
+    assert gateway_to_mock == "401", gateway_to_mock
+    # Settlement's own credential reaches the original payout lookup (404 means no transaction).
+    lookup = compose(
+        "exec", "-T", "settlement", "sh", "-c",
+        'exec curl --silent --write-out "\\n%{http_code}" '
+        '-H "Authorization: Bearer $FINANCE_MOCK_SETTLEMENT_CREDENTIAL" "$1"',
+        "smoke", targets[-1] + "?scenarioVersion=payout-normal-v1",
+    ).stdout.strip()
+    body, _, status = lookup.rpartition("\n")
+    assert status == "404", lookup
+    assert json.loads(body)["code"] == "MOCK_TRANSACTION_NOT_FOUND", body
+    # Payment reaches the PG lookup; its scenario is deliberately not configured without fixtures.
+    lookup = compose(
+        "exec", "-T", "payment-worker", "sh", "-c",
+        'exec curl --silent --write-out "\\n%{http_code}" '
+        '-H "Authorization: Bearer $FINANCE_MOCK_PAYMENT_CREDENTIAL" "$1"',
+        "smoke", pg_lookup,
+    ).stdout.strip()
+    body, _, status = lookup.rpartition("\n")
+    assert status == "503", lookup
+    assert json.loads(body)["code"] == "MOCK_SCENARIO_UNAVAILABLE", body
+    payment_to_payout = compose(
+        "exec", "-T", "payment-worker", "sh", "-c",
+        'exec curl --silent --output /dev/null --write-out "%{http_code}" '
+        '-H "Authorization: Bearer $FINANCE_MOCK_PAYMENT_CREDENTIAL" "$1"',
+        "smoke", targets[-1] + "?scenarioVersion=payout-normal-v1",
+    ).stdout.strip()
+    assert payment_to_payout == "403", payment_to_payout
+    settlement_to_pg = compose(
+        "exec", "-T", "settlement", "sh", "-c",
+        'exec curl --silent --output /dev/null --write-out "%{http_code}" '
+        '-H "Authorization: Bearer $FINANCE_MOCK_SETTLEMENT_CREDENTIAL" "$1"',
+        "smoke", pg_lookup,
+    ).stdout.strip()
+    assert settlement_to_pg == "403", settlement_to_pg
+    # Settlement reaches the Commerce settlement context (404 means no product); Gateway cannot.
+    settlement_context = ("http://commerce:8080/internal/products/" + str(uuid.uuid4())
+                          + "/settlement-context")
+    lookup = compose(
+        "exec", "-T", "settlement", "sh", "-c",
+        'exec curl --silent --write-out "\\n%{http_code}" '
+        '-H "Authorization: Bearer $COMMERCE_SETTLEMENT_CREDENTIAL" "$1"',
+        "smoke", settlement_context,
+    ).stdout.strip()
+    body, _, status = lookup.rpartition("\n")
+    assert status == "404", lookup
+    assert json.loads(body)["code"] == "COMMON_RESOURCE_NOT_FOUND", body
+    gateway_to_context = compose(
+        "exec", "-T", "gateway", "sh", "-c",
+        'exec curl --silent --output /dev/null --write-out "%{http_code}" '
+        '-H "Authorization: Bearer $COMMERCE_GATEWAY_CREDENTIAL" "$1"',
+        "smoke", settlement_context,
+    ).stdout.strip()
+    assert gateway_to_context == "403", gateway_to_context
+
+
+def check_login_flow(base):
+    # A fresh email per run keeps reruns away from the per-email login limit.
+    email = f"smoke-{uuid.uuid4().hex}@example.com"
+    password = uuid.uuid4().hex
+    status, account = gateway_json(base, "POST", "/api/sellers", {
+        "email": email, "password": password, "displayName": "smoke", "payoutAccountRef": "smoke",
+    })
+    assert status == 201 and account["actorKind"] == "SELLER", (status, account)
+    status, _ = gateway_json(base, "POST", "/api/seller-sessions",
+                             {"email": email, "password": password + "x"})
+    assert status == 401, status
+    status, session = gateway_json(base, "POST", "/api/seller-sessions",
+                                   {"email": email.upper(), "password": password})
+    assert status == 200 and session["tokenType"] == "Bearer", (status, session)
+    assert session["expiresAt"].endswith("+09:00"), session
+    token = session["token"]
+
+    status, me = gateway_json(base, "GET", "/api/accounts/me", token=token)
+    assert status == 200 and me["id"] == account["id"], (status, me)
+    status, problem = gateway_json(base, "GET", "/api/buyers/me/coupons", token=token)
+    assert (status, problem.get("code")) == (403, "COMMON_ROLE_FORBIDDEN"), status
+    status, profile = gateway_json(base, "GET", "/api/sellers/me", token=token)
+    assert status == 200 and profile["payoutAccountRef"] == "smoke", (status, profile)
+    update = {"displayName": "smoke-renamed", "payoutAccountRef": "smoke-2",
+              "expectedVersion": profile["version"]}
+    key = {"Idempotency-Key": "smoke-" + uuid.uuid4().hex}
+    status, changed = gateway_json(base, "PUT", "/api/sellers/me", update, token, key)
+    assert status == 200 and changed["version"] == profile["version"] + 1, (status, changed)
+    status, replay = gateway_json(base, "PUT", "/api/sellers/me", update, token, key)
+    assert status == 200 and replay["version"] == changed["version"], (status, replay)
+    status, problem = gateway_json(base, "PUT", "/api/sellers/me", update, token,
+                                   {"Idempotency-Key": "smoke-" + uuid.uuid4().hex})
+    assert (status, problem.get("code")) == (409, "COMMON_VERSION_CONFLICT"), status
+    status, _ = gateway_json(base, "DELETE", "/api/sessions/current", token=token)
+    assert status == 204, status
+    status, problem = gateway_json(base, "GET", "/api/accounts/me", token=token)
+    assert (status, problem.get("code")) == (401, "COMMON_AUTHENTICATION_REQUIRED"), status
+
+
+def check_password_reset(base):
+    # The token is only stored as a delivery ciphertext, so smoke checks the public contract only.
+    email = f"smoke-{uuid.uuid4().hex}@example.com"
+    status, _ = gateway_json(base, "POST", "/api/sellers", {
+        "email": email, "password": uuid.uuid4().hex, "displayName": "smoke",
+        "payoutAccountRef": "smoke",
+    })
+    assert status == 201, status
+    responses = [
+        gateway_json(base, "POST", "/api/password-reset-requests",
+                     {"actorKind": "SELLER", "email": address})
+        for address in (email, f"none-{uuid.uuid4().hex}@example.com")
+    ]
+    assert responses[0] == responses[1] and responses[0][0] == 200, responses
+    assert "token" not in responses[0][1], responses[0]
+    status, problem = gateway_json(base, "POST", "/api/password-resets", {
+        "actorKind": "SELLER", "token": uuid.uuid4().hex, "newPassword": uuid.uuid4().hex,
+    })
+    assert (status, problem.get("code")) == (401, "COMMON_AUTHENTICATION_REQUIRED"), status
+
+
+def check_session_auth(config, base):
+    epoch = config["services"]["gateway"]["environment"]["AUTH_SESSION_EPOCH"]
+    token = uuid.uuid4().hex
+    seller_id = str(uuid.uuid4())
+    session = f"commerce-settle:auth:session:{epoch}:{hashlib.sha256(token.encode()).hexdigest()}"
+    guard = f"commerce-settle:auth:subject:{epoch}:SELLER:{seller_id}"
+    admin = ["exec", "-T", "redis", "sh", "-c",
+             'export REDISCLI_AUTH="$REDIS_PASSWORD"; exec redis-cli --raw "$@"', "redis-smoke"]
+    try:
+        status, problem = gateway_status(base, "GET", "/api/sellers/me")
+        assert (status, problem.get("code")) == (401, "COMMON_AUTHENTICATION_REQUIRED"), status
+
+        seconds, micros = compose(*admin, "TIME").stdout.split()
+        now = int(seconds) * 1000 + int(micros) // 1000
+        compose(*admin, "HSET", session, "actorKind", "SELLER", "actorId", seller_id,
+                "purpose", "SESSION", "authVersion", "0", "issuedAt", str(now),
+                "expiresAt", str(now + 60_000))
+        compose(*admin, "HSET", guard, "authVersion", "0", "state", "ACTIVE")
+        # The seller account row does not exist, so use a seller path that needs only the identity.
+        status, _ = gateway_status(base, "GET", "/api/sellers/me/products", token)
+        assert status == 200, status
+        status, problem = gateway_status(base, "GET", "/api/buyers/me/coupons", token)
+        assert (status, problem.get("code")) == (403, "COMMON_ROLE_FORBIDDEN"), status
+
+        compose(*admin, "HSET", guard, "pendingChangeId", str(uuid.uuid4()))
+        status, problem = gateway_status(base, "GET", "/api/sellers/me", token)
+        assert (status, problem.get("code")) == (503, "COMMON_TEMPORARILY_UNAVAILABLE"), status
+    finally:
+        compose(*admin, "DEL", session, guard)
+
+
+def check_buyer_signup_and_addresses(base):
+    # A fresh email per run keeps reruns away from the per-email login limit.
+    email = f"smoke-{uuid.uuid4().hex}@example.com"
+    signup = {"email": email, "password": uuid.uuid4().hex, "displayName": "smoke"}
+    signup_key = {"Idempotency-Key": f"smoke-{uuid.uuid4().hex}"}
+    status, account = gateway_json(base, "POST", "/api/buyers", signup, headers=signup_key)
+    assert status == 201 and account["actorKind"] == "BUYER", (status, account)
+    status, replay = gateway_json(base, "POST", "/api/buyers", signup, headers=signup_key)
+    assert status == 201 and replay["id"] == account["id"], (status, replay)
+    status, problem = gateway_json(base, "POST", "/api/buyers",
+                                   {**signup, "displayName": "other"}, headers=signup_key)
+    assert (status, problem.get("code")) == (409, "COMMON_IDEMPOTENCY_CONFLICT"), status
+    status, session = gateway_json(base, "POST", "/api/buyer-sessions",
+                                   {"email": email, "password": signup["password"]})
+    assert status == 200, (status, session)
+    token = session["token"]
+
+    status, coupons = gateway_json(base, "GET", "/api/buyers/me/coupons", token=token)
+    assert status == 200 and coupons["totalElements"] == 1, coupons
+
+    address = {"recipient": "smoke", "phone": "010-0000-0000", "postalCode": "00000",
+               "addressLine1": "smoke street", "addressLine2": "", "isDefault": False}
+    key = {"Idempotency-Key": f"smoke-{uuid.uuid4().hex}"}
+    status, created = gateway_json(base, "POST", "/api/buyers/me/addresses", address,
+                                   token, key)
+    assert status == 201 and created["isDefault"] is True, (status, created)
+    status, replay = gateway_json(base, "POST", "/api/buyers/me/addresses", address,
+                                  token, key)
+    assert status == 201 and replay["id"] == created["id"], (status, replay)
+    status, page = gateway_json(base, "GET", "/api/buyers/me/addresses", token=token)
+    assert status == 200 and [item["id"] for item in page["items"]] == [created["id"]], page
+    status, _ = gateway_json(
+        base, "DELETE",
+        f"/api/buyers/me/addresses/{created['id']}?expectedVersion={created['version']}",
+        token=token, headers={"Idempotency-Key": f"smoke-{uuid.uuid4().hex}"})
+    assert status == 204, status
+    status, page = gateway_json(base, "GET", "/api/buyers/me/addresses", token=token)
+    assert status == 200 and page["totalElements"] == 0, page
+    status, _ = gateway_json(base, "DELETE", "/api/sessions/current", token=token)
+    assert status == 204, status
+
+
+def check_kafka_topics():
+    description = compose(
+        "exec", "-T", "kafka", "/opt/kafka/bin/kafka-topics.sh",
+        "--bootstrap-server", "kafka:9092", "--describe", "--exclude-internal",
+    ).stdout
+    summaries = {}
+    for line in description.splitlines():
+        if "Configs:" not in line:
+            continue
+        match = re.search(r"Topic:\s*(\S+)", line)
+        assert match, line
+        name = match.group(1)
+        assert name not in summaries, f"Duplicate topic summary: {name}"
+        summaries[name] = line
+    for owner in ["commerce", "payment", "settlement", "commerce-notifications"]:
+        topics = [(f"commerce-settle.{owner}.v1.dlt", "604800000")]
+        if owner != "commerce-notifications":
+            topics.append((f"commerce-settle.{owner}.v1", "86400000"))
+        for name, retention in topics:
+            assert name in summaries, f"Missing topic: {name}"
+            summary = summaries[name]
+            assert re.search(r"PartitionCount:\s*3\b", summary), summary
+            assert re.search(r"ReplicationFactor:\s*1\b", summary), summary
+            configs = dict(item.split("=", 1) for item in summary.split("Configs:", 1)[1].strip().split(","))
+            assert configs.get("cleanup.policy") == "delete", summary
+            assert configs.get("retention.ms") == retention, summary
+            assert configs.get("retention.bytes") == "-1", summary
+
+
+def check_backend_ports(service, ports, demo_ui=False):
+    allowed = {"commerce": 18081, "payment-api": 18082, "settlement": 18083, "finance-mock": 18084}
+    if not demo_ui or service not in allowed:
+        assert not ports, service
+        return
+    assert ports and len(ports) == 1, service
+    port = ports[0]
+    assert (port.get("host_ip"), int(port["published"]), int(port["target"]), port.get("protocol", "tcp")) == (
+        "127.0.0.1", allowed[service], 8080, "tcp"), service
+
+
+def check_demo_ui_operator_bindings(config):
+    targets = [("commerce", "/internal/coupon-issue-runs", 200),
+               ("payment-api", "/internal/payment-jobs", 200),
+               ("settlement", "/internal/payout-jobs", 200),
+               ("finance-mock", "/mock/accounts/" + str(uuid.uuid4()), 404)]
+    credentials = []
+    for service, _, _ in targets:
+        settings = json.loads(config["services"][service]["environment"]["SPRING_APPLICATION_JSON"])
+        credentials.append(settings["app"]["internal-auth"]["senders"]["[operator:demo-ui]"]["current"])
+    assert len(set(credentials)) == 4 and all(len(value) >= 43 for value in credentials), "Use distinct demo operator credentials"
+    for index, (service, path, expected) in enumerate(targets):
+        port = config["services"][service]["ports"][0]["published"]
+        base = f"http://127.0.0.1:{port}"
+        assert gateway_json(base, "GET", path, token=credentials[index])[0] == expected, service
+        assert gateway_json(base, "GET", path)[0] == 401, service
+        assert gateway_json(base, "GET", path, token=credentials[(index + 1) % 4])[0] == 401, service
+    print("PASS demo UI: four operator bindings; anonymous and other-owner credentials rejected")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--demo-ui", action="store_true", help="Validate the opt-in loopback operator ports on a dedicated UI project")
+    args = parser.parse_args(argv)
+    # Reading the resolved port supports overrides in .env and COMPOSE_FILE.
+    config = json.loads(compose("config", "--format", "json").stdout)
+    if args.demo_ui:
+        assert re.fullmatch(r"commerce-settle-ui-[a-z0-9-]+", config["name"]), "Use a dedicated UI Compose project"
+    port = config["services"]["gateway"]["ports"][0]["published"]
+    base = f"http://127.0.0.1:{port}"
+
+    for service in SERVICES:
+        health = internal_json(service, "/actuator/health")
+        assert health["status"] == "UP", (service, health)
+        assert health["components"]["redis"]["status"] == "UP", service
+        if service != "gateway":
+            assert health["components"]["db"]["status"] == "UP", service
+        metrics = compose(
+            "exec", "-T", service, "curl", "--fail", "--silent",
+            "http://localhost:9091/actuator/prometheus",
+        ).stdout
+        assert "jvm_memory_used_bytes" in metrics, service
+        if service != "gateway":
+            check_backend_ports(service, config["services"][service].get("ports"), args.demo_ui)
+        print(f"PASS {service}: readiness, metrics and port boundary")
+
+        logs = compose("logs", "--no-color", "--no-log-prefix", "--tail=100", service).stdout
+        timestamps = re.findall(r"(?m)^(\d{4}-\d{2}-\d{2}T\S+)\s", logs)
+        assert timestamps and all(stamp.endswith("+09:00") for stamp in timestamps), service
+    print("PASS app logs: explicit KST offset for all six processes")
+    if args.demo_ui:
+        check_demo_ui_operator_bindings(config)
+
+    for service in ["commerce", "payment", "settlement"]:
+        with urlopen(f"{base}/v3/api-docs/{service}", timeout=15) as response:
+            document = json.load(response)
+        assert document["openapi"].startswith("3."), document
+        assert document["info"]["title"].lower() == service, document
+        assert document["servers"] == [{"url": "/"}], document
+    with urlopen(f"{base}/swagger-ui.html", timeout=15) as response:
+        assert response.status == 200
+    for path in ["/internal/pg", "/actuator/env", "/actuator/prometheus", "/api/mock/approve"]:
+        try:
+            urlopen(base + path, timeout=10)
+            raise AssertionError(f"Unexpected external route: {path}")
+        except HTTPError as error:
+            assert error.code == 404, (path, error.code)
+    print("PASS Gateway: service docs, Swagger UI and blocked internal paths")
+
+    assert not config["services"]["redis"].get("ports"), "Redis must remain internal"
+    unauthenticated = compose("exec", "-T", "redis", "redis-cli", "ping")
+    assert "NOAUTH" in unauthenticated.stdout, unauthenticated.stdout
+    redis_cli = ["exec", "-T", "redis", "sh", "-c",
+                 'export REDISCLI_AUTH="$REDIS_PASSWORD"; exec redis-cli --raw "$@"',
+                 "redis-smoke"]
+    key = "commerce-settle:bootstrap:smoke:" + uuid.uuid4().hex
+    value = uuid.uuid4().hex
+    try:
+        assert compose(*redis_cli, "SET", key, value, "EX", "60").stdout.strip() == "OK"
+        assert compose(*redis_cli, "GET", key).stdout.strip() == value
+        assert 0 < int(compose(*redis_cli, "TTL", key).stdout.strip()) <= 60
+    finally:
+        compose(*redis_cli, "DEL", key)
+    print("PASS Redis: all app connections, auth boundary and expiring key round trip")
+
+    check_redis_acl(config)
+    print("PASS Redis ACL: per-app users, Commerce auth writes and read-only Gateway checks")
+
+    check_internal_credentials()
+    print("PASS internal credentials: direct backend calls need the target's credential, "
+          "Settlement reaches Finance Mock")
+
+    check_session_auth(config, base)
+    print("PASS Gateway session: 401 without a session, Redis session pass, role 403, pending guard 503")
+
+    check_login_flow(base)
+    print("PASS Commerce login: seller signup, Gateway-verified session, profile change, "
+          "logout then 401")
+
+    check_password_reset(base)
+    print("PASS Commerce password reset: same request response for unknown accounts, bad token 401")
+
+    check_buyer_signup_and_addresses(base)
+    print("PASS Buyer signup: welcome coupon, idempotent replay/conflict, login, addresses")
+
+    trace_id = uuid.uuid4().hex
+    parent_id = uuid.uuid4().hex[:16]
+    request = Request(f"{base}/v3/api-docs/commerce", headers={
+        "traceparent": f"00-{trace_id}-{parent_id}-01",
+    })
+    with urlopen(request, timeout=15) as response:
+        assert response.status == 200
+    zipkin_port = config["services"]["zipkin"]["ports"][0]["published"]
+    spans = []
+    for _ in range(30):
+        try:
+            with urlopen(f"http://127.0.0.1:{zipkin_port}/api/v2/trace/{trace_id}", timeout=5) as response:
+                spans = json.load(response)
+        except HTTPError as error:
+            if error.code != 404:
+                raise
+        gateway_clients = {span["id"] for span in spans
+                           if span.get("localEndpoint", {}).get("serviceName") == "gateway"
+                           and span.get("kind") == "CLIENT"}
+        if any(span.get("localEndpoint", {}).get("serviceName") == "commerce"
+               and span.get("kind") == "SERVER" and span.get("parentId") in gateway_clients
+               for span in spans):
+            break
+        time.sleep(1)
+    else:
+        raise AssertionError(f"Gateway to Commerce trace propagation missing: {spans}")
+    print("PASS Zipkin: Gateway client and Commerce server share a parent-linked trace")
+
+    for service, password_key in [
+        ("commerce", "COMMERCE_DB_PASSWORD"), ("payment", "PAYMENT_DB_PASSWORD"),
+        ("settlement", "SETTLEMENT_DB_PASSWORD"), ("finance_mock", "FINANCE_MOCK_DB_PASSWORD"),
+    ]:
+        for database in ["commerce", "payment", "settlement", "finance_mock"]:
+            command = (
+                f'PGPASSWORD="${password_key}" psql -h 127.0.0.1 '
+                f'-U {service} -d {database} -c "SELECT 1"'
+            )
+            result = compose("exec", "-T", "postgres", "bash", "-c", command, check=False)
+            if service == database:
+                assert result.returncode == 0, (service, database, result.stderr)
+            else:
+                assert result.returncode != 0 and "permission denied" in result.stderr, (
+                    service, database, result.stderr
+                )
+        ownership = compose(
+            "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", service,
+            "-v", "ON_ERROR_STOP=1", "-v", f"service={service}", "-Atq",
+            input_text="""
+SELECT pg_get_userbyid(nspowner) = :'service'
+FROM pg_namespace WHERE nspname = :'service';
+SELECT coalesce(bool_and(tableowner = :'service'), true)
+FROM pg_tables WHERE schemaname = :'service';
+""",
+        ).stdout.splitlines()
+        assert ownership == ["t", "t"], (service, ownership)
+    print("PASS PostgreSQL: service-owned initial schemas/tables, own access and cross-service denial")
+
+    times = compose(
+        "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "postgres",
+        "-v", "ON_ERROR_STOP=1", "-Atq", input_text="""
+SHOW TimeZone;
+SHOW log_timezone;
+CREATE TEMP TABLE time_smoke (occurred_at timestamptz NOT NULL);
+INSERT INTO time_smoke VALUES ('2026-10-31T15:00:00.123456Z');
+SELECT occurred_at::text FROM time_smoke;
+SELECT occurred_at = '2026-11-01T00:00:00.123456+09:00'::timestamptz FROM time_smoke;
+""",
+    ).stdout.splitlines()
+    assert times == ["Asia/Seoul", "Asia/Seoul", "2026-11-01 00:00:00.123456+09", "t"], times
+    print("PASS PostgreSQL: KST query/log settings and stored instant/microsecond preservation")
+
+    kafka = ["exec", "-T", "kafka"]
+    tool = "/opt/kafka/bin/"
+    check_kafka_topics()
+    print("PASS Kafka: three original and four consumer DLT topic settings")
+    topic = "bootstrap.smoke." + uuid.uuid4().hex
+    compose(*kafka, tool + "kafka-topics.sh", "--bootstrap-server", "kafka:9092",
+            "--create", "--topic", topic, "--partitions", "1", "--replication-factor", "1")
+    try:
+        message = uuid.uuid4().hex
+        compose(*kafka, tool + "kafka-console-producer.sh", "--bootstrap-server", "kafka:9092",
+                "--topic", topic, input_text=message + "\n")
+        received = compose(*kafka, tool + "kafka-console-consumer.sh", "--bootstrap-server", "kafka:9092",
+                           "--topic", topic, "--from-beginning", "--max-messages", "1", "--timeout-ms", "10000")
+        assert received.stdout.strip() == message, received.stdout
+    finally:
+        compose(*kafka, tool + "kafka-topics.sh", "--bootstrap-server", "kafka:9092", "--delete", "--topic", topic)
+    print("PASS Kafka: broker round trip; temporary verification topic removed")
+    print("Bootstrap smoke passed. Payment, refund and settlement APIs are not implemented yet.")
+
+
+if __name__ == "__main__":
+    main()

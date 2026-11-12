@@ -1,0 +1,219 @@
+jdbc:
+  includes: CONNECTION,QUERY,FETCH
+  datasource-proxy:
+    include-parameter-values: false
+    query:
+      enable-logging: false
+    slow-query:
+      enable-logging: false
+  resultset-operations:
+    enabled: false
+
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  jackson:
+    time-zone: Asia/Seoul
+    serialization:
+      write-dates-as-timestamps: false
+      write-dates-with-context-time-zone: true
+  application:
+    name: commerce
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 1
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.default_schema: commerce
+  sql:
+    init:
+      mode: never
+  batch:
+    job:
+      # 기동 시 자동 실행하지 않고 스케줄러가 targetMonth·runId로 실행한다.
+      enabled: false
+    jdbc:
+      # 메타데이터 테이블은 commerce 초기 SQL이 만든다.
+      initialize-schema: never
+      table-prefix: commerce.BATCH_
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+    template:
+      observation-enabled: true
+    producer:
+      acks: all
+      retries: 2147483647
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 120000
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+    consumer:
+      group-id: commerce.v1
+      enable-auto-commit: false
+      auto-offset-reset: none
+      max-poll-records: 100
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+    listener:
+      observation-enabled: true
+      ack-mode: manual_immediate
+      concurrency: 1
+      missing-topics-fatal: true
+  # 오류 응답의 검증 사유를 다른 응답 문구와 같은 한국어로 고정한다.
+  web:
+    locale: ko_KR
+    locale-resolver: fixed
+
+springdoc:
+  paths-to-match: /api/**
+
+management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9091}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        async.work: true
+        async.stage: true
+        jdbc.query: true
+    tags:
+      application: ${spring.application.name}
+      role: ${PAYMENT_ROLE:app}
+
+logging:
+  pattern:
+    dateformat: "yyyy-MM-dd'T'HH:mm:ss.SSSXXX,Asia/Seoul"
+    level: "%5p %kvp"
+
+app:
+  order-admission:
+    prometheus-url: ${APP_ORDER_ADMISSION_PROMETHEUS_URL:http://prometheus:9090}
+    paused: ${APP_ORDER_ADMISSION_PAUSED:false}
+  kakao-self:
+    enabled: ${KAKAO_SELF_DEMO_ENABLED:false}
+    credentials-file: ${KAKAO_SELF_CREDENTIALS_FILE:}
+    user-id: ${KAKAO_SELF_USER_ID:}
+    app-id: ${KAKAO_SELF_APP_ID:}
+    message-link: ${KAKAO_SELF_MESSAGE_LINK:}
+    buyer-ids: ${KAKAO_SELF_BUYER_IDS:}
+    seller-ids: ${KAKAO_SELF_SELLER_IDS:}
+  notifications:
+    consumer-enabled: ${APP_NOTIFICATIONS_CONSUMER_ENABLED:false}
+    worker-enabled: ${APP_NOTIFICATIONS_WORKER_ENABLED:false}
+    metrics:
+      enabled: ${APP_NOTIFICATION_METRICS_ENABLED:false}
+    mock:
+      seed: ${APP_NOTIFICATIONS_MOCK_SEED:67}
+      delay-ms: ${APP_NOTIFICATIONS_MOCK_DELAY_MS:0}
+      temporary-failure-permille: ${APP_NOTIFICATIONS_MOCK_TEMPORARY_FAILURE_PERMILLE:0}
+      permanent-failure-permille: ${APP_NOTIFICATIONS_MOCK_PERMANENT_FAILURE_PERMILLE:0}
+      response-loss-permille: ${APP_NOTIFICATIONS_MOCK_RESPONSE_LOSS_PERMILLE:0}
+  refund-closure:
+    enabled: ${APP_REFUND_CLOSURE_ENABLED:false}
+    payment-url: ${PAYMENT_URL:http://payment-api:8080}
+    settlement-url: ${SETTLEMENT_URL:http://settlement:8080}
+    payment-credential: ${PAYMENT_COMMERCE_CREDENTIAL:}
+    settlement-credential: ${SETTLEMENT_COMMERCE_CREDENTIAL:}
+  retention:
+    settlement-url: ${SETTLEMENT_URL:http://settlement:8080}
+    settlement-credential: ${SETTLEMENT_COMMERCE_CREDENTIAL:}
+    enabled: ${COMMERCE_RETENTION_ENABLED:false}
+    batch-size: ${COMMERCE_RETENTION_BATCH_SIZE:100}
+    max-batches: ${COMMERCE_RETENTION_MAX_BATCHES:10}
+    cron: ${COMMERCE_RETENTION_CRON:0 0 3 * * *}
+  kafka:
+    payment-accepted:
+      enabled: ${APP_KAFKA_PAYMENT_ACCEPTED_ENABLED:false}
+  order-workflow:
+    enabled: ${APP_ORDER_WORKFLOW_ENABLED:false}
+    interval-ms: 60000
+  order-result-processor:
+    enabled: ${APP_ORDER_RESULT_PROCESSOR_ENABLED:false}
+    interval-ms: 1000
+  payment-accepted-processor:
+    enabled: ${APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED:false}
+    interval-ms: 1000
+    batch-size: 100
+  dev-fixtures:
+    enabled: ${APP_DEV_FIXTURES_ENABLED:false}
+    password: ${DEV_FIXTURE_PASSWORD:}
+  coupons:
+    # 기한이 지난 미사용 쿠폰 만료. docs/architecture.md#정기-작업과-비동기-실행
+    expiry-scheduler-enabled: true
+    expiry-interval-ms: 60000
+    expiry-batch-size: 100
+    # 매월 1일 00:10 KST부터 월간 우수고객 회차 실행, 10분마다 미완료 회차 재확인
+    grade-scheduler-enabled: true
+    # 실행자 잠금을 잡았는데도 이보다 오래 갱신이 없는 진행 중 실행은 강제 종료 잔류로 보고 정리 뒤 재시작
+    grade-stale-after: PT10M
+  mileage-accrual:
+    # 새 주문에 고정할 구매 적립 정책. 초기 정책값은 외부 결제액의 1%(100bp, 버림)·주문당 1,000점이다. docs/policies.md#마일리지와-외부-대역
+    enabled: ${APP_MILEAGE_ACCRUAL_ENABLED:true}
+    policy-version: mileage-accrual-v1
+    rate-basis-points: 100
+    per-order-cap: 1000
+  sale-events:
+    # 이벤트 시작·종료 처리. docs/architecture.md#정기-작업과-비동기-실행
+    scheduler-enabled: true
+    schedule-interval-ms: 60000
+    batch-size: 100
+    # 공개 게이지 조회의 인스턴스 메모리 캐시 TTL. 0이면 캐시하지 않는다. docs/policies.md#선착순-상품-이벤트
+    gauge-cache-ttl: PT1S
+    # 신규 이벤트 주문의 이벤트별 동시 실행 상한(인스턴스별)과 슬롯 대기 상한. 초과는 503 + Retry-After(대기 상한 올림 초)
+    # docs/policies.md#선착순-상품-이벤트
+    order-max-concurrent: ${APP_SALE_EVENT_ORDER_MAX_CONCURRENT:3}
+    order-max-wait: ${APP_SALE_EVENT_ORDER_MAX_WAIT:PT1S}
+  outbox:
+    enabled: ${APP_OUTBOX_ENABLED:false}
+    recovery-interval-ms: 1000
+    max-in-flight: 8
+    lease-ms: 240000
+    max-attempts: 10
+  auth:
+    # 세션 키의 인증 세대. Gateway와 같은 UUID를 쓰며 없으면 기동하지 않는다.
+    session-epoch: ${AUTH_SESSION_EPOCH}
+    # 승인한 Redis 실행 식별자(INFO server의 run_id). Gateway와 같은 값이며 없거나 형식이 틀리면 기동하지 않는다.
+    redis-run-id: ${AUTH_REDIS_RUN_ID}
+    rate-limit:
+      identifier-hmac-key: ${AUTH_RATE_LIMIT_HMAC_KEY}
+      # 프로젝트 시작 기본값. docs/policies.md#로그인복구-요청-제한
+      login-max-requests: 5
+      login-window-seconds: 900
+      password-reset-max-requests: 3
+      password-reset-window-seconds: 3600
+    password-reset:
+      delivery-key: ${AUTH_RESET_DELIVERY_KEY}
+  address:
+    # 주소록 배송 정보 암호문의 서버 키. 없으면 기동하지 않는다.
+    encryption-key: ${ADDRESS_ENCRYPTION_KEY}
+  internal-auth:
+    service: commerce
+    # 발신자별 내부 호출 자격. gateway가 없거나 43자 미만이면 기동하지 않는다. previous는 교체 중에만 둔다.
+    senders:
+      gateway:
+        current: ${COMMERCE_GATEWAY_CREDENTIAL}
+        previous: ${COMMERCE_GATEWAY_CREDENTIAL_PREVIOUS:}
+      # Settlement의 지급 컨텍스트 조회(GET /internal/products/{productId}/settlement-context).
+      "[service:settlement]":
+        current: ${COMMERCE_SETTLEMENT_CREDENTIAL}
+        previous: ${COMMERCE_SETTLEMENT_CREDENTIAL_PREVIOUS:}

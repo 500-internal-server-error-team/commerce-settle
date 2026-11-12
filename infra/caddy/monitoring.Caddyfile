@@ -1,0 +1,50 @@
+(monitoring_auth) {
+	header WWW-Authenticate "Basic realm=\"commerce-monitoring\""
+	forward_auth {$DATA_PRIVATE_IP}:3000 {
+		uri /api/user
+		header_up -Cookie
+		transport http {
+			keepalive off
+		}
+	}
+}
+
+(monitoring_proxy) {
+	reverse_proxy {$DATA_PRIVATE_IP}:{args[0]} {
+		header_up -Authorization
+		header_up -Forwarded
+		transport http {
+			keepalive off
+		}
+	}
+}
+
+grafana.{$PUBLIC_DOMAIN} {
+	reverse_proxy {$DATA_PRIVATE_IP}:3000 {
+		header_up -Forwarded
+		transport http {
+			keepalive off
+		}
+	}
+}
+
+prometheus.{$PUBLIC_DOMAIN} {
+	import monitoring_auth
+	import monitoring_proxy 9090
+}
+
+zipkin.{$PUBLIC_DOMAIN} {
+	import monitoring_auth
+	@query method GET HEAD
+	handle @query {
+		import monitoring_proxy 9411
+	}
+	handle {
+		respond "Trace ingestion is available only on the private collector." 405
+	}
+}
+
+kafka.{$PUBLIC_DOMAIN} {
+	import monitoring_auth
+	import monitoring_proxy 8081
+}

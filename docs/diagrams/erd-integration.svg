@@ -1,0 +1,298 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1080" viewBox="0 0 1200 1080" role="img" aria-labelledby="title desc">
+  <title id="title">메시지·멱등성·감사 ERD</title>
+  <desc id="desc">주요 필드와 논리 관계, 단일·복합 유일제약과 적용 조건. 전체 컬럼과 제약은 데이터 모델 문서가 기준이며 물리 FK는 없다. Outbox·Inbox·멱등 기록·감사는 각 소유 서비스 DB에 개별 저장하는 공통 구조다. Outbox의 status는 발행 상태, published_at은 Kafka 브로커 ACK 확인 뒤 확정한 시각이다. Payment의 별도 원문 격리는 원문 한 건에 여러 발행 작업, 발행 작업 한 건에 여러 재개 이력을 연결한다. 정상 Inbox나 업무 eventId를 참조하지 않는다.</desc>
+  <rect width="1200" height="1080" fill="#ffffff" />
+  <path data-relation="outbox:inbox" d="M360,132 L432,132" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" />
+  <g data-entity="outbox" data-box="24,24,336,270">
+    <rect x="24.0" y="24" width="336.0" height="270" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="40.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">발행할 이벤트</text>
+    <text x="40.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">outbox</text>
+    <path d="M24,80h336" stroke="#e2e8f0" />
+    <text x="40.0" y="100" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field"># id uuid (= eventId)</text>
+    <text x="40.0" y="118" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">event_type</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> varchar(80)</tspan>
+    </text>
+    <text x="40.0" y="136" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">event_version</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> integer</tspan>
+    </text>
+    <text x="40.0" y="154" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">occurred_at</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> timestamptz</tspan>
+    </text>
+    <text x="40.0" y="172" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">aggregate_id</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="40.0" y="190" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">aggregate_version</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="40.0" y="208" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">topic</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> varchar(100)</tspan>
+    </text>
+    <text x="40.0" y="226" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">status</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> varchar(16)</tspan>
+    </text>
+    <text x="40.0" y="244" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">published_partition</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> integer?</tspan>
+    </text>
+    <text x="40.0" y="262" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">published_offset</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> bigint?</tspan>
+    </text>
+    <text x="40.0" y="280" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0">published_at</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> timestamptz?</tspan>
+    </text>
+  </g>
+  <g data-entity="inbox" data-box="432,24,336,220">
+    <rect x="432.0" y="24" width="336.0" height="220" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="448.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">수신 이벤트</text>
+    <text x="448.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">inbox</text>
+    <path d="M432,80h336" stroke="#e2e8f0" />
+    <text x="448.0" y="100" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0"># id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="118" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">consumer</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> varchar(100)</tspan>
+    </text>
+    <text x="448.0" y="136" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">event_id</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448.0" y="154" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">event_type</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> varchar(80)</tspan>
+    </text>
+    <text x="448.0" y="172" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">status</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> varchar(24)</tspan>
+    </text>
+    <text x="448.0" y="190" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448.0">next_run_at</tspan>
+      <tspan x="752.0" text-anchor="end" fill="#64748b"> timestamptz?</tspan>
+    </text>
+    <path d="M448,204h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="consumer,event_id" data-condition="">
+      <text x="448.0" y="224" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (consumer, event_id)</text>
+    </g>
+  </g>
+  <g data-entity="idempotency_records" data-box="840,24,336,236">
+    <rect x="840.0" y="24" width="336.0" height="236" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="856.0" y="48" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">요청 멱등 기록</text>
+    <text x="856.0" y="66" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">idempotency_records</text>
+    <path d="M840,80h336" stroke="#e2e8f0" />
+    <text x="856.0" y="100" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0"># id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856.0" y="118" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">actor_kind</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> varchar(24)</tspan>
+    </text>
+    <text x="856.0" y="136" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">actor_id</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> varchar(100)</tspan>
+    </text>
+    <text x="856.0" y="154" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">operation</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> varchar(100)</tspan>
+    </text>
+    <text x="856.0" y="172" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">key_hash</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> char(64)</tspan>
+    </text>
+    <text x="856.0" y="190" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856.0">request_hash</tspan>
+      <tspan x="1160.0" text-anchor="end" fill="#64748b"> char(64)</tspan>
+    </text>
+    <path d="M856,204h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="actor_kind,actor_id,operation,key_hash" data-condition="">
+      <text x="856.0" y="224" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (actor_kind, actor_id, operation,</text>
+      <text x="856.0" y="240" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">key_hash)</text>
+    </g>
+  </g>
+  <g data-entity="audit_logs" data-box="24,356,336,164">
+    <rect x="24.0" y="356" width="336" height="164" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="40.0" y="380" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">행위 감사 기록</text>
+    <text x="40.0" y="398" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">audit_logs</text>
+    <path d="M24,412h336" stroke="#e2e8f0" />
+    <text x="40.0" y="432" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40.0"># id</tspan>
+      <tspan x="344.0" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="40.0" y="450" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">actor_kind / actor_ref / action</text>
+    <text x="40.0" y="468" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">aggregate_type / aggregate_id</text>
+    <text x="40.0" y="486" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">before_status / after_status / reason_code</text>
+    <text x="40.0" y="504" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">event_id / correlation_id / occurred_at</text>
+  </g>
+  <text x="372.0" y="122.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="outbox:inbox" data-endpoint="source">1</text>
+  <text x="420.0" y="150.0" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="outbox:inbox" data-endpoint="target">0..N</text>
+  <text x="432" y="392" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10.5" font-weight="400" data-role="note">서비스별 DB에 독립 저장</text>
+  <text x="432" y="416" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10.5" font-weight="400" data-role="note">업무 변경과 같은 트랜잭션</text>
+  <text x="432" y="440" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10.5" font-weight="400" data-role="note">추가 전용 · 금융 원장과 별개</text>
+  <path d="M24,544H1176" stroke="#e2e8f0" />
+  <text x="24" y="566" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="section-title">Payment 원문 격리·DLT·재처리</text>
+  <text x="24" y="584" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10.5" data-role="note">기본 비활성 · 원문·발행 작업 커밋 후 ACK · 정상 Inbox와 독립</text>
+  <path data-relation="inbox_quarantines:inbox_quarantine_deliveries" d="M360,676 L396,676 L396,694 L432,694" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+      <text x="372" y="666" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="inbox_quarantines:inbox_quarantine_deliveries" data-endpoint="source">1</text>
+      <text x="420" y="712" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="inbox_quarantines:inbox_quarantine_deliveries" data-endpoint="target">1..N</text>
+  <path data-relation="inbox_quarantine_deliveries:inbox_quarantine_resumes" d="M768,676 L804,676 L804,694 L840,694" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+      <text x="780" y="666" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="start" data-label-for="inbox_quarantine_deliveries:inbox_quarantine_resumes" data-endpoint="source">1</text>
+      <text x="828" y="712" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10" font-weight="400" data-role="cardinality" text-anchor="end" data-label-for="inbox_quarantine_deliveries:inbox_quarantine_resumes" data-endpoint="target">0..N</text>
+  <g data-entity="inbox_quarantines" data-box="24,600,336,290">
+    <rect x="24" y="600" width="336" height="290" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="40" y="624" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">해석 불가 원문</text>
+    <text x="40" y="642" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">inbox_quarantines</text>
+    <path d="M24,656h336" stroke="#e2e8f0" />
+    <text x="40" y="676" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40"># id</tspan>
+      <tspan x="344" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="40" y="694" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40">consumer</tspan>
+      <tspan x="344" text-anchor="end" fill="#64748b"> varchar(100)</tspan>
+    </text>
+    <text x="40" y="712" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40">source_topic</tspan>
+      <tspan x="344" text-anchor="end" fill="#64748b"> varchar(249)</tspan>
+    </text>
+    <text x="40" y="730" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40">source_partition</tspan>
+      <tspan x="344" text-anchor="end" fill="#64748b"> integer</tspan>
+    </text>
+    <text x="40" y="748" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40">source_offset</tspan>
+      <tspan x="344" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="40" y="766" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40">message_key</tspan>
+      <tspan x="344" text-anchor="end" fill="#64748b"> bytea?</tspan>
+    </text>
+    <text x="40" y="784" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40">raw_body</tspan>
+      <tspan x="344" text-anchor="end" fill="#64748b"> bytea?</tspan>
+    </text>
+    <text x="40" y="802" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40">error_code</tspan>
+      <tspan x="344" text-anchor="end" fill="#64748b"> varchar(80)</tspan>
+    </text>
+    <text x="40" y="820" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="40">version</tspan>
+      <tspan x="344" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <path d="M40,834h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="consumer,source_topic,source_partition,source_offset" data-condition="">
+      <text x="40" y="854" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (consumer, source_topic,</text>
+      <text x="40" y="870" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">source_partition, source_offset)</text>
+    </g>
+  </g>
+  <g data-entity="inbox_quarantine_deliveries" data-box="432,600,336,342">
+    <rect x="432" y="600" width="336" height="342" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="448" y="624" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">DLT·재처리 발행</text>
+    <text x="448" y="642" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">inbox_quarantine_deliveries</text>
+    <path d="M432,656h336" stroke="#e2e8f0" />
+    <text x="448" y="676" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448"># id</tspan>
+      <tspan x="752" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448" y="694" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448">→ quarantine_id</tspan>
+      <tspan x="752" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="448" y="712" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448">kind</tspan>
+      <tspan x="752" text-anchor="end" fill="#64748b"> varchar(8)</tspan>
+    </text>
+    <text x="448" y="730" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448">topic</tspan>
+      <tspan x="752" text-anchor="end" fill="#64748b"> varchar(249)</tspan>
+    </text>
+    <text x="448" y="748" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448">status</tspan>
+      <tspan x="752" text-anchor="end" fill="#64748b"> varchar(20)</tspan>
+    </text>
+    <text x="448" y="766" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448">attempts</tspan>
+      <tspan x="752" text-anchor="end" fill="#64748b"> integer</tspan>
+    </text>
+    <text x="448" y="784" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448">next_run_at</tspan>
+      <tspan x="752" text-anchor="end" fill="#64748b"> timestamptz</tspan>
+    </text>
+    <text x="448" y="802" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448">lease_until</tspan>
+      <tspan x="752" text-anchor="end" fill="#64748b"> timestamptz?</tspan>
+    </text>
+    <text x="448" y="820" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448">operator_id</tspan>
+      <tspan x="752" text-anchor="end" fill="#64748b"> varchar(100)?</tspan>
+    </text>
+    <text x="448" y="838" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448">reason_code</tspan>
+      <tspan x="752" text-anchor="end" fill="#64748b"> varchar(80)?</tspan>
+    </text>
+    <text x="448" y="856" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="448">version</tspan>
+      <tspan x="752" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <path d="M448,870h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="quarantine_id" data-condition="kind = &#x27;DLT&#x27;">
+      <text x="448" y="890" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (quarantine_id) · kind = DLT</text>
+    </g>
+    <g data-constraint="UK" data-columns="quarantine_id" data-condition="kind = &#x27;REPLAY&#x27; AND status IN (&#x27;PENDING&#x27;,&#x27;RUNNING&#x27;,&#x27;RETRY&#x27;)">
+      <text x="448" y="906" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (quarantine_id) · kind = REPLAY</text>
+      <text x="448" y="922" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">status IN (PENDING, RUNNING, RETRY)</text>
+    </g>
+  </g>
+  <g data-entity="inbox_quarantine_resumes" data-box="840,600,336,238">
+    <rect x="840" y="600" width="336" height="238" rx="6" fill="#ffffff" stroke="#94a3b8" stroke-width="1" />
+    <text x="856" y="624" fill="#0f172a" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="13" font-weight="500" data-role="entity-title">소진 작업 재개 이력</text>
+    <text x="856" y="642" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="table-name">inbox_quarantine_resumes</text>
+    <path d="M840,656h336" stroke="#e2e8f0" />
+    <text x="856" y="676" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856"># id</tspan>
+      <tspan x="1160" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856" y="694" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856">→ delivery_id</tspan>
+      <tspan x="1160" text-anchor="end" fill="#64748b"> uuid</tspan>
+    </text>
+    <text x="856" y="712" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856">expected_version</tspan>
+      <tspan x="1160" text-anchor="end" fill="#64748b"> bigint</tspan>
+    </text>
+    <text x="856" y="730" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856">previous_attempts</tspan>
+      <tspan x="1160" text-anchor="end" fill="#64748b"> integer</tspan>
+    </text>
+    <text x="856" y="748" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856">operator_id</tspan>
+      <tspan x="1160" text-anchor="end" fill="#64748b"> varchar(100)</tspan>
+    </text>
+    <text x="856" y="766" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856">reason_code</tspan>
+      <tspan x="1160" text-anchor="end" fill="#64748b"> varchar(80)</tspan>
+    </text>
+    <text x="856" y="784" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="400" data-role="field">
+      <tspan x="856">created_at</tspan>
+      <tspan x="1160" text-anchor="end" fill="#64748b"> timestamptz</tspan>
+    </text>
+    <path d="M856,798h304" stroke="#e2e8f0" />
+    <g data-constraint="UK" data-columns="delivery_id,expected_version" data-condition="">
+      <text x="856" y="818" fill="#334155" font-family="Geist Mono, SFMono-Regular, monospace" font-size="10.5" font-weight="500" data-role="unique-key">UK (delivery_id, expected_version)</text>
+    </g>
+  </g>
+  <text x="24" y="988" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10.5" data-role="note">bytea는 NUL·null·빈 값을 보존 · 격리 원문과 재개 이력은 수정·자동 삭제하지 않음</text>
+  <path d="M24,1010H1176" stroke="#e2e8f0" />
+  <text x="24" y="1032" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend"># PK    → 논리 참조    UK 괄호 안 컬럼 조합의 중복을 막음</text>
+  <text x="24" y="1052" fill="#334155" font-family="Geist, Arial, Apple SD Gothic Neo, sans-serif" font-size="10" font-weight="400" data-role="legend">적용 조건: 해당 조건의 행끼리만 검사 · 추가 유일제약이 없으면 제약 영역 생략 · 관계선은 물리 FK가 아님</text>
+</svg>

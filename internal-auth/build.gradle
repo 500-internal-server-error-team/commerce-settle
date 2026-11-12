@@ -1,0 +1,10 @@
+// 내부 호출 자격의 수신 판정. 서블릿 MVC 서비스만 사용하며 WebFlux Gateway는 의존하지 않는다.
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'io.micrometer:micrometer-core'
+}
+
+// 판정 시험은 실제 명세의 작업으로 확인한다. 앱은 각자 같은 위치에 명세를 포함한다.
+tasks.named('processTestResources') {
+    from(rootProject.file('docs/openapi.json')) { into 'contracts' }
+}

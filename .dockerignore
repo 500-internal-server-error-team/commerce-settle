@@ -1,0 +1,12 @@
+.git
+.gradle
+.env
+.env.*
+.idea
+.ssh
+**/src
+**/build/classes
+**/build/reports
+**/build/test-results
+**/build/tmp
+work

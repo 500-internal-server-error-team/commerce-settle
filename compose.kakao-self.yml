@@ -1,0 +1,26 @@
+# 본인 계정 시연 전용. 기본 compose에는 실제 카카오 자격을 전달하지 않는다.
+services:
+  commerce:
+    user: "${KAKAO_SELF_UID:?Set the demo host uid}:${KAKAO_SELF_GID:?Set the demo host gid}"
+    environment:
+      KAKAO_SELF_DEMO_ENABLED: "true"
+      APP_NOTIFICATIONS_CONSUMER_ENABLED: "true"
+      APP_NOTIFICATIONS_WORKER_ENABLED: "true"
+      APP_ORDER_WORKFLOW_ENABLED: "true"
+      APP_ORDER_RESULT_PROCESSOR_ENABLED: "true"
+      APP_KAFKA_PAYMENT_ACCEPTED_ENABLED: "true"
+      APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED: "true"
+      APP_OUTBOX_ENABLED: "true"
+      APP_NOTIFICATION_METRICS_ENABLED: "true"
+      KAKAO_SELF_CREDENTIALS_FILE: /run/kakao/credentials.json
+      KAKAO_SELF_USER_ID: ${KAKAO_SELF_USER_ID:?Set your Kakao user id}
+      KAKAO_SELF_APP_ID: ${KAKAO_SELF_APP_ID:?Set your Kakao app id}
+      KAKAO_SELF_MESSAGE_LINK: ${KAKAO_SELF_MESSAGE_LINK:?Set a registered product link}
+      KAKAO_SELF_BUYER_IDS: ${KAKAO_SELF_BUYER_IDS:-}
+      KAKAO_SELF_SELLER_IDS: ${KAKAO_SELF_SELLER_IDS:-}
+    volumes:
+      - type: bind
+        source: ${KAKAO_SELF_CREDENTIALS_DIR:?Set a private credentials directory outside Git}
+        target: /run/kakao
+        bind:
+          create_host_path: false
