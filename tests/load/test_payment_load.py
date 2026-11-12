@@ -58,6 +58,7 @@ class ReconciliationFixture(unittest.TestCase):
 
     def payment(self, mileage=0, status="CONFIRMED", opening_balance=load.WALLET_BALANCE):
         self.expected = {"order": ("mixed" if mileage else "card", 10000, mileage)}
+        self.other_ledger = {}
         self.db.execute("INSERT INTO payment.payments VALUES (?,?,?,?,?,?,?,?)",
                         ("order", "payment", "cycle", load.buyer(0), status, 10000, mileage, 10000-mileage))
         self.db.execute("INSERT INTO payment.payment_attempts VALUES (?,?,?,?,?)",
@@ -78,16 +79,46 @@ class ReconciliationFixture(unittest.TestCase):
         self.db.execute("INSERT INTO payment.inbox VALUES ('APPLIED')")
         self.db.execute("INSERT INTO payment.payment_jobs VALUES ('DONE')")
 
+    def other_run(self, namespace="r2", mileage=1000, balance_error=0, order="order2"):
+        """같은 스택에서 다른 실행 번호로 실행한 다른 실행의 결제·지갑. 그 실행만의 불일치를 balance_error로 만든다."""
+        payment, cycle, buyer_id = f"{order}-payment", f"{order}-cycle", load.buyer(0, namespace)
+        self.other_ledger[order] = ("mixed", 10000, mileage)
+        self.stack_runs = ["fixture", "other"]
+        self.db.execute("INSERT INTO payment.payments VALUES (?,?,?,?,'CONFIRMED',10000,?,?)",
+                        (order, payment, cycle, buyer_id, mileage, 10000 - mileage))
+        self.db.execute("INSERT INTO payment.payment_attempts VALUES (?,'PG_A',?,?,'APPROVED')",
+                        (payment, cycle, 10000 - mileage))
+        self.db.execute("INSERT INTO finance_mock.mock_transactions VALUES ('PG_A',?,?,'SUCCEEDED',NULL,'APPROVE')",
+                        (cycle, 10000 - mileage))
+        self.db.execute("INSERT INTO finance_mock.mock_accounts VALUES (?,?,0,?,'EASY_PAY',?,'WALLET')",
+                        (f"{order}-wallet", load.WALLET_BALANCE, load.WALLET_BALANCE, load.wallet_ref(0, namespace)))
+        self.db.execute("INSERT INTO payment.mileage_wallets VALUES (?,?,0)",
+                        (buyer_id, load.WALLET_BALANCE - mileage + balance_error))
+        for kind in ("RESERVE", "DEBIT"):
+            self.db.execute("INSERT INTO payment.mileage_entries VALUES (?,?)", (payment, kind))
+        for event in ("PaymentAccepted", "PaymentConfirmed"):
+            self.db.execute("INSERT INTO payment.outbox VALUES (?,?,'PUBLISHED')", (payment, event))
+
     def query(self, database, sql):
         sql = sql.replace("account_id::text", "CAST(account_id AS TEXT)")
         return [["" if v is None else str(v) for v in row] for row in self.db.execute(sql)]
 
-    def reconcile(self):
+    def ledger(self, runs):
+        rows = {}
+        for run in runs:
+            rows.update(self.expected if run == "fixture" else self.other_ledger)
+        return rows
+
+    def reconcile(self, runs="fixture"):
         output = MagicMock()
-        with patch.object(load, "psql", self.query), patch.object(load, "ledger", return_value=self.expected), \
+        stack = MagicMock()
+        stack.exists.return_value = bool(getattr(self, "stack_runs", None))
+        stack.read_text.return_value = "\n".join(getattr(self, "stack_runs", []))
+        with patch.object(load, "psql", self.query), patch.object(load, "ledger", self.ledger), \
+                patch.object(load, "STACK_RUNS", stack), \
                 patch.object(load, "WORK", output), contextlib.redirect_stdout(io.StringIO()):
             try:
-                load.cmd_reconcile(argparse.Namespace(runs="fixture", output="report.json"))
+                load.cmd_reconcile(argparse.Namespace(runs=runs, output="report.json"))
             except SystemExit:
                 pass
         return json.loads(output.__truediv__.return_value.write_text.call_args.args[0])
@@ -103,6 +134,65 @@ class ReconciliationRegressionTest(ReconciliationFixture):
         self.payment(status="DECLINED")
         self.db.execute("DELETE FROM finance_mock.mock_transactions")
         self.assertIn("대역 거래 누락", self.reconcile()["problems"])
+
+
+class ReconciliationScopeTest(ReconciliationFixture):
+    def test_ignores_payments_and_wallets_of_another_run_in_the_same_stack(self):
+        self.payment(mileage=1000)
+        self.other_run(namespace="r2")
+        self.assertEqual({}, self.reconcile()["problems"])
+
+    def test_does_not_count_problems_that_belong_to_another_run(self):
+        self.payment()
+        self.other_run(namespace="r2", balance_error=1)
+        report = self.reconcile()
+        self.assertEqual({}, report["problems"])
+        self.assertEqual({"CONFIRMED": 1}, report["payments"])
+
+    def test_whole_stack_reconcile_detects_the_problem_of_another_run(self):
+        # 실행 하나만 대조할 때 빼 둔 다른 실행의 불일치는 그 실행이나 스택 전체를 대조할 때 잡혀야 한다.
+        self.payment()
+        self.other_run(namespace="r2")
+        self.db.execute("DELETE FROM payment.outbox WHERE aggregate_id = 'order2-payment'")
+        self.assertEqual({}, self.reconcile()["problems"])
+        self.assertIn("결과 이벤트 누락", self.reconcile(runs=None)["problems"])
+        self.assertIn("결과 이벤트 누락", self.reconcile(runs="other")["problems"])
+
+    def test_same_namespace_wallet_error_is_detected_from_either_run(self):
+        # 같은 실행 번호의 두 실행은 지갑을 함께 쓰므로, 어느 실행을 대조해도 잔액 오류가 잡힌다.
+        self.payment()
+        self.other_run(namespace="", mileage=1000, balance_error=1)
+        self.db.execute("DELETE FROM finance_mock.mock_accounts WHERE id = 'order2-wallet'")
+        self.db.execute("DELETE FROM payment.mileage_wallets WHERE balance = ?", (load.WALLET_BALANCE,))
+        self.assertIn("마일리지 잔액 불일치", self.reconcile()["problems"])
+
+    def test_rejects_an_order_recorded_in_two_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for run in ("fixture", "other"):
+                (root / run).mkdir()
+                (root / run / "requests.csv").write_text("order,card,10000,0\n", encoding="utf-8")
+            (root / "runs").write_text("fixture\nother\n", encoding="utf-8")
+            with patch.object(load, "WORK", root), patch.object(load, "STACK_RUNS", root / "runs"), \
+                    patch.object(load, "psql") as psql, self.assertRaisesRegex(SystemExit, "duplicate orderId"):
+                load.cmd_reconcile(argparse.Namespace(runs="fixture", output="report.json"))
+            psql.assert_not_called()
+
+    def test_still_detects_a_payment_that_no_run_injected(self):
+        self.payment()
+        self.other_run(namespace="r2")
+        self.other_ledger.clear()
+        self.assertIn("원장에 없는 결제", self.reconcile()["problems"])
+
+    def test_counts_mileage_of_another_run_with_the_same_namespace(self):
+        # 같은 실행 번호의 두 실행은 같은 구매자 지갑을 쓰므로 잔액에는 두 실행의 차감이 함께 남는다.
+        self.payment(mileage=1000)
+        self.other_run(namespace="", mileage=500)
+        self.db.execute("DELETE FROM finance_mock.mock_accounts WHERE id = 'order2-wallet'")
+        self.db.execute("DELETE FROM payment.mileage_wallets WHERE balance = ?", (load.WALLET_BALANCE - 500,))
+        self.assertIn("마일리지 잔액 불일치", self.reconcile()["problems"])
+        self.db.execute("UPDATE payment.mileage_wallets SET balance = ?", (load.WALLET_BALANCE - 1500,))
+        self.assertEqual({}, self.reconcile()["problems"])
 
 
 class ReconciliationNormalTest(ReconciliationFixture):

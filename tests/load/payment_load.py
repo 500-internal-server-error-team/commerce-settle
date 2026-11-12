@@ -572,8 +572,14 @@ def ledger(runs):
 
 def cmd_reconcile(args):
     """주입 원장 ↔ Payment(결제·시도·마일리지·Outbox) ↔ finance-mock(거래·간편결제 지갑)을 대조한다."""
-    runs = args.runs.split(",") if args.runs else STACK_RUNS.read_text(encoding="utf-8").split()
-    expected = ledger(runs)
+    stack_runs = STACK_RUNS.read_text(encoding="utf-8").split() if STACK_RUNS.exists() else []
+    runs = args.runs.split(",") if args.runs else stack_runs
+    # 같은 스택의 다른 실행은 그 실행을 대조할 때 확인한다. 어느 원장에도 없는 결제만 이 대조의 문제로 센다.
+    # 모든 원장을 한 번에 읽어 실행 사이의 주문 ID 중복도 거절한다.
+    other_runs = [run for run in stack_runs if run not in runs]
+    known = ledger(runs + other_runs)
+    expected = ledger(runs) if other_runs else known
+    others = known.keys() - expected.keys()
     problems = []
 
     def problem(kind, detail):
@@ -599,8 +605,9 @@ def cmd_reconcile(args):
             problem("미완료 결제", f"{order} {status}")
         if kind == "mileage" and status != "CONFIRMED":
             problem("전액 마일리지 미확정", order)
-    for order in payments.keys() - expected.keys():
+    for order in payments.keys() - expected.keys() - others:
         problem("원장에 없는 결제", order)
+    scoped = {order: found for order, found in payments.items() if order in expected}
 
     attempts = {}
     for payment, provider, key, amount, status in psql("payment", """
@@ -614,8 +621,10 @@ def cmd_reconcile(args):
             SELECT provider_id, business_key, amount, status, coalesce(account_id::text, '')
             FROM finance_mock.mock_transactions WHERE operation = 'APPROVE'"""):
         mock[(provider, key)] = (int(amount), status, account)
-    used = set()
-    for order, (payment, cycle, _, status, _, _, external) in payments.items():
+    # 다른 실행의 결제에 연결된 대역 거래는 연결된 것으로 보되, 그 결제의 불일치는 여기서 세지 않는다.
+    used = {(attempts[payment][0], attempts[payment][1])
+            for order, (payment, *_) in payments.items() if order not in scoped and payment in attempts}
+    for order, (payment, cycle, _, status, _, _, external) in scoped.items():
         attempt = attempts.get(payment)
         if external == 0:
             if attempt:
@@ -642,18 +651,24 @@ def cmd_reconcile(args):
         problem("결제에 연결되지 않은 대역 거래", "/".join(key))
 
     # prepare가 두 지갑을 같은 초기 금액으로 만든다. 기존 스택의 초기값은 현재 상수와 다를 수 있다.
-    mock_wallets = psql("finance_mock", """
+    # 지갑은 현재 실행 번호(LOAD_NAMESPACE)의 것만 본다. 다른 번호의 지갑은 그 번호로 대조한다.
+    own_wallets = {wallet_ref(n) for n in range(BUYER_POOL)}
+    mock_wallets = [row for row in psql("finance_mock", """
             SELECT id, account_ref, balance, reserved_amount, opening_balance
             FROM finance_mock.mock_accounts
             WHERE provider_id = 'EASY_PAY' AND purpose = 'WALLET' AND account_ref LIKE 'load-wallet-%'""")
+                    if row[1] in own_wallets]
     opening = {account_ref: int(amount) for _, account_ref, _, _, amount in mock_wallets}
     initial_balances = {buyer(n): opening.get(wallet_ref(n)) for n in range(BUYER_POOL)}
+    # 같은 번호를 쓴 다른 실행의 차감도 같은 지갑에 남으므로 차감액은 모든 결제에서 더한다.
     debited = {}
     for order, (_, _, buyer_id, status, _, mileage, _) in payments.items():
         if status == "CONFIRMED" and mileage:
             debited[buyer_id] = debited.get(buyer_id, 0) + mileage
     for buyer_id, balance, reserved in psql("payment", """
             SELECT buyer_id, balance, reserved_amount FROM payment.mileage_wallets"""):
+        if buyer_id not in initial_balances:
+            continue
         if int(reserved) != 0:
             problem("마일리지 예약 잔존", f"{buyer_id} {reserved}")
         initial = initial_balances.get(buyer_id)
@@ -669,7 +684,10 @@ def cmd_reconcile(args):
             FROM payment.payments p LEFT JOIN payment.mileage_entries e ON e.payment_id = p.id
             WHERE p.mileage_amount > 0
             GROUP BY p.id, p.status""")
+    scoped_payments = {payment for payment, *_ in scoped.values()}
     for payment, status, reserve, debit, release in entry_rows:
+        if payment not in scoped_payments:
+            continue
         counts = (int(reserve), int(debit), int(release))
         if counts != ((1, 1, 0) if status == "CONFIRMED" else (1, 0, 1)):
             problem("마일리지 원장 불일치", f"{payment} {status} {counts}")
@@ -689,7 +707,7 @@ def cmd_reconcile(args):
             SELECT aggregate_id, event_type, count(*), bool_and(status = 'PUBLISHED')
             FROM payment.outbox GROUP BY 1, 2"""):
         events[(aggregate, event_type)] = (int(count), published == "t")
-    for order, (payment, _, _, status, _, _, _) in payments.items():
+    for order, (payment, _, _, status, _, _, _) in scoped.items():
         terminal = "PaymentConfirmed" if status == "CONFIRMED" else "PaymentDeclined"
         for event_type in ("PaymentAccepted", terminal):
             found = events.get((payment, event_type))
@@ -710,7 +728,7 @@ def cmd_reconcile(args):
         problem("Inbox 본문 충돌", review[2])
 
     statuses = {}
-    for _, _, _, status, _, _, _ in payments.values():
+    for _, _, _, status, _, _, _ in scoped.values():
         statuses[status] = statuses.get(status, 0) + 1
     kinds = {}
     for kind, _, _ in expected.values():
