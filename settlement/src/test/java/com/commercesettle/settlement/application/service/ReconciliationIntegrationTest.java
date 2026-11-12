@@ -507,6 +507,33 @@ class ReconciliationIntegrationTest {
   }
 
   @Test
+  @DisplayName("같은 마감을 다른 트랜잭션이 등록 중이면 회차 요청은 잠금 상한 안에 실패한다")
+  void boundsRequestLockWait() throws Exception {
+    try (var connection =
+        java.sql.DriverManager.getConnection(
+            POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {
+      connection.setAutoCommit(false);
+      try (var statement =
+          connection.prepareStatement(
+              "INSERT INTO settlement.reconciliation_runs(id,cutoff_at,requested_by) VALUES(?,?,'other')")) {
+        statement.setObject(1, UUID.randomUUID());
+        statement.setObject(2, cutoff.atOffset(ZoneOffset.UTC));
+        statement.executeUpdate();
+        long start = System.nanoTime();
+
+        assertThatThrownBy(() -> store.request(cutoff, "operator:ops"))
+            .isInstanceOf(org.springframework.dao.DataAccessException.class);
+
+        assertThat(java.time.Duration.ofNanos(System.nanoTime() - start))
+            .isLessThan(java.time.Duration.ofSeconds(5));
+      } finally {
+        connection.rollback();
+      }
+    }
+    assertThat(jdbc.queryForObject("SHOW lock_timeout", String.class)).isEqualTo("0");
+  }
+
+  @Test
   @DisplayName("지급의 원거래 참조와 실제 차감 건수·금액을 함께 검사한다")
   void comparesPayoutReferenceAndActualDebit() {
     UUID transaction = UUID.randomUUID(), key = UUID.randomUUID();
