@@ -1,5 +1,6 @@
 package com.commercesettle.payment.infrastructure.messaging;
 
+import com.commercesettle.observability.RepeatedWarning;
 import com.commercesettle.payment.application.service.QuarantineService;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -16,6 +17,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 /** 한 번에 한 작업만 임대하며 Kafka 응답은 전용 실행기에서 기다린다. */
 public class QuarantineRelay implements AutoCloseable {
   private static final Logger LOG = LoggerFactory.getLogger(QuarantineRelay.class);
+  private final RepeatedWarning workerFailed = new RepeatedWarning();
+  private final RepeatedWarning deliveryRetry = new RepeatedWarning();
   private final QuarantineService service;
   private final KafkaTemplate<String, byte[]> kafka;
   private final int batchSize;
@@ -67,7 +70,8 @@ public class QuarantineRelay implements AutoCloseable {
             try {
               deliverAndRelease();
             } catch (RuntimeException exception) {
-              LOG.atWarn()
+              workerFailed
+                  .at(LOG)
                   .addKeyValue("event", "quarantine.worker-failed")
                   .log("Quarantine delivery remains available for retry");
             }
@@ -112,7 +116,7 @@ public class QuarantineRelay implements AutoCloseable {
       try {
         kafka.send(record).get(resultTimeoutMs, TimeUnit.MILLISECONDS);
         if (!service.published(delivery)) {
-          LOG.atWarn()
+          LOG.atDebug()
               .addKeyValue("event", "quarantine.stale-result")
               .addKeyValue("jobId", delivery.id())
               .log("Quarantine delivery lease changed");
@@ -123,7 +127,8 @@ public class QuarantineRelay implements AutoCloseable {
       } catch (Exception exception) {
         // 예외·payload 원문을 로그에 싣지 않는다. 발행 성공 후 저장 실패도 원문으로 재개한다.
         service.failed(delivery);
-        LOG.atWarn()
+        deliveryRetry
+            .at(LOG)
             .addKeyValue("event", "quarantine.delivery-retry")
             .addKeyValue("jobId", delivery.id())
             .log("Quarantine delivery will be retried");

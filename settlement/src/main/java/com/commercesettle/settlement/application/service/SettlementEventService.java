@@ -120,7 +120,7 @@ public class SettlementEventService {
     for (UUID revived :
         inbox.reviveExhaustedPurchases(payment.paymentId(), MAX_WAITING_ATTEMPTS, now)) {
       LOGGER
-          .atInfo()
+          .atDebug()
           .addKeyValue("event", "inbox.waiting-revived")
           .addKeyValue("inboxId", revived)
           .addKeyValue("paymentId", payment.paymentId())

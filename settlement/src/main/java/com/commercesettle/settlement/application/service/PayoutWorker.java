@@ -79,7 +79,7 @@ public class PayoutWorker {
     try {
       observations.step("settlement.payout.record", () -> recorder.record(job, result));
       LOGGER
-          .atInfo()
+          .atDebug()
           .addKeyValue("event", "settlement.payout")
           .addKeyValue("payoutId", job.payoutId())
           .addKeyValue("jobId", job.jobId())
@@ -88,7 +88,7 @@ public class PayoutWorker {
           .log("Payout job result recorded");
     } catch (LeaseLostException e) {
       LOGGER
-          .atWarn()
+          .atDebug()
           .addKeyValue("event", "settlement.payout")
           .addKeyValue("payoutId", job.payoutId())
           .addKeyValue("jobId", job.jobId())

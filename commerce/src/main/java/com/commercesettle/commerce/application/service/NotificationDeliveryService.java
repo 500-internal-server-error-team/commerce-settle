@@ -146,7 +146,7 @@ public final class NotificationDeliveryService {
         notification.status() == Status.REVIEW_REQUIRED
                 && !"NOTIFICATION_REJECTED".equals(notification.lastErrorCode())
             ? Level.ERROR
-            : result.equals("UNKNOWN") || result.equals("RETRY") ? Level.WARN : Level.INFO;
+            : result.equals("UNKNOWN") || result.equals("RETRY") ? Level.WARN : Level.DEBUG;
     var entry =
         LOGGER
             .atLevel(level)

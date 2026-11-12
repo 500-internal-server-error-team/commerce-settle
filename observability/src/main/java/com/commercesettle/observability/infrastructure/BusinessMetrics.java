@@ -1,5 +1,6 @@
 package com.commercesettle.observability.infrastructure;
 
+import com.commercesettle.observability.RepeatedWarning;
 import io.prometheus.metrics.model.registry.MultiCollector;
 import io.prometheus.metrics.model.registry.PrometheusRegistry;
 import io.prometheus.metrics.model.snapshots.GaugeSnapshot;
@@ -42,6 +43,7 @@ public final class BusinessMetrics implements MultiCollector, AutoCloseable {
           "commerce_settle_business_duration_missing",
           "commerce_settle_business_observed_timestamp_seconds",
           "commerce_settle_business_duration_bucket_records");
+  private final RepeatedWarning refreshFailed = new RepeatedWarning();
   private final DataSource dataSource;
   private final PrometheusRegistry registry;
   private final Map<String, String> queries;
@@ -166,7 +168,7 @@ public final class BusinessMetrics implements MultiCollector, AutoCloseable {
           connection.rollback();
         }
       } catch (SQLException | RuntimeException failure) {
-        LOG.warn(
+        refreshFailed.at(LOG).log(
             "Business metric refresh failed for {} ({})",
             source.getKey(),
             failure.getClass().getSimpleName());

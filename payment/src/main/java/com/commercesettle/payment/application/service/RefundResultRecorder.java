@@ -186,7 +186,7 @@ class RefundResultRecorder {
     }
     refunds.save(refund);
     sagas.save(saga);
-    var log = refund.getStatus() == RefundStatus.UNKNOWN ? LOG.atWarn() : LOG.atInfo();
+    var log = refund.getStatus() == RefundStatus.UNKNOWN ? LOG.atWarn() : LOG.atDebug();
     log.addKeyValue("event", "payment.refund")
         .addKeyValue("refundId", refund.getId())
         .addKeyValue("jobId", job.jobId())

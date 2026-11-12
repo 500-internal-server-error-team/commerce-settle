@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.infrastructure.worker;
 
+import com.commercesettle.observability.RepeatedWarning;
 import com.commercesettle.settlement.application.port.InboxOperationStore.Claim;
 import com.commercesettle.settlement.application.service.InboxOperationService;
 import java.time.Duration;
@@ -21,6 +22,7 @@ import org.springframework.transaction.CannotCreateTransactionException;
     matchIfMissing = true)
 class InboxRejudgementScheduler {
   private static final Logger LOG = LoggerFactory.getLogger(InboxRejudgementScheduler.class);
+  private final RepeatedWarning dependencyUnavailable = new RepeatedWarning();
   private final InboxOperationService service;
   private final Duration lease;
 
@@ -57,12 +59,12 @@ class InboxRejudgementScheduler {
     }
   }
 
-  private static void log(RuntimeException error, String stage, Claim claim) {
+  private void log(RuntimeException error, String stage, Claim claim) {
     boolean dependencyUnavailable =
         error instanceof TransientDataAccessException
             || error instanceof DataAccessResourceFailureException
             || error instanceof CannotCreateTransactionException;
-    var event = dependencyUnavailable ? LOG.atWarn() : LOG.atError();
+    var event = dependencyUnavailable ? this.dependencyUnavailable.at(LOG) : LOG.atError();
     event
         .addKeyValue("event", "settlement.inbox-rejudgement")
         .addKeyValue("errorCode", "PROCESSING_FAILED")

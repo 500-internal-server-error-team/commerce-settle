@@ -4,6 +4,7 @@ import com.commercesettle.commerce.application.port.OutboxStore.Delivery;
 import com.commercesettle.commerce.application.port.OutboxStore.Publication;
 import com.commercesettle.commerce.application.service.OutboxDeliveryService;
 import com.commercesettle.observability.AsyncObservation;
+import com.commercesettle.observability.RepeatedWarning;
 import com.commercesettle.observability.infrastructure.BusinessMetrics;
 import jakarta.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +27,8 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 public class OutboxRelay {
   private static final Logger LOG = LoggerFactory.getLogger(OutboxRelay.class);
+  private final RepeatedWarning wakeupRejected = new RepeatedWarning();
+  private final RepeatedWarning claimFailed = new RepeatedWarning();
   private final OutboxDeliveryService service;
   private final KafkaTemplate<String, byte[]> template;
   private final Executor executor;
@@ -119,7 +122,8 @@ public class OutboxRelay {
     } catch (RejectedExecutionException exception) {
       scheduled.set(false);
       // pending 신호는 유지하며 재귀 제출하지 않는다. 복구 조회가 다시 깨운다.
-      LOG.atWarn()
+      wakeupRejected
+          .at(LOG)
           .addKeyValue("event", "outbox.wakeup-rejected")
           .log("Outbox wakeup could not be scheduled; stored events remain recoverable");
     }
@@ -156,7 +160,7 @@ public class OutboxRelay {
     try {
       deliveries = service.claim(available, leaseMs, maxAttempts);
     } catch (RuntimeException exception) {
-      LOG.atWarn().addKeyValue("event", "outbox.claim").log("Outbox claim failed");
+      claimFailed.at(LOG).addKeyValue("event", "outbox.claim").log("Outbox claim failed");
       return;
     }
     saturated = deliveries.size() >= available;
@@ -229,7 +233,7 @@ public class OutboxRelay {
         updated = service.markFailed(delivery, maxAttempts);
       }
       if (!updated) {
-        LOG.atWarn()
+        LOG.atDebug()
             .addKeyValue("event", "outbox.stale-result")
             .addKeyValue("eventId", delivery.id())
             .log("Outbox lease no longer owns the result");

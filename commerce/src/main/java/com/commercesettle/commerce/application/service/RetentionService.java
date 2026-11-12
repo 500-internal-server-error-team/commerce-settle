@@ -3,6 +3,7 @@ package com.commercesettle.commerce.application.service;
 import com.commercesettle.commerce.application.port.RetentionStore;
 import com.commercesettle.commerce.application.port.RetentionStore.Target;
 import com.commercesettle.commerce.application.port.SettlementRetentionGateway;
+import com.commercesettle.observability.RepeatedWarning;
 import java.time.Clock;
 import java.util.HashSet;
 import java.util.List;
@@ -21,6 +22,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class RetentionService {
   private static final Logger LOG = LoggerFactory.getLogger(RetentionService.class);
+  private final RepeatedWarning sourceUnavailable = new RepeatedWarning();
+  private final RepeatedWarning targetFailed = new RepeatedWarning();
   private final RetentionStore store;
   private final Clock clock;
   private final TransactionTemplate transactions;
@@ -56,7 +59,8 @@ public class RetentionService {
           try {
             refresh(ids, false);
           } catch (RuntimeException error) {
-            LOG.atWarn()
+            sourceUnavailable
+                .at(LOG)
                 .addKeyValue("event", "retention.source-unavailable")
                 .log(
                     "Settlement closure could not be verified; unverified notifications remain retained");
@@ -80,7 +84,8 @@ public class RetentionService {
                   .addKeyValue("targetKind", target.name())
                   .log("Retention failure history could not be stored; target remains retryable");
             }
-            LOG.atWarn()
+            targetFailed
+                .at(LOG)
                 .addKeyValue("event", "retention.failed")
                 .addKeyValue("targetId", id)
                 .addKeyValue("targetKind", target.name())

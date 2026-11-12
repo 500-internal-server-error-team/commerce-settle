@@ -1,6 +1,7 @@
 package com.commercesettle.commerce.infrastructure.messaging;
 
 import com.commercesettle.commerce.application.service.PaymentAcceptedService;
+import com.commercesettle.observability.RepeatedWarning;
 import java.util.function.BooleanSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +15,7 @@ public class PaymentAcceptedProcessor {
   private static final Logger LOG = LoggerFactory.getLogger(PaymentAcceptedProcessor.class);
   private final PaymentAcceptedService service;
   private final int batchSize;
+  private final RepeatedWarning paused = new RepeatedWarning();
 
   public PaymentAcceptedProcessor(PaymentAcceptedService service, int batchSize) {
     if (batchSize < 1 || batchSize > 100) throw new IllegalArgumentException("Invalid batch size");
@@ -28,7 +30,7 @@ public class PaymentAcceptedProcessor {
     try {
       drain(service::processNext, batchSize);
     } catch (RuntimeException exception) {
-      LOG.warn("Payment acceptance processing paused: errorCode=INBOX_UNAVAILABLE");
+      paused.at(LOG).log("Payment acceptance processing paused: errorCode=INBOX_UNAVAILABLE");
     }
   }
 

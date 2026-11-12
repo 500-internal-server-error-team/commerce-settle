@@ -140,7 +140,7 @@ public class NotificationService {
                   afterCommit(
                       () ->
                           LOGGER
-                              .atInfo()
+                              .atDebug()
                               .addKeyValue("event", "notification.replay")
                               .addKeyValue("deliveryId", id)
                               .addKeyValue("result", replayed.status().name())
@@ -348,7 +348,7 @@ public class NotificationService {
                   ? Level.ERROR
                   : "NOTIFICATION_ORDER_PREDECESSOR_NOT_READY".equals(code)
                       ? Level.DEBUG
-                      : result.equals("WAITING") ? Level.WARN : Level.INFO;
+                      : result.equals("WAITING") ? Level.WARN : Level.DEBUG;
           var entry =
               LOGGER
                   .atLevel(level)

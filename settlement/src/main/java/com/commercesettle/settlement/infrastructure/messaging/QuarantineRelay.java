@@ -1,5 +1,6 @@
 package com.commercesettle.settlement.infrastructure.messaging;
 
+import com.commercesettle.observability.RepeatedWarning;
 import com.commercesettle.settlement.application.port.QuarantineStore.Delivery;
 import com.commercesettle.settlement.application.service.QuarantineService;
 import java.nio.charset.StandardCharsets;
@@ -23,6 +24,7 @@ import org.springframework.stereotype.Component;
 class QuarantineRelay {
   private static final Logger LOGGER = LoggerFactory.getLogger(QuarantineRelay.class);
   private static final int MAX_ATTEMPTS = 10;
+  private final RepeatedWarning deliveryRetry = new RepeatedWarning();
 
   private final QuarantineService service;
   private final KafkaTemplate<String, byte[]> kafka;
@@ -82,8 +84,8 @@ class QuarantineRelay {
     } catch (Exception exception) {
       // 예외·원문을 로그에 싣지 않는다. 임대 안에서 RETRY로 돌리고 다음 주기에 다시 시도한다.
       service.failed(delivery);
-      LOGGER
-          .atWarn()
+      deliveryRetry
+          .at(LOGGER)
           .addKeyValue("event", "settlement.quarantine")
           .addKeyValue("result", "RETRY")
           .addKeyValue("jobId", delivery.id())
@@ -92,7 +94,7 @@ class QuarantineRelay {
     }
     if (!service.published(delivery)) {
       LOGGER
-          .atWarn()
+          .atDebug()
           .addKeyValue("event", "settlement.quarantine")
           .addKeyValue("result", "STALE")
           .addKeyValue("jobId", delivery.id())

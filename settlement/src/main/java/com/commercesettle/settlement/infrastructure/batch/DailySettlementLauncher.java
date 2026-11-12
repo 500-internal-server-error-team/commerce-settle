@@ -87,7 +87,7 @@ public class DailySettlementLauncher {
     try {
       BatchStatus status = jobLauncher.run(dailySettlementJob, parameters).getStatus();
       LOGGER
-          .atInfo()
+          .atDebug()
           .addKeyValue("event", "settlement.daily-batch")
           .addKeyValue("batchDate", batchDate)
           .addKeyValue("result", status)
@@ -108,7 +108,7 @@ public class DailySettlementLauncher {
 
   private static void logAlreadyRunning(LocalDate batchDate) {
     LOGGER
-        .atWarn()
+        .atDebug()
         .addKeyValue("event", "settlement.daily-batch")
         .addKeyValue("batchDate", batchDate)
         .addKeyValue("result", "ALREADY_RUNNING")

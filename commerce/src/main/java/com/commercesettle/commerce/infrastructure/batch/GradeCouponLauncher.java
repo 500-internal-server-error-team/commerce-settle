@@ -113,7 +113,7 @@ public class GradeCouponLauncher {
 
   private static void logAlreadyRunning(CouponIssueRun run) {
     LOGGER
-        .atWarn()
+        .atDebug()
         .addKeyValue("event", "coupon.grade-job")
         .addKeyValue("targetMonth", run.getTargetMonth())
         .addKeyValue("result", "ALREADY_RUNNING")

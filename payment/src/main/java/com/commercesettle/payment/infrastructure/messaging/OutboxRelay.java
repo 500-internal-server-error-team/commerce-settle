@@ -1,6 +1,7 @@
 package com.commercesettle.payment.infrastructure.messaging;
 
 import com.commercesettle.observability.AsyncObservation;
+import com.commercesettle.observability.RepeatedWarning;
 import com.commercesettle.observability.infrastructure.BusinessMetrics;
 import com.commercesettle.payment.application.port.OutboxStore.Delivery;
 import com.commercesettle.payment.application.port.OutboxStore.Publication;
@@ -38,6 +39,8 @@ public class OutboxRelay {
   static final int MAX_PUBLISHED_BATCH = 100;
   private static final String RESULT_OPERATION = "payment.outbox.result";
   private static final Logger LOG = LoggerFactory.getLogger(OutboxRelay.class);
+  private final RepeatedWarning wakeupRejected = new RepeatedWarning();
+  private final RepeatedWarning claimFailed = new RepeatedWarning();
   private final OutboxDeliveryService service;
   private final KafkaTemplate<String, byte[]> template;
   private final Executor executor;
@@ -136,7 +139,8 @@ public class OutboxRelay {
     } catch (RejectedExecutionException exception) {
       scheduled.set(false);
       // pending 신호는 유지하며 재귀 제출하지 않는다. 복구 조회가 다시 깨운다.
-      LOG.atWarn()
+      wakeupRejected
+          .at(LOG)
           .addKeyValue("event", "outbox.wakeup-rejected")
           .log("Outbox wakeup could not be scheduled; stored events remain recoverable");
     }
@@ -165,7 +169,7 @@ public class OutboxRelay {
     try {
       deliveries = service.claim(available, leaseMs, maxAttempts);
     } catch (RuntimeException exception) {
-      LOG.atWarn().addKeyValue("event", "outbox.claim").log("Outbox claim failed");
+      claimFailed.at(LOG).addKeyValue("event", "outbox.claim").log("Outbox claim failed");
       return;
     }
     for (var delivery : deliveries) {
@@ -328,7 +332,7 @@ public class OutboxRelay {
   }
 
   private static void logStale(Delivery delivery) {
-    LOG.atWarn()
+    LOG.atDebug()
         .addKeyValue("event", "outbox.stale-result")
         .addKeyValue("eventId", delivery.id())
         .log("Outbox lease no longer owns the result");

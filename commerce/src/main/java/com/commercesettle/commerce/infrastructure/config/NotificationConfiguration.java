@@ -10,6 +10,7 @@ import com.commercesettle.commerce.infrastructure.messaging.NotificationListener
 import com.commercesettle.commerce.infrastructure.mock.MockNotificationGateway;
 import com.commercesettle.commerce.infrastructure.observability.NotificationMetrics;
 import com.commercesettle.commerce.infrastructure.persistence.notification.NotificationReceiptStore;
+import com.commercesettle.observability.RepeatedWarning;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
@@ -105,6 +106,8 @@ public class NotificationConfiguration {
             new ThreadPoolExecutor.AbortPolicy());
     private final java.util.concurrent.atomic.AtomicInteger inFlight =
         new java.util.concurrent.atomic.AtomicInteger();
+    private final RepeatedWarning noticePollFailed = new RepeatedWarning();
+    private final RepeatedWarning deliveryPollFailed = new RepeatedWarning();
 
     NotificationPump(NotificationService notices, NotificationDeliveryService deliveries) {
       executor.scheduleWithFixedDelay(
@@ -112,8 +115,8 @@ public class NotificationConfiguration {
             try {
               for (int index = 0; index < 100 && notices.processNextNotice(); index++) {}
             } catch (RuntimeException e) {
-              org.slf4j.LoggerFactory.getLogger(NotificationPump.class)
-                  .atWarn()
+              noticePollFailed
+                  .at(org.slf4j.LoggerFactory.getLogger(NotificationPump.class))
                   .addKeyValue("event", "notification.notice.poll")
                   .addKeyValue("result", "UNKNOWN")
                   .addKeyValue("errorCode", "NOTIFICATION_NOTICE_POLL_FAILED")
@@ -134,8 +137,8 @@ public class NotificationConfiguration {
                       try {
                         deliveries.processNext();
                       } catch (RuntimeException e) {
-                        org.slf4j.LoggerFactory.getLogger(NotificationPump.class)
-                            .atWarn()
+                        deliveryPollFailed
+                            .at(org.slf4j.LoggerFactory.getLogger(NotificationPump.class))
                             .addKeyValue("event", "notification.delivery.poll")
                             .addKeyValue("result", "UNKNOWN")
                             .addKeyValue("errorCode", "NOTIFICATION_DELIVERY_POLL_FAILED")
