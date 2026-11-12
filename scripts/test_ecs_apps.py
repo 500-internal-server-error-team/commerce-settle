@@ -326,15 +326,19 @@ class DeployTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 deployment.read_images(root, "v0.1.0", COMMIT, REGION)
 
-    def test_aws_adapter_uses_stdin_and_never_exposes_failed_payload(self):
+    def test_aws_adapter_uses_private_reopenable_file_and_never_exposes_failed_payload(self):
         with tempfile.TemporaryDirectory() as directory:
             cli = Path(directory) / "aws"
             cli.write_text(f"#!{sys.executable}\n" + (
-                "import json, os, sys\n"
+                "import json, os, pathlib, stat, sys\n"
+                "path = pathlib.Path(sys.argv[sys.argv.index('--cli-input-json') + 1][7:])\n"
+                "assert stat.S_IMODE(path.stat().st_mode) == 0o600\n"
+                "first = json.loads(path.read_text())\n"
+                "assert json.loads(path.read_text()) == first\n"
                 "if os.environ.get('FAIL_CLI') == '1':\n"
                 "    print('synthetic-secret', file=sys.stderr)\n"
                 "    sys.exit(1)\n"
-                "print(json.dumps({'arguments':sys.argv[1:], 'received':json.load(sys.stdin)}))\n"
+                "print(json.dumps({'arguments':sys.argv[1:], 'received':first, 'path':str(path)}))\n"
             ))
             cli.chmod(0o700)
             with patch.dict(os.environ, {"PATH": directory + os.pathsep + os.environ["PATH"],
@@ -344,6 +348,7 @@ class DeployTest(unittest.TestCase):
                 )
                 self.assertNotIn("synthetic-secret", " ".join(response["arguments"]))
                 self.assertEqual(response["received"], {"value": "synthetic-secret"})
+                self.assertFalse(Path(response["path"]).exists())
             with patch.dict(os.environ, {"PATH": directory + os.pathsep + os.environ["PATH"],
                                          "FAIL_CLI": "1"}), \
                     self.assertRaisesRegex(RuntimeError, "^AWS ecs register-task-definition failed$"):
