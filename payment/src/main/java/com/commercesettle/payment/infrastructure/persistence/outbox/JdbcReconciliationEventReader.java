@@ -21,9 +21,6 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 class JdbcReconciliationEventReader implements ReconciliationEventReader {
-  private static final List<String> EVENT_TYPES =
-      List.of("PaymentConfirmed", "RefundFinancialCompleted");
-
   private static final String BASELINE =
       """
       FROM payment.outbox event
@@ -42,7 +39,8 @@ class JdbcReconciliationEventReader implements ReconciliationEventReader {
         SELECT CASE WHEN event.event_type = 'PaymentConfirmed' THEN event.payload->'payload'
                     ELSE original.payload->'payload' END AS amounts
       ) money
-      WHERE event.event_type IN (:types)
+      -- 상수로 둬야 일반 실행 계획에서도 ix_outbox_reconciliation 부분 인덱스 조건과 맞는다.
+      WHERE event.event_type IN ('PaymentConfirmed', 'RefundFinancialCompleted')
         AND event.occurred_at <= :cutoff + interval '1 microsecond'
         AND (event.payload->>'occurredAt' IS NULL OR
           CAST(regexp_replace(event.payload->>'occurredAt','([.][0-9]{6})[0-9]+','\\1') AS timestamptz) <= :cutoff)
@@ -134,7 +132,6 @@ class JdbcReconciliationEventReader implements ReconciliationEventReader {
 
   private static MapSqlParameterSource params(Instant cutoffAt, Instant snapshotAt) {
     return new MapSqlParameterSource()
-        .addValue("types", EVENT_TYPES)
         .addValue("cutoff", utc(cutoffAt))
         .addValue("snapshot", utc(snapshotAt));
   }
