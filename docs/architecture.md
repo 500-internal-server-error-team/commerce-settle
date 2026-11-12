@@ -26,7 +26,7 @@
 
 팀 공용 배포는 **ECS 클러스터 하나에 앱 서비스용 EC2 1대와 공유 인프라용 EC2 1대를 등록**하는 구성으로 정했습니다. 각 실행은 ECS 서비스로 관리하며, 컨테이너를 실행하는 단위인 Task를 사용합니다. EC2의 역할 속성과 배치 제약으로 앱·인프라 위치를 구분합니다.
 
-사양 후보·2주 예산·시험 데이터 운영 조건은 [EC2 2대 배포·부하 시험 제안](decisions/0013-ec2-deployment-and-load-test.md)에서 비교합니다.
+사양 후보·2주 예산·시험 데이터 운영 조건은 [EC2 2대 배포·부하 시험 제안](decisions/0013-ec2-deployment-and-load-test.md)에서 비교합니다. 병목 판정 순서와 병렬도 시험 범위는 [병렬도 결정 절차](decisions/0015-parallelism-decision-and-load-scope.md)에서 정합니다.
 
 ### 전체 구성
 
