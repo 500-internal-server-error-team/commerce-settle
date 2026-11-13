@@ -2,11 +2,14 @@ package com.commercesettle.commerce.application.service;
 
 import static com.commercesettle.commerce.support.ConcurrentTransactions.holdTransaction;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doAnswer;
 
 import com.commercesettle.commerce.application.port.AddressCipher;
 import com.commercesettle.commerce.domain.model.ProductStatus;
 import com.commercesettle.commerce.domain.model.ShippingAddress;
 import com.commercesettle.commerce.domain.repository.OrderRepository;
+import com.commercesettle.commerce.domain.repository.ProductRepository;
 import com.commercesettle.commerce.support.JdbcExecutionRecorder;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -49,6 +52,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -95,6 +99,7 @@ class OrderIntegrationTest {
   @Autowired BuyerAddressService addresses;
   @Autowired ProductCatalogService catalog;
   @Autowired OrderRepository orders;
+  @MockitoSpyBean ProductRepository products;
   @Autowired AddressCipher cipher;
   @Autowired PlatformTransactionManager transactions;
   @Autowired JdbcExecutionRecorder sql;
@@ -129,7 +134,7 @@ class OrderIntegrationTest {
     problem(conflict.result(), 409, "COMMON_IDEMPOTENCY_CONFLICT");
     assertThat(created.inventoryLocks()).isEqualTo(1);
     assertThat(created.timeoutSettings()).isEqualTo(1);
-    assertThat(created.executions()).hasSizeLessThanOrEqualTo(14);
+    assertThat(created.executions()).hasSizeLessThanOrEqualTo(15);
     assertThat(replay.executions()).hasSizeLessThanOrEqualTo(4);
     assertThat(conflict.executions()).hasSizeLessThanOrEqualTo(3);
     assertThat(replay.inventoryLocks()).isZero();
@@ -379,6 +384,154 @@ class OrderIntegrationTest {
   }
 
   @Test
+  @DisplayName("같은 구매자의 다른 주문은 병렬 접수하고 주소 변경은 주문 뒤에 진행한다")
+  void sharesBuyerLockBetweenOrdersButExcludesAddressChange() throws Exception {
+    var first = fixture(2);
+    var another = fixture(2);
+    var second = new Fixture(first.buyer(), first.address(), another.seller(), another.product());
+    CountDownLatch read = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    pauseFirstProductRead(first.product(), read, release);
+    try (var pool = Executors.newFixedThreadPool(2)) {
+      var create = pool.submit(() -> post(first.buyer(), key(), body(first)));
+      try {
+        assertThat(read.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(post(second.buyer(), key(), body(second)).getStatusCode().value())
+            .isEqualTo(201);
+        var updated = new ShippingAddress("변경 수령인", "000-1111-2222", "00002", "가상시 새주소 2", "");
+        var change =
+            pool.submit(
+                () -> addresses.change(first.buyer(), first.address(), key(), updated, true, 0));
+        assertThatThrownBy(() -> change.get(150, TimeUnit.MILLISECONDS))
+            .isInstanceOf(java.util.concurrent.TimeoutException.class);
+        release.countDown();
+        var result = create.get(10, TimeUnit.SECONDS);
+        assertThat(result.getStatusCode().value()).isEqualTo(201);
+        assertThat(change.get(10, TimeUnit.SECONDS).version()).isEqualTo(1);
+        UUID orderId = UUID.fromString(result.getBody().path("id").asText());
+        var snapshot = orders.findAddressByBuyerAndOrderId(first.buyer(), orderId).orElseThrow();
+        assertThat(cipher.open(snapshot.getId(), snapshot.getSealed())).isEqualTo(SHIPPING);
+        assertInventory(first.product(), 1, 1);
+        assertInventory(second.product(), 1, 1);
+      } finally {
+        release.countDown();
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "12000,ON_SALE,409,COMMON_VERSION_CONFLICT",
+    "10000,STOPPED,404,COMMON_RESOURCE_NOT_FOUND",
+    "10000,DELETED,404,COMMON_RESOURCE_NOT_FOUND"
+  })
+  @DisplayName("주문이 읽은 상품이 재고 잠금 전에 바뀌면 캐시 대신 DB를 검사하고 전체 저장을 롤백한다")
+  void rejectsProductChangedAfterInitialRead(
+      long price, ProductStatus state, int status, String code) throws Exception {
+    var f = fixture(2);
+    String requestKey = key();
+    long snapshots =
+        jdbc.queryForObject("select count(*) from commerce.order_addresses", Long.class);
+    long outbox = jdbc.queryForObject("select count(*) from commerce.outbox", Long.class);
+    long movements = count("inventory_movements", "product_id", f.product());
+    CountDownLatch read = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    pauseFirstProductRead(f.product(), read, release);
+    try (var pool = Executors.newSingleThreadExecutor()) {
+      var create = pool.submit(() -> post(f.buyer(), requestKey, body(f)));
+      try {
+        assertThat(read.await(10, TimeUnit.SECONDS)).isTrue();
+        if (state == ProductStatus.DELETED) catalog.delete(f.seller(), f.product(), key(), 0);
+        else catalog.change(f.seller(), f.product(), key(), "변경 상품", price, state, 0);
+      } finally {
+        release.countDown();
+      }
+      problem(create.get(10, TimeUnit.SECONDS), status, code);
+    }
+    assertThat(count("orders", "buyer_id", f.buyer())).isZero();
+    assertThat(count("inventory_reservations", "product_id", f.product())).isZero();
+    assertThat(count("inventory_movements", "product_id", f.product())).isEqualTo(movements);
+    assertThat(jdbc.queryForObject("select count(*) from commerce.order_addresses", Long.class))
+        .isEqualTo(snapshots);
+    assertThat(jdbc.queryForObject("select count(*) from commerce.outbox", Long.class))
+        .isEqualTo(outbox);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from commerce.idempotency_records where actor_id=? and operation='ORDER_CREATE'",
+                Long.class,
+                f.buyer().toString()))
+        .isZero();
+    assertInventory(f.product(), 2, 0);
+    if (state == ProductStatus.ON_SALE) {
+      assertThat(
+              post(
+                      f.buyer(),
+                      requestKey,
+                      body(f).put("expectedProductVersion", 1).put("expectedTotalAmount", price))
+                  .getStatusCode()
+                  .value())
+          .isEqualTo(201);
+      assertInventory(f.product(), 1, 1);
+    }
+  }
+
+  @Test
+  @DisplayName("주문이 재고를 먼저 잠그면 상품 변경은 주문 커밋 뒤에 진행한다")
+  void excludesSellerChangeAfterLateInventoryLock() throws Exception {
+    var f = fixture(2);
+    CountDownLatch locked = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    doAnswer(
+            invocation -> {
+              var version = invocation.callRealMethod();
+              locked.countDown();
+              awaitRelease(release);
+              return version;
+            })
+        .when(products)
+        .findOrderableVersion(f.product());
+    try (var pool = Executors.newFixedThreadPool(2)) {
+      var create = pool.submit(() -> post(f.buyer(), key(), body(f)));
+      try {
+        assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+        var change =
+            pool.submit(
+                () ->
+                    catalog.change(
+                        f.seller(), f.product(), key(), "변경 상품", 12000, ProductStatus.ON_SALE, 0));
+        assertThatThrownBy(() -> change.get(150, TimeUnit.MILLISECONDS))
+            .isInstanceOf(java.util.concurrent.TimeoutException.class);
+        release.countDown();
+        assertThat(create.get(10, TimeUnit.SECONDS).getStatusCode().value()).isEqualTo(201);
+        assertThat(change.get(10, TimeUnit.SECONDS).getUnitPrice()).isEqualTo(12000);
+      } finally {
+        release.countDown();
+      }
+    }
+    assertInventory(f.product(), 1, 1);
+  }
+
+  private void pauseFirstProductRead(UUID productId, CountDownLatch read, CountDownLatch release) {
+    var first = new java.util.concurrent.atomic.AtomicBoolean(true);
+    doAnswer(
+            invocation -> {
+              var product = invocation.callRealMethod();
+              if (first.getAndSet(false)) {
+                read.countDown();
+                awaitRelease(release);
+              }
+              return product;
+            })
+        .when(products)
+        .findById(productId);
+  }
+
+  private static void awaitRelease(CountDownLatch release) throws InterruptedException {
+    if (!release.await(10, TimeUnit.SECONDS))
+      throw new IllegalStateException("test release timed out");
+  }
+
+  @Test
   @DisplayName("상품 변경의 재고 잠금이 풀리면 새 가격·버전을 검사하고 이전 견적은 거절한다")
   void readsLatestProductAfterSellerChange() throws Exception {
     var f = fixture(2);
@@ -529,9 +682,10 @@ class OrderIntegrationTest {
     assertInventory(fixture.product(), 2, 1);
   }
 
-  @Test
-  @DisplayName("Outbox의 실제 DB 저장 실패는 주문·주소·재고·멱등 기록을 롤백하고 같은 키로 재시도된다")
-  void rollsBackEveryWriteIfOutboxFails() {
+  @ParameterizedTest
+  @ValueSource(strings = {"outbox", "inventory_reservations"})
+  @DisplayName("Outbox·예약의 DB 저장 실패는 전체 주문을 롤백하고 같은 키로 재시도된다")
+  void rollsBackEveryWriteIfStorageFails(String table) {
     var f = fixture(2);
     String key = key();
     long addressCount =
@@ -541,7 +695,9 @@ class OrderIntegrationTest {
     jdbc.execute(
         "CREATE FUNCTION commerce.reject_order_outbox() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected storage failure'; END $$");
     jdbc.execute(
-        "CREATE TRIGGER reject_order_outbox BEFORE INSERT ON commerce.outbox FOR EACH ROW EXECUTE FUNCTION commerce.reject_order_outbox()");
+        "CREATE TRIGGER reject_order_outbox BEFORE INSERT ON commerce."
+            + table
+            + " FOR EACH ROW EXECUTE FUNCTION commerce.reject_order_outbox()");
     try {
       assertThat(post(f.buyer(), key, body(f)).getStatusCode().is5xxServerError()).isTrue();
       assertThat(count("orders", "buyer_id", f.buyer())).isZero();
@@ -559,7 +715,7 @@ class OrderIntegrationTest {
           .isEqualTo(outboxCount);
       assertThat(count("inventory_movements", "product_id", f.product())).isEqualTo(movements);
     } finally {
-      jdbc.execute("DROP TRIGGER reject_order_outbox ON commerce.outbox");
+      jdbc.execute("DROP TRIGGER reject_order_outbox ON commerce." + table);
       jdbc.execute("DROP FUNCTION commerce.reject_order_outbox()");
     }
     assertThat(post(f.buyer(), key, body(f)).getStatusCode().value()).isEqualTo(201);
