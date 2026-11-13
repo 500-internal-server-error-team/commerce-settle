@@ -45,7 +45,7 @@ import org.testcontainers.kafka.KafkaContainer;
       "app.internal-auth.senders.gateway.current=test-gateway-credential-0123456789abcdef0123",
       "app.internal-auth.senders[service\\:commerce].current=test-commerce-retention-credential-0123456789abcdef",
       "app.internal-auth.senders[operator\\:ops].current=test-operator-credential-0123456789abcdef0123",
-      "settlement.commerce.credential=test-commerce-settlement-0123456789abcdef012345",
+      "settlement.commerce.outbound-credential=test-commerce-settlement-0123456789abcdef012345",
       "settlement.payout.mock-credential=test-settlement-credential-0123456789abcdef0123",
       "spring.kafka.admin.auto-create=false",
       "settlement.daily-batch.schedule-enabled=false",
