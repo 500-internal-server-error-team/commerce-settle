@@ -123,10 +123,9 @@ class DockerReadProxy:
             selected = {}
             for service, candidates in services.items():
                 running = [row for row in candidates if row.get("State") == "running"]
-                if len(running) > 1:
-                    raise ValueError("Multiple running containers exceed the single-task observation contract")
-                row = max(running or candidates, key=lambda value: (int(value.get("Created", 0)), value["Id"]))
-                selected[row["Id"]] = service
+                current = running or [max(candidates, key=lambda value: (int(value.get("Created", 0)), value["Id"]))]
+                for row in current:
+                    selected[row["Id"]] = service
             with self.lock:
                 self.containers = selected
             return [{"Id": identity, "service": service} for identity, service in selected.items()]

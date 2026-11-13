@@ -22,6 +22,13 @@ def ecs_labels(service="payment-worker", cluster="owned", account="123456789012"
 
 
 class DockerBoundaryTest(unittest.TestCase):
+    def test_compose_service_and_its_live_oom_probe_are_both_observed(self):
+        labels = {"com.docker.compose.project": "owned", "com.docker.compose.service": "finance-mock"}
+        rows = [{"Id": identity, "Labels": labels, "State": "running", "Created": created}
+                for identity, created in ((IDENTITY, 1), (FOREIGN, 2))]
+        proxy = runtime.DockerReadProxy("owned", ["finance-mock"], Mock(return_value=rows))
+        self.assertEqual({row["Id"] for row in proxy.get("/containers/json")}, {IDENTITY, FOREIGN})
+
     def test_ecs_selection_checks_cluster_account_family_and_container_before_inspect(self):
         labels = [ecs_labels(), ecs_labels(cluster="foreign"), ecs_labels(service="commerce"),
                   ecs_labels(account="999999999999"),
@@ -50,15 +57,14 @@ class DockerBoundaryTest(unittest.TestCase):
         self.assertEqual(result[0]["exitCode"], "137")
         self.assertNotIn("private", json.dumps(result))
 
-    def test_replacement_prefers_running_task_and_rejects_ambiguous_replicas(self):
+    def test_replacement_ignores_stopped_history_and_preserves_running_replicas(self):
         old = {"Id": FOREIGN, "Labels": ecs_labels(), "State": "exited", "Created": 1}
         new = {"Id": IDENTITY, "Labels": ecs_labels(), "State": "running", "Created": 2}
         backend = Mock(return_value=[old, new])
         proxy = runtime.DockerReadProxy(None, ["payment-worker"], backend, ecs_cluster=CLUSTER)
         self.assertEqual(proxy.get("/containers/json"), [{"Id": IDENTITY, "service": "payment-worker"}])
         backend.return_value = [{**old, "State": "running"}, new]
-        with self.assertRaises(ValueError):
-            proxy.get("/containers/json")
+        self.assertEqual({row["Id"] for row in proxy.get("/containers/json")}, {IDENTITY, FOREIGN})
 
     def test_missing_or_invalid_scope_is_rejected(self):
         for project, services, cluster in [(None, ["commerce"], None),
