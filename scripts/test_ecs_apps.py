@@ -77,7 +77,7 @@ class FakeAws:
             {"status": "PRIMARY", "taskDefinition": arn, "rolloutState": "COMPLETED"}
         ])
 
-    def __call__(self, service, operation, *arguments, payload=None):
+    def __call__(self, service, operation, *arguments, payload=None, timeout=None):
         self.calls.append((operation, arguments, copy.deepcopy(payload)))
         if service == "sts":
             return {"Account": ACCOUNT}
@@ -113,6 +113,90 @@ class FakeAws:
                 self.stable(name, current.rsplit(":", 1)[0] + ":" + revision)
             return {}
         raise AssertionError((service, operation))
+
+
+class WaitTest(unittest.TestCase):
+    TASK = f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/commerce-settle-finance-mock:2"
+
+    def state(self, rollout="COMPLETED", task=None):
+        arn = task or self.TASK
+        return {"serviceName": "commerce-settle-finance-mock", "status": "ACTIVE",
+                "desiredCount": 1, "runningCount": 1, "pendingCount": 0,
+                "taskDefinition": arn, "deployments": [
+                    {"status": "PRIMARY", "taskDefinition": arn, "rolloutState": rollout},
+                ]}
+
+    def observe(self, states, *, waiter_seconds=90, expected=None, describe_seconds=0):
+        elapsed, polls = [0], []
+
+        def aws(service, operation, *args, timeout=None):
+            self.assertEqual(service, "ecs")
+            if operation == "wait":
+                self.assertEqual(timeout, 600)
+                elapsed[0] += waiter_seconds
+                return {}
+            self.assertEqual(operation, "describe-services")
+            self.assertEqual(timeout, min(60, 600 - elapsed[0]))
+            elapsed[0] += describe_seconds
+            current = states[min(len(polls), len(states) - 1)]
+            polls.append(copy.deepcopy(current))
+            return {"services": [copy.deepcopy(current)]}
+
+        def sleep(seconds):
+            elapsed[0] += seconds
+
+        error = None
+        with patch.object(deployment.time, "monotonic", side_effect=lambda: elapsed[0]), \
+                patch.object(deployment.time, "sleep", side_effect=sleep):
+            try:
+                deployment.wait_for(aws, "commerce-cluster", "finance-mock", expected or self.TASK)
+            except RuntimeError as caught:
+                error = caught
+        return error, elapsed[0], len(polls)
+
+    def test_waiter_success_waits_for_expected_rollout_completion(self):
+        error, elapsed, polls = self.observe([self.state("IN_PROGRESS"), self.state()])
+        self.assertIsNone(error)
+        self.assertEqual((elapsed, polls), (105, 2))
+
+    def test_rollback_waits_for_previous_revision_completion(self):
+        previous = self.TASK.rsplit(":", 1)[0] + ":1"
+        error, _, polls = self.observe([
+            self.state("IN_PROGRESS", previous), self.state(task=previous),
+        ], expected=previous)
+        self.assertIsNone(error)
+        self.assertEqual(polls, 2)
+
+    def test_other_revision_and_failed_or_inactive_service_are_rejected(self):
+        inactive = self.state()
+        inactive["status"] = "INACTIVE"
+        for state in (self.state(task=self.TASK + "9"), self.state("FAILED"), inactive):
+            with self.subTest(state=state):
+                error, elapsed, polls = self.observe([state])
+                self.assertIsNotNone(error)
+                self.assertEqual((elapsed, polls), (90, 1))
+
+    def test_waiter_and_rollout_share_the_existing_ten_minute_budget(self):
+        error, elapsed, polls = self.observe([self.state("IN_PROGRESS")], waiter_seconds=599)
+        self.assertIn("timed out", str(error))
+        self.assertEqual((elapsed, polls), (600, 2))
+
+    def test_running_and_pending_counts_must_also_settle(self):
+        pending = self.state("IN_PROGRESS")
+        pending.update(runningCount=0, pendingCount=1)
+        error, _, polls = self.observe([pending, self.state()])
+        self.assertIsNone(error)
+        self.assertEqual(polls, 2)
+
+    def test_late_waiter_cannot_approve_an_already_completed_service(self):
+        error, elapsed, polls = self.observe([self.state()], waiter_seconds=601)
+        self.assertIn("timed out", str(error))
+        self.assertEqual((elapsed, polls), (601, 0))
+
+    def test_completion_response_after_remaining_budget_is_not_approved(self):
+        error, elapsed, polls = self.observe([self.state()], waiter_seconds=599, describe_seconds=2)
+        self.assertIn("timed out", str(error))
+        self.assertEqual((elapsed, polls), (601, 1))
 
 
 class RenderTest(unittest.TestCase):
@@ -382,6 +466,15 @@ class DeployTest(unittest.TestCase):
                                          "FAIL_CLI": "1"}), \
                     self.assertRaisesRegex(RuntimeError, "^AWS ecs register-task-definition failed$"):
                 deployment.Aws(REGION)("ecs", "register-task-definition", payload={})
+
+    def test_aws_adapter_enforces_the_callers_remaining_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cli = Path(directory) / "aws"
+            cli.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(1)\nprint('{{}}')\n")
+            cli.chmod(0o700)
+            with patch.dict(os.environ, {"PATH": directory + os.pathsep + os.environ["PATH"]}), \
+                    self.assertRaisesRegex(RuntimeError, "^AWS ecs describe-services failed$"):
+                deployment.Aws(REGION)("ecs", "describe-services", timeout=0.02)
 
     def test_public_url_and_backend_docs_checks(self):
         for value in ["http://example.com", "https://user:secret@example.com",
