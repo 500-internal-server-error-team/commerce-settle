@@ -608,24 +608,29 @@ def cmd_reconcile(args):
     for order in payments.keys() - expected.keys() - others:
         problem("원장에 없는 결제", order)
     scoped = {order: found for order, found in payments.items() if order in expected}
+    scoped_payments = {payment for payment, *_ in scoped.values()}
 
     attempts = {}
     for payment, provider, key, amount, status in psql("payment", """
             SELECT payment_id, provider_id, business_key, amount, status
             FROM payment.payment_attempts"""):
-        if payment in attempts:
+        attempts.setdefault(payment, []).append((provider, key, int(amount), status))
+    # 다른 실행 결제의 재시도는 그 실행을 대조할 때 판단한다.
+    for payment, found in attempts.items():
+        if payment in scoped_payments and len(found) > 1:
             problem("승인 시도 중복", payment)
-        attempts[payment] = (provider, key, int(amount), status)
     mock = {}
     for provider, key, amount, status, account in psql("finance_mock", """
             SELECT provider_id, business_key, amount, status, coalesce(account_id::text, '')
             FROM finance_mock.mock_transactions WHERE operation = 'APPROVE'"""):
         mock[(provider, key)] = (int(amount), status, account)
     # 다른 실행의 결제에 연결된 대역 거래는 연결된 것으로 보되, 그 결제의 불일치는 여기서 세지 않는다.
-    used = {(attempts[payment][0], attempts[payment][1])
-            for order, (payment, *_) in payments.items() if order not in scoped and payment in attempts}
+    # 그 결제의 모든 승인 시도에 연결된 거래를 연결된 것으로 본다.
+    used = {(provider, key)
+            for order, (payment, *_) in payments.items() if order not in scoped
+            for provider, key, *_ in attempts.get(payment, ())}
     for order, (payment, cycle, _, status, _, _, external) in scoped.items():
-        attempt = attempts.get(payment)
+        attempt = attempts[payment][-1] if payment in attempts else None
         if external == 0:
             if attempt:
                 problem("전액 마일리지에 승인 시도", order)
@@ -684,7 +689,6 @@ def cmd_reconcile(args):
             FROM payment.payments p LEFT JOIN payment.mileage_entries e ON e.payment_id = p.id
             WHERE p.mileage_amount > 0
             GROUP BY p.id, p.status""")
-    scoped_payments = {payment for payment, *_ in scoped.values()}
     for payment, status, reserve, debit, release in entry_rows:
         if payment not in scoped_payments:
             continue
