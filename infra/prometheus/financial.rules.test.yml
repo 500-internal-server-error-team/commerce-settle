@@ -224,3 +224,62 @@ tests:
       - expr: business:completions
         eval_time: 2m
         exp_samples: []
+
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_financial_operation_age_seconds{operation="refund.unknown",job="apps",instance="one"}'
+        values: '300x4'
+      - series: 'commerce_settle_financial_operation_observed_timestamp_seconds{operation="refund.unknown",job="apps",instance="one"}'
+        values: '0+15x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FinancialUnknown
+        exp_alerts: []
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_financial_operation_age_seconds{operation="refund.unknown",job="apps",instance="one"}'
+        values: '301x4'
+      - series: 'commerce_settle_financial_operation_observed_timestamp_seconds{operation="refund.unknown",job="apps",instance="one"}'
+        values: '0+15x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FinancialUnknown
+        exp_alerts:
+          - exp_labels: {severity: warning, operation: refund.unknown}
+            exp_annotations:
+              summary: 금융 미확정 원거래를 조회하고 대조하세요.
+              runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_financial_operation_age_seconds{operation="refund.unknown",job="apps",instance="one"}'
+        values: '900x4'
+      - series: 'commerce_settle_financial_operation_observed_timestamp_seconds{operation="refund.unknown",job="apps",instance="one"}'
+        values: '0+15x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FinancialUnknown
+        exp_alerts:
+          - exp_labels: {severity: warning, operation: refund.unknown}
+            exp_annotations:
+              summary: 금융 미확정 원거래를 조회하고 대조하세요.
+              runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_financial_operation_age_seconds{operation="refund.unknown",job="apps",instance="one"}'
+        values: '901x4'
+      - series: 'commerce_settle_financial_operation_observed_timestamp_seconds{operation="refund.unknown",job="apps",instance="one"}'
+        values: '0+15x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FinancialUnknown
+        exp_alerts:
+          - exp_labels: {severity: warning, operation: refund.unknown}
+            exp_annotations:
+              summary: 금융 미확정 원거래를 조회하고 대조하세요.
+              runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
+          - exp_labels: {severity: critical, operation: refund.unknown}
+            exp_annotations:
+              summary: 금융 미확정 원거래를 조회하고 대조하세요.
+              runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구

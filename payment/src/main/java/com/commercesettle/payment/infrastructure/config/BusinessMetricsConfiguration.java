@@ -2,6 +2,7 @@ package com.commercesettle.payment.infrastructure.config;
 
 import com.commercesettle.observability.infrastructure.BusinessMetrics;
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import java.util.HashMap;
 import java.util.Map;
 import javax.sql.DataSource;
 import org.springframework.beans.factory.ObjectProvider;
@@ -27,20 +28,23 @@ public class BusinessMetricsConfiguration {
   }
 
   public static Map<String, String> sources() {
-    return Map.of(
-        "payment.confirmed",
-            """
+    var sources = new HashMap<>(BusinessMetrics.deliverySources("payment"));
+    sources.putAll(
+        Map.of(
+            "payment.confirmed",
+                """
           SELECT confirmed_at AS completed_at, created_at AS started_at FROM payment.payments
           WHERE confirmed_at >= statement_timestamp() - interval '900 seconds'
             AND confirmed_at < statement_timestamp()
           """,
-        "refund.completed",
-            """
+            "refund.completed",
+                """
           SELECT s.order_restored_at AS completed_at, r.created_at AS started_at
           FROM payment.refund_sagas s JOIN payment.refunds r ON r.id=s.refund_id
           WHERE s.step='COMPLETED' AND r.status='COMPLETED'
             AND s.order_restored_at >= statement_timestamp() - interval '900 seconds'
             AND s.order_restored_at < statement_timestamp()
-          """);
+          """));
+    return Map.copyOf(sources);
   }
 }

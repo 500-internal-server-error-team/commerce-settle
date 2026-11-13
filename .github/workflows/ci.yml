@@ -57,6 +57,7 @@ jobs:
           python3 scripts/test_sync_redis_run_id.py
           python3 scripts/test_pr_body.py
           python3 -B -m unittest discover -s scripts -p 'test_storage_metrics.py'
+          python3 -B scripts/test_runtime_metrics.py
           python3 -B -m unittest discover -s scripts -p 'test_admission_runner.py'
           python3 -B scripts/test_prepare_financial_kafka.py
           python3 -B -m unittest discover -s scripts -p 'test_ci_helpers.py'
@@ -142,7 +143,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - *checkout
-      - name: Verify quarantine and notification alert delivery
+      - name: Verify financial and runtime alert delivery
         run: python3 scripts/test_observability.py
 
   integration:

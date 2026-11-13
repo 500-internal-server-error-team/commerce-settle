@@ -11,7 +11,9 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 OPERATIONS = ("payment.confirmed", "refund.completed", "order.settlement.applied",
-              "payment.settlement.applied")
+              "payment.settlement.applied", "payment.payout.succeeded", "ready.payout.succeeded") + tuple(
+    owner + "." + boundary for owner in ("commerce", "payment", "settlement")
+    for boundary in ("outbox.published", "inbox.applied"))
 IMAGES = ("gateway", "commerce", "payment", "settlement", "finance-mock")
 CONDITIONS = ("workload", "datasetSha256", "arrivalRate", "mix", "scenario", "generator",
               "resources", "runtime", "warmupSeconds")
@@ -95,6 +97,20 @@ def one(rows):
     return value if math.isfinite(value) else None
 
 
+def cohort_values(rows):
+    result = {}
+    for row in rows:
+        operation, reason = row["metric"]["operation"], row["metric"]["reason"]
+        values = result.setdefault(operation, {})
+        if reason in values:
+            raise ValueError("duplicate payout cohort source")
+        value = float(row["value"][1])
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("invalid payout cohort observation")
+        values[reason] = value
+    return result
+
+
 def capture(metadata, window, at, fetch):
     operations = validate_metadata(metadata)
     if window not in (60, 300, 900):
@@ -138,16 +154,75 @@ def capture(metadata, window, at, fetch):
         if count > 0 and value is None:
             raise ValueError("HTTP count exists but histogram is unavailable")
         http_values[f"p{int(100*quantile)}Seconds"] = value if count and (quantile != .99 or count >= 10000) else None
+    cohorts = {}
+    population = None
+    if any(op in operations for op in ("payment.payout.succeeded", "ready.payout.succeeded")):
+        observed = business_values(fetch("business:cohort_source"))
+        coverage = {name: business_values(fetch("business:cohort_" + name)).get("payout.unapplied")
+                    for name in ("cutoff", "snapshot", "capture_complete")}
+        requested = metadata.get("payoutPopulationCutoff")
+        if (type(requested) not in (int, float) or not math.isfinite(requested) or requested <= 0
+                or coverage["capture_complete"] != 1 or coverage["cutoff"] is None
+                or coverage["snapshot"] is None
+                or not requested <= coverage["cutoff"] <= coverage["snapshot"] <= at):
+            raise ValueError("payout source population unverified; specify payoutPopulationCutoff and complete owner reconciliation")
+        population = {"requestedCutoff": requested, **coverage}
+
+        values = {name: cohort_values(fetch("business:cohort_" + name))
+                  for name in ("records", "age_seconds", "missing_origin")}
+        reasons = {"purchase_pending", "refund_pending", "batch_wait", "payout_pending",
+                   "payout_unknown", "payout_declined", "refunded"}
+        for operation in ("payout.total", "payout.ready", "payout.unapplied"):
+            expected_reasons = ({"wait_publication", "wait_delivery", "wait_application", "quarantined",
+                                 "defect", "pending", "unverified", "unclassified"}
+                                if operation == "payout.unapplied" else reasons)
+            source = observed.get(operation)
+            if source is None or not 0 <= at-source <= 45:
+                raise ValueError("missing/stale/future payout cohort: " + operation)
+            if any(set(values[name].get(operation, {})) != expected_reasons for name in values):
+                raise ValueError("incomplete payout cohort: " + operation)
+            cohorts[operation] = {"observedAt": source, "observationLagSeconds": at-source,
+                                  **{name: values[name][operation] for name in values}}
     return {"format": 1, "metadata": metadata, "windowSeconds": window,
             "measurementStart": at-window, "measurementEnd": at,
-            "business": business, "http": http_values}
+            "business": business, "http": http_values, "cohorts": cohorts, "payoutPopulation": population}
+
+
+def validate_payout_report(report, operations):
+    if not set(operations) & {"payment.payout.succeeded", "ready.payout.succeeded"}:
+        return
+    population = report.get("payoutPopulation") or {}
+    requested = report["metadata"].get("payoutPopulationCutoff")
+    fields = [population.get(key) for key in ("requestedCutoff", "cutoff", "snapshot", "capture_complete")]
+    if (type(requested) not in (int, float) or not math.isfinite(requested)
+            or not all(type(value) in (int, float) and math.isfinite(value) for value in fields)
+            or population["requestedCutoff"] != requested or population["capture_complete"] != 1
+            or not 0 < requested <= population["cutoff"] <= population["snapshot"] <= report["measurementEnd"]):
+        raise ValueError("payout report source population is unverified")
+    reasons = {"purchase_pending", "refund_pending", "batch_wait", "payout_pending", "payout_unknown", "payout_declined", "refunded"}
+    cohorts = report.get("cohorts", {})
+    if set(cohorts) != {"payout.total", "payout.ready", "payout.unapplied"}:
+        raise ValueError("payout report cohorts are incomplete")
+    for operation, cohort in cohorts.items():
+        expected = ({"wait_publication", "wait_delivery", "wait_application", "quarantined", "defect", "pending", "unverified", "unclassified"}
+                    if operation == "payout.unapplied" else reasons)
+        observed = cohort.get("observedAt")
+        if not isinstance(observed, (int, float)) or not 0 <= report["measurementEnd"]-observed <= 45:
+            raise ValueError("payout report cohort timestamp is unavailable")
+        for name in ("records", "age_seconds", "missing_origin"):
+            values = cohort.get(name, {})
+            if set(values) != expected or any(type(value) not in (int, float) or not math.isfinite(value) or value < 0 for value in values.values()):
+                raise ValueError("payout report cohort values are incomplete")
 
 
 def compare(before, after):
     for report in (before, after):
         if report.get("format") != 1:
             raise ValueError("unsupported report format")
-        validate_metadata(report["metadata"])
+        operations = validate_metadata(report["metadata"])
+        validate_payout_report(report, operations)
+        if set(report["business"]) != set(operations):
+            raise ValueError("report business measurements differ from selected operations")
     for key in ("conditions", "http", "operations"):
         if before["metadata"].get(key) != after["metadata"].get(key):
             raise ValueError("comparison conditions differ: " + key)
@@ -155,6 +230,8 @@ def compare(before, after):
         raise ValueError("comparison windows differ")
     if set(before["business"]) != set(after["business"]):
         raise ValueError("comparison business measurements differ")
+    if set(before.get("cohorts", {})) != set(after.get("cohorts", {})):
+        raise ValueError("comparison payout cohorts differ")
     deltas, unavailable = {}, []
     def delta(name, old, new):
         if old is None or new is None:
@@ -171,9 +248,24 @@ def compare(before, after):
             unavailable.append(operation + ".durationCoverage")
             continue
         for key in ("p50Seconds", "p95Seconds", "p99Seconds"):
-            delta(operation + "." + key, old[key], new[key])
+            if key == "p99Seconds" and min(old["latencySamples"], new["latencySamples"]) < 10000:
+                unavailable.append(operation + "." + key)
+            else:
+                delta(operation + "." + key, old[key], new[key])
     for key in ("p95Seconds", "p99Seconds"):
-        delta("http." + key, before["http"][key], after["http"][key])
+        if key == "p99Seconds" and min(before["http"]["samples"], after["http"]["samples"]) < 10000:
+            unavailable.append("http." + key)
+        else:
+            delta("http." + key, before["http"][key], after["http"][key])
+    for operation, new in after.get("cohorts", {}).items():
+        old = before["cohorts"][operation]
+        for field in ("records", "age_seconds", "missing_origin"):
+            if set(old[field]) != set(new[field]):
+                raise ValueError("comparison payout cohort reasons differ")
+            for reason in new[field]:
+                delta(operation + "." + field + "." + reason, old[field][reason], new[field][reason])
+        if any(old["missing_origin"].values()) or any(new["missing_origin"].values()):
+            unavailable.append(operation + ".originCoverage")
     return {"complete": not unavailable, "unavailable": unavailable, "deltas": deltas,
             "beforeRevision": before["metadata"]["revision"], "afterRevision": after["metadata"]["revision"],
             "beforeImages": before["metadata"]["imageDigests"], "afterImages": after["metadata"]["imageDigests"],
@@ -181,7 +273,8 @@ def compare(before, after):
                                    for op,value in report["business"].items()}
                           for phase,report in (("before",before),("after",after))},
             "beforeVariant": before["metadata"].get("variant"), "afterVariant": after["metadata"].get("variant"),
-            "conditions": before["metadata"]["conditions"], "windowSeconds": before["windowSeconds"]}
+            "conditions": before["metadata"]["conditions"], "windowSeconds": before["windowSeconds"],
+            "payoutPopulation": {"before": before.get("payoutPopulation"), "after": after.get("payoutPopulation")}}
 
 
 def main(argv=None):

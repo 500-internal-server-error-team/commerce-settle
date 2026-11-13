@@ -117,6 +117,8 @@ Payment·Settlement는 확정 상태와 알림 요청 Outbox를 함께 저장하
 
 [Prometheus 설정](../infra/prometheus/prometheus.yml)은 Gateway·Commerce·Payment API·Payment Worker·Settlement·Finance Mock의 `/actuator/prometheus`를 15초마다 수집합니다. Grafana는 [내부 Prometheus 주소](../infra/grafana/provisioning/datasources/prometheus.yml)를 조회합니다.
 
+컨테이너 수집기 `container-metrics`도 기본 Compose에서 실행합니다. Docker 소켓은 `docker-metrics-proxy`만 읽고, 프록시는 내부 전용 네트워크에서 지정한 프로젝트·서비스의 목록·상태·자원·OOM/종료 이벤트 GET만 허용합니다. 환경 변수·마운트·임의 Engine API는 내보내지 않으며 앱과 수집기에는 소켓을 주지 않습니다. Docker 호스트 지표는 Linux 호스트/VM 기준이며 macOS 전체 자원과 다릅니다. ECS Task에는 이 소켓 기반 수집기를 적용하지 않으므로 별도 런타임 수집 경계를 검증해야 합니다.
+
 Prometheus와 데이터 파일시스템 수집기는 신규 접수 판단에 필요하므로 기본 Compose에서 실행합니다. Grafana·Alertmanager·Kafka UI는 `observability`, k6는 `tools` 프로필에서 실행합니다.
 
 Prometheus·Grafana는 각각 `prometheus-data`·`grafana-data` 볼륨을 사용하고, Zipkin 추적은 재시작하면 사라집니다. 관측 도구의 호스트 포트는 [네트워크와 관측](#네트워크와-관측)을 따르며 모두 루프백에 바인딩됩니다. 앱 관리 포트 9091·DB·Kafka·Redis는 호스트에 게시하지 않습니다.

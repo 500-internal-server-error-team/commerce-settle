@@ -952,3 +952,7 @@ CREATE TABLE commerce.BATCH_JOB_EXECUTION_CONTEXT (
 CREATE SEQUENCE commerce.BATCH_STEP_EXECUTION_SEQ MAXVALUE 9223372036854775807 NO CYCLE;
 CREATE SEQUENCE commerce.BATCH_JOB_EXECUTION_SEQ MAXVALUE 9223372036854775807 NO CYCLE;
 CREATE SEQUENCE commerce.BATCH_JOB_SEQ MAXVALUE 9223372036854775807 NO CYCLE;
+
+-- Bounded completion-window observations avoid scanning terminal history on every refresh.
+CREATE INDEX ix_outbox_observation_published ON commerce.outbox (published_at, id) WHERE status='PUBLISHED';
+CREATE INDEX ix_inbox_observation_applied ON commerce.inbox (consumer, updated_at, id) WHERE status='APPLIED';

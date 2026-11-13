@@ -291,6 +291,7 @@ CREATE TABLE payment.refunds (
     external_status         varchar(24) NOT NULL,
     external_ref            uuid,
     mileage_restored_at     timestamptz,
+    unknown_since           timestamptz,
     created_at              timestamptz NOT NULL,
     updated_at              timestamptz NOT NULL,
     version                 bigint      NOT NULL,
@@ -310,6 +311,7 @@ CREATE TABLE payment.refunds (
         CHECK (external_status <> 'SUCCEEDED' OR external_ref IS NOT NULL),
     CONSTRAINT ck_refunds_restored
         CHECK (status NOT IN ('INTERNAL_PENDING', 'COMPLETED') OR mileage_restored_at IS NOT NULL),
+    CONSTRAINT ck_refunds_unknown_since CHECK (status <> 'UNKNOWN' OR unknown_since IS NOT NULL),
     CONSTRAINT ck_refunds_version CHECK (version >= 0)
 );
 -- 같은 원결제에 진행 중이거나 완료된 환불은 하나뿐이다. 확정 거절(DECLINED) 뒤에만 새 환불을 받는다.
@@ -503,3 +505,8 @@ CREATE INDEX ix_refund_sagas_observation_completed ON payment.refund_sagas (orde
 CREATE INDEX ix_inbox_observation_order_cycle ON payment.inbox
     (aggregate_id, (payload->'payload'->>'paymentCycleId'), created_at, id)
     WHERE event_type='OrderPaymentRequested';
+
+-- Bounded completion-window observations avoid scanning terminal history on every refresh.
+CREATE INDEX ix_outbox_observation_published ON payment.outbox (published_at, id) WHERE status='PUBLISHED';
+CREATE INDEX ix_inbox_observation_applied ON payment.inbox (consumer, updated_at, id) WHERE status='APPLIED';
+CREATE INDEX ix_refunds_unknown_since ON payment.refunds (unknown_since, id) WHERE status='UNKNOWN';

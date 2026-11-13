@@ -23,6 +23,12 @@ load = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(load)
 
 
+def completed_injection(stages, mix, directory, offset, marks, *_):
+    marks.append({"stage": 0, "rate": 1, "seconds": 1, "sent": 0, "elapsed": 0,
+                  "start": "2026-11-03T00:00:00Z", "end": "2026-11-03T00:00:00Z",
+                  "endedMonotonic": load.time.monotonic()})
+
+
 class BoolAnd:
     def __init__(self):
         self.value = True
@@ -324,7 +330,7 @@ class RestartRegressionTest(unittest.TestCase):
                                   interval=1, drain=1, kill_after=25, scenario="normal")
         with patch("threading.Thread", InlineThread), patch("threading.Event") as event, patch("builtins.open", mock_open()), \
                 patch.object(load, "time") as clock, patch.object(load, "WORK", work), \
-                patch.object(load, "produce"), patch.object(load, "remember_run"), \
+                patch.object(load, "produce", side_effect=completed_injection), patch.object(load, "latency", return_value={}), patch.object(load, "remember_run"), \
                 patch.object(load, "snapshot", return_value=sample), \
                 patch.object(load, "compose", side_effect=compose), \
                 patch.object(load, "compose_env", return_value={}), \
@@ -455,7 +461,7 @@ class StopInjectionTest(unittest.TestCase):
             timer.start()
             try:
                 with patch.object(load, 'WORK', root), patch.object(load, 'STACK_RUNS', root / 'runs'), \
-                        patch.object(load, 'produce'), patch.object(load, 'compose_env', return_value={}), \
+                        patch.object(load, 'produce', side_effect=completed_injection), patch.object(load, 'compose_env', return_value={}), \
                         patch.object(load, 'snapshot', side_effect=snapshot), \
                         patch.object(load, 'compose', side_effect=compose), \
                         contextlib.redirect_stdout(io.StringIO()), \
@@ -584,25 +590,32 @@ class InjectedAggregationTest(unittest.TestCase):
             return next(snapshots)
 
         class StageThread:
-            # 첫 관측 표본까지는 주입 중이고, 이후는 drain이다. 주입 결과는 join에서 확정한다.
+            # 주입 결과를 먼저 기록한 뒤 종료를 알리는 실제 Thread 수명주기를 따른다.
             def __init__(self, target):
                 self.target = target
+                self.done = False
 
             def start(self):
                 pass
 
             def is_alive(self):
-                return len(calls) < 3
+                if len(calls) >= 3 and not self.done:
+                    self.target()
+                    self.done = True
+                return not self.done
 
             def join(self):
-                self.target()
+                if not self.done:
+                    self.target()
+                    self.done = True
 
         def produce(stages, mix, directory, offset, marks, *_):
             with open(directory / "requests.csv", "a", newline="", encoding="utf-8") as out:
                 for order, published in ledger:
                     csv.writer(out).writerow([order, "card", 10000, 0, 0, self.iso(published)])
             marks.append({"stage": 0, "rate": 100, "seconds": 60, "start": self.iso(0), "end": self.iso(60),
-                          "sent": len(ledger), "stopped": False, "elapsed": 60, "maxBehindSeconds": 0})
+                          "sent": len(ledger), "stopped": False, "elapsed": 60, "maxBehindSeconds": 0,
+                          "endedMonotonic": load.time.monotonic()})
 
         def psql(database, sql):
             if "percentile_cont" in sql:
@@ -634,7 +647,7 @@ class InjectedAggregationTest(unittest.TestCase):
         injected = summary["stages"][0]["injected"]
         self.assertEqual((4, 3, 3, 1, False), (injected["injected"], injected["received"], injected["confirmed"],
                                                injected["unresolved"], injected["complete"]))
-        self.assertEqual({"count": 3, "p50Ms": 69000.0, "p95Ms": 85200.0, "p99Ms": 86640.0, "maxMs": 87000.0},
+        self.assertEqual({"count": 3, "p50Ms": 69000.0, "p95Ms": 85200.0, "p99Ms": None, "maxMs": 87000.0},
                          injected["publishToConfirmed"])
         self.assertEqual(68000.0, injected["publishToReceipt"]["maxMs"])
         self.assertEqual(86900.0, injected["receiptToConfirmed"]["maxMs"])
@@ -647,7 +660,7 @@ class InjectedAggregationTest(unittest.TestCase):
         self.assertEqual(2690, summary["stages"][0]["maxKafkaLag"])
         self.assertEqual(3489, summary["peaks"]["kafkaLag"]["value"])
         self.assertEqual("drain", summary["peaks"]["kafkaLag"]["stage"])
-        self.assertEqual(2, summary["aggregation"]["version"])
+        self.assertEqual(3, summary["aggregation"]["version"])
 
     def test_unreadable_consumer_group_lag_is_not_recorded_as_zero(self):
         rebalancing = "\nConsumer group 'payment.v1' is rebalancing.\n"
@@ -785,6 +798,44 @@ class RemoteRoutingTest(unittest.TestCase):
             spec.loader.exec_module(module)
         self.assertEqual(module.KAFKA_BOOTSTRAP, "localhost:9092")
         self.assertEqual(load.KAFKA_BOOTSTRAP, "kafka:9092")
+
+
+
+
+class DrainBoundaryTest(unittest.TestCase):
+    def sample(self, elapsed, **changes):
+        return {"elapsed": elapsed, "stage": "drain", "unfinished": 0, "waiting": 0,
+                "kafkaLag": 0, "outboxPending": 0, "jobsReview": 0, "inboxReview": 0, **changes}
+
+    def test_first_zero_observation_keeps_time_before_first_drain_sample(self):
+        result = load.drain_observation([{"endedMonotonic": 104, "end": "host-end"}],
+                                        [self.sample(7)], 100)
+        self.assertEqual(3, result["drainSeconds"])
+        self.assertEqual(4, result["injectionEndedAt"])
+        self.assertTrue(result["drainComplete"])
+
+    def test_sampling_bounds_unknown_lag_and_reviews_do_not_become_zero(self):
+        marks = [{"endedMonotonic": 104, "end": "host-end"}]
+        result = load.drain_observation(marks, [self.sample(6, waiting=1), self.sample(9)], 100)
+        self.assertEqual((2, 5), (result["drainLowerBoundSeconds"], result["drainSeconds"]))
+        for key in ("kafkaLag", "jobsReview", "inboxReview"):
+            result = load.drain_observation(marks, [self.sample(9, **{key: 1})], 100)
+            self.assertFalse(result["drainComplete"])
+            self.assertIsNone(result["drainSeconds"])
+        result = load.drain_observation([{}], [self.sample(9)], 100)
+        self.assertIsNone(result["drainSeconds"])
+
+    def test_p99_is_unavailable_below_ten_thousand_samples(self):
+        self.assertIsNone(load.distribution([1.0] * 9999)["p99Ms"])
+        self.assertEqual(1.0, load.distribution([1.0] * 10000)["p99Ms"])
+
+    def test_unknown_lag_is_not_evidence_of_nonzero_backlog(self):
+        sample = {"elapsed": 6, "stage": "drain", "unfinished": 0, "waiting": 0,
+                  "kafkaLag": None, "outboxPending": 0, "jobsReview": 0, "inboxReview": 0}
+        zero = {**sample, "elapsed": 8, "kafkaLag": 0}
+        result = load.drain_observation([{"endedMonotonic": 104, "end": "end"}], [sample, zero], 100)
+        self.assertEqual(0, result["drainLowerBoundSeconds"])
+        self.assertEqual(4, result["drainSeconds"])
 
 
 if __name__ == "__main__":

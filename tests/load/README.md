@@ -93,7 +93,7 @@ Commerce가 발행하는 것과 같은 `OrderPaymentRequested` v1을 `commerce-s
 
 ### 지연·적체 집계 기준
 
-`ramp`·`scenario`의 `summary.json`은 `aggregation`(현재 `version` 2)에 아래 기준을 함께 남깁니다. [#254](https://github.com/500-internal-server-error-team/commerce-settle/issues/254) 전 결과에는 이 필드가 없으며, 그 결과와는 기존 지표끼리만 비교합니다.
+`ramp`·`scenario`의 `summary.json`은 `aggregation`(현재 `version` 3)에 아래 기준을 함께 남깁니다. [#254](https://github.com/500-internal-server-error-team/commerce-settle/issues/254) 전 결과에는 이 필드가 없으며, 그 결과와는 기존 지표끼리만 비교합니다.
 
 | 필드 | 집계 대상 | 시작 → 종료 | 시계 |
 | --- | --- | --- | --- |
@@ -108,7 +108,8 @@ Commerce가 발행하는 것과 같은 `OrderPaymentRequested` v1을 `commerce-s
 - **발행 시각:** 주입 원장(`requests.csv`)의 기록 시각입니다. 발생기 호스트 시계(UTC)로 producer 표준 입력에 쓴 직후에 기록하므로 Kafka acks보다 조금 이릅니다.
 - **시계 차이:** 발행 시각과 DB 시각은 시계가 다르므로 차이를 보정하지 않고 `clock`에 남깁니다. 표본마다 상태 조회 직전·직후의 호스트 시각과 그 사이에 읽은 DB `clock_timestamp()`로 `DB − 호스트` 범위(ms)를 잽니다. 조회 왕복 시간만큼 불확실하므로, 발행 기준 지연을 이 범위보다 작은 차이로 비교하지 않습니다.
 - **미완료 요청:** 요약 시점(적체가 비거나 `--drain` 제한 시간 도달)에 확정·거절되지 않은 요청은 `unresolved`로 세고 지연 분포에서 뺍니다. `unresolved`가 0보다 크면 `complete=false`이며 지연 분포는 하한입니다. 거절은 `declined`로 세고 확정 지연에서 뺍니다.
-- **백분위수:** 기존 지표의 PostgreSQL `percentile_cont`와 같은 선형 보간이며 ms 단위, 소수 첫째 자리까지입니다.
+- **배출 시간:** `drainSeconds`는 실제 주입 종료 monotonic 시각부터 처음 모든 적체가 0인 drain 관측까지의 상한입니다. `drainLowerBoundSeconds`와 함께 표본 사이의 불확실성을 기록하고, 미관측 lag·수동 확인 건·timeout은 `drainComplete=false`로 남깁니다. 단계 TPS는 관측 구간의 확정 증가 합계/실제 시간 합계입니다.
+- **백분위수:** p99는 해당 구간 표본 10,000건 미만이면 `null`입니다. 기존 지표의 PostgreSQL `percentile_cont`와 같은 선형 보간이며 ms 단위, 소수 첫째 자리까지입니다.
 - **Kafka lag 미관측:** 그룹 재조정 중처럼 `kafka-consumer-groups --describe`에서 파티션 lag를 읽지 못한 표본은 0이 아니라 `null`로 남기고, `peaks.kafkaLag.unobservedSamples`로 셉니다. 이런 표본이 있으면 적체가 빈 것으로 보지 않습니다.
 - 상태 표본은 `--interval`(`scenario`는 5초) 간격이므로 `peaks`는 표본 사이의 순간 최댓값을 놓칠 수 있습니다.
 
@@ -220,7 +221,7 @@ SQL 중복 방지 회귀는 환경 변수 없이 기본 테스트의 `locksInven
 
 ## 업무 완료·전구간 지연의 전후 비교
 
-Grafana `commerce-settle / 업무 완료·전구간 성능 비교`는 완료 TPS, 주문 결제 접수→정산 최초 반영 지연, HTTP 서버 p95/p99를 같은 60/300/900초 창으로 비교합니다. 기존 금융 처리 대시보드의 비동기·SQL·배치 구간과 함께 봅니다. 승인 확정 TPS는 이후 취소돼도 남는 `confirmed_at` 이력이며, 환불은 외부 환불·마일리지 복원·원장 상쇄·주문 복구 확인까지 끝나야 완료입니다. 정산 최초 반영은 판매대금 지급 완료와 다릅니다.
+Grafana `commerce-settle / 업무 완료·전구간 성능 비교`는 완료 TPS, 주문 결제 접수→정산 최초 반영 지연, HTTP 서버 p95/p99를 같은 60/300/900초 창으로 비교합니다. 기존 금융 처리 대시보드의 비동기·SQL·배치 구간과 함께 봅니다. 승인 확정 TPS는 이후 취소돼도 남는 `confirmed_at` 이력이며, 환불은 외부 환불·마일리지 복원·원장 상쇄·주문 복구 확인까지 끝나야 완료입니다. 정산 최초 반영은 판매대금 지급 완료와 다릅니다. 지연 구간 선택에서 `payment.payout.succeeded`·`ready.payout.succeeded` 및 서비스별 `outbox.published`·`inbox.applied`도 조회합니다. 지급 구간을 `performance.py`의 `operations`에 선택하면 로컬 두 미지급 cohort와 정산 미반영 원천 cohort의 사유별 건수·최장 나이·원천 누락을 함께 저장·비교합니다. 원천 누락이나 최소 표본 부족은 비교 완료로 판단하지 않습니다. 지급 비교에는 `payoutPopulationCutoff`(시험 원천 모집단의 종료 Unix 초)를 metadata에 지정하고 [정산 대조](../../docs/development.md#정산-대조-실행과-재개)를 먼저 완료합니다. 최신 회차의 Payment 원천 수집이 완료되고 cutoff가 이 기준을 덮어야 capture가 성공합니다. 결과에 요청 기준·대조 cutoff·snapshot을 보존하며, 현재 로컬 cohort와 대조 기준 cohort를 전역 합계로 섞지 않습니다.
 
 기준 구간 offset은 시각을 겹쳐 보는 기능입니다. 개선의 근거는 같은 초기 데이터·요청 혼합·도착률·장애 시나리오·발생기 위치·CPU/메모리·runtime·warm-up 조건으로 반복 실행해 남깁니다. 코드 revision과 조정한 동시성 등의 `variant`는 결과에 따로 기록합니다. 원래 Payment 직접 주입 도구는 주문 API와 Settlement 반영을 실행하지 않으므로 그 결과를 전체 주문 왕복 성능으로 바꾸어 부르지 않습니다.
 

@@ -112,6 +112,78 @@
         "multi": true,
         "includeAll": true,
         "allValue": ".*"
+      },
+      {
+        "name": "latency_operation",
+        "label": "지연 구간",
+        "type": "custom",
+        "query": "payment.confirmed,refund.completed,order.settlement.applied,payment.settlement.applied,payment.payout.succeeded,ready.payout.succeeded,commerce.outbox.published,commerce.inbox.applied,payment.outbox.published,payment.inbox.applied,settlement.outbox.published,settlement.inbox.applied",
+        "current": {
+          "text": "order.settlement.applied",
+          "value": "order.settlement.applied"
+        },
+        "options": [
+          {
+            "text": "payment.confirmed",
+            "value": "payment.confirmed",
+            "selected": false
+          },
+          {
+            "text": "refund.completed",
+            "value": "refund.completed",
+            "selected": false
+          },
+          {
+            "text": "order.settlement.applied",
+            "value": "order.settlement.applied",
+            "selected": true
+          },
+          {
+            "text": "payment.settlement.applied",
+            "value": "payment.settlement.applied",
+            "selected": false
+          },
+          {
+            "text": "payment.payout.succeeded",
+            "value": "payment.payout.succeeded",
+            "selected": false
+          },
+          {
+            "text": "ready.payout.succeeded",
+            "value": "ready.payout.succeeded",
+            "selected": false
+          },
+          {
+            "text": "commerce.outbox.published",
+            "value": "commerce.outbox.published",
+            "selected": false
+          },
+          {
+            "text": "commerce.inbox.applied",
+            "value": "commerce.inbox.applied",
+            "selected": false
+          },
+          {
+            "text": "payment.outbox.published",
+            "value": "payment.outbox.published",
+            "selected": false
+          },
+          {
+            "text": "payment.inbox.applied",
+            "value": "payment.inbox.applied",
+            "selected": false
+          },
+          {
+            "text": "settlement.outbox.published",
+            "value": "settlement.outbox.published",
+            "selected": false
+          },
+          {
+            "text": "settlement.inbox.applied",
+            "value": "settlement.inbox.applied",
+            "selected": false
+          }
+        ]
       }
     ]
   },
@@ -193,7 +265,7 @@
     },
     {
       "id": 3,
-      "title": "주문 결제 접수 → 정산 최초 반영 · p50",
+      "title": "선택 업무 구간 · p50",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -214,20 +286,20 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.5, business:duration_bucket{window=\"$window\",operation=\"order.settlement.applied\"})",
+          "expr": "histogram_quantile(0.5, business:duration_bucket{window=\"$window\",operation=\"$latency_operation\"})",
           "legendFormat": "현재 {{operation}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.5, business:duration_bucket{window=\"$window\",operation=\"order.settlement.applied\"} offset $comparison_offset)",
+          "expr": "histogram_quantile(0.5, business:duration_bucket{window=\"$window\",operation=\"$latency_operation\"} offset $comparison_offset)",
           "legendFormat": "기준 ($comparison_offset) {{operation}}"
         }
       ],
-      "description": "최초 주문 created_at부터 커밋되어 보이는 정산항목 최초 생성 시각까지. Kafka/대기/재시도 포함, 일배치·판매대금 지급 대기는 제외. p99는 1만 유효 표본 이상에서만 표시합니다. 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+      "description": "결제·환불·최초 정산·거래별 지급 또는 전체 메시지 전달 구간을 선택합니다. 처리 단계 Timer와 합산하지 않습니다. 지급은 일배치 대기와 복구를 포함합니다. 원천 누락과 표본 수를 함께 확인하세요."
     },
     {
       "id": 4,
-      "title": "주문 결제 접수 → 정산 최초 반영 · p95",
+      "title": "선택 업무 구간 · p95",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -248,20 +320,20 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, business:duration_bucket{window=\"$window\",operation=\"order.settlement.applied\"})",
+          "expr": "histogram_quantile(0.95, business:duration_bucket{window=\"$window\",operation=\"$latency_operation\"})",
           "legendFormat": "현재 {{operation}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, business:duration_bucket{window=\"$window\",operation=\"order.settlement.applied\"} offset $comparison_offset)",
+          "expr": "histogram_quantile(0.95, business:duration_bucket{window=\"$window\",operation=\"$latency_operation\"} offset $comparison_offset)",
           "legendFormat": "기준 ($comparison_offset) {{operation}}"
         }
       ],
-      "description": "최초 주문 created_at부터 커밋되어 보이는 정산항목 최초 생성 시각까지. Kafka/대기/재시도 포함, 일배치·판매대금 지급 대기는 제외. p99는 1만 유효 표본 이상에서만 표시합니다. 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+      "description": "결제·환불·최초 정산·거래별 지급 또는 전체 메시지 전달 구간을 선택합니다. 처리 단계 Timer와 합산하지 않습니다. 지급은 일배치 대기와 복구를 포함합니다. 원천 누락과 표본 수를 함께 확인하세요."
     },
     {
       "id": 5,
-      "title": "주문 결제 접수 → 정산 최초 반영 · p99",
+      "title": "선택 업무 구간 · p99",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -282,16 +354,16 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.99, business:duration_bucket{window=\"$window\",operation=\"order.settlement.applied\"}) and on (operation,window) (business:duration_count{window=\"$window\",operation=\"order.settlement.applied\"} >= 10000)",
+          "expr": "histogram_quantile(0.99, business:duration_bucket{window=\"$window\",operation=\"$latency_operation\"}) and on (operation,window) (business:duration_count{window=\"$window\",operation=\"$latency_operation\"} >= 10000)",
           "legendFormat": "현재 {{operation}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.99, business:duration_bucket{window=\"$window\",operation=\"order.settlement.applied\"} offset $comparison_offset) and on (operation,window) (business:duration_count{window=\"$window\",operation=\"order.settlement.applied\"} offset $comparison_offset >= 10000)",
+          "expr": "histogram_quantile(0.99, business:duration_bucket{window=\"$window\",operation=\"$latency_operation\"} offset $comparison_offset) and on (operation,window) (business:duration_count{window=\"$window\",operation=\"$latency_operation\"} offset $comparison_offset >= 10000)",
           "legendFormat": "기준 ($comparison_offset) {{operation}}"
         }
       ],
-      "description": "최초 주문 created_at부터 커밋되어 보이는 정산항목 최초 생성 시각까지. Kafka/대기/재시도 포함, 일배치·판매대금 지급 대기는 제외. p99는 1만 유효 표본 이상에서만 표시합니다. 현재/기준 구간은 같은 집계 창입니다. 부하·초기 데이터·자원·warm-up 조건과 revision은 performance.py 결과로 대조하세요. 수집 없음/무표본은 0으로 해석하지 않습니다."
+      "description": "결제·환불·최초 정산·거래별 지급 또는 전체 메시지 전달 구간을 선택합니다. 처리 단계 Timer와 합산하지 않습니다. 지급은 일배치 대기와 복구를 포함합니다. 원천 누락과 표본 수를 함께 확인하세요."
     },
     {
       "id": 6,
@@ -593,6 +665,187 @@
         }
       ],
       "description": "서버가 수신한 요청 시도 기준입니다. 발생기 타임아웃·연결 실패는 발생기 결과에서 별도로 확인합니다. 무요청/미수집은 정상 0%로 해석하지 않습니다."
+    },
+    {
+      "id": 15,
+      "title": "미지급 거래 · 사유별",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "business:cohort_records{reason!=\"refunded\"}",
+          "legendFormat": "{{operation}} / {{reason}}"
+        }
+      ],
+      "description": "지급 전체 대기와 readyAt 이후 대기는 서로 겹치므로 합산하지 않습니다. 환불 종결은 미지급에서 제외하며, 원천 누락은 실제 0초가 아닙니다. 수집 신선도 45초 이내의 단일 소유 DB 표본입니다."
+    },
+    {
+      "id": 16,
+      "title": "미지급 최장 경과 · 초",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 64,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "business:cohort_age_seconds{reason!=\"refunded\"}",
+          "legendFormat": "{{operation}} / {{reason}}"
+        }
+      ],
+      "description": "지급 전체 대기와 readyAt 이후 대기는 서로 겹치므로 합산하지 않습니다. 환불 종결은 미지급에서 제외하며, 원천 누락은 실제 0초가 아닙니다. 수집 신선도 45초 이내의 단일 소유 DB 표본입니다."
+    },
+    {
+      "id": 17,
+      "title": "지급 시간 원천 누락",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "business:cohort_missing_origin",
+          "legendFormat": "{{operation}} / {{reason}}"
+        }
+      ],
+      "description": "지급 전체 대기와 readyAt 이후 대기는 서로 겹치므로 합산하지 않습니다. 환불 종결은 미지급에서 제외하며, 원천 누락은 실제 0초가 아닙니다. 수집 신선도 45초 이내의 단일 소유 DB 표본입니다."
+    },
+    {
+      "id": 18,
+      "title": "지급 제외 · 환불 종결",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 80,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "business:cohort_records{reason=\"refunded\"}",
+          "legendFormat": "{{operation}} / {{reason}}"
+        }
+      ],
+      "description": "지급 전체 대기와 readyAt 이후 대기는 서로 겹치므로 합산하지 않습니다. 환불 종결은 미지급에서 제외하며, 원천 누락은 실제 0초가 아닙니다. 수집 신선도 45초 이내의 단일 소유 DB 표본입니다."
+    },
+    {
+      "id": 19,
+      "title": "정산 항목 생성 전 확정 원천 · 고정 cutoff 범위",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 88
+      },
+      "targets": [
+        {
+          "expr": "business:cohort_records{operation=\"payout.unapplied\"}",
+          "legendFormat": "{{reason}} {{__name__}}",
+          "refId": "A"
+        }
+      ],
+      "description": "지급 전체 대기와 readyAt 이후 대기는 서로 겹치므로 합산하지 않습니다. 환불 종결은 미지급에서 제외하며, 원천 누락은 실제 0초가 아닙니다. 수집 신선도 45초 이내의 단일 소유 DB 표본입니다."
+    },
+    {
+      "id": 20,
+      "title": "원천 수집 완료 · 0이면 전체 지급 모집단 미확인",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 88
+      },
+      "targets": [
+        {
+          "expr": "business:cohort_capture_complete{operation=\"payout.unapplied\"}",
+          "legendFormat": "{{reason}} {{__name__}}",
+          "refId": "A"
+        }
+      ],
+      "description": "지급 전체 대기와 readyAt 이후 대기는 서로 겹치므로 합산하지 않습니다. 환불 종결은 미지급에서 제외하며, 원천 누락은 실제 0초가 아닙니다. 수집 신선도 45초 이내의 단일 소유 DB 표본입니다."
+    },
+    {
+      "id": 21,
+      "title": "원천 대조 기준 · Unix timestamp",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 95
+      },
+      "targets": [
+        {
+          "expr": "{__name__=~\"business:cohort_cutoff|business:cohort_snapshot\",operation=\"payout.unapplied\"}",
+          "legendFormat": "{{reason}} {{__name__}}",
+          "refId": "A"
+        }
+      ],
+      "description": "지급 전체 대기와 readyAt 이후 대기는 서로 겹치므로 합산하지 않습니다. 환불 종결은 미지급에서 제외하며, 원천 누락은 실제 0초가 아닙니다. 수집 신선도 45초 이내의 단일 소유 DB 표본입니다."
+    },
+    {
+      "id": 22,
+      "title": "정산 미반영 최장 대기 · 초",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 95
+      },
+      "targets": [
+        {
+          "expr": "business:cohort_age_seconds{operation=\"payout.unapplied\"}",
+          "legendFormat": "{{reason}} {{__name__}}",
+          "refId": "A"
+        }
+      ],
+      "description": "지급 전체 대기와 readyAt 이후 대기는 서로 겹치므로 합산하지 않습니다. 환불 종결은 미지급에서 제외하며, 원천 누락은 실제 0초가 아닙니다. 수집 신선도 45초 이내의 단일 소유 DB 표본입니다."
     }
-  ]
+  ],
+  "description": " 정산 항목 전 원천 cohort는 최신 대조 cutoff까지의 별도 모집단이며 현재 로컬 cohort와 합산하지 않습니다. 원천 수집 완료 0/기준시각을 먼저 확인합니다."
 }

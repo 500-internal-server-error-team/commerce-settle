@@ -32,12 +32,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (queue) (rate(payment_queue_wait_seconds_sum{application=\"payment\",role=\"worker\"}[2m])) / sum by (queue) (rate(payment_queue_wait_seconds_count{application=\"payment\",role=\"worker\"}[2m]))",
+          "expr": "sum by (queue) (rate(payment_queue_wait_seconds_sum{application=\"payment\",role=\"worker\"}[${window}s])) / sum by (queue) (rate(payment_queue_wait_seconds_count{application=\"payment\",role=\"worker\"}[${window}s]))",
           "legendFormat": "현재 {{queue}}"
         },
         {
           "refId": "B",
-          "expr": "sum by (queue) (rate(payment_queue_wait_seconds_sum{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)) / sum by (queue) (rate(payment_queue_wait_seconds_count{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset))",
+          "expr": "sum by (queue) (rate(payment_queue_wait_seconds_sum{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset)) / sum by (queue) (rate(payment_queue_wait_seconds_count{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset))",
           "legendFormat": "이전 ($comparison_offset) {{queue}}"
         }
       ],
@@ -65,12 +65,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le,queue) (rate(payment_queue_wait_seconds_bucket{application=\"payment\",role=\"worker\"}[2m])))",
+          "expr": "histogram_quantile(0.95, sum by (le,queue) (rate(payment_queue_wait_seconds_bucket{application=\"payment\",role=\"worker\"}[${window}s])))",
           "legendFormat": "현재 {{queue}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le,queue) (rate(payment_queue_wait_seconds_bucket{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)))",
+          "expr": "histogram_quantile(0.95, sum by (le,queue) (rate(payment_queue_wait_seconds_bucket{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset)))",
           "legendFormat": "이전 ($comparison_offset) {{queue}}"
         }
       ],
@@ -98,12 +98,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (stage) (rate(payment_processing_seconds_sum{application=\"payment\",role=\"worker\"}[2m])) / sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[2m]))",
+          "expr": "sum by (stage) (rate(payment_processing_seconds_sum{application=\"payment\",role=\"worker\"}[${window}s])) / sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[${window}s]))",
           "legendFormat": "현재 {{stage}}"
         },
         {
           "refId": "B",
-          "expr": "sum by (stage) (rate(payment_processing_seconds_sum{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)) / sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset))",
+          "expr": "sum by (stage) (rate(payment_processing_seconds_sum{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset)) / sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset))",
           "legendFormat": "이전 ($comparison_offset) {{stage}}"
         }
       ],
@@ -131,12 +131,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(payment_processing_seconds_bucket{application=\"payment\",role=\"worker\"}[2m])))",
+          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(payment_processing_seconds_bucket{application=\"payment\",role=\"worker\"}[${window}s])))",
           "legendFormat": "현재 {{stage}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(payment_processing_seconds_bucket{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)))",
+          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(payment_processing_seconds_bucket{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset)))",
           "legendFormat": "이전 ($comparison_offset) {{stage}}"
         }
       ],
@@ -164,12 +164,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (stage) (rate(jdbc_query_seconds_sum{application=\"payment\",role=\"worker\"}[2m])) / sum by (stage) (rate(jdbc_query_seconds_count{application=\"payment\",role=\"worker\"}[2m]))",
+          "expr": "sum by (stage) (rate(jdbc_query_seconds_sum{application=\"payment\",role=\"worker\"}[${window}s])) / sum by (stage) (rate(jdbc_query_seconds_count{application=\"payment\",role=\"worker\"}[${window}s]))",
           "legendFormat": "현재 {{stage}}"
         },
         {
           "refId": "B",
-          "expr": "sum by (stage) (rate(jdbc_query_seconds_sum{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)) / sum by (stage) (rate(jdbc_query_seconds_count{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset))",
+          "expr": "sum by (stage) (rate(jdbc_query_seconds_sum{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset)) / sum by (stage) (rate(jdbc_query_seconds_count{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset))",
           "legendFormat": "이전 ($comparison_offset) {{stage}}"
         }
       ],
@@ -197,12 +197,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(jdbc_query_seconds_bucket{application=\"payment\",role=\"worker\"}[2m])))",
+          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(jdbc_query_seconds_bucket{application=\"payment\",role=\"worker\"}[${window}s])))",
           "legendFormat": "현재 {{stage}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(jdbc_query_seconds_bucket{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)))",
+          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(jdbc_query_seconds_bucket{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset)))",
           "legendFormat": "이전 ($comparison_offset) {{stage}}"
         }
       ],
@@ -230,12 +230,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[2m]))",
+          "expr": "sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[${window}s]))",
           "legendFormat": "현재 {{stage}}"
         },
         {
           "refId": "B",
-          "expr": "sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset))",
+          "expr": "sum by (stage) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset))",
           "legendFormat": "이전 ($comparison_offset) {{stage}}"
         }
       ],
@@ -263,12 +263,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (stage,error) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\",error!=\"none\"}[2m]))",
+          "expr": "sum by (stage,error) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\",error!=\"none\"}[${window}s]))",
           "legendFormat": "현재 {{stage}} {{error}}"
         },
         {
           "refId": "B",
-          "expr": "sum by (stage,error) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\",error!=\"none\"}[2m] offset $comparison_offset))",
+          "expr": "sum by (stage,error) (rate(payment_processing_seconds_count{application=\"payment\",role=\"worker\",error!=\"none\"}[${window}s] offset $comparison_offset))",
           "legendFormat": "이전 ($comparison_offset) {{stage}} {{error}}"
         }
       ],
@@ -362,12 +362,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le,application,operation) (rate(async_work_seconds_bucket[2m])))",
+          "expr": "histogram_quantile(0.95, sum by (le,application,operation) (rate(async_work_seconds_bucket[${window}s])))",
           "legendFormat": "현재 {{application}} {{operation}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le,application,operation) (rate(async_work_seconds_bucket[2m] offset $comparison_offset)))",
+          "expr": "histogram_quantile(0.95, sum by (le,application,operation) (rate(async_work_seconds_bucket[${window}s] offset $comparison_offset)))",
           "legendFormat": "이전 ($comparison_offset) {{application}} {{operation}}"
         }
       ],
@@ -395,16 +395,16 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.99, sum by (le,application,operation) (rate(async_work_seconds_bucket[2m])))",
+          "expr": "histogram_quantile(0.99, sum by (le,application,operation) (rate(async_work_seconds_bucket[${window}s]))) and on (application,operation) (sum by (application,operation) (increase(async_work_seconds_count[${window}s])) >= 10000)",
           "legendFormat": "현재 {{application}} {{operation}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.99, sum by (le,application,operation) (rate(async_work_seconds_bucket[2m] offset $comparison_offset)))",
+          "expr": "histogram_quantile(0.99, sum by (le,application,operation) (rate(async_work_seconds_bucket[${window}s] offset $comparison_offset))) and on (application,operation) (sum by (application,operation) (increase(async_work_seconds_count[${window}s] offset $comparison_offset)) >= 10000)",
           "legendFormat": "이전 ($comparison_offset) {{application}} {{operation}}"
         }
       ],
-      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+      "description": "동일 집계 창의 유효 표본 1만 건 이상에서만 p99를 표시합니다. 예열·배출을 제외한 같은 조건의 측정창으로 비교하세요. 실행 횟수는 업무 완료량과 다릅니다."
     },
     {
       "id": 13,
@@ -428,12 +428,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le,application,queue,kind) (rate(async_queue_wait_seconds_bucket[2m])))",
+          "expr": "histogram_quantile(0.95, sum by (le,application,queue,kind) (rate(async_queue_wait_seconds_bucket[${window}s])))",
           "legendFormat": "현재 {{application}} {{queue}} {{kind}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le,application,queue,kind) (rate(async_queue_wait_seconds_bucket[2m] offset $comparison_offset)))",
+          "expr": "histogram_quantile(0.95, sum by (le,application,queue,kind) (rate(async_queue_wait_seconds_bucket[${window}s] offset $comparison_offset)))",
           "legendFormat": "이전 ($comparison_offset) {{application}} {{queue}} {{kind}}"
         }
       ],
@@ -461,12 +461,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le,application,queue,kind) (rate(async_queue_ready_delay_seconds_bucket[2m])))",
+          "expr": "histogram_quantile(0.95, sum by (le,application,queue,kind) (rate(async_queue_ready_delay_seconds_bucket[${window}s])))",
           "legendFormat": "현재 {{application}} {{queue}} {{kind}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le,application,queue,kind) (rate(async_queue_ready_delay_seconds_bucket[2m] offset $comparison_offset)))",
+          "expr": "histogram_quantile(0.95, sum by (le,application,queue,kind) (rate(async_queue_ready_delay_seconds_bucket[${window}s] offset $comparison_offset)))",
           "legendFormat": "이전 ($comparison_offset) {{application}} {{queue}} {{kind}}"
         }
       ],
@@ -494,12 +494,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le,application,queue) (rate(async_queue_backoff_seconds_bucket[2m])))",
+          "expr": "histogram_quantile(0.95, sum by (le,application,queue) (rate(async_queue_backoff_seconds_bucket[${window}s])))",
           "legendFormat": "현재 {{application}} {{queue}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le,application,queue) (rate(async_queue_backoff_seconds_bucket[2m] offset $comparison_offset)))",
+          "expr": "histogram_quantile(0.95, sum by (le,application,queue) (rate(async_queue_backoff_seconds_bucket[${window}s] offset $comparison_offset)))",
           "legendFormat": "이전 ($comparison_offset) {{application}} {{queue}}"
         }
       ],
@@ -527,12 +527,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(async_stage_seconds_bucket[2m])))",
+          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(async_stage_seconds_bucket[${window}s])))",
           "legendFormat": "현재 {{application}} {{stage}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(async_stage_seconds_bucket[2m] offset $comparison_offset)))",
+          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(async_stage_seconds_bucket[${window}s] offset $comparison_offset)))",
           "legendFormat": "이전 ($comparison_offset) {{application}} {{stage}}"
         }
       ],
@@ -560,12 +560,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[2m])))",
+          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[${window}s])))",
           "legendFormat": "현재 {{application}} {{stage}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[2m] offset $comparison_offset)))",
+          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[${window}s] offset $comparison_offset)))",
           "legendFormat": "이전 ($comparison_offset) {{application}} {{stage}}"
         }
       ],
@@ -593,16 +593,16 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.99, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[2m])))",
+          "expr": "histogram_quantile(0.99, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[${window}s]))) and on (application,stage) (sum by (application,stage) (increase(jdbc_query_seconds_count[${window}s])) >= 10000)",
           "legendFormat": "현재 {{application}} {{stage}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.99, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[2m] offset $comparison_offset)))",
+          "expr": "histogram_quantile(0.99, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[${window}s] offset $comparison_offset))) and on (application,stage) (sum by (application,stage) (increase(jdbc_query_seconds_count[${window}s] offset $comparison_offset)) >= 10000)",
           "legendFormat": "이전 ($comparison_offset) {{application}} {{stage}}"
         }
       ],
-      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+      "description": "동일 집계 창의 유효 표본 1만 건 이상에서만 p99를 표시합니다. 예열·배출을 제외한 같은 조건의 측정창으로 비교하세요. 실행 횟수는 업무 완료량과 다릅니다."
     },
     {
       "id": 19,
@@ -626,12 +626,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (application,operation) (rate(async_work_seconds_count[2m]))",
+          "expr": "sum by (application,operation) (rate(async_work_seconds_count[${window}s]))",
           "legendFormat": "현재 {{application}} {{operation}}"
         },
         {
           "refId": "B",
-          "expr": "sum by (application,operation) (rate(async_work_seconds_count[2m] offset $comparison_offset))",
+          "expr": "sum by (application,operation) (rate(async_work_seconds_count[${window}s] offset $comparison_offset))",
           "legendFormat": "이전 ($comparison_offset) {{application}} {{operation}}"
         }
       ],
@@ -659,12 +659,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum by (application,operation) (rate(async_work_seconds_count{error!=\"none\"}[2m])) or on (application,operation) (0 * sum by (application,operation) (rate(async_work_seconds_count[2m])))) / sum by (application,operation) (rate(async_work_seconds_count[2m]))",
+          "expr": "(sum by (application,operation) (rate(async_work_seconds_count{error!=\"none\"}[${window}s])) or on (application,operation) (0 * sum by (application,operation) (rate(async_work_seconds_count[${window}s])))) / sum by (application,operation) (rate(async_work_seconds_count[${window}s]))",
           "legendFormat": "현재 {{application}} {{operation}}"
         },
         {
           "refId": "B",
-          "expr": "(sum by (application,operation) (rate(async_work_seconds_count{error!=\"none\"}[2m] offset $comparison_offset)) or on (application,operation) (0 * sum by (application,operation) (rate(async_work_seconds_count[2m] offset $comparison_offset)))) / sum by (application,operation) (rate(async_work_seconds_count[2m] offset $comparison_offset))",
+          "expr": "(sum by (application,operation) (rate(async_work_seconds_count{error!=\"none\"}[${window}s] offset $comparison_offset)) or on (application,operation) (0 * sum by (application,operation) (rate(async_work_seconds_count[${window}s] offset $comparison_offset)))) / sum by (application,operation) (rate(async_work_seconds_count[${window}s] offset $comparison_offset))",
           "legendFormat": "이전 ($comparison_offset) {{application}} {{operation}}"
         }
       ],
@@ -692,12 +692,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (status) (rate(http_server_requests_seconds_count{application=\"gateway\"}[2m]))",
+          "expr": "sum by (status) (rate(http_server_requests_seconds_count{application=\"gateway\"}[${window}s]))",
           "legendFormat": "현재 HTTP {{status}}"
         },
         {
           "refId": "B",
-          "expr": "sum by (status) (rate(http_server_requests_seconds_count{application=\"gateway\"}[2m] offset $comparison_offset))",
+          "expr": "sum by (status) (rate(http_server_requests_seconds_count{application=\"gateway\"}[${window}s] offset $comparison_offset))",
           "legendFormat": "이전 ($comparison_offset) HTTP {{status}}"
         }
       ],
@@ -725,16 +725,16 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.99, sum by (le,stage) (rate(payment_processing_seconds_bucket{application=\"payment\",role=\"worker\"}[2m])))",
+          "expr": "histogram_quantile(0.99, sum by (le,stage) (rate(payment_processing_seconds_bucket{application=\"payment\",role=\"worker\"}[${window}s]))) and on (stage) (sum by (stage) (increase(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[${window}s])) >= 10000)",
           "legendFormat": "현재 {{stage}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.99, sum by (le,stage) (rate(payment_processing_seconds_bucket{application=\"payment\",role=\"worker\"}[2m] offset $comparison_offset)))",
+          "expr": "histogram_quantile(0.99, sum by (le,stage) (rate(payment_processing_seconds_bucket{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset))) and on (stage) (sum by (stage) (increase(payment_processing_seconds_count{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset)) >= 10000)",
           "legendFormat": "이전 ($comparison_offset) {{stage}}"
         }
       ],
-      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+      "description": "동일 집계 창의 유효 표본 1만 건 이상에서만 p99를 표시합니다. 예열·배출을 제외한 같은 조건의 측정창으로 비교하세요. 실행 횟수는 업무 완료량과 다릅니다."
     },
     {
       "id": 23,
@@ -1122,6 +1122,33 @@
             "selected": false,
             "text": "7d",
             "value": "7d"
+          }
+        ]
+      },
+      {
+        "name": "window",
+        "label": "집계 창(초)",
+        "type": "custom",
+        "query": "60,300,900",
+        "current": {
+          "text": "300",
+          "value": "300"
+        },
+        "options": [
+          {
+            "text": "60",
+            "value": "60",
+            "selected": false
+          },
+          {
+            "text": "300",
+            "value": "300",
+            "selected": true
+          },
+          {
+            "text": "900",
+            "value": "900",
+            "selected": false
           }
         ]
       }
