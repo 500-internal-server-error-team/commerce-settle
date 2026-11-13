@@ -219,7 +219,7 @@ class ResultTest(unittest.TestCase):
                            self.ledger(), 0)
         self.assertEqual(value["states"], {"PAID": 3})
         self.assertEqual(value["ordersWithout201Receipt"], ["unknown"])
-        self.assertEqual(sum(value["paymentConfirmedAtCounts"].values()), 3)
+        self.assertNotIn("paymentConfirmedAtCounts", value)
         self.assertIn("UNVERIFIED", value["financialReconciliation"])
 
     def test_drain_waits_for_order_created_without_201_receipt(self):
@@ -566,6 +566,47 @@ class RecoveryTest(unittest.TestCase):
             self.assertTrue(report["recoveryComplete"])
             self.assertNotIn("k6SummaryErrors", report)
 
+    def test_interrupted_collection_warning_survives_resume_with_same_evidence(self):
+        import subprocess
+        for recorded in (0, 1):
+            with self.subTest(recorded=recorded), tempfile.TemporaryDirectory() as tmp:
+                target, fixture = Path(tmp) / "run", ApiFixture("https://load.test")
+                original_call = fixture.call
+                def orders(method, path, *args, **kwargs):
+                    if path.startswith("/api/orders?"):
+                        return {"totalPages": 1, "items": [{"id": ident, "productId": "product", "status": "PAID"}
+                            for ident in (["smoke", "known"] if recorded else ["smoke"])]}
+                    return original_call(method, path, *args, **kwargs)
+                fixture.call = orders
+                def interrupt(base, buyer, plan, directory, args, phase):
+                    rows = [{"event": "phase", "phase": phase, "measurementStart": "2026-11-13T00:00:00Z",
+                             "measurementEnd": "2026-11-13T00:00:02Z"}]
+                    if recorded:
+                        rows += [{"event": event, "phase": phase, "iteration": 0,
+                            "startedAt": "2026-11-13T00:00:00Z", "status": 201, "orderId": "known"}
+                            for event in ("started", "completed")]
+                    (directory / "requests.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+                    load.write_json(directory / "k6-summary.json", {"metrics": {"http_reqs": {"count": recorded}}})
+                    raise KeyboardInterrupt
+                docker = subprocess.CompletedProcess([], 0, '[{"Id":"fixture"}]')
+                with patch.dict(os.environ, {}, clear=True), patch.object(load, "Api", return_value=fixture), \
+                        patch.object(load.shutil, "which", return_value="docker"), \
+                        patch.object(load.subprocess, "run", return_value=docker), \
+                        patch.object(load, "inject", side_effect=interrupt) as inject, \
+                        contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(load.main(["--base-url", fixture.base, "--tps", "1", "--seconds", "2",
+                        "--drain-seconds", "0", "--output-dir", str(target)]), 130)
+                    before = (target / "summary.json").read_bytes()
+                    calls = inject.call_count
+                    self.assertEqual(load.main(["--resume", str(target), "--drain-seconds", "0"]), 1)
+                    self.assertEqual(inject.call_count, calls)
+                report = json.loads(next(target.glob("recovery-*/summary.json")).read_text())
+                self.assertTrue(report["recoveryRequired"])
+                self.assertFalse(report["recoveryComplete"])
+                self.assertTrue(any(row["reason"] == "injection_interrupted_without_complete_coverage"
+                                    for row in report["unresolvedRequests"]))
+                self.assertEqual((target / "summary.json").read_bytes(), before)
+
     def test_cleanup_parse_failures_keep_primary_failure_summary_and_remaining_logouts(self):
         class InvalidCleanup(ApiFixture):
             fail_inventory = False
@@ -734,7 +775,7 @@ process.stdout.write(JSON.stringify(results));
         self.assertNotIn("fixture-secret", row["clientError"])
         self.assertNotIn("https://", row["clientError"])
 
-    def test_900_second_measurement_separates_warmup_and_late_completions_without_waiting(self):
+    def test_900_second_measurement_separates_warmup_without_business_throughput_aggregation(self):
         import subprocess
         from urllib.parse import parse_qs, urlsplit
 
@@ -791,7 +832,8 @@ process.stdout.write(JSON.stringify(results));
             self.assertEqual(report["plannedOrders"], 900)
             self.assertEqual(states["measurementStates"], {"PAID": 900})
             self.assertEqual(states["states"], {"PAID": 902})
-            self.assertEqual(states["commerceConfirmedWithinMeasurement"], 0)
+            self.assertNotIn("commerceConfirmedWithinMeasurement", states)
+            self.assertNotIn("paymentConfirmedAtCounts", states)
             self.assertEqual(report["performanceVerification"]["status"], "UNVERIFIED")
             self.assertEqual(report["measurementWindow"]["end"] - report["measurementWindow"]["start"], 900)
             self.assertEqual(linked["revision"], "a" * 40)
