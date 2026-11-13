@@ -3,6 +3,7 @@ package com.commercesettle.commerce.domain.model;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.commercesettle.commerce.domain.model.OrderAdmissionState.Key;
+import com.commercesettle.commerce.domain.model.OrderAdmissionState.Reason;
 import com.commercesettle.commerce.domain.model.OrderAdmissionState.Sample;
 import com.commercesettle.commerce.domain.model.OrderAdmissionState.Signal;
 import java.time.Instant;
@@ -22,24 +23,30 @@ class OrderAdmissionStateTest {
   void appliesThresholdsAndHysteresis(Signal signal, double stop, double resume) {
     var key = new Key(signal, "queue");
     var state = new OrderAdmissionState(Set.of(key));
-    assertThat(state.permits(NOW)).isFalse();
+    assertThat(state.evaluate(NOW).open()).isFalse();
     observe(state, key, 0, 0);
     observe(state, key, 0, 30);
-    assertThat(state.permits(NOW.plusSeconds(59))).isFalse();
+    assertThat(state.evaluate(NOW.plusSeconds(59)).open()).isFalse();
     observe(state, key, 0, 60);
-    assertThat(state.permits(NOW.plusSeconds(60))).isTrue();
+    assertThat(state.evaluate(NOW.plusSeconds(60)).open()).isTrue();
     observe(state, key, resume, 61);
-    assertThat(state.permits(NOW.plusSeconds(61))).isTrue();
-    observe(state, key, stop, 62);
-    assertThat(state.permits(NOW.plusSeconds(62))).isFalse();
+    assertThat(state.evaluate(NOW.plusSeconds(61)).open()).isTrue();
+    var change =
+        state.observe(List.of(new Sample(key, stop, NOW.plusSeconds(62))), NOW.plusSeconds(62));
+    assertThat(change.reason()).isEqualTo(Reason.THRESHOLD_EXCEEDED);
+    assertThat(change.key()).isEqualTo(key);
+    assertThat(change.value()).isEqualTo(stop);
+    assertThat(change.limit()).isEqualTo(stop);
+    assertThat(change.observedAt()).isEqualTo(NOW.plusSeconds(62));
+    assertThat(state.evaluate(NOW.plusSeconds(62)).open()).isFalse();
     observe(state, key, 0, 63);
     observe(state, key, resume, 90);
     observe(state, key, 0, 91);
     observe(state, key, 0, 121);
     observe(state, key, 0, 150);
-    assertThat(state.permits(NOW.plusSeconds(150))).isFalse();
+    assertThat(state.evaluate(NOW.plusSeconds(150)).open()).isFalse();
     observe(state, key, 0, 151);
-    assertThat(state.permits(NOW.plusSeconds(151))).isTrue();
+    assertThat(state.evaluate(NOW.plusSeconds(151)).open()).isTrue();
   }
 
   @Test
@@ -50,10 +57,10 @@ class OrderAdmissionStateTest {
     observe(state, key, 0, 0);
     observe(state, key, 0, 30);
     observe(state, key, 0, 60);
-    assertThat(state.permits(NOW.plusSeconds(105))).isTrue();
-    assertThat(state.permits(NOW.plusSeconds(106))).isFalse();
+    assertThat(state.evaluate(NOW.plusSeconds(105)).open()).isTrue();
+    assertThat(state.evaluate(NOW.plusSeconds(106)).open()).isFalse();
     observe(state, key, 0, 200);
-    assertThat(state.permits(NOW.plusSeconds(200))).isFalse();
+    assertThat(state.evaluate(NOW.plusSeconds(200)).open()).isFalse();
   }
 
   @Test
@@ -63,7 +70,7 @@ class OrderAdmissionStateTest {
     var state = new OrderAdmissionState(Set.of(key));
     observe(state, key, 0, 0);
     observe(state, key, 0, 100);
-    assertThat(state.permits(NOW.plusSeconds(100))).isFalse();
+    assertThat(state.evaluate(NOW.plusSeconds(100)).open()).isFalse();
   }
 
   @Test
@@ -75,13 +82,13 @@ class OrderAdmissionStateTest {
       Instant at = NOW.plusSeconds(seconds);
       state.observe(List.of(new Sample(key, 40000, at), new Sample(key, 40000, at)), at);
     }
-    assertThat(state.permits(NOW.plusSeconds(60))).isTrue();
+    assertThat(state.evaluate(NOW.plusSeconds(60)).open()).isTrue();
     state.observe(
         List.of(
             new Sample(key, 40000, NOW.plusSeconds(61)),
             new Sample(key, 100000, NOW.plusSeconds(61))),
         NOW.plusSeconds(61));
-    assertThat(state.permits(NOW.plusSeconds(61))).isFalse();
+    assertThat(state.evaluate(NOW.plusSeconds(61)).open()).isFalse();
   }
 
   @Test
@@ -95,12 +102,91 @@ class OrderAdmissionStateTest {
       state.observe(List.of(new Sample(a, 0, at), new Sample(b, 0.1, at)), at);
     }
     state.observe(List.of(new Sample(a, 0, NOW.plusSeconds(61))), NOW.plusSeconds(61));
-    assertThat(state.permits(NOW.plusSeconds(61))).isFalse();
+    assertThat(state.evaluate(NOW.plusSeconds(61)).open()).isFalse();
     state.observe(
         List.of(
             new Sample(a, Double.NaN, NOW.plusSeconds(62)), new Sample(b, 0, NOW.plusSeconds(63))),
         NOW.plusSeconds(62));
-    assertThat(state.permits(NOW.plusSeconds(62))).isFalse();
+    assertThat(state.evaluate(NOW.plusSeconds(62)).open()).isFalse();
+  }
+
+  @Test
+  @DisplayName("새 입력이 임계값을 넘겨도 이전 표본 만료가 먼저 닫았다면 그 근거를 반환한다")
+  void preservesFirstClosureWhenFreshInputAlsoExceedsThreshold() {
+    var key = new Key(Signal.LAG, "commerce.v1");
+    var state = new OrderAdmissionState(Set.of(key));
+    for (int seconds : new int[] {0, 30, 60}) observe(state, key, 0, seconds);
+
+    var change =
+        state.observe(List.of(new Sample(key, 100000, NOW.plusSeconds(106))), NOW.plusSeconds(106));
+
+    assertThat(change.reason()).isEqualTo(Reason.STALE_SAMPLE);
+    assertThat(change.value()).isZero();
+    assertThat(change.observedAt()).isEqualTo(NOW.plusSeconds(60));
+    assertThat(state.evaluate(NOW.plusSeconds(106)).transition()).isNull();
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "MISSING_SAMPLE,missing",
+    "INVALID_SAMPLE,nan",
+    "INVALID_SAMPLE,negative",
+    "INVALID_SAMPLE,noTime",
+    "FUTURE_SAMPLE,future",
+    "STALE_SAMPLE,stale"
+  })
+  @DisplayName("초기 준비를 막은 누락·잘못된 값·시각 문제를 원래 입력으로 구분한다")
+  void describesInvalidInitialInput(Reason reason, String scenario) {
+    var key = new Key(Signal.STORAGE, "postgres");
+    var state = new OrderAdmissionState(Set.of(key));
+    List<Sample> input =
+        switch (scenario) {
+          case "missing" -> List.of();
+          case "nan" -> List.of(new Sample(key, Double.NaN, NOW));
+          case "negative" -> List.of(new Sample(key, -1, NOW));
+          case "noTime" -> List.of(new Sample(key, 0, null));
+          case "future" -> List.of(new Sample(key, 0, NOW.plusSeconds(1)));
+          default -> List.of(new Sample(key, 0, NOW.minusSeconds(46)));
+        };
+
+    var change = state.observe(input, NOW);
+
+    assertThat(change.initial()).isTrue();
+    assertThat(change.reason()).isEqualTo(reason);
+    assertThat(change.key()).isEqualTo(key);
+    assertThat(state.evaluate(NOW).open()).isFalse();
+  }
+
+  @Test
+  @DisplayName("동시에 표본 만료를 확인해도 최초 차단 전환은 한 번만 반환한다")
+  void returnsOneClosureToConcurrentCallers() throws Exception {
+    var key = new Key(Signal.LAG, "commerce.v1");
+    var state = new OrderAdmissionState(Set.of(key));
+    for (int seconds : new int[] {0, 30, 60}) observe(state, key, 0, seconds);
+    var futures =
+        new java.util.ArrayList<java.util.concurrent.Future<OrderAdmissionState.Decision>>();
+
+    var start = new java.util.concurrent.CountDownLatch(1);
+    try (var executor = java.util.concurrent.Executors.newFixedThreadPool(8)) {
+      for (int i = 0; i < 100; i++)
+        futures.add(
+            executor.submit(
+                () -> {
+                  start.await();
+                  return state.evaluate(NOW.plusSeconds(106));
+                }));
+      start.countDown();
+      int transitions = 0;
+      for (var future : futures) {
+        var decision = future.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        assertThat(decision.open()).isFalse();
+        if (decision.transition() != null) {
+          transitions++;
+          assertThat(decision.transition().reason()).isEqualTo(Reason.STALE_SAMPLE);
+        }
+      }
+      assertThat(transitions).isEqualTo(1);
+    }
   }
 
   private static void observe(OrderAdmissionState state, Key key, double value, int seconds) {
