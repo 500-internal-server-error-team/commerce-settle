@@ -1,6 +1,5 @@
 // 내부 호출 자격의 수신 판정. 서블릿 MVC 서비스만 사용하며 WebFlux Gateway는 의존하지 않는다.
 dependencies {
-    implementation project(':observability')
     implementation 'org.springframework.boot:spring-boot-starter-web'
     implementation 'io.micrometer:micrometer-core'
 }

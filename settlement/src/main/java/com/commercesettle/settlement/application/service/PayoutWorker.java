@@ -78,8 +78,8 @@ public class PayoutWorker {
     Result result = observations.step("settlement.payout.gateway", () -> call(job, prepared.get()));
     try {
       observations.step("settlement.payout.record", () -> recorder.record(job, result));
-      LOGGER
-          .atDebug()
+      // 성공만 DEBUG다. 거절·미확정·부재는 확인 대상이나 미확정으로 남으므로 WARN이다.
+      (result instanceof Result.Succeeded ? LOGGER.atDebug() : LOGGER.atWarn())
           .addKeyValue("event", "settlement.payout")
           .addKeyValue("payoutId", job.payoutId())
           .addKeyValue("jobId", job.jobId())
