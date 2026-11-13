@@ -27,6 +27,8 @@ spring:
     hikari:
       maximum-pool-size: 10
       minimum-idle: 1
+      # 풀 획득 대기. DB 잠금·SQL 제한이나 HTTP 전체 deadline과는 별도이며 기존 기본값을 유지한다.
+      connection-timeout: 30000
   jpa:
     open-in-view: false
     hibernate:

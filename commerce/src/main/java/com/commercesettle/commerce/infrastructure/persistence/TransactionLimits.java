@@ -6,7 +6,9 @@ import org.springframework.jdbc.support.JdbcAccessor;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-/** 잠금을 기다릴 수 있는 쓰기 트랜잭션의 DB 대기 상한. 초과하면 해당 트랜잭션을 롤백한다. */
+/**
+ * 연결 획득 후 개별 잠금 시도·SQL에 적용하는 상한. 초과하면 해당 트랜잭션을 롤백한다. 연결 풀 대기나 여러 SQL·커밋을 합친 요청 전체의 deadline은 아니다.
+ */
 public final class TransactionLimits {
   private TransactionLimits() {}
 
