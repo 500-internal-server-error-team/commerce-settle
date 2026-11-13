@@ -13,6 +13,7 @@ import tempfile
 import time
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlencode
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,6 +66,21 @@ def verify_dashboard_quantiles():
         assert all("window" in expression for expression in p99), name
 
 
+def verify_runtime_dashboards(query):
+    def panels(name):
+        dashboard = json.loads((ROOT / "infra/grafana/dashboards" / (name + ".json")).read_text())
+        return {panel["id"]: panel for panel in dashboard["panels"]}
+
+    host = panels("overview")[8]
+    names = {row["metric"]["__name__"] for target in host["targets"] for row in query(target["expr"])}
+    assert names == {"commerce_settle_docker_host_cpu_usage_ratio", "commerce_settle_docker_host_memory_available_ratio"}, names
+    business = panels("business-performance")
+    for number, expected in ((15, {"payout.total", "payout.ready"}), (16, {"payout.total", "payout.ready"}),
+                             (19, {"payout.unapplied"}), (22, {"payout.unapplied"})):
+        actual = {row["metric"]["operation"] for target in business[number]["targets"] for row in query(target["expr"])}
+        assert actual == expected, (number, actual)
+
+
 def verify():
     verify_dashboard_quantiles()
     project = "cs-quarantine-observation-" + secrets.token_hex(5)
@@ -80,6 +96,13 @@ def verify():
         )
         (directory / "alertmanager.yml").write_text(test_alerts)
         (directory / "slack-webhook").write_text("https://example.invalid/unused-test-only")
+        template_data = {"Alerts": [{"Labels": {"service": "payment-worker", "instance": "worker:9091"},
+                                    "Annotations": {"summary": "memory pressure", "runbook_url": "https://example.invalid/runbook"}}]}
+        for application, method, uri in (("gateway", "POST", "/api/orders"), ("commerce", "GET", "/api/products")):
+            template_data["Alerts"].append({"Labels": {"application": application, "method": method, "uri": uri},
+                                           "Annotations": {"summary": "HTTP errors", "runbook_url": "https://example.invalid/http"}})
+        (directory / "template-data.json").write_text(json.dumps(template_data))
+        (directory / "empty.tmpl").write_text("")
         (directory / "integration.rules.yml").write_text(integration_rules(
             (ROOT / "infra/prometheus/quarantine.rules.yml").read_text(),
         ))
@@ -140,6 +163,8 @@ def verify():
                         mount(ROOT / "infra/alertmanager/alertmanager.yml", "/etc/alertmanager/base.yml"),
                         mount(ROOT / "infra/alertmanager/alertmanager-slack.yml", "/etc/alertmanager/slack.yml"),
                         mount(directory / "slack-webhook", "/run/secrets/slack_webhook_url"),
+                        mount(directory / "template-data.json", "/etc/alertmanager/template-data.json"),
+                        mount(directory / "empty.tmpl", "/etc/alertmanager/empty.tmpl"),
                     ],
                     "ports": ["127.0.0.1::9093"],
                 },
@@ -177,6 +202,14 @@ def verify():
             cli("run", "--rm", "--no-deps", "--workdir", "/etc/prometheus", "--entrypoint", "/bin/promtool", "prometheus", "test", "rules", "/etc/prometheus/financial.rules.test.yml")
             cli("run", "--rm", "--no-deps", "--workdir", "/etc/prometheus", "--entrypoint", "/bin/promtool", "prometheus", "test", "rules", "/etc/prometheus/runtime.rules.test.yml")
             cli("run", "--rm", "--no-deps", "--entrypoint", "/bin/amtool", "alertmanager", "check-config", "/etc/alertmanager/base.yml", "/etc/alertmanager/slack.yml")
+            slack = (ROOT / "infra/alertmanager/alertmanager-slack.yml").read_text()
+            template = re.search(r"(?m)^        text: '(.*)'$", slack).group(1).replace("''", "'")
+            rendered = cli("run", "--rm", "--no-deps", "--entrypoint", "/bin/amtool", "alertmanager", "template", "render",
+                           "--template.glob=/etc/alertmanager/empty.tmpl", "--template.text=" + template,
+                           "--template.data=/etc/alertmanager/template-data.json", output=True)
+            assert all(value in rendered for value in ("payment-worker", "worker:9091", "https://example.invalid/runbook")), rendered
+            normalized = " ".join(rendered.split())
+            assert all(value in normalized for value in ("gateway POST /api/orders", "commerce GET /api/products")), rendered
             cli("up", "-d", "--wait", "--wait-timeout", "120")
             fixture = endpoint("fixture", 8000)
             prometheus = endpoint("prometheus", 9090)
@@ -195,6 +228,10 @@ def verify():
             source = next(item for item in sources if item["type"] == "prometheus")
             proxy_url = grafana + "/api/datasources/proxy/uid/" + source["uid"]
             until(lambda: http(proxy_url + "/api/v1/query?query=commerce_settle_runtime_observed_timestamp_seconds", authorization=authorization)["data"]["result"], "Grafana datasource did not read live Prometheus")
+            def query(expression):
+                return http(proxy_url + "/api/v1/query?" + urlencode({"query": expression}), authorization=authorization)["data"]["result"]
+            until(lambda: query("commerce_settle_docker_host_cpu_usage_ratio"), "host fixture was not scraped")
+            verify_runtime_dashboards(query)
             assert all(target.get("instant") and not target.get("range") for panel in dashboard["dashboard"]["panels"] if panel["type"] == "stat" for target in panel["targets"])
             until(lambda: http(prometheus + "/api/v1/query?query=payment:quarantine_originals:max")["data"]["result"], "metrics were not scraped and recorded")
             until(lambda: http(alertmanager + "/api/v2/status"), "Alertmanager was not ready")
@@ -213,7 +250,16 @@ def verify():
                 return alerts if expected_alerts <= names else None
 
             delivered = until(firing, "firing notifications were not delivered")
-            assert all(a["labels"]["severity"] == "critical" for a in delivered)
+            def memory_inhibition():
+                alerts = {(a["labels"]["alertname"], a["labels"].get("service")): a for a in http(alertmanager + "/api/v2/alerts")}
+                suppressed = alerts.get(("ContainerMemoryPressure", "payment-worker"), {}).get("status", {})
+                other = alerts.get(("ContainerMemoryPressure", "commerce"), {}).get("status", {})
+                return suppressed.get("inhibitedBy") and other.get("state") == "active" and not other.get("inhibitedBy")
+            until(memory_inhibition, "memory severity inhibition did not preserve service boundaries")
+            delivered = [a for n in http(fixture + "/notifications") if n["status"] == "firing" for a in n["alerts"]]
+            assert all(a["labels"]["severity"] == "critical" or
+                       (a["labels"]["alertname"] == "ContainerMemoryPressure" and a["labels"].get("service") == "commerce")
+                       for a in delivered), delivered
             assert all(not ({"buyerId", "sellerId", "orderId", "recipientId", "token", "body"} & set(a["labels"])) for a in delivered)
             http(fixture + "/state", {"active": False})
             def resolved():
@@ -227,7 +273,7 @@ def verify():
                 return expected_alerts <= names
 
             until(resolved, "resolved notifications were not delivered for all firing alerts")
-            print("PASS observability: rule boundaries, stale/duplicate samples, provisioned dashboard, firing/inhibition/resolution delivery")
+            print("PASS observability: rule boundaries, dashboard series and cohort separation, rendered Slack identity, service-scoped inhibition and resolution")
         except BaseException:
             for name, suffix in [("prometheus", "/api/v1/targets"), ("alertmanager", "/api/v2/alerts"), ("fixture", "/notifications")]:
                 url = locals().get(name)

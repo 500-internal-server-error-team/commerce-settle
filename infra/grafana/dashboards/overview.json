@@ -176,8 +176,14 @@
       },
       "targets": [
         {
-          "expr": "commerce_settle_docker_host_cpu_usage_ratio or commerce_settle_docker_host_memory_available_ratio",
-          "legendFormat": "{{service}} {{basis}} {{__name__}}"
+          "refId": "A",
+          "expr": "commerce_settle_docker_host_cpu_usage_ratio",
+          "legendFormat": "Docker 호스트 CPU"
+        },
+        {
+          "refId": "B",
+          "expr": "commerce_settle_docker_host_memory_available_ratio",
+          "legendFormat": "Docker 호스트 가용 메모리"
         }
       ],
       "description": "명시한 Compose 프로젝트만 수집합니다. host_shared는 컨테이너 CPU quota가 아니며, 호스트 수치는 Docker의 Linux 호스트/VM입니다. 표본이 오래됐거나 이벤트 관측이 끊긴 구간은 정상 0으로 해석하지 않습니다."

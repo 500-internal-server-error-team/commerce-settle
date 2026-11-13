@@ -50,7 +50,8 @@
                 "basis": "limit"
               },
               "exp_annotations": {
-                "summary": "컨테이너 여유 메모리가 5% 미만입니다."
+                "summary": "컨테이너 여유 메모리가 5% 미만입니다.",
+                "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적"
               }
             }
           ]
@@ -103,7 +104,8 @@
                 "basis": "quota"
               },
               "exp_annotations": {
-                "summary": "설정한 CPU quota 대비 사용량과 병렬도·대기를 확인하세요."
+                "summary": "설정한 CPU quota 대비 사용량과 병렬도·대기를 확인하세요.",
+                "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적"
               }
             }
           ]
@@ -155,7 +157,8 @@
                 "service": "payment-worker"
               },
               "exp_annotations": {
-                "summary": "관측된 OOM과 컨테이너 메모리 제한·종료 원인을 확인하세요."
+                "summary": "관측된 OOM과 컨테이너 메모리 제한·종료 원인을 확인하세요.",
+                "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적"
               }
             }
           ]
@@ -187,7 +190,8 @@
                 "service": "payment-worker"
               },
               "exp_annotations": {
-                "summary": "비정상 종료 코드·재시작과 미완료 금융 작업을 확인하세요."
+                "summary": "비정상 종료 코드·재시작과 미완료 금융 작업을 확인하세요.",
+                "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적"
               }
             }
           ]
@@ -212,7 +216,8 @@
                 "severity": "critical"
               },
               "exp_annotations": {
-                "summary": "컨테이너 관측의 프로젝트·서비스 범위와 GET 프록시를 확인하세요."
+                "summary": "컨테이너 관측의 프로젝트·서비스 범위와 GET 프록시를 확인하세요.",
+                "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적"
               }
             }
           ]
@@ -243,7 +248,8 @@
                 "instance": "gateway:9091"
               },
               "exp_annotations": {
-                "summary": "앱 관측 대상의 기동·의존 서비스와 로그를 확인하세요."
+                "summary": "앱 관측 대상의 기동·의존 서비스와 로그를 확인하세요.",
+                "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적"
               }
             }
           ]
@@ -274,7 +280,8 @@
                 "instance": "commerce:9091"
               },
               "exp_annotations": {
-                "summary": "앱 관측 대상의 기동·의존 서비스와 로그를 확인하세요."
+                "summary": "앱 관측 대상의 기동·의존 서비스와 로그를 확인하세요.",
+                "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적"
               }
             }
           ]
@@ -305,7 +312,8 @@
                 "instance": "finance-mock:9091"
               },
               "exp_annotations": {
-                "summary": "앱 관측 대상의 기동·의존 서비스와 로그를 확인하세요."
+                "summary": "앱 관측 대상의 기동·의존 서비스와 로그를 확인하세요.",
+                "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적"
               }
             }
           ]
@@ -357,7 +365,8 @@
                 "method": "POST"
               },
               "exp_annotations": {
-                "summary": "경로별 서버 오류와 클라이언트 타임아웃을 함께 확인하세요."
+                "summary": "경로별 서버 오류와 클라이언트 타임아웃을 함께 확인하세요.",
+                "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적"
               }
             }
           ]
@@ -389,7 +398,8 @@
                 "service": "payment-worker"
               },
               "exp_annotations": {
-                "summary": "관측된 OOM과 컨테이너 메모리 제한·종료 원인을 확인하세요."
+                "summary": "관측된 OOM과 컨테이너 메모리 제한·종료 원인을 확인하세요.",
+                "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적"
               }
             }
           ]
@@ -426,7 +436,8 @@
                 "service": "payment-worker"
               },
               "exp_annotations": {
-                "summary": "비정상 종료 코드·재시작과 미완료 금융 작업을 확인하세요."
+                "summary": "비정상 종료 코드·재시작과 미완료 금융 작업을 확인하세요.",
+                "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적"
               }
             }
           ]
