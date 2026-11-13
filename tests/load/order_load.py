@@ -556,8 +556,12 @@ def main(argv=None):
     if original:
         try:
             value = json.loads((original / "summary.json").read_text())
-            if isinstance(value, dict):
-                previous = value
+            if isinstance(value, dict) and type(value.get("loadExecuted")) is bool:
+                phase = value.get("phaseBeforeRecovery", value.get("failurePhase"))
+                codes = value.get("k6PhaseExitCodes", {})
+                if (not value["loadExecuted"] or phase in {"preparation", "warmup", "measurement"}
+                        and ("failure" in value or isinstance(codes, dict) and type(codes.get(phase)) is int)):
+                    previous = value
         except (ValueError, OSError):
             pass  # A killed run may have no summary; its planned phases remain unverified.
     if (not 1 <= args.rate <= 1000 or not 1 <= args.seconds <= 900 or not 0 <= args.warmup_seconds <= 300
@@ -705,15 +709,14 @@ def main(argv=None):
                         check_coverage(ledger, phase_summary, phase)
                         if phase == "measurement":
                             summary = phase_summary
-                interrupted = previous if original else report
-                interrupted_phase = interrupted.get("phaseBeforeRecovery", interrupted.get("failurePhase"))
-                expected = plan.get("warmupOrders", 0) if interrupted_phase == "warmup" else plan["plannedOrders"]
-                if (interrupted.get("loadExecuted") and "failure" in interrupted
-                        and interrupted_phase in ledger["counts"]
-                        and ledger["counts"][interrupted_phase]["started"] < expected):
-                    ledger["ledgerComplete"] = False
-                    ledger["unknown"].append({"phase": interrupted_phase,
-                                              "reason": "injection_interrupted_without_complete_coverage"})
+                        source = previous if original else report
+                        interrupted_phase = source.get("phaseBeforeRecovery", source.get("failurePhase"))
+                        expected = plan.get("warmupOrders", 0) if phase == "warmup" else plan["plannedOrders"]
+                        if ((original and not previous or source.get("loadExecuted") and "failure" in source
+                             and interrupted_phase == phase) and ledger["counts"][phase]["started"] < expected):
+                            ledger["ledgerComplete"] = False
+                            ledger["unknown"].append({"phase": phase,
+                                "reason": "injection_interrupted_without_complete_coverage"})
                 report.update(k6ExitCode=code, droppedIterations=metric(summary, "dropped_iterations", "count"))
                 buyer = session_for(api, "BUYER", owned, sessions, args.drain_seconds + 30)
                 observed = drain(api, buyer, plan, ledger, args.drain_seconds,

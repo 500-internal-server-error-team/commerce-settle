@@ -607,6 +607,39 @@ class RecoveryTest(unittest.TestCase):
                                     for row in report["unresolvedRequests"]))
                 self.assertEqual((target / "summary.json").read_bytes(), before)
 
+    def test_unverified_original_summary_cannot_clear_partial_collection(self):
+        for source in (None, '{"loadExecuted":', '{}', '{"loadExecuted":true}',
+                       '{"loadExecuted":true,"phaseBeforeRecovery":"measurement"}'):
+            for recorded in (0, 1, 2):
+                with self.subTest(source=source, recorded=recorded), tempfile.TemporaryDirectory() as tmp:
+                    original, fixture = Path(tmp), ApiFixture("https://load.test")
+                    load.write_json(original / "plan.json", {"runId": "run", "baseUrl": fixture.base,
+                        "productId": "product", "plannedOrders": 2, "measurementSeconds": 60,
+                        "smokeOrderId": "smoke", "smokePaid": True})
+                    if source is not None:
+                        (original / "summary.json").write_text(source)
+                    rows = [{"event": "phase", "phase": "measurement",
+                        "measurementStart": "2026-11-13T00:00:00Z", "measurementEnd": "2026-11-13T00:01:00Z"}]
+                    for n in range(recorded):
+                        rows += [{"event": event, "iteration": n, "startedAt": "2026-11-13T00:00:00Z",
+                                  "status": 201, "orderId": str(n)} for event in ("started", "completed")]
+                    (original / "requests.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+                    load.write_json(original / "k6-summary.json", {"metrics": {"http_reqs": {"count": recorded}}})
+                    original_call = fixture.call
+                    def orders(method, path, *args, **kwargs):
+                        if path.startswith("/api/orders?"):
+                            return {"totalPages": 1, "items": [{"id": str(n), "productId": "product", "status": "PAID"}
+                                                               for n in range(recorded)]}
+                        return original_call(method, path, *args, **kwargs)
+                    fixture.call = orders
+                    with patch.dict(os.environ, {}, clear=True), patch.object(load, "Api", return_value=fixture), \
+                            contextlib.redirect_stdout(io.StringIO()):
+                        code = load.main(["--resume", str(original), "--drain-seconds", "0"])
+                    report = json.loads(next(original.glob("recovery-*/summary.json")).read_text())
+                    self.assertEqual(code, 0 if recorded == 2 else 1)
+                    self.assertEqual(report["recoveryRequired"], recorded < 2)
+                    self.assertEqual(report["recoveryComplete"], recorded == 2)
+
     def test_cleanup_parse_failures_keep_primary_failure_summary_and_remaining_logouts(self):
         class InvalidCleanup(ApiFixture):
             fail_inventory = False
