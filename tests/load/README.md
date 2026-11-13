@@ -227,6 +227,10 @@ Grafana `commerce-settle / 업무 완료·전구간 성능 비교`는 완료 TPS
 
 `performance.py capture`는 이미 실행한 부하의 끝 시각에 Prometheus의 같은 창을 읽는 도구입니다. 부하를 주입하거나 데이터를 초기화하지 않습니다. DB는 주기 수집하므로 각 업무의 실제 `dbWindowStart/End`와 관측 지연(최대 45초)을 결과에 남기고, HTTP 창은 지정한 조회 종료 시각을 기준으로 합니다. 일정 부하가 이 전체 구간과 warm-up 이후에도 유지되도록 실행하며, 경계가 다른 급격한 ramp 구간을 같은 창으로 해석하지 않습니다. 전체 주문 왕복 부하는 Gateway 주문 API를 거쳐 실제 정산 반영까지 진행하고, warm-up을 제외한 창 끝에서 수집합니다. 격리된 시험의 초기 데이터와 실제 사용 이미지·자원·발생기 결과는 실행자가 확인합니다. 클라이언트 타임아웃·연결 실패·`dropped_iterations`는 발생기 원문도 함께 보존합니다.
 
+200 TPS를 검증하는 별도 수동·전용 실험은 예열을 제외한 결제 확정 200 TPS를 900초 유지해야 합니다. 짧은 CI 회귀와 구분하며, 180,000건을 주입했다는 사실만으로 달성을 판정하지 않습니다. 각 실제 DB 창과 HTTP 창이 모두 예열 이후 지속 부하 안에 포함되는지 확인하고, 늦게 완료된 예열 거래도 원장 ID로 구분합니다. 정확히 같은 고정 900초의 완료량이 필요하면 rolling Gauge 대신 해당 원장 ID와 Payment 원천의 `confirmed_at`을 그 경계로 대조합니다. 적체 증가·오류·환경에 맞는 API 지연과 배출 후 재고·예약·금액 대조도 함께 통과해야 합니다.
+
+실행기는 같은 실행의 `runId`, 실제 예열 종료·측정 시작/끝을 담은 `measurementWindow`, `evidence.ledger`·`evidence.k6Summary`의 `path`·`sha256`을 metadata에 추가할 수 있습니다. capture는 이 metadata를 그대로 보존하며, 추가 필드의 진위·동일 실행·원장 모집단 검증은 실행기가 담당합니다. 최종 실행 manifest는 원장·요약과 **원본 capture JSON**을 SHA로 묶습니다. compare 출력에는 추가 metadata가 남지 않으며 `complete`는 비교값의 가용성만 뜻합니다. DB 전체 지표를 해당 run만의 지표로 해석하려면 격리 데이터와 원장 ID·소유 서비스 대조가 필요합니다.
+
 측정마다 저장소 밖 또는 기존 ignored `tests/load/work/<실행>/`에 metadata JSON을 만듭니다. 다음은 필드 형식이며 자리표시는 실제 관측값으로 채웁니다.
 
 ```json
