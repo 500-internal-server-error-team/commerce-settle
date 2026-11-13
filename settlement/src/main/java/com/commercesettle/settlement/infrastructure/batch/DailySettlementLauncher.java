@@ -86,8 +86,8 @@ public class DailySettlementLauncher {
     JobParameters parameters = builder.toJobParameters();
     try {
       BatchStatus status = jobLauncher.run(dailySettlementJob, parameters).getStatus();
-      LOGGER
-          .atDebug()
+      // 하루 한 번 실행 여부를 확인하도록 성공도 남긴다. 등급 규칙의 INFO 예외다.
+      (status == BatchStatus.COMPLETED ? LOGGER.atInfo() : LOGGER.atWarn())
           .addKeyValue("event", "settlement.daily-batch")
           .addKeyValue("batchDate", batchDate)
           .addKeyValue("result", status)
