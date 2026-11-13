@@ -265,30 +265,29 @@ aws ecs wait services-stable --cluster "$ECS_CLUSTER" --services "$service"
 
 서비스별 전환 중 서로 다른 버전이 공존할 수 있으므로 API·이벤트 호환성을 유지합니다. 고정 포트의 구 Task를 먼저 멈추므로 중단 시간이 있으며 무중단 배포를 보장하지 않습니다. 실제 AWS의 역할·SSM·기동·재배포·실패 복구를 확인하기 전에는 자동 배포의 운영 검증 완료로 판단하지 않습니다.
 
-### ECR 수명 주기 정책
+### ECR 이미지 자동 정리
 
-[수명 주기 정책](../infra/ecr/lifecycle-policy.json)은 태그 없는 이미지를 push 1일 후 만료하고, `<모듈>-v` 접두사별로 최근 10개를 기본 보관합니다. `keep-<모듈>-` 접두사의 상위 규칙은 모듈당 이미지 3개까지 보존하므로, 보호 대상이 최근 10개 밖에 있으면 보관 개수가 늘어납니다. 릴리스·보호 접두사에 맞지 않는 태그 이미지는 만료하지 않습니다.
+태그 배포 도구는 앱 여섯 서비스의 안정화와 공개 HTTPS 검증이 끝난 뒤, 실제 실행 Task의 revision·digest·health를 대조하고 **모듈별 배포 성공 이미지 1개**만 남깁니다. Payment API·Worker는 같은 `payment` 이미지를 사용합니다. 배포 도중에는 기존·후보 이미지를 모두 유지하며, 배포 실패와 롤백 중에는 삭제하지 않습니다. 정리 후 이전 이미지로 되돌리려면 해당 소스에서 새 릴리스를 빌드해야 합니다.
 
-보호 태그는 모듈별 `keep-<모듈>-current`·`keep-<모듈>-rollback`·`keep-<모듈>-candidate` 세 이름만 사용하며, 배포 주체가 다음 순서로 관리합니다.
+정리는 이 클러스터 전용 앱 저장소의 `<모듈>-v*`, 이전 `keep-<모듈>-current|rollback|candidate`, 태그 없는 이미지에 한정합니다. 성공 이미지가 참조하는 manifest와 참조 artifact, 다른 태그가 붙은 이미지는 보존합니다. 삭제 계획 조회 뒤 새로 추가된 digest는 이번 삭제 대상에 포함하지 않습니다. 따라서 정상 정리 후 앱 릴리스는 모듈별 1개이며 필수 manifest·다른 소유 태그는 추가로 남을 수 있습니다.
 
-1. 정책 적용 전에 실행 Task와 서비스의 Task Definition을 대조해 실행·필수 롤백 digest가 ECR에 존재하는지 확인합니다. 기존 untagged 실행 이미지에도 보호 태그를 붙이며, 보호 누락이나 모듈당 대상 3개 초과가 있으면 적용하지 않습니다.
-2. 같은 환경·저장소의 태그 갱신과 배포를 직렬화합니다. 후보는 pull 전에 `candidate`로 보호하고, 이전 후보 Task가 모두 종료되고 실행·롤백 대상이 계속 보호될 때만 다음 후보로 옮깁니다.
-3. 모든 관련 서비스가 안정화되면 기존 `current`를 `rollback`에 먼저 보존한 뒤 새 digest로 `current`를 옮깁니다. 두 대상의 보호를 확인한 뒤 `candidate`를 제거합니다. 실패하면 기존 `current`·`rollback`을 유지하고, 복구와 후보 Task 종료가 끝날 때까지 다음 배포를 막습니다.
+전체 태그 workflow를 같은 동시 실행 그룹으로 묶어 이미지 게시부터 배포·정리까지 직렬화합니다. **동일 저장소에 대한 수동 게시·태그 이동·정책 변경·ECS 갱신도 workflow 완료까지 중단합니다.** AWS 삭제 API에는 조회 조건을 묶는 CAS가 없으므로 이 실행 규칙을 유지해야 합니다. 다른 클러스터나 제품과 이 앱 저장소를 공유하지 않습니다.
 
-**보호 태그 갱신과 릴리스 태그 재사용 거절을 구현·검증하기 전에는 정책을 적용하지 않습니다.** 정책 파일 추가가 이 절차의 구현이나 실제 AWS 검증을 뜻하지 않습니다. 보호 방식의 선택 이유는 [이미지 보관 결정](decisions/0014-ecr-and-ecs-image-retention.md)에 정리합니다.
+기존 업로드 개수 기반 수명 주기 정책 JSON은 폐기했습니다. ECR 정책은 배포 성공을 판단하지 못하므로 적용하지 않습니다. 최초 전환 전 적용자가 AWS 계정·리전·저장소와 기존 정책을 확인하고, 기존 정책이 있으면 영향과 실행 digest를 검토한 뒤 별도로 제거합니다. 배포 도구는 정책 부재를 읽기 전용으로 확인하고, 정책 존재·권한 오류·조회 실패 시 배포를 시작하지 않습니다. 이 PR의 코드 변경은 실제 AWS 정책 제거·이미지 삭제를 뜻하지 않습니다.
 
-조건을 충족한 뒤 ECR 권한이 있는 적용자가 AWS 계정·리전·리포지토리와 기존 정책을 확인하고 미리보기를 시작합니다. CI는 정책을 적용하지 않습니다.
+배포 역할에는 해당 ECR 저장소의 `ecr:GetLifecyclePolicy`, `ecr:DescribeImages`, `ecr:BatchGetImage`, `ecr:BatchDeleteImage`와 클러스터의 `ecs:ListTasks`·`ecs:DescribeTasks` 읽기 권한이 추가로 필요합니다. 기존 이미지 게시 권한은 유지합니다. 정책 삭제 권한은 CI에 주지 않습니다. 정책 제거와 권한 적용은 AWS 적용자의 작업이며, 실제 AWS 검증 전에는 활성화 완료로 판단하지 않습니다.
 
-```bash
-aws ecr start-lifecycle-policy-preview --repository-name "$ECR_REPOSITORY" --lifecycle-policy-text file://infra/ecr/lifecycle-policy.json
-aws ecr get-lifecycle-policy-preview --repository-name "$ECR_REPOSITORY"
-```
-
-`status`가 `IN_PROGRESS`이면 결과를 다시 조회합니다. `COMPLETE`가 된 뒤 만료 대상 전체를 검토하고, 보호 digest가 하나라도 포함되거나 필요한 보호 대상이 모듈당 3개를 넘으면 적용하지 않습니다. `FAILED`·`EXPIRED`이면 중단하고 원인을 확인합니다. 검토를 마친 뒤에만 아래 명령을 별도로 실행합니다.
+정리 계획과 삭제 결과는 `deployment.json`의 `cleanup`에 기록합니다. 정리 실패 시 배포 `status`는 `success`를 유지하고 `cleanup.status`만 `failed`가 됩니다. workflow는 실패를 보고하지만 정상 배포를 롤백하지 않습니다. 일부 이미지가 이미 삭제됐을 수 있으므로 이전 실행 정의로 수동 롤백하지 말고, 같은 릴리스의 이미지 artifact·배포 기록을 받아 정리만 다시 실행합니다. 재시도는 현재 서비스와 실행 digest를 다시 확인하며 다른 릴리스로 바뀌었으면 삭제를 거부합니다.
 
 ```bash
-aws ecr put-lifecycle-policy --repository-name "$ECR_REPOSITORY" --lifecycle-policy-text file://infra/ecr/lifecycle-policy.json
+python3 -B scripts/deploy_ecs_apps.py \
+  --cluster "$ECS_CLUSTER" --region "$AWS_REGION" \
+  --images-directory work/images --release "$RELEASE" --commit "$COMMIT" \
+  --public-url "$PUBLIC_BASE_URL" --record work/deployment.json \
+  --cleanup-only work/deployment.json
 ```
+
+빠른 관련 검사는 `python3 -B scripts/test_ecs_apps.py`입니다. CI의 `deployment-checks` 잡은 Java 빌드와 독립적으로 배포·롤백·정리 경계를 검사합니다. 전체 `build-and-smoke`는 이 잡을 포함한 기존 필수 검사를 모두 요구합니다. PR 게시 시 빠른 검사 결과를 먼저 확인할 수 있으며 병합 조건은 줄이지 않습니다.
 
 ## 배포용 HTTPS
 

@@ -43,6 +43,11 @@ class Aws:
                     command, capture_output=True, text=True, check=True,
                     timeout=timeout if timeout is not None else (660 if operation == "wait" else 60),
                 )
+        except subprocess.CalledProcessError as error:
+            if (service, operation) == ("ecr", "get-lifecycle-policy") and re.search(
+                    r"\(LifecyclePolicyNotFoundException\)", error.stderr or ""):
+                return {}
+            raise RuntimeError(f"AWS {service} {operation} failed") from error
         except (OSError, subprocess.SubprocessError) as error:
             # Do not send task environment values or AWS response bodies to CI logs.
             raise RuntimeError(f"AWS {service} {operation} failed") from error
@@ -272,6 +277,140 @@ def deploy(aws, cluster, images, region, verify, save, baseline, demo_auto_shipm
         raise
 
 
+def require_no_lifecycle(aws, images):
+    account, _, repository = image_identity(images["gateway"])
+    policy = aws("ecr", "get-lifecycle-policy", "--registry-id", account,
+                 "--repository-name", repository)
+    if policy:
+        raise RuntimeError("remove the competing ECR lifecycle policy before publishing a release")
+
+
+def require_running_release(aws, cluster, images, registered):
+    services = describe(aws, cluster, SERVICES)
+    for name in SERVICES:
+        require_stable(services[name], registered[name])
+    arns = set()
+    # Include tasks whose desired state is STOPPED but whose containers are still draining.
+    for desired in ("RUNNING", "STOPPED"):
+        arns.update(aws("ecs", "list-tasks", "--cluster", cluster,
+                        "--desired-status", desired).get("taskArns", []))
+    found = set()
+    for offset in range(0, len(arns), 100):
+        batch = sorted(arns)[offset:offset + 100]
+        response = aws("ecs", "describe-tasks", "--cluster", cluster, "--tasks", *batch)
+        if response.get("failures") or {t["taskArn"] for t in response.get("tasks", [])} != set(batch):
+            raise RuntimeError("cannot verify all cluster tasks before image cleanup")
+        for task in response["tasks"]:
+            if task.get("lastStatus") == "STOPPED":
+                continue
+            for container in task.get("containers", []):
+                image = container.get("image", "")
+                registry = images["gateway"].split("@", 1)[0]
+                if image.split("@", 1)[0].split(":", 1)[0] != registry:
+                    continue
+                name = container.get("name")
+                if (name not in SERVICES or task.get("group") != "service:" + service_name(name)
+                        or task.get("taskDefinitionArn") != registered[name]
+                        or task.get("lastStatus") != "RUNNING"
+                        or container.get("lastStatus") != "RUNNING"
+                        or container.get("healthStatus") != "HEALTHY"
+                        or container.get("imageDigest") != images[module_for(name)].split("@", 1)[1]
+                        or name in found):
+                    raise RuntimeError("cluster still references another or unverified app image")
+                found.add(name)
+    if found != set(SERVICES):
+        raise RuntimeError("all six running app image digests must be observed")
+
+
+def cleanup_images(aws, cluster, images, registered, save):
+    """Delete only a verified snapshot after successful deployment, never during rollback."""
+    account, _, repository = image_identity(images["gateway"])
+    require_no_lifecycle(aws, images)
+    require_running_release(aws, cluster, images, registered)
+    args = ("--registry-id", account, "--repository-name", repository)
+    details = aws("ecr", "describe-images", *args).get("imageDetails", [])
+    inventory = {item["imageDigest"]: item for item in details}
+    retained = {image.split("@", 1)[1] for image in images.values()}
+    if not retained <= inventory.keys():
+        raise RuntimeError("successful release images are missing from ECR")
+    managed = re.compile(r"(?:" + "|".join(MODULES) + r")-v[0-9][A-Za-z0-9_.-]*$"
+                         r"|keep-(?:" + "|".join(MODULES) + r")-(?:current|rollback|candidate)$")
+    candidates = {digest for digest, item in inventory.items()
+                  if all(managed.fullmatch(tag) for tag in item.get("imageTags", []))}
+    retained.update(inventory.keys() - candidates)
+    manifests = {}
+    digests = sorted(inventory)
+    for offset in range(0, len(digests), 100):
+        batch = digests[offset:offset + 100]
+        response = aws("ecr", "batch-get-image", payload={
+            "registryId": account, "repositoryName": repository,
+            "imageIds": [{"imageDigest": digest} for digest in batch],
+        })
+        if response.get("failures"):
+            raise RuntimeError("cannot read image dependencies before cleanup")
+        received = {item["imageId"]["imageDigest"]: json.loads(item["imageManifest"])
+                    for item in response.get("images", [])}
+        if received.keys() != set(batch):
+            raise RuntimeError("incomplete image dependency response")
+        manifests.update(received)
+    dependencies = {digest: {item["digest"] for item in body.get("manifests", [])}
+                    for digest, body in manifests.items()}
+    # An attestation/reference artifact belonging to a retained image must also survive.
+    while True:
+        expanded = retained | {child for digest in retained for child in dependencies.get(digest, [])}
+        expanded.update(digest for digest, body in manifests.items()
+                        if body.get("subject", {}).get("digest") in expanded)
+        if expanded == retained:
+            break
+        retained = expanded
+    if not retained <= inventory.keys():
+        raise RuntimeError("retained image has missing manifest dependencies")
+    pending = candidates - retained
+    record = {"status": "deleting", "retained": sorted(retained),
+              "planned": sorted(pending), "deleted": []}
+    save(record)
+    while pending:
+        # Delete manifest lists before their children; AWS also enforces these references.
+        children = {child for digest in pending for child in dependencies.get(digest, [])}
+        batch = sorted(pending - children)[:100]
+        if not batch:
+            raise RuntimeError("cyclic image manifest references")
+        require_running_release(aws, cluster, images, registered)
+        response = aws("ecr", "batch-delete-image", payload={
+            "registryId": account, "repositoryName": repository,
+            "imageIds": [{"imageDigest": digest} for digest in batch],
+        })
+        deleted = {item["imageDigest"] for item in response.get("imageIds", [])}
+        record["deleted"] += sorted(deleted)
+        save(record)
+        if response.get("failures") or deleted != set(batch):
+            raise RuntimeError("ECR deletion incomplete; retry cleanup without redeploying")
+        pending -= deleted
+    remaining = {item["imageDigest"] for item in aws("ecr", "describe-images", *args).get("imageDetails", [])}
+    if not retained <= remaining or (candidates - retained) & remaining:
+        raise RuntimeError("ECR image cleanup verification failed")
+    record["status"] = "success"
+    save(record)
+    return record
+
+
+def finish_cleanup(aws, record, save):
+    # Successful deployment is irreversible here: a cleanup error must never invoke rollback.
+    if record.get("status") != "success" or set(record.get("registered", {})) != set(SERVICES):
+        raise ValueError("cleanup requires a successful complete deployment record")
+
+    def save_cleanup(cleanup):
+        record["cleanup"] = cleanup
+        save(record)
+
+    try:
+        cleanup_images(aws, record["cluster"], record["images"], record["registered"], save_cleanup)
+    except Exception:
+        record.setdefault("cleanup", {})["status"] = "failed"
+        save(record)
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("cluster", "region", "images-directory", "release", "commit",
@@ -280,6 +419,7 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--prepare-only", action="store_true")
     mode.add_argument("--baseline")
+    mode.add_argument("--cleanup-only", metavar="DEPLOYMENT_RECORD")
     parser.add_argument("--baseline-sha256")
     parser.add_argument("--demo-auto-shipment", choices=("true", "false", "preserve"),
                         default="preserve")
@@ -297,6 +437,26 @@ def main():
             temporary.write_text(json.dumps(record, indent=2) + "\n")
             temporary.replace(target)
 
+        if args.baseline:
+            raw = Path(args.baseline).read_bytes()
+            if hashlib.sha256(raw).hexdigest() != args.baseline_sha256:
+                raise ValueError("rollback baseline checksum differs")
+            baseline = json.loads(raw)
+            if (baseline.get("release"), baseline.get("commit")) != (args.release, args.commit):
+                raise ValueError("rollback baseline belongs to another release")
+        aws = Aws(args.region)
+        if args.cleanup_only:
+            record = json.loads(Path(args.cleanup_only).read_text())
+            if any(record.get(key) != value for key, value in {
+                    "cluster": args.cluster, "region": args.region, "images": images,
+                    "release": args.release, "commit": args.commit}.items()):
+                raise ValueError("cleanup record belongs to another release or target")
+            if aws("sts", "get-caller-identity").get("Account") != image_identity(images["gateway"])[0]:
+                raise RuntimeError("caller and cleanup image accounts differ")
+            finish_cleanup(aws, record, save)
+            print("Successful deployment images retained; cleanup verified.")
+            return 0
+        require_no_lifecycle(aws, images)
         if args.prepare_only:
             services, _ = prepare(Aws(args.region), args.cluster, images, args.region,
                                   demo_auto_shipment)
@@ -304,18 +464,13 @@ def main():
                                    demo_auto_shipment))
             print("Rollback baseline prepared; no AWS changes made.")
             return 0
-        raw = Path(args.baseline).read_bytes()
-        if hashlib.sha256(raw).hexdigest() != args.baseline_sha256:
-            raise ValueError("rollback baseline checksum differs")
-        baseline = json.loads(raw)
-        if (baseline.get("release"), baseline.get("commit")) != (args.release, args.commit):
-            raise ValueError("rollback baseline belongs to another release")
-        deploy(Aws(args.region), args.cluster, images, args.region,
+        record = deploy(aws, args.cluster, images, args.region,
                lambda: verify_https(origin), save, baseline, demo_auto_shipment)
+        finish_cleanup(aws, record, save)
     except (Exception, KeyboardInterrupt) as error:
         # The record contains only image/revision references, never task environments.
         reason = str(error) if isinstance(error, (ValueError, RuntimeError)) else type(error).__name__
-        print("ECS deployment failed: " + reason + "; check the deployment record.")
+        print("Deployment or image cleanup failed: " + reason + "; check status and cleanup in the record.")
         return 1
     print("All six app services and public HTTPS verified.")
     return 0

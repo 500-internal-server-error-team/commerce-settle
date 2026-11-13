@@ -79,6 +79,8 @@ class FakeAws:
 
     def __call__(self, service, operation, *arguments, payload=None, timeout=None):
         self.calls.append((operation, arguments, copy.deepcopy(payload)))
+        if (service, operation) == ("ecr", "get-lifecycle-policy"):
+            return {}
         if service == "sts":
             return {"Account": ACCOUNT}
         if operation == "describe-services":
@@ -493,6 +495,216 @@ class DeployTest(unittest.TestCase):
             "https://example.com/v3/api-docs/" + owner
             for owner in ("commerce", "payment", "settlement")
         ])
+
+
+class CleanupTest(unittest.TestCase):
+    OLD = "sha256:" + "a" * 64
+    CHILD = "sha256:" + "b" * 64
+    FOREIGN = "sha256:" + "c" * 64
+
+    def setup_release(self):
+        aws = FakeAws()
+        record = deployment.deploy(aws, "commerce-cluster", IMAGES, REGION, lambda: None,
+                                   lambda value: None,
+                                   deployment.rollback_baseline(aws.services, "commerce-cluster", IMAGES, REGION))
+        details = {image.split("@")[1]: {"imageDigest": image.split("@")[1],
+                   "imageTags": [module + "-v2"], "imagePushedAt": 20}
+                   for module, image in IMAGES.items()}
+        details[self.OLD] = {"imageDigest": self.OLD, "imageTags": ["gateway-v1"], "imagePushedAt": 10}
+        details[self.CHILD] = {"imageDigest": self.CHILD, "imagePushedAt": 10}
+        details[self.FOREIGN] = {"imageDigest": self.FOREIGN, "imageTags": ["another-product"], "imagePushedAt": 10}
+        manifests = {digest: {} for digest in details}
+        self.deletions, self.cleanup_records = [], []
+        self.live = [{"taskArn": name, "taskDefinitionArn": record["registered"][name],
+                      "group": "service:" + deployment.service_name(name), "lastStatus": "RUNNING",
+                      "containers": [{"name": name, "image": IMAGES[renderer.module_for(name)],
+                                      "imageDigest": IMAGES[renderer.module_for(name)].split("@")[1],
+                                      "lastStatus": "RUNNING", "healthStatus": "HEALTHY"}]}
+                     for name in renderer.SERVICES]
+        self.failure = None
+
+        def api(service, operation, *args, payload=None, timeout=None):
+            if service != "ecr" and operation not in ("list-tasks", "describe-tasks"):
+                return aws(service, operation, *args, payload=payload, timeout=timeout)
+            aws.calls.append((operation, args, payload))
+            if operation == "get-lifecycle-policy":
+                return {"lifecyclePolicyText": "existing"} if self.failure == "policy" else {}
+            if operation == "list-tasks":
+                return {"taskArns": [t["taskArn"] for t in self.live] if args[-1] == "RUNNING" else []}
+            if operation == "describe-tasks":
+                return {"tasks": copy.deepcopy(self.live)}
+            if operation == "describe-images":
+                return {"imageDetails": copy.deepcopy(list(details.values()))}
+            if operation == "batch-get-image":
+                return {"images": [{"imageId": row, "imageManifest": json.dumps(manifests[row["imageDigest"]])}
+                                   for row in payload["imageIds"]]}
+            if operation == "batch-delete-image":
+                batch = [row["imageDigest"] for row in payload["imageIds"]]
+                self.deletions += batch
+                removed = batch[:-1] if self.failure == "partial" else batch
+                for digest in removed:
+                    del details[digest]
+                return {"imageIds": [{"imageDigest": digest} for digest in removed],
+                        "failures": [{"failureCode": "ImageReferencedByManifestList"}]
+                        if self.failure == "partial" else []}
+            raise AssertionError(operation)
+        self.aws, self.api, self.record = aws, api, record
+        self.details, self.manifests = details, manifests
+
+    def cleanup(self):
+        deployment.finish_cleanup(self.api, self.record,
+                                  lambda value: self.cleanup_records.append(copy.deepcopy(value)))
+
+    def test_success_keeps_five_deployed_images_and_foreign_tags(self):
+        self.setup_release()
+        self.cleanup()
+        self.assertEqual(set(self.deletions), {self.OLD, self.CHILD})
+        self.assertEqual(self.record["cleanup"]["status"], "success")
+        self.assertEqual(len(self.details), 6)
+        self.assertEqual(self.record["status"], "success")
+
+    def test_manifest_children_and_reference_artifacts_of_current_or_foreign_images_survive(self):
+        for parent in (IMAGES["gateway"].split("@")[1], self.FOREIGN):
+            with self.subTest(parent=parent):
+                self.setup_release()
+                self.manifests[parent] = {"manifests": [{"digest": self.CHILD}]}
+                self.manifests[self.OLD] = {"subject": {"digest": parent}}
+                self.cleanup()
+                self.assertEqual(self.deletions, [])
+
+    def test_old_manifest_list_is_deleted_before_its_children(self):
+        self.setup_release()
+        self.manifests[self.OLD] = {"manifests": [{"digest": self.CHILD}]}
+        self.cleanup()
+        self.assertEqual(self.deletions, [self.OLD, self.CHILD])
+
+    def test_image_published_after_snapshot_is_not_added_to_deletion_plan(self):
+        self.setup_release()
+        original = self.api
+        future = "sha256:" + "d" * 64
+
+        def api(service, operation, *args, **kwargs):
+            response = original(service, operation, *args, **kwargs)
+            if operation == "batch-delete-image":
+                self.details[future] = {"imageDigest": future, "imageTags": ["gateway-v3"], "imagePushedAt": 30}
+            return response
+        self.api = api
+        self.cleanup()
+        self.assertNotIn(future, self.deletions)
+        self.assertIn(future, self.details)
+
+    def test_failed_deployment_and_incomplete_record_never_delete(self):
+        for change in ({"status": "failed"}, {"registered": {}}):
+            with self.subTest(change=change):
+                self.setup_release()
+                self.record.update(change)
+                with self.assertRaises(ValueError):
+                    self.cleanup()
+                self.assertEqual(self.deletions, [])
+
+    def test_drift_unknown_digest_draining_or_unhealthy_task_blocks_all_deletion(self):
+        changes = [
+            {"imageDigest": self.OLD}, {"healthStatus": "UNKNOWN"}, {"lastStatus": "PENDING"},
+        ]
+        for change in changes:
+            with self.subTest(change=change):
+                self.setup_release()
+                self.live[0]["containers"][0].update(change)
+                with self.assertRaises(RuntimeError):
+                    self.cleanup()
+                self.assertEqual(self.deletions, [])
+        self.setup_release()
+        self.live.append({**self.live[0], "taskArn": "draining", "lastStatus": "DEACTIVATING"})
+        with self.assertRaises(RuntimeError):
+            self.cleanup()
+        self.assertEqual(self.deletions, [])
+
+    def test_conflicting_lifecycle_and_missing_manifest_or_current_image_block_cleanup(self):
+        for problem in ("policy", "missing-image", "missing-child"):
+            with self.subTest(problem=problem):
+                self.setup_release()
+                if problem == "policy":
+                    self.failure = "policy"
+                elif problem == "missing-image":
+                    del self.details[IMAGES["gateway"].split("@")[1]]
+                else:
+                    self.manifests[self.FOREIGN] = {"manifests": [{"digest": "sha256:" + "d" * 64}]}
+                with self.assertRaises(RuntimeError):
+                    self.cleanup()
+                self.assertEqual(self.deletions, [])
+
+    def test_partial_deletion_preserves_deployment_and_can_retry_without_rollback(self):
+        self.setup_release()
+        self.failure = "partial"
+        before = copy.deepcopy(self.aws.services)
+        with self.assertRaises(RuntimeError):
+            self.cleanup()
+        self.assertEqual(self.record["status"], "success")
+        self.assertEqual(self.record["cleanup"]["status"], "failed")
+        self.assertEqual(self.aws.services, before)
+        self.failure = None
+        self.cleanup()
+        self.assertEqual(self.record["cleanup"]["status"], "success")
+        self.assertEqual(self.aws.services, before)
+
+    def test_batches_large_repository_at_aws_limit_and_checks_each_deletion(self):
+        self.setup_release()
+        for number in range(101):
+            digest = "sha256:" + f"{number + 100:064x}"
+            self.details[digest] = {"imageDigest": digest, "imageTags": [f"gateway-v0.{number}"], "imagePushedAt": 1}
+            self.manifests[digest] = {}
+        self.cleanup()
+        self.assertEqual(len(self.deletions), 103)
+        calls = [payload for operation, _, payload in self.aws.calls
+                 if operation in ("batch-get-image", "batch-delete-image")]
+        self.assertTrue(all(1 <= len(payload["imageIds"]) <= 100 for payload in calls))
+        self.assertEqual(len(self.details), 6)
+
+    def test_task_drift_after_planning_blocks_first_deletion(self):
+        self.setup_release()
+        original = self.api
+
+        def api(service, operation, *args, **kwargs):
+            response = original(service, operation, *args, **kwargs)
+            if operation == "batch-get-image":
+                self.live[0]["containers"][0]["imageDigest"] = self.OLD
+            return response
+        self.api = api
+        with self.assertRaises(RuntimeError):
+            self.cleanup()
+        self.assertEqual(self.deletions, [])
+
+    def test_real_cli_recognizes_only_missing_lifecycle_and_keeps_other_errors_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cli = Path(directory) / "aws"
+            cli.write_text(f"#!{sys.executable}\nimport sys\n"
+                           "print('An error occurred (' + sys.argv[-1] + ')', file=sys.stderr)\n"
+                           "sys.exit(254)\n")
+            cli.chmod(0o700)
+            with patch.dict(os.environ, {"PATH": directory + os.pathsep + os.environ["PATH"]}):
+                self.assertEqual(deployment.Aws(REGION)("ecr", "get-lifecycle-policy",
+                                                       "LifecyclePolicyNotFoundException"), {})
+                with self.assertRaises(RuntimeError):
+                    deployment.Aws(REGION)("ecr", "get-lifecycle-policy", "AccessDeniedException")
+
+    def test_cleanup_cli_rechecks_target_and_never_deploys(self):
+        self.setup_release()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_images(root)
+            record = root / "deployment.txt"
+            self.record.update(release="v0.1.0", commit=COMMIT)
+            record.write_text(json.dumps(self.record))
+            args = ["deploy_ecs_apps.py", "--cluster", "commerce-cluster", "--region", REGION,
+                    "--images-directory", directory, "--release", "v0.1.0", "--commit", COMMIT,
+                    "--public-url", "https://example.com", "--record", str(record),
+                    "--cleanup-only", str(record)]
+            with patch.object(sys, "argv", args), patch.object(deployment, "Aws", return_value=self.api), \
+                    patch.object(deployment, "deploy", side_effect=AssertionError("redeployment")), \
+                    patch.object(deployment, "verify_https", side_effect=AssertionError("network")), \
+                    patch.object(sys, "stdout", io.StringIO()):
+                self.assertEqual(deployment.main(), 0)
+            self.assertEqual(json.loads(record.read_text())["cleanup"]["status"], "success")
 
 
 if __name__ == "__main__":

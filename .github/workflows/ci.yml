@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ startsWith(github.ref, 'refs/tags/v') && format('release-{0}', github.repository) || format('ci-{0}', github.ref) }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
@@ -53,7 +53,6 @@ jobs:
           python3 scripts/test_init_env.py
           python3 -B scripts/test_compose.py
           python3 -B scripts/test_render_ecs_data.py
-          python3 -B scripts/test_ecs_apps.py
           python3 -B scripts/smoke_caddy.py
           python3 scripts/test_sync_redis_run_id.py
           python3 scripts/test_pr_body.py
@@ -75,6 +74,14 @@ jobs:
           path: '**/build/reports/checkstyle/'
           if-no-files-found: ignore
           retention-days: 7
+
+  deployment-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - *checkout
+      - name: Verify deployment, rollback and image cleanup
+        run: python3 -B scripts/test_ecs_apps.py
 
   package:
     runs-on: ubuntu-24.04
@@ -363,7 +370,7 @@ jobs:
 
   build-and-smoke:
     if: always()
-    needs: [checks, package, tests, observability, integration, demo-ui]
+    needs: [checks, deployment-checks, package, tests, observability, integration, demo-ui]
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:
