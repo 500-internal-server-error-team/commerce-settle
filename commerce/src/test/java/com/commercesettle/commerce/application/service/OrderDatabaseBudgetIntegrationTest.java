@@ -81,6 +81,9 @@ class OrderDatabaseBudgetIntegrationTest {
   void saturationLeavesNoPartialOrderAndReturnsConnections() throws Exception {
     var f = fixture();
     String key = UUID.randomUUID().toString();
+    String acceptedKey = UUID.randomUUID().toString();
+    var accepted = request(f, acceptedKey, null);
+    assertThat(accepted.getStatusCode().value()).isEqualTo(201);
     var held = new ArrayList<Connection>();
     try {
       held.add(source.getConnection());
@@ -89,16 +92,22 @@ class OrderDatabaseBudgetIntegrationTest {
       assertThat(response.getStatusCode().value()).isEqualTo(503);
       assertThat(response.getBody().path("code").asText())
           .isEqualTo("COMMON_TEMPORARILY_UNAVAILABLE");
+      // 기존 키도 DB를 읽어야 하므로 포화 중에는 일시적 실패이며 기존 거래를 실패 처리하지 않는다.
+      assertThat(request(f, acceptedKey, null).getStatusCode().value()).isEqualTo(503);
     } finally {
       for (var connection : held) connection.close();
     }
-    assertState(f, 0);
+    assertState(f, 1);
+    var recovered = request(f, acceptedKey, null);
+    assertThat(recovered.getStatusCode().value()).isEqualTo(201);
+    assertThat(recovered.getBody().path("id")).isEqualTo(accepted.getBody().path("id"));
+    assertThat(recovered.getBody().path("status").asText()).isEqualTo("PAYMENT_PENDING");
     var first = request(f, key, null);
     assertThat(first.getStatusCode().value()).isEqualTo(201);
     var replay = request(f, key, null);
     assertThat(replay.getStatusCode().value()).isEqualTo(201);
     assertThat(replay.getBody().path("id")).isEqualTo(first.getBody().path("id"));
-    assertState(f, 1);
+    assertState(f, 2);
 
     // 같은 DataSource를 쓰는 후속·관측 조회가 연결 반환 후 재개되는지 확인한다.
     // 실제 Relay/Inbox의 15분 진행 공정성은 별도 전용 실험에서 확인한다.
