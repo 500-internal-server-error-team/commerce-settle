@@ -5,6 +5,7 @@ import com.commercesettle.commerce.application.port.AdmissionMetrics;
 import com.commercesettle.commerce.domain.model.OrderAdmissionState;
 import com.commercesettle.commerce.domain.model.OrderAdmissionState.Reason;
 import com.commercesettle.commerce.domain.model.OrderAdmissionState.Transition;
+import com.commercesettle.observability.RepeatedWarning;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -19,6 +20,7 @@ import org.slf4j.LoggerFactory;
 public class OrderAdmissionService {
   private static final ZoneId KST = ZoneId.of("Asia/Seoul");
   private static final Logger LOGGER = LoggerFactory.getLogger(OrderAdmissionService.class);
+  private final RepeatedWarning refreshFailed = new RepeatedWarning();
   private final OrderAdmissionState state;
   private final AdmissionMetrics metrics;
   private final Clock clock;
@@ -45,7 +47,9 @@ public class OrderAdmissionService {
       failure = e;
       change = state.unavailable(Reason.METRICS_UNAVAILABLE, clock.instant());
     }
-    report(change, (System.nanoTime() - started) / 1_000_000d, failure);
+    double refreshMs = (System.nanoTime() - started) / 1_000_000d;
+    report(change, refreshMs);
+    if (failure != null) reportFailure(failure, refreshMs);
   }
 
   public void requireAdmission() {
@@ -54,15 +58,15 @@ public class OrderAdmissionService {
 
   public boolean isOpen() {
     if (paused) {
-      report(state.unavailable(Reason.OPERATOR_PAUSED, clock.instant()), null, null);
+      report(state.unavailable(Reason.OPERATOR_PAUSED, clock.instant()), null);
       return false;
     }
     var decision = state.evaluate(clock.instant());
-    report(decision.transition(), null, null);
+    report(decision.transition(), null);
     return decision.open();
   }
 
-  private static void report(Transition change, Double refreshMs, RuntimeException failure) {
+  private static void report(Transition change, Double refreshMs) {
     if (change == null) return;
     var log =
         change.open() || change.reason() == Reason.RECOVERING ? LOGGER.atDebug() : LOGGER.atWarn();
@@ -100,12 +104,20 @@ public class OrderAdmissionService {
                   .toList());
     }
     if (refreshMs != null) log.addKeyValue("refreshDurationMs", refreshMs);
-    if (failure != null) {
-      log.addKeyValue("errorType", failure.getClass().getSimpleName());
-      String cause = causeType(failure);
-      if (cause != null) log.addKeyValue("causeType", cause);
-    }
     log.log("Order admission state changed");
+  }
+
+  private void reportFailure(RuntimeException failure, double refreshMs) {
+    var log =
+        refreshFailed
+            .at(LOGGER)
+            .addKeyValue("event", "commerce.order.admission.refresh-failed")
+            .addKeyValue("failedAt", format(clock.instant()))
+            .addKeyValue("refreshDurationMs", refreshMs)
+            .addKeyValue("errorType", failure.getClass().getSimpleName());
+    String cause = causeType(failure);
+    if (cause != null) log.addKeyValue("causeType", cause);
+    log.log("Order admission metrics refresh failed");
   }
 
   private static String causeType(RuntimeException failure) {
