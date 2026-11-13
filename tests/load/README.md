@@ -93,7 +93,7 @@ python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN \
 
 원장은 행 단위로 읽고 추적용 flags·ID만 유지하지만 메모리는 요청 수에 비례합니다. 기존 주문 목록 API는 구매자의 전체 주문을 훑으므로 180,000건만으로도 약 1,800페이지 이상입니다. 조회 시간만큼 다음 전수 조회를 늦추고 `queryCosts`에 GET 수·페이지·조회 행 수를 기록합니다. 기한 때문에 페이지를 다 읽지 못하면 `snapshotComplete=false`로 남기며 조회 실패가 이전 관측을 지우지 않습니다.
 
-첫 중단·실행 예외에도 추가 주입을 멈춘 뒤 원장을 재독하고 제한된 배출을 수행합니다. 배출 중 다시 중단하면 마지막 checkpoint와 미해결 상태를 남깁니다. 강제 종료에서는 finally 실행을 보장할 수 없으므로 남은 원장과 계획을 보존합니다. 나중에 다음 명령으로 **추가 주문 없이** 재관측할 수 있습니다. 기존 실패·원장을 덮어쓰지 않고 새 `recovery-<ID>/`에 결과를 남기며 상품/자체 세션은 정상 종료 절차로 정리합니다.
+첫 중단·실행 예외에도 추가 주입을 멈춘 뒤 원장을 재독하고 제한된 배출을 수행합니다. 배출 중 다시 중단하면 마지막 checkpoint와 미해결 상태를 남깁니다. 강제 종료에서는 finally 실행을 보장할 수 없으므로 남은 원장과 계획을 보존합니다. 나중에 다음 명령으로 **추가 주문 없이** 재관측할 수 있습니다. 원래 실행의 중단 정보와 원장을 함께 대조하므로, 재개만으로 불완전 수집 경고가 사라지지 않습니다. 기존 실패·원장을 덮어쓰지 않고 새 `recovery-<ID>/`에 결과를 남기며 상품/자체 세션은 정상 종료 절차로 정리합니다.
 
 ```bash
 python3 -B tests/load/order_load.py --resume tests/load/work/orders-RUN_ID --drain-seconds 300
@@ -103,7 +103,7 @@ python3 -B tests/load/order_load.py --resume tests/load/work/orders-RUN_ID --dra
 
 성능 수집에는 생성된 metadata와 기존 `tests/load/performance.py`를 사용합니다. `loadRun.measurementWindow`는 발생기 UTC이므로 수집 결과의 실제 `dbWindowStart/End`·시계 불확실성·모집단과 일치하는지 확인합니다. 수집 명령의 `--at`만 맞췄다고 실제 DB 측정창도 같다고 가정하지 않습니다. 준비 실패(`loadExecuted=false`)는 부하 실행 실패와 구분합니다.
 
-Grafana의 **Financial processing**, Zipkin, Kafka UI에서 같은 구간의 단계·SQL·PG 호출·대기열·lag를 확인합니다. `paymentConfirmedAtCounts`·`commerceConfirmedWithinMeasurement`는 Commerce가 돌려준 시각이며 Payment DB 직접 측정과 구분합니다. 단계 실행 횟수·HTTP 201·배출 뒤 PAID를 15분 완료 TPS로 해석하지 않습니다. PG 거절·미확정은 따로 집계하고 [정산 대조](../../docs/development.md#정산-대조-실행과-재개), 최종 재고/예약·금액과 시험 원장을 대조한 뒤 전체 성능을 판정합니다.
+HTTP 처리량·지연은 k6가 측정하고, 업무 완료 TPS·적체·전구간 지연은 기존 Prometheus·Payment DB 수집과 Grafana에서 확인합니다. Python 실행기는 요청 누락·중복·주문 상태를 대조하며 결제 시각별 건수나 업무 TPS를 따로 계산하지 않습니다. Zipkin과 Kafka UI에서 같은 구간의 단계·SQL·PG 호출·대기열·lag를 확인합니다. 단계 실행 횟수·HTTP 201·배출 뒤 PAID를 15분 완료 TPS로 해석하지 않습니다. PG 거절·미확정은 따로 집계하고 [정산 대조](../../docs/development.md#정산-대조-실행과-재개), 최종 재고/예약·금액과 시험 원장을 대조한 뒤 전체 성능을 판정합니다.
 
 일반 실행이 끝나면 자체 k6 컨테이너·발급 세션을 정리하고 새 시험 상품을 판매 중지합니다. 주문·재고 이력·시험 결과는 삭제하지 않습니다. 중단·정리 실패는 요약에 남으며 다음 시험 전에 미확정 거래를 확인합니다. 로컬 도구가 EC2를 종료하지는 않습니다. 공유 환경의 적체 배출·대조와 팀 사용 여부를 확인한 뒤 담당자가 EC2를 중지합니다.
 

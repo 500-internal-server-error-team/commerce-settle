@@ -398,8 +398,7 @@ def orders_for_product(api, buyer, product, deadline, costs=None):
                 if costs is not None:
                     costs["scannedOrders"] += 1
                 if order["productId"] == product:
-                    result[order["id"]] = {"status": order["status"],
-                                          "paymentConfirmedAt": order.get("paymentConfirmedAt")}
+                    result[order["id"]] = {"status": order["status"]}
         except ApiError as error:
             return result, False, error.evidence()
         except (ValueError, RuntimeError, KeyError, TypeError) as error:
@@ -432,13 +431,7 @@ def drain(api, buyer, plan, ledger, seconds, checkpoint=None):
         complete = (snapshot_complete and accepted <= orders.keys()
                     and all(order["status"] in TERMINAL for order in orders.values())
                     and not unknown and ledger["ledgerComplete"] and bool(smoke_complete))
-        confirmations = Counter(order["paymentConfirmedAt"][:19] for order in orders.values()
-                                if order.get("paymentConfirmedAt"))
         measurement_ids = ledger["accepted"]["measurement"]
-        window = ledger["windows"].get("measurement")
-        inside = sum(bool(order.get("paymentConfirmedAt")) and window is not None
-                     and window["start"] <= timestamp(order["paymentConfirmedAt"]) < window["end"]
-                     for key, order in orders.items() if key in measurement_ids)
         value = {
             "observedAt": now(), "acceptedOrders": len(accepted), "observedOrders": len(orders),
             "snapshotComplete": snapshot_complete, "drainComplete": complete,
@@ -453,9 +446,6 @@ def drain(api, buyer, plan, ledger, seconds, checkpoint=None):
             "recoveryRequired": not complete or bool(orders.keys() - accepted),
             "stopReason": ("complete" if complete else "observation_error" if error else "deadline"),
             "observationError": error, "elapsedSeconds": time.monotonic() - began, "queryCosts": dict(costs),
-            "paymentConfirmedAtCounts": dict(sorted(confirmations.items())),
-            "commerceConfirmedWithinMeasurement": inside,
-            "paymentTimestampSource": "Commerce mirrored paymentConfirmedAt; not a direct Payment DB measurement",
             "financialReconciliation": "UNVERIFIED: inventory/reservation and financial source reconciliation required",
         }
         if checkpoint:
@@ -715,13 +705,14 @@ def main(argv=None):
                         check_coverage(ledger, phase_summary, phase)
                         if phase == "measurement":
                             summary = phase_summary
-                interrupted_phase = report["phaseBeforeRecovery"]
+                interrupted = previous if original else report
+                interrupted_phase = interrupted.get("phaseBeforeRecovery", interrupted.get("failurePhase"))
                 expected = plan.get("warmupOrders", 0) if interrupted_phase == "warmup" else plan["plannedOrders"]
-                if (report["loadExecuted"] and "failure" in report
+                if (interrupted.get("loadExecuted") and "failure" in interrupted
                         and interrupted_phase in ledger["counts"]
                         and ledger["counts"][interrupted_phase]["started"] < expected):
                     ledger["ledgerComplete"] = False
-                    ledger["unknown"].append({"phase": report["phaseBeforeRecovery"],
+                    ledger["unknown"].append({"phase": interrupted_phase,
                                               "reason": "injection_interrupted_without_complete_coverage"})
                 report.update(k6ExitCode=code, droppedIterations=metric(summary, "dropped_iterations", "count"))
                 buyer = session_for(api, "BUYER", owned, sessions, args.drain_seconds + 30)
