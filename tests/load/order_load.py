@@ -562,6 +562,14 @@ def main(argv=None):
             raise ValueError("performance metadata는 loadRun이 없는 기존 JSON 객체여야 합니다.")
     except (ValueError, OSError, KeyError, TypeError) as error:
         arguments.error(str(error))
+    previous = {}
+    if original:
+        try:
+            value = json.loads((original / "summary.json").read_text())
+            if isinstance(value, dict):
+                previous = value
+        except (ValueError, OSError):
+            pass  # A killed run may have no summary; its planned phases remain unverified.
     if (not 1 <= args.rate <= 1000 or not 1 <= args.seconds <= 900 or not 0 <= args.warmup_seconds <= 300
             or not 1 <= args.pre_allocated_vus <= args.max_vus <= 10000
             or not 1 <= args.smoke_timeout <= 300 or not 0 <= args.drain_seconds <= 900):
@@ -695,7 +703,13 @@ def main(argv=None):
                               clientErrors=ledger["clientErrors"], measurementWindow=ledger["windows"].get("measurement"),
                               firstStartedAt=ledger["firstStartedAt"], lastStartedAt=ledger["lastStartedAt"])
                 for phase in ("warmup", "measurement"):
-                    if (ledger["counts"][phase]["started"] or phase in report.get("k6PhaseExitCodes", {})
+                    name = "k6-summary.json" if phase == "measurement" else "k6-warmup-summary.json"
+                    previous_phase = previous.get("phaseBeforeRecovery", previous.get("failurePhase"))
+                    possible = (original and previous.get("loadExecuted") is not False
+                                and (bool(plan.get("warmupOrders")) if phase == "warmup"
+                                     else previous_phase != "warmup"))
+                    if (possible or phase in ledger["windows"] or (ledger_root / name).is_file()
+                            or ledger["counts"][phase]["started"] or phase in report.get("k6PhaseExitCodes", {})
                             or report["phaseBeforeRecovery"] == phase):
                         phase_summary = read_k6_summary(ledger_root, phase, report)
                         check_coverage(ledger, phase_summary, phase)
@@ -733,25 +747,29 @@ def main(argv=None):
                 if isinstance(error, ApiError):
                     report["drainFailureEvidence"] = error.evidence()
         if plan and seller and not (args.prepare_only and exit_code == 0):
+            path = "/api/sellers/me/products/" + plan["productId"]
             try:
                 seller = session_for(api, "SELLER", owned, sessions, 30)
-                path = "/api/sellers/me/products/" + plan["productId"]
                 product = api.call("GET", path, token=seller)
                 if product.get("status") != "STOPPED":
                     api.call("PUT", path, {"name": product["name"], "unitPrice": product["unitPrice"],
                                           "status": "STOPPED", "expectedVersion": product["version"]},
                              seller, run_id + "-stop-product")
+            except Exception as error:
+                cleanup_errors.append("시험 상품 판매 중지 미확인: " + type(error).__name__)
+            try:
                 report["inventoryObservation"] = api.call("GET", path + "/inventory", token=seller)
-            except (ApiError, RuntimeError, KeyError):
-                cleanup_errors.append("시험 상품 판매 중지 미확인")
+            except Exception as error:
+                cleanup_errors.append("시험 재고 관측 미확인: " + type(error).__name__)
         for token in owned:
             try:
                 api.call("DELETE", "/api/sessions/current", token=token)
-            except ApiError as error:
+            except Exception as error:
                 # Expiry is fixed and authoritative; never treat a lookup failure as expiry.
                 expiry = sessions.get("_issued", {}).get(token)
-                if error.status != 401 or expiry is None or time.time() < expiry:
-                    cleanup_errors.append("자체 발급 세션 로그아웃 미확인")
+                if not (isinstance(error, ApiError) and error.status == 401
+                        and expiry is not None and time.time() >= expiry):
+                    cleanup_errors.append("자체 발급 세션 로그아웃 미확인: " + type(error).__name__)
         if cleanup_errors:
             report["cleanupErrors"] = cleanup_errors
             report["passed"] = False
