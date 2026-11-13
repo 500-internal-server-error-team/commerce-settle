@@ -48,6 +48,73 @@ def wait_drained(compose, groups=("commerce.v1", "payment.v1"), seconds=60):
         until(consumed, f"{group} did not consume the replayed records", seconds)
 
 
+def observed_trace(zipkin, trace_id, required, services, *, retry_wait=False):
+    last = {}
+    def collected():
+        try:
+            with urlopen(zipkin + "/api/v2/trace/" + trace_id, timeout=5) as response:
+                spans = json.load(response)
+        except HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
+        names = {span.get("name") for span in spans}
+        sources = {span.get("localEndpoint", {}).get("serviceName") for span in spans}
+        ids = {span["id"] for span in spans}
+        work = [span for span in spans if span.get("name") in required]
+        last.update(missingNames=sorted(required - names), missingServices=sorted(services - sources))
+        last["missingRetryWait"] = retry_wait and not any(
+            span.get("name") == "payment.refund.process.wait"
+            and span.get("tags", {}).get("kind") in {"retry", "lease-recovery"}
+            for span in spans)
+        if not required <= names or not services <= sources or last["missingRetryWait"]:
+            return None
+        # Every selected durable-work parent is an actual exported span, not a new root.
+        last["missingParents"] = [
+            (span.get("name"), span.get("parentId")) for span in work if span.get("parentId") not in ids]
+        if last["missingParents"]:
+            return None
+        assert all(span["traceId"] == trace_id for span in spans)
+        by_id = {span["id"]: span for span in spans}
+
+        def key(span):
+            return (span.get("localEndpoint", {}).get("serviceName"), span.get("name"))
+
+        def ancestor_matches(span, expected):
+            seen = {span["id"]}
+            parent_id = span.get("parentId")
+            while parent_id in by_id and parent_id not in seen:
+                parent = by_id[parent_id]
+                if key(parent) in expected:
+                    return True
+                seen.add(parent_id)
+                parent_id = parent.get("parentId")
+            return False
+
+        # Check the actual runtime composition, including Kafka spans between saved boundaries.
+        ancestry = {
+            ("payment", "payment.inbox.process"): {
+                ("commerce", "commerce.outbox.send"), ("settlement", "settlement.outbox.send")},
+            ("payment", "payment.approval.process"): {("payment", "payment.inbox.process")},
+            ("payment", "payment.refund.process"): {("payment", "payment.inbox.process")},
+            ("commerce", "commerce.inbox.accepted"): {("payment", "payment.outbox.send")},
+            ("commerce", "commerce.inbox.result"): {("payment", "payment.outbox.send")},
+            ("settlement", "settlement.inbox.process"): {
+                ("payment", "payment.outbox.send"), ("commerce", "commerce.outbox.send")},
+        }
+        last["wrongAncestors"] = [
+            key(span) for span in spans if key(span) in ancestry and not ancestor_matches(span, ancestry[key(span)])]
+        if last["wrongAncestors"]:
+            return None
+        return spans
+    try:
+        spans = until(collected, "missing sampled async trace boundaries: " + ",".join(sorted(required)), 60)
+    except AssertionError as failure:
+        raise AssertionError(str(failure) + "; " + json.dumps(last, sort_keys=True)) from failure
+    print(json.dumps({"traceId": trace_id, "spanCount": len(spans),
+                      "asyncBoundaries": sorted(required)}), flush=True)
+    return spans
+
 def verify():
     with stack("cs-financial-flow-", memory_storage=True, commerce_outbox=False) as compose:
         def flow(*args, **kwargs):
@@ -63,69 +130,6 @@ def verify():
 
         def trace_headers(trace_id):
             return {"traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"}
-
-        def observed_trace(trace_id, required, services):
-            last = {}
-            def collected():
-                try:
-                    with urlopen(zipkin + "/api/v2/trace/" + trace_id, timeout=5) as response:
-                        spans = json.load(response)
-                except HTTPError as error:
-                    if error.code == 404:
-                        return None
-                    raise
-                names = {span.get("name") for span in spans}
-                sources = {span.get("localEndpoint", {}).get("serviceName") for span in spans}
-                ids = {span["id"] for span in spans}
-                work = [span for span in spans if span.get("name") in required]
-                last.update(missingNames=sorted(required - names), missingServices=sorted(services - sources))
-                if not required <= names or not services <= sources:
-                    return None
-                # Every selected durable-work parent is an actual exported span, not a new root.
-                last["missingParents"] = [
-                    (span.get("name"), span.get("parentId")) for span in work if span.get("parentId") not in ids]
-                if last["missingParents"]:
-                    return None
-                assert all(span["traceId"] == trace_id for span in spans)
-                by_id = {span["id"]: span for span in spans}
-
-                def key(span):
-                    return (span.get("localEndpoint", {}).get("serviceName"), span.get("name"))
-
-                def ancestor_matches(span, expected):
-                    seen = {span["id"]}
-                    parent_id = span.get("parentId")
-                    while parent_id in by_id and parent_id not in seen:
-                        parent = by_id[parent_id]
-                        if key(parent) in expected:
-                            return True
-                        seen.add(parent_id)
-                        parent_id = parent.get("parentId")
-                    return False
-
-                # Check the actual runtime composition, including Kafka spans between saved boundaries.
-                ancestry = {
-                    ("payment", "payment.inbox.process"): {
-                        ("commerce", "commerce.outbox.send"), ("settlement", "settlement.outbox.send")},
-                    ("payment", "payment.approval.process"): {("payment", "payment.inbox.process")},
-                    ("payment", "payment.refund.process"): {("payment", "payment.inbox.process")},
-                    ("commerce", "commerce.inbox.accepted"): {("payment", "payment.outbox.send")},
-                    ("commerce", "commerce.inbox.result"): {("payment", "payment.outbox.send")},
-                    ("settlement", "settlement.inbox.process"): {
-                        ("payment", "payment.outbox.send"), ("commerce", "commerce.outbox.send")},
-                }
-                last["wrongAncestors"] = [
-                    key(span) for span in spans if key(span) in ancestry and not ancestor_matches(span, ancestry[key(span)])]
-                if last["wrongAncestors"]:
-                    return None
-                return spans
-            try:
-                spans = until(collected, "missing sampled async trace boundaries: " + ",".join(sorted(required)), 60)
-            except AssertionError as failure:
-                raise AssertionError(str(failure) + "; " + json.dumps(last, sort_keys=True)) from failure
-            print(json.dumps({"traceId": trace_id, "spanCount": len(spans),
-                              "asyncBoundaries": sorted(required)}), flush=True)
-            return spans
 
         def gate_open():
             with urlopen(prometheus + "/api/v1/query?" + urlencode({"query": "commerce_order_admission_open"}), timeout=5) as response:
@@ -351,7 +355,7 @@ and aggregate_id='{aggregate}' and payload->'payload'->>'paymentCycleId'='{cycle
             if mileage < PRICE:
                 required.add("payment.approval.process")
                 services.add("finance-mock")
-            observed_trace(trace_id, required, services)
+            observed_trace(zipkin, trace_id, required, services)
             return order["id"], payment
 
         def cancel(order_id):
@@ -405,16 +409,15 @@ where r.business_key='{refund_key}'::uuid
 and r.operation='REFUND' and a.operation='APPROVE' and r.status='SUCCEEDED'
 and r.amount={int(external)} and r.amount=a.amount and r.provider_id=a.provider_id
 and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amount)""") == "1"
-            spans = observed_trace(refund_traces[order_id],
+            retry_wait = int(sql("payment", f"select attempts from payment.payment_jobs where refund_id='{refund_id}'")) > 1
+            spans = observed_trace(zipkin, refund_traces[order_id],
                                    {"commerce.outbox.send", "payment.inbox.process", "payment.refund.process",
                                     "payment.outbox.send", "settlement.outbox.send", "commerce.inbox.result"},
-                                   {"gateway", "commerce", "payment", "settlement"} | ({"finance-mock"} if int(external) else set()))
+                                   {"gateway", "commerce", "payment", "settlement"} | ({"finance-mock"} if int(external) else set()),
+                                   retry_wait=retry_wait)
             if recovered_parent is not None:
                 assert any(span.get("name") == "payment.refund.process" and span.get("parentId") == recovered_parent
                            for span in spans), "recovered worker did not restore the persisted parent"
-            if int(sql("payment", f"select attempts from payment.payment_jobs where refund_id='{refund_id}'")) > 1:
-                assert any(span.get("name") == "payment.refund.process.wait"
-                           and span.get("tags", {}).get("kind") in {"retry", "lease-recovery"} for span in spans), "retry/restart wait span missing"
             print(json.dumps({"completed": refund_id, "external": int(external), "mileage": expected_mileage}), flush=True)
             if expected_mileage == MILEAGE:
                 print(json.dumps({"mixedRefundCase":{"refund_completed":True,"external_refund_amount":int(external),"mileage_restored_amount":int(mileage)}}),flush=True)

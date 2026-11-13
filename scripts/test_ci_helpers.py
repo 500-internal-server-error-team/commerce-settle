@@ -1,6 +1,7 @@
 """Keep CI optimizations from weakening production rules or topic checks."""
 
 from copy import deepcopy
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -80,6 +81,56 @@ class CiHelpersTest(unittest.TestCase):
     def test_accelerates_other_group_intervals_without_changing_expressions(self):
         production = "groups:\n  - name: other\n    interval: 30s\n    rules:\n      - record: sample\n        expr: rate(sample_total[15s])\n"
         self.assertEqual(integration_rules(production), production.replace("interval: 30s", "interval: 1s"))
+
+
+class FinancialTraceWaitTest(unittest.TestCase):
+    trace_id = "0123456789abcdef0123456789abcdef"
+
+    def spans(self, kind="initial"):
+        def span(identifier, name, service, parent=None, **tags):
+            return {"id": identifier, "name": name, "traceId": self.trace_id,
+                    "localEndpoint": {"serviceName": service}, "parentId": parent, "tags": tags}
+        return [span("01", "commerce.outbox.send", "commerce"),
+                span("02", "payment.inbox.process", "payment", "01"),
+                span("03", "payment.refund.process", "payment", "02"),
+                span("04", "payment.refund.process.wait", "payment", "02", kind=kind)]
+
+    def observe(self, retry_wait):
+        return smoke_financial_flow.observed_trace(
+            "http://zipkin.test", self.trace_id, {"payment.refund.process"},
+            {"commerce", "payment"}, retry_wait=retry_wait)
+
+    def test_waits_for_retry_export_after_processing_spans_arrive(self):
+        for kind in ("retry", "lease-recovery"):
+            with self.subTest(kind=kind):
+                snapshots = [self.spans(), self.spans("unknown"), self.spans(kind)]
+                def poll(probe, message, seconds):
+                    self.assertEqual(seconds, 60)
+                    self.assertIsNone(probe())
+                    self.assertIsNone(probe())
+                    return probe()
+                with patch.object(smoke_financial_flow, "urlopen", side_effect=[
+                        BytesIO(json.dumps(value).encode()) for value in snapshots]) as fetch, \
+                        patch.object(smoke_financial_flow, "until", side_effect=poll):
+                    self.assertEqual(self.observe(True), snapshots[-1])
+                self.assertEqual(fetch.call_count, 3)
+                self.assertTrue(all(call.kwargs["timeout"] == 5 for call in fetch.call_args_list))
+
+    def test_missing_retry_span_still_fails_at_the_deadline(self):
+        def deadline(probe, message, seconds):
+            self.assertEqual(seconds, 60)
+            self.assertIsNone(probe())
+            raise AssertionError("deadline reached")
+        with patch.object(smoke_financial_flow, "urlopen", return_value=BytesIO(json.dumps(self.spans()).encode())), \
+                patch.object(smoke_financial_flow, "until", side_effect=deadline), \
+                self.assertRaisesRegex(AssertionError, '"missingRetryWait": true'):
+            self.observe(True)
+
+    def test_first_attempt_does_not_require_a_retry_span(self):
+        spans = self.spans()
+        with patch.object(smoke_financial_flow, "urlopen", return_value=BytesIO(json.dumps(spans).encode())), \
+                patch.object(smoke_financial_flow, "until", side_effect=lambda probe, *args: probe()):
+            self.assertEqual(self.observe(False), spans)
 
 
 class FinancialReplayWaitTest(unittest.TestCase):
