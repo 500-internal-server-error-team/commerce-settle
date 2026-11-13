@@ -30,6 +30,26 @@ FLOW = ROOT / "compose.financial-flow.yml"
 APPS = ["commerce", "payment-worker", "settlement"]
 PRICE, MILEAGE = 1000, 300
 
+# Keep the observer alive until the real cgroup-v2 OOM event has been collected.
+OOM_PROBE = """import json,subprocess,sys,time
+from pathlib import Path
+def wait_for(path):
+ deadline=time.monotonic()+180
+ while not Path(path).exists():
+  if time.monotonic()>deadline:raise TimeoutError(path)
+  time.sleep(.1)
+def killed():
+ return int(dict(line.split() for line in Path('/sys/fs/cgroup/memory.events').read_text().splitlines())['oom_kill'])
+before=killed()
+wait_for('/tmp/allocate')
+child=subprocess.run([sys.executable,'-c',"from pathlib import Path;Path('/proc/self/oom_score_adj').write_text('1000');x=bytearray(128*1024*1024)"])
+after=killed()
+assert child.returncode==-9 and after>before,(child.returncode,before,after)
+print(json.dumps({'kernelOomKills':after-before,'childExitCode':child.returncode}),flush=True)
+wait_for('/tmp/exit')
+sys.exit(137)
+"""
+
 
 def timed(stage, action, *args, **kwargs):
     """Run one smoke stage and print its wall time so CI logs show where the job budget goes."""
@@ -958,17 +978,27 @@ print('GET whitelist and mutation denial passed')
         subprocess.run(["docker", "run", "-d", "--name", name, "--memory", "32m", "--memory-swap", "32m", "--cpus", "0.5",
             "--network", "none", "--label", "com.docker.compose.project="+project,
             "--label", "com.docker.compose.service=finance-mock", "python:3.13.7-alpine",
-            "python", "-c", "import time;time.sleep(60);x=bytearray(128*1024*1024);time.sleep(5)"], check=True, capture_output=True, timeout=30)
+            "python", "-c", OOM_PROBE], check=True, capture_output=True, timeout=30)
         until(lambda: prom_query(prometheus, 'commerce_settle_container_cpu_usage_ratio{service="finance-mock",basis="quota"}'), "real CPU quota was not observed before probe exit", 50)
+        subprocess.run(["docker", "exec", name, "touch", "/tmp/allocate"], check=True, capture_output=True, timeout=10)
+        def kernel_evidence():
+            logs = subprocess.check_output(["docker", "logs", name], text=True, timeout=10).strip()
+            return json.loads(logs) if logs else None
+        evidence = until(kernel_evidence, "cgroup did not confirm the owned child OOM kill", 30)
+        assert evidence["kernelOomKills"] > 0 and evidence["childExitCode"] == -9, evidence
+        until(lambda: any(float(row["value"][1]) >= probe_started for row in prom_query(
+            prometheus, 'commerce_settle_container_last_oom_timestamp_seconds{service="finance-mock"}')),
+            "real scoped OOM event was not collected before probe exit", 75)
+        subprocess.run(["docker", "exec", name, "touch", "/tmp/exit"], check=True, capture_output=True, timeout=10)
         subprocess.run(["docker", "wait", name], check=True, capture_output=True, timeout=75)
         state = json.loads(subprocess.check_output(["docker", "inspect", "--format", "{{json .State}}", name], text=True, timeout=10))
-        assert state["OOMKilled"] and state["ExitCode"] == 137, state
+        assert state["ExitCode"] == 137, state
         until(lambda: {r["metric"]["alertname"] for r in prom_query(prometheus, 'ALERTS{alertstate="firing",alertname=~"ContainerOom|ContainerAbnormalExit"}')} >= {"ContainerOom", "ContainerAbnormalExit"}, "real OOM/exit events did not fire production alerts", 75)
         for event in ("oom", "abnormal_exit"):
             until(lambda: any(float(row["value"][1]) >= probe_started for row in prom_query(
                 prometheus, 'commerce_settle_container_last_' + event + '_timestamp_seconds{service="finance-mock"}')),
                 "real scoped " + event + " event timestamp was not collected", 45)
-        print(json.dumps({"runtime": "real quota/memory and project-filtered proxy", "kernelOom": True, "exitCode": 137, "productionAlerts": ["ContainerOom", "ContainerAbnormalExit"]}), flush=True)
+        print(json.dumps({"runtime": "real quota/memory and project-filtered proxy", **evidence, "exitCode": 137, "productionAlerts": ["ContainerOom", "ContainerAbnormalExit"]}), flush=True)
     finally:
         subprocess.run(["docker", "rm", "-f", name], check=True, capture_output=True, timeout=30)
 
