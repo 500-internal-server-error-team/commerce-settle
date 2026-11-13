@@ -3,6 +3,202 @@ evaluation_interval: 15s
 tests:
   - interval: 15s
     input_series:
+      - series: 'commerce_settle_business_cohort_observed_timestamp_seconds{operation="payout.unapplied"}'
+        values: '0+15x40'
+      - series: 'commerce_settle_business_cohort_capture_complete{operation="payout.unapplied"}'
+        values: '0x28 1x12'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: BusinessCohortPopulationUnverified
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: BusinessCohortPopulationUnverified
+        exp_alerts:
+          - exp_labels: {severity: warning, operation: payout.unapplied}
+            exp_annotations:
+              summary: 지급 모집단의 Payment 원천 대조가 완료되지 않았습니다.
+              runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적
+      - eval_time: 8m
+        alertname: BusinessCohortPopulationUnverified
+        exp_alerts: []
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.confirmed",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="refund.completed",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="order.settlement.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.settlement.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.payout.succeeded",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="ready.payout.succeeded",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="commerce.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="commerce.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="settlement.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="settlement.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: BusinessObservationUnavailable
+        exp_alerts: []
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.confirmed",window="900",job="apps",instance="one"}'
+        values: '10x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="refund.completed",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="order.settlement.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.settlement.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.payout.succeeded",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="ready.payout.succeeded",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="commerce.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="commerce.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="settlement.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="settlement.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: BusinessObservationUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, operation: payment.confirmed, window: "900"}
+            exp_annotations:
+              summary: "payment.confirmed · 업무 지표 원천이 누락·실패했거나 45초보다 오래됐습니다."
+              runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="refund.completed",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="order.settlement.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.settlement.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.payout.succeeded",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="ready.payout.succeeded",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="commerce.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="commerce.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="settlement.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="settlement.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: BusinessObservationUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, operation: payment.confirmed, window: "900"}
+            exp_annotations:
+              summary: "payment.confirmed · 업무 지표 원천이 누락·실패했거나 45초보다 오래됐습니다."
+              runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.confirmed",window="900",job="apps",instance="one"}'
+        values: '10000x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="refund.completed",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="order.settlement.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.settlement.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.payout.succeeded",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="ready.payout.succeeded",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="commerce.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="commerce.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="settlement.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="settlement.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: BusinessObservationUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, operation: payment.confirmed, window: "900"}
+            exp_annotations:
+              summary: "payment.confirmed · 업무 지표 원천이 누락·실패했거나 45초보다 오래됐습니다."
+              runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.confirmed",window="900",job="apps",instance="one"}'
+        values: '0x8 135+15x8'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="refund.completed",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="order.settlement.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.settlement.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.payout.succeeded",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="ready.payout.succeeded",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="commerce.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="commerce.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="payment.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="settlement.outbox.published",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_observed_timestamp_seconds{operation="settlement.inbox.applied",window="900",job="apps",instance="one"}'
+        values: '0+15x16'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: BusinessObservationUnavailable
+        exp_alerts: []
+  - interval: 15s
+    input_series:
+      - series: 'commerce_settle_business_cohort_observed_timestamp_seconds{operation="payout.total",reason="pending",job="apps",instance="one"}'
+        values: '0+15x16'
+      - series: 'commerce_settle_business_cohort_observed_timestamp_seconds{operation="payout.ready",reason="pending",job="apps",instance="one"}'
+        values: '10x16'
+      - series: 'commerce_settle_business_cohort_observed_timestamp_seconds{operation="payout.unapplied",reason="pending",job="apps",instance="one"}'
+        values: '0+15x16'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: BusinessCohortObservationUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical, operation: payout.ready}
+            exp_annotations:
+              summary: "payout.ready · 지급 모집단 집계 원천의 수집 상태를 확인하세요."
+              runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적
+  - interval: 15s
+    input_series:
       - series: 'commerce_settle_financial_queue_records{queue="payment.payment_jobs",job="apps",instance="old"}'
         values: '999x4'
       - series: 'commerce_settle_admission_observed_timestamp_seconds{signal="QUEUE_SIZE",resource="payment.payment_jobs",job="apps",instance="old"}'

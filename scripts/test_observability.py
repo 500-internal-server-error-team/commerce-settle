@@ -144,12 +144,13 @@ def verify():
         ))
         financial = (ROOT / "infra/prometheus/financial.rules.yml").read_text()
         selected = [block for block in re.findall(r"(?ms)^      - (?:record|alert):.*?(?=^      - |^  - name:|\Z)", financial)
-                    if re.match(r"      - (?:record: financial:operation_(?:current|age|records)|alert: Financial(?:Unknown|RefundUnknown))\n", block)]
-        assert len(selected) == 6
+                    if re.match(r"      - (?:record: financial:operation_(?:current|age|records)|alert: Financial(?:Unknown|RefundUnknown)|record: business:(?:source|cohort_source|cohort_capture_complete)|alert: Business(?:ObservationUnavailable|CohortObservationUnavailable|CohortPopulationUnverified))\n", block)]
+        assert len(selected) == 12
         runtime = (ROOT / "infra/prometheus/runtime.rules.yml").read_text()
         (directory / "runtime.integration.rules.yml").write_text(integration_rules(re.sub(r"(?m)^(\s+)for: [^\n]+$", r"\1for: 2s", runtime)))
         (directory / "financial.integration.rules.yml").write_text(integration_rules(
-            "groups:\n  - name: financial-transport\n    interval: 15s\n    rules:\n" + "".join(selected)))
+            re.sub(r"(?m)^(\s+)for: [^\n]+$", r"\1for: 2s",
+                "groups:\n  - name: financial-transport\n    interval: 15s\n    rules:\n" + "".join(selected))))
         (directory / "prometheus.yml").write_text(
             "global:\n  scrape_interval: 1s\n  evaluation_interval: 1s\n"
             "rule_files: [/etc/prometheus/integration.rules.yml, /etc/prometheus/notification.integration.rules.yml, /etc/prometheus/runtime.integration.rules.yml, /etc/prometheus/financial.integration.rules.yml]\n"
@@ -275,6 +276,7 @@ def verify():
                 "NotificationDeliveryOverdue", "NotificationReviewRequired", "NotificationRetryExhausted",
                 "NotificationFinancialActionRequired", "KakaoReauthenticationRequired",
                 "FinancialUnknown", "FinancialRefundUnknown", "RuntimeEventCoverageGap", "ContainerMemoryPressure", "ContainerMemoryCritical", "ContainerOom", "ContainerAbnormalExit",
+                "BusinessObservationUnavailable", "BusinessCohortObservationUnavailable", "BusinessCohortPopulationUnverified",
             }
 
             def firing():
@@ -287,7 +289,7 @@ def verify():
             delivered = until(firing, "firing notifications were not delivered")
             assert all(a["labels"]["severity"] == "critical" or
                        (a["labels"]["alertname"] == "ContainerMemoryPressure" and a["labels"].get("service") == "settlement") or
-                       a["labels"]["alertname"] in {"FinancialRefundUnknown", "RuntimeEventCoverageGap"} for a in delivered)
+                       a["labels"]["alertname"] in {"FinancialRefundUnknown", "RuntimeEventCoverageGap", "BusinessCohortPopulationUnverified"} for a in delivered)
             assert not any(a["labels"]["alertname"] == "ContainerMemoryPressure" and a["labels"]["severity"] == "warning" and a["labels"].get("service") == "payment-worker" for a in delivered)
             assert all(not ({"buyerId", "sellerId", "orderId", "recipientId", "token", "body"} & set(a["labels"])) for a in delivered)
             http(fixture + "/state", {"active": False})
