@@ -115,6 +115,48 @@ def observed_trace(zipkin, trace_id, required, services, *, retry_wait=False):
                       "asyncBoundaries": sorted(required)}), flush=True)
     return spans
 
+def observed_business_metrics(prometheus, sql):
+    barrier = float(sql("payment", "select extract(epoch from clock_timestamp())"))
+    facts = {
+        "payment.confirmed": ("payment", "select count(*) from payment.payments where confirmed_at >= {at}-interval '900 seconds' and confirmed_at < {at}"),
+        "refund.completed": ("payment", "select count(*) from payment.refund_sagas s join payment.refunds r on r.id=s.refund_id where s.step='COMPLETED' and r.status='COMPLETED' and s.order_restored_at >= {at}-interval '900 seconds' and s.order_restored_at < {at}"),
+        "order.settlement.applied": ("settlement", "select count(*) from settlement.settlement_items where created_at >= {at}-interval '900 seconds' and created_at < {at}"),
+    }
+    last = {"barrier": barrier}
+
+    def collected():
+        expression = '{__name__=~"business:completions|business:source",window="900"}'
+        with urlopen(prometheus + "/api/v1/query?" + urlencode({"query": expression}), timeout=5) as response:
+            rows = json.load(response)["data"]["result"]
+        actual, observed, query_times = {}, {}, {}
+        for row in rows:
+            operation = row["metric"].get("operation")
+            if operation not in facts:
+                continue
+            name = row["metric"].get("__name__")
+            if name == "business:completions":
+                actual[operation] = float(row["value"][1])
+            elif name == "business:source":
+                observed[operation] = float(row["value"][1])
+                query_times[operation] = float(row["value"][0])
+        last.update(actual=actual, observed=observed)
+        if not all(barrier <= observed.get(operation, -1) <= query_times.get(operation, -1)
+                   for operation in facts):
+            return None
+        expected = {
+            operation: int(sql(database, query.format(at=f"to_timestamp({observed[operation]})")))
+            for operation, (database, query) in facts.items()
+        }
+        last["expected"] = expected
+        return expected if all(value > 0 and actual.get(operation) == value
+                               for operation, value in expected.items()) else None
+
+    try:
+        return until(collected, "committed DB completion TPS did not reach Prometheus", 60)
+    except AssertionError as failure:
+        raise AssertionError(str(failure) + "; " + json.dumps(last, sort_keys=True)) from failure
+
+
 def verify():
     with stack("cs-financial-flow-", memory_storage=True, commerce_outbox=False) as compose:
         def flow(*args, **kwargs):
@@ -656,18 +698,7 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
             assert sql("payment", f"select balance || '/' || reserved_amount from payment.mileage_wallets where buyer_id='{buyer}'") == f"{10_000-MILEAGE}/0"
             # The declined refund keeps one sale and the disposed return leaves stock without restoring it.
             assert inventory() == "8/0/1", inventory()
-            def committed_business_metrics():
-                expected = {
-                    "payment.confirmed": int(sql("payment", "select count(*) from payment.payments where confirmed_at >= statement_timestamp()-interval '900 seconds' and confirmed_at < statement_timestamp()")),
-                    "refund.completed": int(sql("payment", "select count(*) from payment.refund_sagas s join payment.refunds r on r.id=s.refund_id where s.step='COMPLETED' and r.status='COMPLETED' and s.order_restored_at >= statement_timestamp()-interval '900 seconds' and s.order_restored_at < statement_timestamp()")),
-                    "order.settlement.applied": int(sql("settlement", "select count(*) from settlement.settlement_items where created_at >= statement_timestamp()-interval '900 seconds' and created_at < statement_timestamp()")),
-                }
-                expression='business:completions{window="900"}'
-                with urlopen(prometheus + "/api/v1/query?"+urlencode({"query":expression}),timeout=5) as response:
-                    rows=json.load(response)["data"]["result"]
-                actual={row["metric"]["operation"]:float(row["value"][1]) for row in rows}
-                return expected if all(value>0 and actual.get(operation)==value for operation,value in expected.items()) else None
-            counts=until(committed_business_metrics,"committed DB completion TPS did not reach Prometheus",60)
+            counts = observed_business_metrics(prometheus, sql)
             with urlopen(prometheus + "/api/v1/query?"+urlencode({"query":'business:duration_count{window="900",operation="order.settlement.applied"}'}),timeout=5) as response:
                 samples=json.load(response)["data"]["result"]
             assert samples and float(samples[0]["value"][1])>0, samples

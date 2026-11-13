@@ -133,6 +133,61 @@ class FinancialTraceWaitTest(unittest.TestCase):
             self.assertEqual(self.observe(False), spans)
 
 
+class FinancialBusinessSnapshotTest(unittest.TestCase):
+    operations = ("payment.confirmed", "refund.completed", "order.settlement.applied")
+
+    def response(self, observed=1970, actual=2, include_source=True):
+        rows = []
+        for index, operation in enumerate(self.operations):
+            rows.append({"metric": {"__name__": "business:completions", "operation": operation},
+                         "value": [2000, str(actual)]})
+            if include_source:
+                rows.append({"metric": {"__name__": "business:source", "operation": operation},
+                             "value": [2000, str(observed + index)]})
+        return BytesIO(json.dumps({"data": {"result": rows}}).encode())
+
+    def test_uses_each_post_barrier_snapshot_window_instead_of_query_time(self):
+        statements = []
+        def sql(database, statement):
+            if statement == "select extract(epoch from clock_timestamp())":
+                return "1950"
+            statements.append((database, statement))
+            # Both facts fit [observed-900, observed); the fact at1085 is outside the current2000 window.
+            observed = float(re.search(r"to_timestamp\(([0-9.]+)\)", statement).group(1))
+            return str(sum(observed - 900 <= fact < observed for fact in (1085, 1800)))
+        def poll(probe, message, seconds):
+            self.assertEqual(seconds, 60)
+            self.assertIsNone(probe())
+            self.assertEqual(statements, [])
+            return probe()
+        with patch.object(smoke_financial_flow, "urlopen", side_effect=[self.response(1940), self.response()]) as fetch, \
+                patch.object(smoke_financial_flow, "until", side_effect=poll):
+            self.assertEqual(smoke_financial_flow.observed_business_metrics("http://prometheus.test", sql),
+                             dict.fromkeys(self.operations, 2))
+        self.assertEqual([database for database, _ in statements], ["payment", "payment", "settlement"])
+        for index, (_, statement) in enumerate(statements):
+            self.assertIn(f"to_timestamp({1970.0 + index})", statement)
+            self.assertNotIn("statement_timestamp()", statement)
+        self.assertEqual(fetch.call_count, 2)
+        self.assertTrue(all(call.kwargs["timeout"] == 5 for call in fetch.call_args_list))
+
+    def test_missing_stale_future_or_mismatched_snapshots_do_not_pass(self):
+        for observed, actual, expected, include_source in [
+                (1940, 2, 2, True), (2001, 2, 2, True), (1970, 2, 2, False),
+                (1970, 3, 2, True), (1970, 0, 0, True)]:
+            with self.subTest(observed=observed, actual=actual, expected=expected, source=include_source):
+                def sql(database, statement):
+                    return "1950" if "clock_timestamp()" in statement else str(expected)
+                def deadline(probe, message, seconds):
+                    self.assertEqual(seconds, 60)
+                    self.assertIsNone(probe())
+                    raise AssertionError("deadline reached")
+                with patch.object(smoke_financial_flow, "urlopen", return_value=self.response(observed, actual, include_source)), \
+                        patch.object(smoke_financial_flow, "until", side_effect=deadline), \
+                        self.assertRaisesRegex(AssertionError, '"barrier": 1950.0'):
+                    smoke_financial_flow.observed_business_metrics("http://prometheus.test", sql)
+
+
 class FinancialReplayWaitTest(unittest.TestCase):
     def targets(self, count=3):
         return {(f"commerce-settle.{owner}.v1", partition): 5
