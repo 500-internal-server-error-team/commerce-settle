@@ -6,6 +6,8 @@ import com.commercesettle.payment.infrastructure.config.DemoWalletConfiguration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
@@ -76,18 +78,29 @@ class DemoWalletFixtureIntegrationTest {
   }
 
   @Test
-  @DisplayName("동시·반복 실행해도 지갑과 원장을 한 번만 만든다")
+  @DisplayName("빈 DB에서 동시에 시작해도 지갑과 원장을 한 번만 만들고 재실행으로 바꾸지 않는다")
   void isIdempotentUnderConcurrentStarts() throws Exception {
-    fixture.load();
-    var wallets = jdbc().queryForList("SELECT * FROM payment.mileage_wallets ORDER BY id");
-    var entries = jdbc().queryForList("SELECT * FROM payment.mileage_entries ORDER BY id");
+    var start = new CyclicBarrier(2);
+    Callable<Void> load =
+        () -> {
+          start.await(10, TimeUnit.SECONDS);
+          fixture.load();
+          return null;
+        };
 
     try (var executor = Executors.newFixedThreadPool(2)) {
-      var first = executor.submit(fixture::load);
-      var second = executor.submit(fixture::load);
+      var first = executor.submit(load);
+      var second = executor.submit(load);
       first.get(10, TimeUnit.SECONDS);
       second.get(10, TimeUnit.SECONDS);
     }
+    var wallets = jdbc().queryForList("SELECT * FROM payment.mileage_wallets ORDER BY id");
+    var entries = jdbc().queryForList("SELECT * FROM payment.mileage_entries ORDER BY id");
+    assertThat(wallets).hasSize(2);
+    assertThat(entries)
+        .singleElement()
+        .satisfies(entry -> assertThat(entry).containsEntry("kind", "SEED"));
+
     fixture.load();
 
     assertThat(jdbc().queryForList("SELECT * FROM payment.mileage_wallets ORDER BY id"))
