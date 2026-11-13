@@ -56,9 +56,7 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
   @Transactional
   public Optional<LeasedJob> leaseNext(
       PaymentJobOperation operation, String owner, Duration leaseDuration) {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
-    // ix_payment_jobs_lease를 next_run_at 순서로 읽다가 첫 후보에서 멈춘다. 임대는 next_run_at이 지난 작업에만
-    // 걸리므로 RUNNING 작업도 next_run_at이 현재 이전이다. 고정 시각 조건만 인덱스 범위로 쓸 수 있다.
+    limits();
     return jdbc
         .query(
             """
@@ -66,8 +64,8 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
               SELECT id,created_at AS queued_created,updated_at AS queued_changed,
                   next_run_at AS queued_due,lease_until AS queued_lease,status AS queued_status
               FROM payment.payment_jobs WHERE operation = :operation
-                AND status IN ('PENDING', 'RETRY', 'RUNNING') AND next_run_at <= statement_timestamp()
-                AND (status <> 'RUNNING' OR lease_until < clock_timestamp())
+                AND ((status IN ('PENDING', 'RETRY') AND next_run_at <= clock_timestamp())
+                  OR (status = 'RUNNING' AND lease_until < clock_timestamp()))
               ORDER BY next_run_at, id LIMIT 1 FOR UPDATE SKIP LOCKED)
             UPDATE payment.payment_jobs j
             SET status = 'RUNNING', lease_owner = :owner, lease_token = :token,
@@ -122,7 +120,7 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
   @Override
   public boolean releaseLease(
       UUID jobId, UUID leaseToken, PaymentJobStatus status, Duration runAfter, String errorCode) {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    limits();
     // 임대 만료는 실제 현재 시각으로 본다. now()는 트랜잭션 시작 시각이라 잠금 대기 중 만료된 임대도 통과시킨다.
     return jdbc.update(
             """
@@ -161,7 +159,7 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
 
   @Override
   public ReplayResult replay(UUID jobId, long expectedVersion) {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    limits();
     var params = new MapSqlParameterSource().addValue("id", jobId);
     var current =
         jdbc.query(
@@ -199,6 +197,20 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
   }
 
   private record Current(PaymentJobStatus status, long version, boolean leased) {}
+
+  /** 다른 트랜잭션의 작업 잠금은 1초, SQL 한 문장은 5초까지만 기다린다. 호출자의 더 짧은 상한은 유지한다. */
+  private void limits() {
+    jdbc.getJdbcTemplate()
+        .queryForList(
+            """
+            SELECT set_config(budget.name,
+                least(coalesce(nullif(settings.setting::integer,0),budget.timeout_ms),
+                    budget.timeout_ms)::text,true)
+            FROM (VALUES ('lock_timeout',1000),('statement_timeout',5000))
+                AS budget(name,timeout_ms)
+            JOIN pg_settings settings ON settings.name=budget.name
+            """);
+  }
 
   private static double seconds(Duration duration) {
     return duration.toMillis() / 1000.0;

@@ -208,7 +208,7 @@ public class OrderService {
     // 쿠폰 기한·이벤트 기간은 주문 생성 시각 하나로 판단해 견적과 예약이 서로 다른 시각으로 갈리지 않게 한다.
     var now = clock.instant();
     var offer =
-        benefits.quoteForOrder(
+        benefits.quote(
             buyerId,
             product.getId(),
             product.getSellerId(),

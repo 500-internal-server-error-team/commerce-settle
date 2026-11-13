@@ -60,7 +60,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     })
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-@org.springframework.context.annotation.Import(CouponOrderIntegrationTest.SqlRecording.class)
 class CouponOrderIntegrationTest {
   static final String GATEWAY = "test-gateway-credential-0123456789abcdef0123";
   static final String PAYMENT = "test-payment-credential-0123456789abcdef0123";
@@ -80,15 +79,6 @@ class CouponOrderIntegrationTest {
   @Autowired OrderResultService results;
   @Autowired PaymentAcceptedService accepted;
   @Autowired TransactionTemplate tx;
-  @Autowired com.commercesettle.commerce.support.JdbcExecutionRecorder sql;
-
-  @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
-  static class SqlRecording {
-    @org.springframework.context.annotation.Bean
-    static com.commercesettle.commerce.support.JdbcExecutionRecorder jdbcExecutionRecorder() {
-      return new com.commercesettle.commerce.support.JdbcExecutionRecorder();
-    }
-  }
 
   // 금융 관측 기반 접수 제한은 이 시험의 대상이 아니므로 항상 접수한다.
   @MockitoBean OrderAdmissionService admission;
@@ -161,28 +151,6 @@ class CouponOrderIntegrationTest {
     assertThat(couponStatus(coupon)).isEqualTo("ISSUED");
     assertTotalsChanged(issued, 0, 0);
     assertThat(history(coupon)).containsExactly("ISSUE", "RESERVE", "USE", "RESTORE");
-  }
-
-  @Test
-  @DisplayName("쿠폰 주문은 견적과 예약에서 쿠폰 행을 한 번만 잠그고 읽으며 이력은 조회 없이 추가한다")
-  void readsCouponOnceWhileCreatingOrder() throws Exception {
-    Buyer buyer = buyer();
-    UUID product = product();
-    UUID coupon = coupons.issueWelcome(buyer.id(), Instant.now()).getId();
-
-    var created = sql.measure(() -> order(buyer, product, coupon, 201));
-
-    assertThat(created.executions())
-        .filteredOn(e -> e.sql().contains("from commerce.buyer_coupons"))
-        .singleElement()
-        .satisfies(e -> assertThat(e.sql()).contains("for no key update"));
-    assertThat(created.executions())
-        .filteredOn(e -> e.sql().contains("from commerce.coupon_history"))
-        .isEmpty();
-    assertThat(
-            jdbc.queryForObject(
-                "select status from commerce.buyer_coupons where id=?", String.class, coupon))
-        .isEqualTo("RESERVED");
   }
 
   @Test

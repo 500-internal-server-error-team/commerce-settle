@@ -81,8 +81,7 @@ public class InventoryReservationService {
       throw new IllegalArgumentException(
           "reservation requires a regular order for the locked product");
     }
-    // 주문 ID는 이번 트랜잭션에서 만든 값이라 기존 예약이 없다. 조회 없이 저장하며 UNIQUE(order_id)가 최종 중복을 막는다.
-    reserveNew(
+    reserve(
         order.getId(),
         inventory,
         order.getQuantity(),
@@ -110,11 +109,6 @@ public class InventoryReservationService {
       }
       return Outcome.ALREADY_APPLIED;
     }
-    return reserveNew(orderId, inventory, quantity, cycleId, expiresAt);
-  }
-
-  private Outcome reserveNew(
-      UUID orderId, ProductInventory inventory, int quantity, UUID cycleId, Instant expiresAt) {
     InventoryReservation.Created created =
         InventoryReservation.reserve(
             UUID.randomUUID(),
@@ -149,15 +143,6 @@ public class InventoryReservationService {
         events
             .findProductIdById(eventId)
             .orElseThrow(() -> new SaleEventNotFoundException(eventId));
-    return reserveNewForEvent(orderId, eventId, productId, buyerId, cycleId, expiresAt);
-  }
-
-  /**
-   * 이번 트랜잭션에서 만든 선착순 주문의 수량 확보. 기존 예약 조회를 생략하며, 상품은 같은 트랜잭션의 견적이 이벤트와 대조한 주문 상품을 받는다(이벤트 상품은 공개 후
-   * 바뀌지 않는다). 거절 사유는 {@link #reserveForEvent}와 같다.
-   */
-  public Outcome reserveNewForEvent(
-      UUID orderId, UUID eventId, UUID productId, UUID buyerId, UUID cycleId, Instant expiresAt) {
     if (participations.existsActive(eventId, buyerId)) {
       throw new EventAdmissionClosedException(Reason.ALREADY_PARTICIPATED);
     }

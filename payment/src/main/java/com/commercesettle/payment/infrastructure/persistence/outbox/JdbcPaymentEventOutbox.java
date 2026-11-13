@@ -16,14 +16,11 @@ import com.commercesettle.payment.application.event.RefundReleaseRequestedPayloa
 import com.commercesettle.payment.application.event.RefundReservationRequestedPayload;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
 import com.commercesettle.payment.infrastructure.messaging.OutboxAppended;
-import com.commercesettle.payment.infrastructure.persistence.TransactionLimits;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
@@ -32,8 +29,6 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Repository
 public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
@@ -131,7 +126,7 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
     } catch (JsonProcessingException exception) {
       throw new IllegalArgumentException("Cannot serialize payment outbox event");
     }
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    applyTransactionLimits();
     var params =
         new MapSqlParameterSource("id", event.eventId())
             .addValue("aggregate", event.aggregateId())
@@ -154,105 +149,70 @@ public class JdbcPaymentEventOutbox implements PaymentEventOutbox {
             .addValue("type", event.eventType())
             .addValue("key", paymentId.toString());
     // 집계별 append를 커밋까지 직렬화하여 늦은 낮은 버전의 삽입을 막는다.
-    lockAggregate(event.aggregateId(), params);
-    // 기존 ID 확인·최신 버전 확인·삽입을 한 문장에서 같은 스냅샷으로 처리한다. existing은 삽입 전 행이다.
-    var result =
-        jdbc.queryForObject(
-            """
-            WITH latest AS (
-                SELECT coalesce(max(aggregate_version), -1) AS version FROM payment.outbox
-                WHERE aggregate_id = :aggregate),
-            existing AS (SELECT raw_body FROM payment.outbox WHERE id = :id),
-            inserted AS (
-                INSERT INTO payment.outbox (id,event_type,event_version,aggregate_id,
-                    aggregate_version,topic,occurred_at,message_key,payload,raw_body,trace_parent,
-                    order_accepted_at)
-                SELECT :id,:type,1,:aggregate,:version,'commerce-settle.payment.v1',
-                    CAST(:occurred AS timestamptz),:key,CAST(:json AS jsonb),:body,:traceParent,
-                    (SELECT i.order_accepted_at FROM payment.inbox i
-                     WHERE :type='PaymentConfirmed' AND i.event_type='OrderPaymentRequested'
-                       AND i.aggregate_id=CAST(:orderId AS uuid)
-                       AND i.status IN ('WAITING','APPLIED')
-                       AND i.payload->'payload'->>'paymentCycleId'=:cycleId
-                     ORDER BY i.created_at,i.id LIMIT 1)
-                FROM latest
-                WHERE NOT EXISTS (SELECT 1 FROM existing) AND :version >= latest.version
-                ON CONFLICT (id) DO NOTHING
-                RETURNING id)
-            SELECT (SELECT count(*) FROM inserted) AS inserted,
-                (SELECT version FROM latest) AS latest,
-                (SELECT raw_body FROM existing) AS existing
-            """,
+    jdbc.queryForList(
+        "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:aggregate AS text), 0))", params);
+    var existing =
+        jdbc.query(
+            "SELECT raw_body FROM payment.outbox WHERE id = :id",
             params,
-            (rs, row) ->
-                new AppendResult(
-                    rs.getLong("inserted") == 1, rs.getLong("latest"), rs.getBytes("existing")));
-    if (result.inserted()) {
-      events.publishEvent(new OutboxAppended());
-    } else if (result.existing() != null) {
-      requireSameBody(result.existing(), body);
-    } else if (event.aggregateVersion() < result.latest()) {
+            (rs, row) -> rs.getBytes(1));
+    if (!existing.isEmpty()) {
+      requireSameBody(existing.getFirst(), body);
+      return event.eventId();
+    }
+    Long latest =
+        jdbc.queryForObject(
+            "SELECT coalesce(max(aggregate_version), -1) FROM payment.outbox WHERE aggregate_id ="
+                + " :aggregate",
+            params,
+            Long.class);
+    if (latest != null && event.aggregateVersion() < latest) {
       throw new IllegalArgumentException("Payment outbox version moved backwards");
-    } else {
-      // 같은 ID를 다른 집계 잠금 아래에서 먼저 넣은 경우다.
+    }
+    int inserted =
+        jdbc.update(
+            """
+            INSERT INTO payment.outbox (id,event_type,event_version,aggregate_id,aggregate_version,
+                topic,occurred_at,message_key,payload,raw_body,trace_parent,order_accepted_at)
+            VALUES (:id,:type,1,:aggregate,:version,'commerce-settle.payment.v1',
+                CAST(:occurred AS timestamptz),:key,CAST(:json AS jsonb),:body,:traceParent,
+                (SELECT i.order_accepted_at FROM payment.inbox i
+                 WHERE :type='PaymentConfirmed' AND i.event_type='OrderPaymentRequested'
+                   AND i.aggregate_id=CAST(:orderId AS uuid) AND i.status IN ('WAITING','APPLIED')
+                   AND i.payload->'payload'->>'paymentCycleId'=:cycleId
+                 ORDER BY i.created_at,i.id LIMIT 1))
+            ON CONFLICT (id) DO NOTHING
+            """,
+            params);
+    if (inserted == 0) {
       byte[] original =
           jdbc.queryForObject(
               "SELECT raw_body FROM payment.outbox WHERE id = :id",
               Map.of("id", event.eventId()),
               byte[].class);
       requireSameBody(original, body);
+    } else {
+      events.publishEvent(new OutboxAppended());
     }
     return event.eventId();
   }
-
-  /** 같은 물리 트랜잭션에서 이미 잡은 집계 잠금은 다시 요청하지 않는다. 잠금은 트랜잭션 종료까지 유지된다. */
-  private void lockAggregate(UUID aggregateId, MapSqlParameterSource params) {
-    Set<UUID> locked = lockedAggregates();
-    if (locked != null && locked.contains(aggregateId)) {
-      return;
-    }
-    jdbc.queryForList(
-        "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:aggregate AS text), 0))", params);
-    if (locked != null) {
-      locked.add(aggregateId);
-    }
-  }
-
-  @SuppressWarnings("unchecked")
-  private Set<UUID> lockedAggregates() {
-    var source = jdbc.getJdbcTemplate().getDataSource();
-    Object holder =
-        source == null || !TransactionSynchronizationManager.isSynchronizationActive()
-            ? null
-            : TransactionSynchronizationManager.getResource(source);
-    if (holder == null) {
-      return null;
-    }
-    var key = new LockedAggregates(holder);
-    Object bound = TransactionSynchronizationManager.getResource(key);
-    if (bound != null) {
-      return (Set<UUID>) bound;
-    }
-    Set<UUID> locked = new HashSet<>();
-    TransactionSynchronizationManager.bindResource(key, locked);
-    TransactionSynchronizationManager.registerSynchronization(
-        new TransactionSynchronization() {
-          @Override
-          public void afterCompletion(int status) {
-            TransactionSynchronizationManager.unbindResourceIfPossible(key);
-          }
-        });
-    return locked;
-  }
-
-  /** 커넥션 홀더의 동일성으로 물리 트랜잭션을 구분한다. */
-  private record LockedAggregates(Object holder) {}
-
-  private record AppendResult(boolean inserted, long latest, byte[] existing) {}
 
   private static void requireSameBody(byte[] original, byte[] body) {
     if (!Arrays.equals(original, body)) {
       throw new IllegalArgumentException("Outbox event ID has a different body");
     }
+  }
+
+  private void applyTransactionLimits() {
+    jdbc.getJdbcTemplate()
+        .queryForList(
+            """
+        SELECT set_config(budget.name,
+            least(coalesce(nullif(settings.setting::integer,0),budget.timeout_ms),
+                budget.timeout_ms)::text,true)
+        FROM (VALUES ('lock_timeout',1000),('statement_timeout',5000))
+            AS budget(name,timeout_ms)
+        JOIN pg_settings settings ON settings.name=budget.name
+        """);
   }
 }

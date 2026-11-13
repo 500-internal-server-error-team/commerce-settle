@@ -38,7 +38,7 @@ class JpaPaymentRepository implements PaymentRepository {
   @Override
   @Transactional(propagation = Propagation.MANDATORY)
   public Optional<Payment> findByIdForUpdate(UUID id) {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    limits();
     return repository.findByIdForUpdate(id);
   }
 
@@ -65,5 +65,19 @@ class JpaPaymentRepository implements PaymentRepository {
     return orderId == null
         ? repository.countByBuyerId(buyerId)
         : repository.countByBuyerIdAndOrderId(buyerId, orderId);
+  }
+
+  /** 결제 행 잠금 전에 현재 트랜잭션의 대기 상한을 건다. 호출자가 정한 더 짧은 상한은 유지하고, 트랜잭션이 끝나면 풀린다. */
+  private void limits() {
+    jdbc.getJdbcTemplate()
+        .queryForList(
+            """
+            SELECT set_config(budget.name,
+                least(coalesce(nullif(settings.setting::integer,0),budget.timeout_ms),
+                    budget.timeout_ms)::text,true)
+            FROM (VALUES ('lock_timeout',1000),('statement_timeout',5000))
+                AS budget(name,timeout_ms)
+            JOIN pg_settings settings ON settings.name=budget.name
+            """);
   }
 }

@@ -5,7 +5,6 @@ import { operations, redact, type Json, type Operation } from '../shared/api/con
 import { execute, journal, RequestInputError, type Execution, type RequestValues } from '../shared/api/client';
 import { OperationForm } from '../features/requests/OperationForm';
 import { PurchaseFlow } from '../features/requests/PurchaseFlow';
-import { MileageDemoGuide, showsMileageGuide } from '../features/benefits/MileageDemoGuide';
 import { mergeResponseContext, responseContext } from '../features/requests/responseContext';
 import { useEventGauge } from '../features/requests/useEventGauge';
 import { ResultView } from '../features/results/ResultView';
@@ -383,7 +382,6 @@ export function App() {
       </details>}
       <details className="prerequisites"><summary>시연 준비 조건과 정책</summary><p>{scenario?.note}</p>{requirements(caseId).map(note => <p key={note}>{note}</p>)}
         {group === 'monthly' && <p>전월 구매확정·미환불 거래의 외부 결제액으로 상위 100위와 동점자를 선정합니다. 매월 1일 00:00 마감·00:10 자동 발급. 수동 발급·업무 시간 이동 기능은 없습니다.</p>}</details>
-      {showsMileageGuide(caseId, operation?.path) && <MileageDemoGuide />}
       {guidedPurchase ? <PurchaseFlow active={stepIndex} records={purchaseRecords} productId={context.BUYER?.productId}>
         {workbench}
       </PurchaseFlow> : workbench}

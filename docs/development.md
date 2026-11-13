@@ -253,7 +253,7 @@ OIDC 신뢰는 해당 저장소의 `refs/tags/v*`와 `sts.amazonaws.com` audienc
 
 실패하면 이번 실행이 갱신을 시도한 앱을 역순으로 되돌립니다. 조회 시 다른 revision을 감지한 서비스는 변경하지 않습니다. 다만 ECS의 조회와 갱신은 원자적이지 않아 조회 직후의 수동 변경까지 막지는 못합니다. **CI 배포가 시작되면 완료·복구까지 콘솔·CLI 수동 갱신을 중단합니다.** CI의 동시 실행 제한이 수동 AWS 작업을 잠그지는 않습니다.
 
-`rollback_errors`에 남은 서비스는 현재 revision·로그를 대조해 적용자가 복구합니다. 강제 종료로 결과 artifact가 없더라도 사전에 보관한 `rollback-plan.json`의 `previous`를 사용합니다. 이 값은 시작 상태이므로 실제 변경된 서비스는 현재 AWS 상태로 확인합니다. 결과 기록이 없으면 현재 Task Definition의 이미지와 계획의 digest를 대조해 이번 실행의 변경인지 확인합니다. 수동 복구도 AWS 계정·리전·클러스터와 현재/직전/이번 등록 revision을 대조한 뒤 수행합니다. SSM 값 복구는 별도이며 스키마 변경은 [DB 적용 정책](migrations.md)을 따릅니다.
+`rollback_errors`에 남은 서비스는 현재 revision·로그를 대조해 적용자가 복구합니다. 강제 종료로 결과 artifact가 없더라도 사전에 보관한 `rollback-plan.json`의 `previous`를 사용합니다. 이 값은 시작 상태이므로 실제 변경된 서비스는 현재 AWS 상태로 확인합니다. 결과 기록이 없으면 현재 Task Definition의 이미지와 계획의 digest를 대조해 이번 실행의 변경인지 확인합니다. 수동 복구도 AWS 계정·리전·클러스터와 현재/직전/이번 등록 revision을 대조한 뒤 수행합니다. SSM 값·DB migration의 복구는 별도입니다.
 
 ```bash
 jq '.status, .previous' work/rollback-plan.json
@@ -487,21 +487,6 @@ docker compose up -d --build --wait --wait-timeout 300
 
 계속 사용할 옵션은 `.env`에 저장합니다. 비밀번호는 `init_env.py`가 생성한 `DEV_FIXTURE_PASSWORD`이며 최초 계정에만 적용합니다. 기존 Argon2id·주소 AES-GCM 암호화를 사용합니다. 비밀번호나 주소 암호화 키를 공유·커밋하지 않습니다.
 
-### 마일리지 시연 지갑
-
-계정 fixture와 같은 `COMMERCE_DEV_FIXTURES_ENABLED`로 Payment API가 구매자 A/B의 마일리지 지갑을 준비합니다(Payment 설정은 `APP_DEMO_WALLETS_ENABLED`, 기본 false). 구매자 A는 100,000점, 구매자 B는 잔액 부족 확인용 0점입니다. 금융 스냅샷과 별개라 `APP_DEV_FIXTURES_ENABLED`·정산 일배치·지급 Worker 설정을 바꾸지 않고 기동합니다. 두 fixture를 함께 켜도 같은 금액의 지갑을 한 번만 만듭니다.
-
-- 지갑이 없을 때만 만들고 양수 잔액은 `SEED` 원장 한 줄을 남깁니다. API 역할만 실행하며 동시 기동은 잠금으로 직렬화합니다.
-- 기존 지갑의 잔액·예약·원장은 바꾸지 않습니다. 사용한 잔액은 재기동해도 다시 채워지지 않으므로 처음 잔액이 필요하면 삭제 승인된 볼륨을 [초기화](#종료재실행초기화)합니다.
-- 주문의 마일리지 예약·차감·복원은 [주문·결제·정산·환불 왕복](#주문결제정산환불-왕복)의 금융 흐름 구성에서 실행합니다. 기본 구성만으로는 주문이 결제 대기로 남습니다.
-- 마일리지 충전·현금 인출·만료는 제공하지 않습니다. 구매 적립은 결제 완료 뒤 예정액으로만 보이고 자동 구매확정 뒤 잔액에 더해지며, 업무 시간 이동 기능이 없어 시연 중에는 사용 가능 전환을 확인할 수 없습니다.
-- 이미 만든 ECS Task 정의는 이미지 배포가 환경을 보존하므로 `payment-api`에 `APP_DEMO_WALLETS_ENABLED=true`를 추가해야 반영됩니다.
-
-```bash
-docker compose exec postgres psql -U postgres -d payment -c \
-  "SELECT w.buyer_id,w.balance,w.reserved_amount,e.kind,e.amount FROM payment.mileage_wallets w LEFT JOIN payment.mileage_entries e ON e.wallet_id=w.id ORDER BY w.buyer_id,e.created_at;"
-```
-
 ### Commerce 조회 데이터
 
 UUID는 `00000000-0000-4000-8000-` 뒤에 아래 접미사를 12자리로 채웁니다.
@@ -615,7 +600,7 @@ Commerce의 `PaymentAccepted` Listener와 처리기는 기본 비활성입니다
 
 호출 순서·본문·권한·완료 의미는 [주문·환불 사용 순서](api.md#주문환불-사용-순서)와 [OpenAPI](openapi.json)를 따릅니다. 변경 요청에는 멱등키와 최신 조회의 `expectedVersion`을 사용합니다. 반품 입고는 판매자가 실제 도착·재판매 가능 검수 뒤 확정하며 금융 결과만으로 자동 생성하지 않습니다.
 
-주문 스케줄러는 `APP_ORDER_WORKFLOW_ENABLED=true`, 결과 처리기는 `APP_ORDER_RESULT_PROCESSOR_ENABLED=true`로 시험 인스턴스에서 활성화합니다. 결과 수신은 기존 `APP_KAFKA_PAYMENT_ACCEPTED_ENABLED=true`를 공유하며, 접수 ID 처리기는 기존 플래그를 별도로 유지합니다. 기본값은 모두 false입니다. 변경한 환경은 Compose 컨테이너 재생성 또는 새 ECS Task Definition으로 적용합니다. 빈 전용 DB에는 갱신한 초기 SQL을 적용하고 기존 볼륨을 초기화하지 않습니다.
+주문 스케줄러는 `APP_ORDER_WORKFLOW_ENABLED=true`, 결과 처리기는 `APP_ORDER_RESULT_PROCESSOR_ENABLED=true`로 시험 인스턴스에서 활성화합니다. 결과 수신은 기존 `APP_KAFKA_PAYMENT_ACCEPTED_ENABLED=true`를 공유하며, 접수 ID 처리기는 기존 플래그를 별도로 유지합니다. 기본값은 모두 false입니다. 이 설정은 인스턴스 환경에 전달해야 하며 `.env` 추가만으로 기존 Compose 컨테이너에 전달되지 않습니다. 빈 전용 DB에는 갱신한 초기 SQL을 적용하고 기존 볼륨을 초기화하지 않습니다.
 
 Payment 내부 조회와 운영 종결은 `service:payment`·`operator:<식별자>` 자격을 인스턴스의 `app.internal-auth.senders`에 설정해야 합니다. 사용자 토큰이나 Gateway 자격으로 호출할 수 없습니다. 운영 종결은 [소유 증빙과 구매자 확인](api.md#실패-환불의-운영-종결)을 모두 대조하는 `RefundClosureEvidence`를 사용합니다. 기본은 비활성(503)이며 금융 실패만으로 주문을 PAID로 되돌리거나 자동 구매확정을 진행하지 않습니다.
 
@@ -637,16 +622,6 @@ Payment 내부 조회와 운영 종결은 `service:payment`·`operator:<식별�
 
 이 명령은 전용 PostgreSQL·Kafka와 명시적 계약 결과 대역으로 구매자/판매자 HTTP 흐름, 중복·역순·기한 경합·잠금 상한·롤백을 확인합니다. 실제 PG·마일리지·정산 금융 정합성 완료를 뜻하지 않습니다.
 
-### 실험실 자동 발송
-
-판매자 없는 실험실은 `APP_ORDER_WORKFLOW_ENABLED=true`와 `APP_DEMO_AUTO_SHIPMENT_ENABLED=true`를 함께 사용합니다. 기존 주문 시계가 결제 완료·미발송 주문을 찾아 판매자 대역으로 발송하며, 기본값은 비활성입니다. 활성화한 환경의 기존 주문도 포함하므로 실험실에서만 켭니다. 새 테이블·인덱스는 필요하지 않습니다.
-
-Compose의 금융 왕복 overlay는 주문 시계를 켭니다. 해당 환경에서 자동 발송 옵션을 켜고 Commerce를 재생성합니다. ECS 태그 배포는 저장소 변수 `APP_DEMO_AUTO_SHIPMENT_ENABLED=true`로 두 플래그를 함께 적용합니다. 수동 배포는 `deploy_ecs_apps.py`의 준비·실행 양쪽에 `--demo-auto-shipment true`를 전달하며, 준비 후 선택을 바꾸면 거절합니다.
-
-자동 발송을 끄려면 Compose 환경값 또는 ECS 배포 변수를 `false`로 바꾸고 재배포합니다. ECS 변수를 비워 두거나 CLI에서 `preserve`를 선택하면 기존 설정을 유지합니다. 이미 발송한 주문의 배송·구매확정은 주문 시계가 계속 처리하며 발송 시각·거래 이력을 되돌리지 않습니다.
-
-금융 왕복·정산 일배치·지급 Worker가 활성화돼 있어야 결제→자동 발송→모의 배송완료→자동 구매확정→정산·지급이 이어집니다. [배송·환불 기한](policies.md#배송환불-기한과-자동-구매확정)은 그대로이며 서버가 해당 시각에 실행 중이어야 합니다. PostgreSQL·주입 Clock 검증과 실제 자연 기한을 기다린 지급 결과를 구분합니다. 배포 뒤에는 자기 시험 주문의 발송 시각과 `SYSTEM/demo-seller` 감사, 도착 예정·환불 마감·구매확정, 이후 일배치와 지급 결과를 순서대로 대조합니다.
-
 ## 주문·결제·정산·환불 왕복
 
 세 서비스의 금융 소비자·발행기는 기본으로 꺼져 있습니다. 실제 왕복은 덮어쓰기 파일 `compose.financial-flow.yml`로 켭니다. 이 파일은 Commerce의 Outbox·결제 결과 수신·처리기, Payment Worker의 주문 요청 수신·처리기·승인·환불 Worker·Settlement 응답 수신·Outbox, Settlement의 이벤트 수신·Inbox 처리기·Outbox를 켭니다. PG 승인·외부 환불은 Finance Mock HTTP로 선택하고 정상 시나리오·지급 재원·개발 fixture를 준비합니다. 알림 소비는 켜지 않습니다. 기본 `compose.yml`과 `.env`는 바꾸지 않습니다.
@@ -663,13 +638,12 @@ docker compose -f compose.yml -f compose.financial-flow.yml up -d --wait commerc
 
 1. 시험 구매자·판매자·상품·재고와 Payment 마일리지 지갑을 넣고, HTTP 승인 → Kafka 정산 항목 → 취소 → 외부 HTTP 환불 → 마일리지 복원 → 원장 상쇄 → 주문 복구를 실행합니다.
 2. 카드·혼합·전액 마일리지·간편결제를 대조합니다. 1,000원 중 마일리지 300원이면 외부 환불은 700원이며, 전액 마일리지는 외부 HTTP 호출이 0회여야 합니다. 원장 상쇄는 최초 5 leg 각각에 반대 부호로 한 줄씩 대응하고 복원·금융 완료 이벤트도 한 번이어야 합니다.
-3. 혼합 결제(1,000원 중 마일리지 300원)를 확정 거절시킨 뒤 실제 `payment-retries` API로 새 회차를 엽니다. 새 회차 승인은 정산 항목 생성과 취소 환불까지, 재거절한 회차와 승인 Worker를 멈춘 승인 전 회차는 구매자 미결제 취소까지 진행합니다. 시도 번호·외부 승인 호출 수, 회차별 마일리지 예약(이전 회차 RELEASED 보존, 현재 회차만 CONSUMED 또는 RELEASED)과 원장, 재고 예약·지갑 잔액을 대조합니다. 이전·현재 회차의 요청·결과 원문을 원래 topic·key로 다시 보내고 소비자 그룹이 모두 읽은 뒤에도 상태가 그대로인지 확인합니다. 처리 중 취소 거절 뒤의 재거절, 기한 만료 작업, 처음 받는 이전 회차 결과는 smoke에 넣지 않고 Commerce·Payment 통합 시험에서 각각 확인합니다.
-4. 실제 입금 작업이 현금을 받은 뒤 환불 차감을 확인합니다. 입금 전 환불은 예정 입금 0원, 간편결제 지갑은 원잔액으로 복원되며 최종 현금 원장·재원 잔액도 대조합니다.
-5. Settlement 중단 중 예약 대기, 환불 확정 거절 뒤 실제 예약 해제, 응답 유실·조회 불가 중 UNKNOWN·예약 유지, 외부 성공 직후 Payment 강제 종료·재기동과 만료 임대 인계, 늦은 응답의 토큰 차단을 확인합니다.
-6. 호출 전 중단(REQUESTED지만 외부 거래 없음)과 PROCESSING은 격리 DB fixture로 주입합니다. 실제 HTTP 조회에서 각각 거래 부재 뒤 같은 키 재전송·처리 중 예약 유지를 확인하며, Finance Mock이 자연스럽게 PROCESSING을 반환한 시험으로 표시하지 않습니다.
-7. 발송한 주문(배송완료 전 `SHIPPED`)의 반품을 판매자 API로 승인합니다. 환불 완료만으로는 재고를 바꾸지 않고, 재판매 가능 입고가 가용 재고를 한 번 복원하는지 확인합니다. Settlement 중단 중 재판매 불가로 입고한 반품은 판매 수량만 줄이고 가용 재고에 더하지 않으며, 재기동 뒤 같은 환불이 완료되는지 확인합니다. 마지막에는 Inbox·Outbox와 지갑·재고·외부 거래 중복을 대조합니다. 반품 주문이 Settlement 정산 원장·지급 대상에서 한 번만 처리되는지는 대조하지 않습니다.
+3. 실제 입금 작업이 현금을 받은 뒤 환불 차감을 확인합니다. 입금 전 환불은 예정 입금 0원, 간편결제 지갑은 원잔액으로 복원되며 최종 현금 원장·재원 잔액도 대조합니다.
+4. Settlement 중단 중 예약 대기, 환불 확정 거절 뒤 실제 예약 해제, 응답 유실·조회 불가 중 UNKNOWN·예약 유지, 외부 성공 직후 Payment 강제 종료·재기동과 만료 임대 인계, 늦은 응답의 토큰 차단을 확인합니다.
+5. 호출 전 중단(REQUESTED지만 외부 거래 없음)과 PROCESSING은 격리 DB fixture로 주입합니다. 실제 HTTP 조회에서 각각 거래 부재 뒤 같은 키 재전송·처리 중 예약 유지를 확인하며, Finance Mock이 자연스럽게 PROCESSING을 반환한 시험으로 표시하지 않습니다.
+6. 발송한 주문(배송완료 전 `SHIPPED`)의 반품을 판매자 API로 승인합니다. 환불 완료만으로는 재고를 바꾸지 않고, 재판매 가능 입고가 가용 재고를 한 번 복원하는지 확인합니다. Settlement 중단 중 재판매 불가로 입고한 반품은 판매 수량만 줄이고 가용 재고에 더하지 않으며, 재기동 뒤 같은 환불이 완료되는지 확인합니다. 마지막에는 Inbox·Outbox와 지갑·재고·외부 거래 중복을 대조합니다. 반품 주문이 Settlement 정산 원장·지급 대상에서 한 번만 처리되는지는 대조하지 않습니다.
 
-CI는 `financial-flow` 시나리오를 35분, `reconciliation` 시나리오를 25분 상한으로 실행하며 다른 통합 시나리오는 기존 15분 상한을 유지합니다. 이 시험의 계정·시나리오·시각·임대 변경과 무작위 루프백 포트는 새 시험 프로젝트에만 적용하며 기존 DB·사용자 데모에는 적용하지 않습니다. 지급 배정 뒤 예약 거절(`PAYOUT_RESERVED`)은 구매확정(도착+168시간)과 지급 선점이 먼저 필요하므로 Settlement `RefundPayoutExclusionIntegrationTest`와 Payment `RefundSagaIntegrationTest`로 별도 검증합니다. 실제 금융기관과 카카오 알림은 이 smoke의 검증 범위가 아닙니다.
+CI는 `financial-flow`와 `reconciliation` 시나리오를 각각 25분 상한으로 실행하며 다른 통합 시나리오는 기존 15분 상한을 유지합니다. 이 시험의 계정·시나리오·시각·임대 변경과 무작위 루프백 포트는 새 시험 프로젝트에만 적용하며 기존 DB·사용자 데모에는 적용하지 않습니다. 지급 배정 뒤 예약 거절(`PAYOUT_RESERVED`)은 구매확정(도착+168시간)과 지급 선점이 먼저 필요하므로 Settlement `RefundPayoutExclusionIntegrationTest`와 Payment `RefundSagaIntegrationTest`로 별도 검증합니다. 실제 금융기관과 카카오 알림은 이 smoke의 검증 범위가 아닙니다.
 
 ## 모의 거래 알림
 
@@ -733,7 +707,7 @@ Grafana의 `commerce-settle / Runtime overview` 대시보드와 Prometheus 데�
 
 #### 금융 처리 시간과 비동기 추적
 
-`commerce-settle / Financial processing` 대시보드(기존 Payment Worker UID 유지)는 Payment 단계별 평균·p95·p99, 세 서비스의 비동기 처리·대기·재시도·SQL과 대기열을 보여줍니다. 새 Commerce·Payment API/Worker·Settlement·Finance Mock 이미지와 대시보드 설정을 함께 반영합니다. 추적 컬럼이 없는 기존 실험 DB는 [DB 적용 정책](migrations.md#최초-배포와-기존-데이터-변경)에 따라 초기화하고 현재 DDL로 구성합니다. 작업이 실행되기 전이나 두 번의 수집이 쌓이기 전에는 데이터가 없을 수 있습니다.
+`commerce-settle / Financial processing` 대시보드(기존 Payment Worker UID 유지)는 Payment 단계별 평균·p95·p99, 세 서비스의 비동기 처리·대기·재시도·SQL과 대기열을 보여줍니다. 새 Commerce·Payment API/Worker·Settlement·Finance Mock 이미지와 대시보드 설정을 함께 반영합니다. 기존 DB에는 먼저 [추적 컬럼 업그레이드](migrations.md#기존-db의-추적-컬럼-추가)를 적용합니다. 작업이 실행되기 전이나 두 번의 수집이 쌓이기 전에는 데이터가 없을 수 있습니다.
 
 | 지표 | 측정 경계 |
 | --- | --- |
@@ -750,13 +724,15 @@ Timer의 `_count`·`_sum`·`_bucket`은 Trace 샘플링과 별도로 수집합�
 
 W3C `traceparent`는 Outbox·Inbox·금융 Job의 첫 저장 때 업무 원문과 분리해 저장하고, 실행기·콜백·재시작 뒤에 복원합니다. 같은 eventId 재전달은 원문 bytes·해시·최초 부모를 바꾸지 않습니다. Zipkin에서 `commerce.outbox.send` → Kafka → `payment.inbox.process` → `payment.approval.process`/`payment.refund.process` → Outbox·Commerce/Settlement Inbox를 같은 traceId로 따라갑니다. 판매자 승인처럼 별도 사용자가 새로 내리는 명령은 새 HTTP trace이며, 반품 환불은 실제 SAGA를 시작하는 판매자 승인 요청에서 추적합니다. 지급도 배치·지급 Job을 만든 문맥에서 시작하므로 주문과 별도 trace일 수 있습니다. 관련 거래는 Trace의 업무 ID로 대조합니다. `.wait` span은 실행 span과 저장 부모를 공유하는 형제이며 메서드 실행 시간에 더하지 않습니다. `event.id`·`inbox.id`·`job.id`·`seller.id`·금융 ID는 Trace에만 기록하며 metric label로 사용하지 않습니다.
 
-JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업은 비활성화합니다. 예외는 오류 종류만 남기는 `ObservationFailure`로 정제하며 SQL 오류가 상위 HTTP·Kafka span에 전파돼도 원문을 내보내지 않습니다. 원래 예외·롤백·재시도 동작과 framework 지표의 오류 분류는 유지합니다. 샘플링 기본값은 10%이고 Zipkin은 메모리에 최대 10,000개 span을 보관합니다. 재시작·보관 한도·비샘플 요청의 과거 trace를 복구하거나 모든 알림·운영 작업을 계측하지는 않습니다. 강제 종료 시 아직 export하지 못한 span과 진행 중이던 span은 유실될 수 있습니다. 저장 부모 복원은 같은 traceId로 후속 작업을 연결하며 유실된 span 자체를 복원하지는 않습니다. 강제 종료 smoke는 외부 성공·로컬 미반영을 유지한 채 완료된 선행 부모가 수집된 것을 먼저 확인하고, 재시작한 실행이 DB에 저장된 부모를 실제로 복원하는지 대조합니다. `python3 -B scripts/smoke_financial_flow.py`는 선택한 요청에 sampled W3C 부모를 보내 실제 승인·환불·재시작 경로의 traceId·부모 연결을 금융 정합성과 함께 검사합니다. 일배치 Job→Step→판매자→저장된 지급 부모→실제 지급 Worker의 연결과 상태·진행량의 실제 Prometheus HTTP 응답은 `DailySettlementObservabilityIntegrationTest`(외부 지급 호출은 대역), 실행기 문맥 복원은 `PayoutTracingTest`, 저장 어댑터의 중복·재시작은 `DurableTraceIntegrationTest`로 별도 확인합니다.
+JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업은 비활성화합니다. 예외는 오류 종류만 남기는 `ObservationFailure`로 정제하며 SQL 오류가 상위 HTTP·Kafka span에 전파돼도 원문을 내보내지 않습니다. 원래 예외·롤백·재시도 동작과 framework 지표의 오류 분류는 유지합니다. 샘플링 기본값은 10%이고 Zipkin은 메모리에 최대 10,000개 span을 보관합니다. 재시작·보관 한도·비샘플 요청의 과거 trace를 복구하거나 모든 알림·운영 작업을 계측하지는 않습니다. 강제 종료 시 아직 export하지 못한 span과 진행 중이던 span은 유실될 수 있습니다. 저장 부모 복원은 같은 traceId로 후속 작업을 연결하며 유실된 span 자체를 복원하지는 않습니다. 강제 종료 smoke는 외부 성공·로컬 미반영을 유지한 채 완료된 선행 부모가 수집된 것을 먼저 확인하고, 재시작한 실행이 DB에 저장된 부모를 실제로 복원하는지 대조합니다. `python3 -B scripts/smoke_financial_flow.py`는 선택한 요청에 sampled W3C 부모를 보내 실제 승인·환불·재시작 경로의 traceId·부모 연결을 금융 정합성과 함께 검사합니다. 일배치 Job→Step→판매자→저장된 지급 부모→실제 지급 Worker의 연결과 상태·진행량의 실제 Prometheus HTTP 응답은 `DailySettlementObservabilityIntegrationTest`(외부 지급 호출은 대역), 실행기 문맥 복원은 `PayoutTracingTest`, 저장 어댑터의 중복·재시작·기존 DB 업그레이드는 `DurableTraceIntegrationTest`로 별도 확인합니다.
 
 #### 병목 개선 전후 비교
 
 대시보드의 `이전 구간 간격`(1시간·6시간·1일·7일)은 현재와 이전 구간의 같은 집계식을 겹쳐 표시합니다. 과거 표본이 없는 선은 빈 값이며 0이 아닙니다. 개선 전에도 새 계측을 적용한 기준선을 먼저 수집해야 합니다. 배포·워밍업·측정·배출을 섞지 않은 동일 길이의 측정 구간을 선택하고, 이전 구간 간격을 두 실행의 시작 시각 차이에 맞춥니다. 지원 간격에 맞지 않으면 각 실행의 절대 시간 구간을 따로 선택해 동일 질의 결과를 비교합니다.
 
-관측 사전 확인·실행 조건·분석·증거 보존은 [실험 준비와 분석](../tests/load/README.md#실험-준비와-분석), 업무 완료 TPS·지연의 수집·비교는 [전구간 비교 절차](../tests/load/README.md#업무-완료전구간-지연의-전후-비교)를 따릅니다. 위 처리 시간·대기 지표와 선택 trace로 SQL·외부 호출·첫 대기·백오프·도래 후 지연 중 달라진 구간을 대조합니다. 계측 추가만으로 성능 개선을 입증한 것으로 판단하지 않습니다.
+기존 [부하 시험](../tests/load/README.md)의 실행 원장·summary와 함께 다음 조건을 기록합니다: commit SHA·실제 이미지 digest, CPU·메모리·DB 풀·Worker 동시성, 주입률·지속 시간·결제수단 비율·데이터 규모·PG 시나리오, 워밍업·측정·배출 시작/끝, scrape 주기·Trace 샘플링률·부하 발생기 위치. 자원·외부 지연·입력 분포가 다르면 그 차이를 먼저 명시합니다. 이전 지표가 없던 배포 전 구간과 신규 지표를 직접 비교해 개선율을 만들지 않습니다.
+
+완료 TPS·실패/거절·p95/p99와 미완료 수·배출 시간을 함께 비교하고 금융 원장 대조가 통과했는지 확인합니다. 단계 실행 횟수는 결제 완료 건수가 아니며 낮은 지연만으로 병목 개선을 판정하지 않습니다. 느려진 구간을 Zipkin의 선택 trace로 확인하고, SQL·외부 호출·첫 대기·백오프·도래 후 지연 중 무엇이 바뀌었는지 대조합니다. 현재 변경은 비교를 위한 계측이며 성능 개선 효과를 입증한 결과는 아닙니다.
 
 ### Swagger 로그인
 
@@ -955,9 +931,7 @@ Payment 환불 SAGA는 `PAYMENT_ROLE=worker`에서 `app.refund.enabled=true`로 
 
 업무와 Outbox·Inbox의 원자 저장·원문·선행 순서·ACK는 [이벤트 연동](api.md#이벤트-연동)과 [메시지 저장 모델](data-model.md#메시지멱등성감사)을 따릅니다. 이 절의 환불·Outbox·Inbox 저장은 잠금 대기 1초·SQL 5초 상한을 적용하며 롤백 시 offset을 ACK하지 않습니다. 금융 실패나 예약 해제로 바꾸지 않습니다.
 
-Commerce Outbox는 커밋 신호로 발행하며 누락 신호·재시도·만료 임대를 기본 1초마다 복구합니다. 기본값은 미완료 발행 8건·조회 100건·임대 240초·재시도 1~60초/10회이며 회수도 횟수에 포함합니다. 임대는 Kafka 대기 상한의 합보다 길어야 하고 설정 불일치는 기동을 거절합니다. 결과 저장 뒤에는 직전 선점이 빈 슬롯을 모두 채웠거나 같은 집계의 후행이 기다릴 때만 바로 다시 선점합니다. 같은 집계의 선행 미완료 건을 추월하지 않으며 소진은 복구 주기에 REVIEW_REQUIRED로 전환해 보존합니다. 종료 대기는 최대 30초, 운영 HTTP 재처리는 지원하지 않습니다. 실행 풀·대기열의 세부값은 [Commerce 설정](../commerce/src/main/resources/application.yml)을 따릅니다.
-
-Payment 수신 그룹은 classic 프로토콜에서 heartbeat 3초·session timeout 10초를 사용합니다. broker의 허용 session 범위에 10초가 포함돼야 합니다. 이 값은 이전 멤버의 heartbeat 만료 기준이며 앱 기동·재균형·적체 처리 시간은 별도입니다. Payment Outbox 임대는 30초, Kafka 생산자의 metadata/buffer 대기는 최대 5초·전송 완료는 15초·개별 요청은 5초입니다. 임대가 앞의 두 대기 상한 합보다 길어야 하며 잘못된 덮어쓰기는 기동을 거절합니다. 전송 실패는 같은 원문·eventId로 영속 재시도하고 10회 소진 시 REVIEW_REQUIRED로 보존합니다. 전송 제한 시간이 짧아져 장기 broker 장애에서는 이 상태에 더 빨리 도달할 수 있습니다. 재기동 때 RUNNING을 일괄 해제하지 않고 만료·버전 검증과 같은 집계의 선행 순서를 유지합니다.
+Commerce Outbox는 커밋 신호로 발행하며 누락 신호·재시도·만료 임대를 기본 1초마다 복구합니다. 기본값은 미완료 발행 8건·조회 100건·임대 240초·재시도 1~60초/10회이며 회수도 횟수에 포함합니다. 임대는 Kafka 대기 상한의 합보다 길어야 하고 설정 불일치는 기동을 거절합니다. 같은 집계의 선행 미완료 건을 추월하지 않으며 소진은 REVIEW_REQUIRED로 보존합니다. 종료 대기는 최대 30초, 운영 HTTP 재처리는 지원하지 않습니다. 실행 풀·대기열의 세부값은 [Commerce 설정](../commerce/src/main/resources/application.yml)을 따릅니다.
 
 Kafka template·listener의 observation을 활성화해 실제 발행 시도의 traceparent를 소비자 처리로 전파합니다. Outbox·Inbox·금융 Job의 저장 부모 복원과 재시도·재시작 뒤의 연결은 [금융 처리 시간과 비동기 추적](#금융-처리-시간과-비동기-추적)을 따릅니다. Kafka 통합 시험은 원본 헤더와 소비자 span의 traceId·parentId, 재전달 뒤에도 같은 원본 parent를 유지하는지 확인합니다.
 
@@ -983,7 +957,7 @@ Payment 격리 발행은 한 번에 하나만 임대하며 Kafka 응답 대기 �
 
 Settlement 원문 격리도 같은 테이블 구조와 `app.kafka.quarantine.enabled`(기본 false)를 사용합니다. `PaymentConfirmed`·`PurchaseConfirmed`의 해석 실패만 격리하고, 반영 중 DB 오류와 격리 저장 실패는 ACK 없이 Listener를 중단합니다. Settlement 격리 발행은 공통 예약 스레드(4개)에서 Kafka 응답을 기다리며 주기·묶음·임대·결과 대기·재시도 규칙은 Payment와 같습니다. 대상 토픽은 `commerce-settle.settlement.v1.dlt`입니다. 운영 재처리·재개도 Payment와 같은 검사·기록으로 원래 수신 토픽(`commerce-settle.payment.v1`·`commerce-settle.commerce.v1`)에 재발행합니다. 이 토픽은 Commerce·Payment·알림 소비 그룹도 읽으므로, 다른 그룹이 같은 원문을 이미 처리했는지 확인한 뒤 요청합니다. 같은 eventId·bytes 재전달은 각 Inbox가 중복으로 끝냅니다.
 
-Settlement 발행 Outbox는 Payment Relay를 바탕으로 커밋 후·시작 시 깨우고 1초 복구 조회, 미완료 발행 최대 8건, 임대 240초, 10회 소진 REVIEW_REQUIRED를 따르며 `app.outbox.enabled`(`APP_OUTBOX_ENABLED`, 기본 false)로 켭니다. 결과를 반영할 때마다 다시 조회하지 않고, 발행 결과 저장이 같은 집계의 뒤 미발행 이벤트를 보고했거나 저장 중 같은 프로세스의 Outbox 커밋 신호가 왔거나 직전 조회가 빈 슬롯을 다 채웠을 때(슬롯이 없던 경우 포함)만 커밋 뒤 다시 조회합니다. 앞 이벤트 발행 중 커밋된 뒤 이벤트는 그 신호의 조회에서 건너뛰어도 이 규칙으로 바로 다시 조회하지만, 다른 인스턴스가 저장한 뒤 이벤트와 실패 결과의 재시도는 복구 조회(최대 1초 지연)가 찾습니다. 시도를 다 쓴 행의 REVIEW_REQUIRED 전환은 조회마다가 아니라 복구 조회에서 주기당 최대 100건씩 합니다. 환불 SAGA 응답과 판매자 알림 요청은 스위치와 관계없이 업무 트랜잭션에서 저장합니다. 일배치와 지급 결과 반영도 Outbox에 쓰므로 `settlement.outbox`가 없는 기존 개발 DB에서는 일배치가 실패합니다. 새 초기 SQL을 적용한 DB에서 실행합니다.
+Settlement 발행 Outbox는 Payment와 같은 Relay 규칙(커밋 후·결과 반영 후·시작 시 깨움, 1초 복구 조회, 미완료 발행 최대 8건, 임대 240초, 10회 소진 REVIEW_REQUIRED)을 따르며 `app.outbox.enabled`(`APP_OUTBOX_ENABLED`, 기본 false)로 켭니다. 환불 SAGA 응답과 판매자 알림 요청은 스위치와 관계없이 업무 트랜잭션에서 저장합니다. 일배치와 지급 결과 반영도 Outbox에 쓰므로 `settlement.outbox`가 없는 기존 개발 DB에서는 일배치가 실패합니다. 새 초기 SQL을 적용한 DB에서 실행합니다.
 
 ### 업무 Inbox 관측과 재판정
 
@@ -1105,8 +1079,6 @@ Redis 인증 저장소 장애·재시작·재연결 뒤에는 자동으로 보�
 복구 뒤에는 AOF의 이전 토큰과 지연된 이전 인증 변경이 다시 유효해지지 않는지 확인합니다. Redis 실행 식별자·인증 세대가 그대로인 API 프로세스 재시작은 원래 세션 만료를 유지합니다.
 
 ## 종료·재실행·초기화
-
-스키마 변경과 새 독립 실험은 [DB 초기화 정책](migrations.md#최초-배포와-기존-데이터-변경)을 따릅니다. 같은 거래의 장애 복구·재시작 시험은 데이터를 유지합니다. 아래 삭제 명령은 선택한 로컬 Compose 환경 전용이며 AWS 데이터 디렉터리에 적용하지 않습니다.
 
 ```bash
 # 컨테이너만 종료하고 DB·Kafka·Redis·관측 볼륨을 보존
@@ -1272,10 +1244,10 @@ API/역할 격리·미확정·중복 요청·순위의 권한/페이지·중지 
 
 Grafana UID `commerce-settle-business-performance`에서 업무 완료 TPS·주문 결제 접수→정산 최초 반영·결제 확정→정산 반영·HTTP p95/p99와 표본 수를 조회합니다. 집계 창은 60/300/900초이며 원래 시간 구간과 동일 창의 이전 구간을 겹쳐 봅니다. 개선 판정에 필요한 조건과 결과 수집은 [부하 전후 비교](../tests/load/README.md#업무-완료전구간-지연의-전후-비교)를 따릅니다.
 
-업무 지표는 `BusinessMetrics`가 서비스 소유 DB에서 15초마다 읽고 scrape는 메모리 snapshot만 반환합니다. 2초 query timeout이나 DB 오류면 이전 표본과 성공 시각을 유지하며, Prometheus는 45초를 넘긴 표본을 제외합니다. Payment는 같은 DB를 읽는 API·Worker 중 Worker(역할을 지정하지 않은 단일 실행 포함)만 업무 지표와 금융 대기열 지표를 수집하며, 규칙은 `business:source`가 고른 단일 source의 모든 bucket/sum/count를 사용합니다. raw `commerce_settle_business_completions`와 `commerce_settle_business_duration_bucket_records`는 구간 Gauge이며 `rate()`로 완료 TPS를 계산하지 않습니다. `business:completions / 창 길이`와 `histogram_quantile(..., business:duration_bucket)`를 사용합니다.
+업무 지표는 `BusinessMetrics`가 서비스 소유 DB에서 15초마다 읽고 scrape는 메모리 snapshot만 반환합니다. 2초 query timeout이나 DB 오류면 이전 표본과 성공 시각을 유지하며, Prometheus는 45초를 넘긴 표본을 제외합니다. Payment API·Worker는 `business:source`가 고른 단일 source의 모든 bucket/sum/count를 사용합니다. raw `commerce_settle_business_completions`와 `commerce_settle_business_duration_bucket_records`는 구간 Gauge이며 `rate()`로 완료 TPS를 계산하지 않습니다. `business:completions / 창 길이`와 `histogram_quantile(..., business:duration_bucket)`를 사용합니다.
 
 승인 확정, 환불 전체 완료, 정산 최초 반영은 각각 `payment.confirmed`, `refund.completed`, `order.settlement.applied`입니다. 승인 지연은 Payment 생성→확정, 환불 지연은 Payment 환불 등록→주문 복구 확인이며, 주문 전체 지연은 별도의 `order.settlement.applied`입니다. 정산항목의 최초 생성 시각을 완료 시각으로 사용하되 커밋되어 조회되는 이력만 셉니다. 지급 배치/송금의 완료 시각과 혼동하지 않습니다. 시작 시각 누락·역전은 `business:duration_missing`에 포함하고 유효 지연 분포에서 제외합니다. 무표본은 0ms가 아니며 p99는 1만 유효 표본 이상에서만 표시합니다.
 
-왕복 smoke의 재시도 범위는 [왕복 순서](#주문결제정산환불-왕복) 3번입니다. 새 회차로 승인한 주문은 이전 DECLINED 시도, 새 APPROVED 시도 번호, 단일 정산항목과 최초 주문 생성 시각 전달도 검사합니다. 회차별 예약 제약이 없는 기존 실험 DB는 [DB 적용 정책](migrations.md#최초-배포와-기존-데이터-변경)에 따라 초기화하고 현재 DDL로 구성합니다. 코드 검증과 실제 환경 배포·수집 확인은 각각 기록합니다.
+왕복 smoke는 확정 거절 뒤 실제 `payment-retries` API로 새 회차를 접수하고 승인·정산항목 생성까지 확인합니다. 이전 DECLINED 시도, 새 APPROVED 시도 번호, 단일 정산항목과 최초 주문 생성 시각 전달을 검사합니다. 재시도 배포에는 [예약 이력 업그레이드와 복구 절차](migrations.md#기존-db의-결제-회차별-예약)를 함께 적용합니다. 코드 검증과 실제 환경 배포·수집 확인은 각각 기록합니다.
 
-업무 지표 관측 컬럼·인덱스가 없는 기존 실험 DB는 [DB 적용 정책](migrations.md#최초-배포와-기존-데이터-변경)에 따라 초기화하고 현재 DDL로 구성합니다. 실제 사용본에는 새 이미지뿐 아니라 `financial.rules.yml`과 `business-performance.json`도 적용한 뒤 rule evaluation·수집 신선도·실제 주문 반영과 지연 coverage를 확인합니다. `app.business-metrics.enabled=false`는 DB 표본 수집을 끄며, 꺼진 환경은 전체 지표 준비 완료로 보고하지 않습니다.
+기존 DB에는 [업무 지표 관측 컬럼 적용](migrations.md#기존-db의-업무-지표-관측-컬럼)을 먼저 수행합니다. 실제 사용본에는 새 이미지뿐 아니라 `financial.rules.yml`과 `business-performance.json`도 적용한 뒤 rule evaluation·수집 신선도·실제 주문 반영과 지연 coverage를 확인합니다. `app.business-metrics.enabled=false`는 DB 표본 수집을 끄며, 꺼진 환경은 전체 지표 준비 완료로 보고하지 않습니다.

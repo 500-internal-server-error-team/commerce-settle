@@ -22,7 +22,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 import time
@@ -73,72 +72,14 @@ def compose_env():
     return env
 
 
-# 배포 모드: 앱·인프라 EC2의 ECS 컨테이너에서 SSH로 명령을 실행한다. 두 값이 모두 비면 로컬 compose 스택을 쓴다.
-# 컨테이너는 ECS 라벨로 찾는다. 워커 설정(병렬도·시나리오)은 ECS 배포로 고정하고 이 도구는 바꾸지 않는다.
-# 인프라 EC2는 프라이빗 IP로 접속할 때 LOAD_SSH_JUMP를 쓴다.
-SSH_KEY = os.environ.get("LOAD_SSH_KEY", "")
-APP_SSH = os.environ.get("LOAD_APP_SSH", "")
-INFRA_SSH = os.environ.get("LOAD_INFRA_SSH", "")
-SSH_JUMP = os.environ.get("LOAD_SSH_JUMP", "")
-REMOTE_DOCKER = os.environ.get("LOAD_REMOTE_DOCKER", "docker")
-REMOTE = bool(APP_SSH or INFRA_SSH)
-APP_SERVICES = ("payment-api", "payment-worker")
-INFRA_SERVICES = ("postgres", "kafka", "redis")
-ECS_CONTAINER_LABEL = "com.amazonaws.ecs.container-name"
-# 배포 Kafka는 데이터 호스트 프라이빗 IP를 advertised listener로 쓰므로 컨테이너 안에서는 localhost로 붙는다.
-KAFKA_BOOTSTRAP = os.environ.get("LOAD_KAFKA_BOOTSTRAP", "localhost:9092" if REMOTE else "kafka:9092")
-
-
-def compose_argv(args):
-    return ["docker", "compose", "-p", PROJECT, "-f", str(ROOT / "compose.yml"),
-            "-f", str(ROOT / "tests" / "load" / "compose.load.yml"), *args]
-
-
-def remote_exec(args):
-    """`exec -T <서비스> 명령…`을 호스트의 ECS 컨테이너 `docker exec`로 바꾼다. 컨테이너가 정확히 1개여야 한다."""
-    if len(args) < 4 or args[0] != "exec" or args[1] != "-T":
-        raise SystemExit("배포 모드에서는 컨테이너 안 명령(exec)만 실행합니다. "
-                         f"워커 재기동·설정 변경은 ECS 배포로 합니다: {' '.join(args[:4])}")
-    service, command = args[2], args[3:]
-    docker = REMOTE_DOCKER.split()
-    find = " ".join(shlex.quote(part) for part in
-                    [*docker, "ps", "-q", "--filter", f"label={ECS_CONTAINER_LABEL}={service}"])
-    run = " ".join(shlex.quote(part) for part in [*docker, "exec", "-i"])
-    return (f'ids=$({find}); n=$(printf "%s\\n" "$ids" | grep -c .); '
-            f'[ "$n" = 1 ] || {{ echo "{service} container count: $n" >&2; exit 3; }}; '
-            f'exec {run} "$ids" ' + " ".join(shlex.quote(part) for part in command))
-
-
-def host_for(args):
-    """서비스 이름으로 실행 호스트를 고른다. 배포 모드에서 서비스를 알 수 없으면 실행하지 않는다."""
-    if any(arg in APP_SERVICES for arg in args):
-        return "app"
-    if any(arg in INFRA_SERVICES for arg in args):
-        return "infra"
-    raise SystemExit(f"배포 모드에서는 대상 서비스를 지정해야 합니다: {' '.join(args)}")
-
-
-def command_for(args):
-    """실행 명령. 로컬이면 로컬 compose, 배포 모드면 대상 호스트의 ECS 컨테이너에서 SSH로 실행한다."""
-    if not REMOTE:
-        return compose_argv(args)
-    remote = remote_exec(args)
-    host = host_for(args[2:3])
-    target = APP_SSH if host == "app" else INFRA_SSH
-    if not target:
-        raise SystemExit(f"LOAD_{host.upper()}_SSH 값이 필요합니다")
-    ssh = ["ssh", "-o", "BatchMode=yes"]
-    if SSH_KEY:
-        ssh += ["-i", SSH_KEY]
-    if SSH_JUMP and host == "infra":
-        ssh += ["-J", SSH_JUMP]
-    return ssh + [target, remote]
-
-
 def compose(*args, input_text=None, check=True, capture=True, env=None, timeout=None):
-    env = env or compose_env()
+    command = [
+        "docker", "compose", "-p", PROJECT,
+        "-f", str(ROOT / "compose.yml"), "-f", str(ROOT / "tests" / "load" / "compose.load.yml"),
+        *args,
+    ]
     result = subprocess.run(
-        command_for(args), cwd=ROOT, env=env, input=input_text, text=True, timeout=timeout,
+        command, cwd=ROOT, env=env or compose_env(), input=input_text, text=True, timeout=timeout,
         stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE if capture else None,
     )
     if check and result.returncode != 0:
@@ -148,9 +89,6 @@ def compose(*args, input_text=None, check=True, capture=True, env=None, timeout=
 
 def redis_run_id():
     """이 프로젝트의 Redis run_id. 공용 .env의 승인 값은 바꾸지 않고 환경 변수로만 넘긴다."""
-    if REMOTE:
-        # 로컬 compose 보간용 값이다. 배포 모드는 compose를 쓰지 않으므로 조회하지 않는다.
-        return None
     compose("up", "-d", "--wait", "redis")
     info = compose("exec", "-T", "redis", "sh", "-c",
                    'REDISCLI_AUTH="$REDIS_PASSWORD" exec redis-cli INFO server')
@@ -169,7 +107,7 @@ def psql(database, sql):
 
 def kafka(script, *args):
     return compose("exec", "-T", "kafka", f"/opt/kafka/bin/{script}",
-                   "--bootstrap-server", KAFKA_BOOTSTRAP, *args)
+                   "--bootstrap-server", "kafka:9092", *args)
 
 
 def cmd_up(args):
@@ -336,13 +274,14 @@ def parse_stages(text):
 
 def produce(stages, mix, directory, offset, marks, stop_file=None, stop_event=None):
     """단계별 도착률로 요청을 넣는다. 각 단계의 시작·끝 시각을 marks에 남긴다."""
-    env = compose_env()
     producer = subprocess.Popen(
-        command_for(["exec", "-T", "kafka", "/opt/kafka/bin/kafka-console-producer.sh",
-                     "--bootstrap-server", KAFKA_BOOTSTRAP, "--topic", TOPIC,
-                     "--reader-property", "parse.key=true", "--reader-property", "key.separator=\t",
-                     "--command-property", "acks=all", "--command-property", "linger.ms=5"]),
-        cwd=ROOT, env=env, stdin=subprocess.PIPE, text=True)
+        ["docker", "compose", "-p", PROJECT, "-f", str(ROOT / "compose.yml"),
+         "-f", str(ROOT / "tests" / "load" / "compose.load.yml"),
+         "exec", "-T", "kafka", "/opt/kafka/bin/kafka-console-producer.sh",
+         "--bootstrap-server", "kafka:9092", "--topic", TOPIC,
+         "--reader-property", "parse.key=true", "--reader-property", "key.separator=\t",
+         "--command-property", "acks=all", "--command-property", "linger.ms=5"],
+        cwd=ROOT, env=compose_env(), stdin=subprocess.PIPE, text=True)
     index = offset
     try:
         with open(directory / "requests.csv", "a", newline="", encoding="utf-8") as ledger:
@@ -403,15 +342,11 @@ def produce(stages, mix, directory, offset, marks, stop_file=None, stop_event=No
 
 
 def snapshot():
-    lag, partitions = 0, 0
+    lag = 0
     for line in kafka("kafka-consumer-groups.sh", "--describe", "--group", GROUP).splitlines():
         parts = line.split()
         if len(parts) > 5 and parts[0] == GROUP and parts[1] == TOPIC and parts[5].isdigit():
             lag += int(parts[5])
-            partitions += 1
-    # 재조정 중 등으로 파티션 행을 읽지 못하면 0이 아니라 미관측(None)으로 남긴다.
-    lag = lag if partitions else None
-    before = datetime.now(timezone.utc).timestamp()
     row = psql("payment", """
         SELECT clock_timestamp(),
           (SELECT count(*) FROM payment.inbox WHERE event_type = 'OrderPaymentRequested'),
@@ -423,17 +358,11 @@ def snapshot():
             WHERE status IN ('PENDING', 'PROCESSING', 'UNKNOWN')),
           (SELECT count(*) FROM payment.payment_jobs WHERE status = 'REVIEW_REQUIRED'),
           (SELECT count(*) FROM payment.inbox WHERE status = 'REVIEW_REQUIRED'),
-          (SELECT count(*) FROM payment.outbox WHERE status <> 'PUBLISHED'),
-          extract(epoch FROM clock_timestamp())""")[0]
-    after = datetime.now(timezone.utc).timestamp()
+          (SELECT count(*) FROM payment.outbox WHERE status <> 'PUBLISHED')""")[0]
     names = ("at", "received", "waiting", "confirmed", "declined", "unfinished",
              "jobsReview", "inboxReview", "outboxPending")
     values = dict(zip(names, row))
-    database = float(row[len(names)])
-    # 조회 왕복 동안 DB 시계를 읽었으므로 시계 차이는 이 범위 안에 있다. 지연 계산에는 보정하지 않는다.
-    clock = {"minMs": round((database - after) * 1000, 1), "maxMs": round((database - before) * 1000, 1)}
-    return {"kafkaLag": lag, **{k: (v if k == "at" else int(v)) for k, v in values.items()},
-            "dbMinusHostMs": clock}
+    return {"kafkaLag": lag, **{k: (v if k == "at" else int(v)) for k, v in values.items()}}
 
 
 def cmd_inject(args):
@@ -451,10 +380,7 @@ def cmd_status(args):
 
 
 def latency(start, end):
-    """기존 지표: 단계 구간 안에 Inbox에 저장된 요청의 수신(Inbox 저장)→결제 확정. 이전 결과와 비교하려고 유지한다.
-
-    두 시각 모두 DB 시계다. 구간 밖에 수신된 요청(Kafka 대기·drain)은 빠지므로 장애 지연은 injected_stats로 본다.
-    """
+    """수신(Inbox 저장, DB 시각)부터 결제 확정까지. 같은 Docker VM의 시계라 호스트 시계 오차가 들어가지 않는다."""
     row = psql("payment", f"""
         SELECT count(*),
           round(percentile_cont(0.50) WITHIN GROUP (ORDER BY ms)::numeric, 1),
@@ -467,124 +393,6 @@ def latency(start, end):
                 AND i.created_at >= '{start}' AND i.created_at < '{end}') t""")[0]
     return dict(zip(("count", "p50Ms", "p95Ms", "p99Ms", "maxMs"),
                     [int(row[0])] + [float(v) if v else None for v in row[1:]]))
-
-
-# summary.json의 집계 기준. 기준을 바꾸면 version을 올려 이전 결과와 섞어 비교하지 않게 한다.
-AGGREGATION = {
-    "version": 2,
-    "population": "이번 실행에서 주입 원장(requests.csv)에 기록한 요청. 단계는 원장의 단계 번호이며, 수신·확정 시각이 "
-                  "단계 구간 밖(다음 단계·drain)이어도 주입한 단계에 넣는다.",
-    "publishedAt": "주입 원장 기록 시각. 발생기 호스트 시계(UTC)로 producer stdin에 쓴 직후이며 Kafka acks 전이다.",
-    "receivedAt": "payment.inbox.created_at (Payment DB 시계)",
-    "confirmedAt": "payment.payments.confirmed_at (Payment DB 시계)",
-    "metrics": {
-        "injected.publishToConfirmed": "publishedAt → confirmedAt, 확정된 요청만. 호스트·DB 시계 차이가 들어간다(clock 참고).",
-        "injected.publishToReceipt": "publishedAt → receivedAt, 수신된 요청만. Kafka 대기와 Worker 중단 시간이 들어간다.",
-        "injected.receiptToConfirmed": "receivedAt → confirmedAt, 확정된 요청만. DB 시계 하나로 잰다.",
-        "latency": "기존 지표(version 1과 같음): 단계 구간 [start, end) 안에 Inbox에 저장된 확정 결제의 receivedAt → "
-                   "confirmedAt. 구간 밖에 수신된 요청은 빠진다.",
-        "maxKafkaLag": "기존 지표: 단계 구간에 기록한 표본만의 최대 lag.",
-        "peaks": "초기·주입·drain의 모든 표본에서 본 최댓값과 그 경과 시각·단계. 표본 간격 사이의 순간값은 놓칠 수 있다.",
-    },
-    "unresolved": "요약 시점(적체가 비거나 drain 제한 시간 도달)에 확정·거절되지 않은 요청. 지연 분포에서 빠지므로 "
-                  "unresolved > 0이면 complete=false이고 지연 분포는 하한이다. 거절 요청은 확정 지연에서 뺀다.",
-    "clock": "표본마다 상태 조회 직전·직후의 호스트 시각과 그 사이의 DB clock_timestamp()로 잰 DB − 호스트 범위(ms). "
-             "지연 값은 보정하지 않는다.",
-    "percentiles": "선형 보간(PostgreSQL percentile_cont와 같음), ms, 소수 첫째 자리 반올림",
-}
-
-
-def percentile(values, q):
-    """정렬된 값의 선형 보간 백분위수. 기존 지표의 percentile_cont와 같은 방식이다."""
-    position = q * (len(values) - 1)
-    low = int(position)
-    high = min(low + 1, len(values) - 1)
-    return values[low] + (values[high] - values[low]) * (position - low)
-
-
-def distribution(values_ms):
-    values = sorted(values_ms)
-    if not values:
-        return {"count": 0, "p50Ms": None, "p95Ms": None, "p99Ms": None, "maxMs": None}
-    return {"count": len(values),
-            **{key: round(percentile(values, q), 1)
-               for key, q in (("p50Ms", .50), ("p95Ms", .95), ("p99Ms", .99))},
-            "maxMs": round(values[-1], 1)}
-
-
-def injected_requests(path, since):
-    """이번 실행의 주입 원장. [(orderId, 단계 번호, 발행 epoch 초)]. 같은 실행 이름의 이전 기록은 since로 뺀다."""
-    if not Path(path).exists():
-        return []
-    since = datetime.fromisoformat(since).timestamp()
-    rows = []
-    with open(path, newline="", encoding="utf-8") as source:
-        for row in csv.reader(source):
-            published = datetime.fromisoformat(row[5]).timestamp()
-            if published >= since:
-                rows.append((row[0], int(row[4]), published))
-    return rows
-
-
-def request_outcomes():
-    """orderId → (Inbox 저장 epoch 초, 결제 상태, 확정 epoch 초). 없는 값은 None. 시각은 모두 DB 시계다."""
-    outcomes = {}
-    for order, received, status, confirmed in psql("payment", """
-            SELECT i.aggregate_id, extract(epoch FROM min(i.created_at)), coalesce(p.status, ''),
-                   extract(epoch FROM p.confirmed_at)
-            FROM payment.inbox i LEFT JOIN payment.payments p ON p.order_id = i.aggregate_id
-            WHERE i.event_type = 'OrderPaymentRequested'
-            GROUP BY i.aggregate_id, p.status, p.confirmed_at"""):
-        outcomes[order] = (float(received), status or None, float(confirmed) if confirmed else None)
-    return outcomes
-
-
-def injected_stats(requests, outcomes):
-    """주입한 요청 집합의 결과와 지연. 수신·확정 시각이 단계 구간 밖이어도 포함한다."""
-    publish_to_confirmed, publish_to_receipt, receipt_to_confirmed = [], [], []
-    confirmed = declined = received = 0
-    for order, _, published in requests:
-        outcome = outcomes.get(order)
-        if outcome is None:
-            continue
-        received_at, status, confirmed_at = outcome
-        received += 1
-        publish_to_receipt.append((received_at - published) * 1000)
-        if status == "DECLINED":
-            declined += 1
-        elif status == "CONFIRMED" and confirmed_at is not None:
-            confirmed += 1
-            publish_to_confirmed.append((confirmed_at - published) * 1000)
-            receipt_to_confirmed.append((confirmed_at - received_at) * 1000)
-    unresolved = len(requests) - confirmed - declined
-    return {"injected": len(requests), "received": received, "confirmed": confirmed,
-            "declined": declined, "unresolved": unresolved, "complete": unresolved == 0,
-            "publishToConfirmed": distribution(publish_to_confirmed),
-            "publishToReceipt": distribution(publish_to_receipt),
-            "receiptToConfirmed": distribution(receipt_to_confirmed)}
-
-
-def peaks(samples):
-    """모든 표본(초기·주입·drain)의 최댓값. 미관측(None) 표본은 건너뛰고 그 수를 남긴다."""
-    result = {}
-    for key in ("kafkaLag", "waiting", "unfinished", "outboxPending"):
-        observed = [s for s in samples if s.get(key) is not None]
-        top = max(observed, key=lambda s: s[key], default=None)
-        result[key] = {"value": top[key] if top else None,
-                       "elapsed": top.get("elapsed") if top else None,
-                       "stage": top.get("stage") if top else None,
-                       "unobservedSamples": len(samples) - len(observed)}
-    return result
-
-
-def clock_summary(samples):
-    """표본마다 잰 Payment DB 시계 − 발생기 호스트 시계 범위(ms)의 처음·마지막과 전체 범위."""
-    ranges = [s["dbMinusHostMs"] for s in samples if s.get("dbMinusHostMs")]
-    if not ranges:
-        return None
-    return {"first": ranges[0], "last": ranges[-1],
-            "minMs": min(r["minMs"] for r in ranges), "maxMs": max(r["maxMs"] for r in ranges),
-            "samples": len(ranges)}
 
 
 WORKER_SETTINGS = ("PAYMENT_REQUEST_CONCURRENCY", "PAYMENT_APPROVAL_CONCURRENCY", "PAYMENT_DB_POOL_SIZE")
@@ -608,8 +416,6 @@ def cmd_ramp(args):
     import threading
 
     stages = parse_stages(args.stages)
-    if REMOTE and args.kill_after:
-        raise SystemExit("배포 모드에서는 --kill-after(워커 재기동)를 쓰지 않습니다")
     if args.kill_after < 0 or args.kill_after >= sum(seconds for _, seconds in stages):
         raise SystemExit("kill-after must be nonnegative and earlier than the end of injection")
     run = args.run or "ramp-" + datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -711,9 +517,7 @@ def cmd_ramp(args):
             raise SystemExit("worker restart did not complete")
 
     summary = {"run": run, "mix": args.mix, "scenario": args.scenario, "fault": fault,
-               "workerSettings": worker_settings(), "aggregation": AGGREGATION, "stages": []}
-    requests = injected_requests(directory / "requests.csv", marks[0]["start"]) if marks else []
-    outcomes = request_outcomes() if requests else {}
+               "workerSettings": worker_settings(), "stages": []}
     for mark in marks:
         in_stage = [s for s in samples[1:] if s.get("stage") == mark["stage"]]
         steady = in_stage[1:] or in_stage  # 첫 구간은 warm-up으로 뺀다
@@ -723,14 +527,9 @@ def cmd_ramp(args):
                 sum(s["confirmedPerSecond"] for s in steady) / max(1, len(steady)), 1),
             "unfinishedStart": in_stage[0]["unfinished"] if in_stage else None,
             "unfinishedEnd": in_stage[-1]["unfinished"] if in_stage else None,
-            "maxKafkaLag": max((s["kafkaLag"] for s in in_stage if s["kafkaLag"] is not None),
-                               default=None),
+            "maxKafkaLag": max((s["kafkaLag"] for s in in_stage), default=None),
             "latency": latency(mark["start"], mark["end"]),
-            "injected": injected_stats([r for r in requests if r[1] == mark["stage"]], outcomes),
         })
-    summary["injected"] = injected_stats(requests, outcomes)
-    summary["peaks"] = peaks(samples)
-    summary["clock"] = clock_summary(samples)
     drain = [s for s in samples[1:] if s.get("stage") == "drain"]
     summary["drainSeconds"] = round(samples[-1]["elapsed"] - drain[0]["elapsed"], 1) if drain else 0
     summary["injectionEndedAt"] = drain[0]["elapsed"] if drain else None
@@ -773,14 +572,8 @@ def ledger(runs):
 
 def cmd_reconcile(args):
     """주입 원장 ↔ Payment(결제·시도·마일리지·Outbox) ↔ finance-mock(거래·간편결제 지갑)을 대조한다."""
-    stack_runs = STACK_RUNS.read_text(encoding="utf-8").split() if STACK_RUNS.exists() else []
-    runs = args.runs.split(",") if args.runs else stack_runs
-    # 같은 스택의 다른 실행은 그 실행을 대조할 때 확인한다. 어느 원장에도 없는 결제만 이 대조의 문제로 센다.
-    # 모든 원장을 한 번에 읽어 실행 사이의 주문 ID 중복도 거절한다.
-    other_runs = [run for run in stack_runs if run not in runs]
-    known = ledger(runs + other_runs)
-    expected = ledger(runs) if other_runs else known
-    others = known.keys() - expected.keys()
+    runs = args.runs.split(",") if args.runs else STACK_RUNS.read_text(encoding="utf-8").split()
+    expected = ledger(runs)
     problems = []
 
     def problem(kind, detail):
@@ -806,32 +599,24 @@ def cmd_reconcile(args):
             problem("미완료 결제", f"{order} {status}")
         if kind == "mileage" and status != "CONFIRMED":
             problem("전액 마일리지 미확정", order)
-    for order in payments.keys() - expected.keys() - others:
+    for order in payments.keys() - expected.keys():
         problem("원장에 없는 결제", order)
-    scoped = {order: found for order, found in payments.items() if order in expected}
-    scoped_payments = {payment for payment, *_ in scoped.values()}
 
     attempts = {}
     for payment, provider, key, amount, status in psql("payment", """
             SELECT payment_id, provider_id, business_key, amount, status
             FROM payment.payment_attempts"""):
-        attempts.setdefault(payment, []).append((provider, key, int(amount), status))
-    # 다른 실행 결제의 재시도는 그 실행을 대조할 때 판단한다.
-    for payment, found in attempts.items():
-        if payment in scoped_payments and len(found) > 1:
+        if payment in attempts:
             problem("승인 시도 중복", payment)
+        attempts[payment] = (provider, key, int(amount), status)
     mock = {}
     for provider, key, amount, status, account in psql("finance_mock", """
             SELECT provider_id, business_key, amount, status, coalesce(account_id::text, '')
             FROM finance_mock.mock_transactions WHERE operation = 'APPROVE'"""):
         mock[(provider, key)] = (int(amount), status, account)
-    # 다른 실행의 결제에 연결된 대역 거래는 연결된 것으로 보되, 그 결제의 불일치는 여기서 세지 않는다.
-    # 그 결제의 모든 승인 시도에 연결된 거래를 연결된 것으로 본다.
-    used = {(provider, key)
-            for order, (payment, *_) in payments.items() if order not in scoped
-            for provider, key, *_ in attempts.get(payment, ())}
-    for order, (payment, cycle, _, status, _, _, external) in scoped.items():
-        attempt = attempts[payment][-1] if payment in attempts else None
+    used = set()
+    for order, (payment, cycle, _, status, _, _, external) in payments.items():
+        attempt = attempts.get(payment)
         if external == 0:
             if attempt:
                 problem("전액 마일리지에 승인 시도", order)
@@ -857,24 +642,18 @@ def cmd_reconcile(args):
         problem("결제에 연결되지 않은 대역 거래", "/".join(key))
 
     # prepare가 두 지갑을 같은 초기 금액으로 만든다. 기존 스택의 초기값은 현재 상수와 다를 수 있다.
-    # 지갑은 현재 실행 번호(LOAD_NAMESPACE)의 것만 본다. 다른 번호의 지갑은 그 번호로 대조한다.
-    own_wallets = {wallet_ref(n) for n in range(BUYER_POOL)}
-    mock_wallets = [row for row in psql("finance_mock", """
+    mock_wallets = psql("finance_mock", """
             SELECT id, account_ref, balance, reserved_amount, opening_balance
             FROM finance_mock.mock_accounts
             WHERE provider_id = 'EASY_PAY' AND purpose = 'WALLET' AND account_ref LIKE 'load-wallet-%'""")
-                    if row[1] in own_wallets]
     opening = {account_ref: int(amount) for _, account_ref, _, _, amount in mock_wallets}
     initial_balances = {buyer(n): opening.get(wallet_ref(n)) for n in range(BUYER_POOL)}
-    # 같은 번호를 쓴 다른 실행의 차감도 같은 지갑에 남으므로 차감액은 모든 결제에서 더한다.
     debited = {}
     for order, (_, _, buyer_id, status, _, mileage, _) in payments.items():
         if status == "CONFIRMED" and mileage:
             debited[buyer_id] = debited.get(buyer_id, 0) + mileage
     for buyer_id, balance, reserved in psql("payment", """
             SELECT buyer_id, balance, reserved_amount FROM payment.mileage_wallets"""):
-        if buyer_id not in initial_balances:
-            continue
         if int(reserved) != 0:
             problem("마일리지 예약 잔존", f"{buyer_id} {reserved}")
         initial = initial_balances.get(buyer_id)
@@ -891,8 +670,6 @@ def cmd_reconcile(args):
             WHERE p.mileage_amount > 0
             GROUP BY p.id, p.status""")
     for payment, status, reserve, debit, release in entry_rows:
-        if payment not in scoped_payments:
-            continue
         counts = (int(reserve), int(debit), int(release))
         if counts != ((1, 1, 0) if status == "CONFIRMED" else (1, 0, 1)):
             problem("마일리지 원장 불일치", f"{payment} {status} {counts}")
@@ -912,7 +689,7 @@ def cmd_reconcile(args):
             SELECT aggregate_id, event_type, count(*), bool_and(status = 'PUBLISHED')
             FROM payment.outbox GROUP BY 1, 2"""):
         events[(aggregate, event_type)] = (int(count), published == "t")
-    for order, (payment, _, _, status, _, _, _) in scoped.items():
+    for order, (payment, _, _, status, _, _, _) in payments.items():
         terminal = "PaymentConfirmed" if status == "CONFIRMED" else "PaymentDeclined"
         for event_type in ("PaymentAccepted", terminal):
             found = events.get((payment, event_type))
@@ -933,7 +710,7 @@ def cmd_reconcile(args):
         problem("Inbox 본문 충돌", review[2])
 
     statuses = {}
-    for _, _, _, status, _, _, _ in scoped.values():
+    for _, _, _, status, _, _, _ in payments.values():
         statuses[status] = statuses.get(status, 0) + 1
     kinds = {}
     for kind, _, _ in expected.values():

@@ -41,20 +41,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 @Transactional(propagation = Propagation.MANDATORY)
 class JdbcInboxStore implements InboxStore {
-  /** 조건은 inbox_purchase_revival 부분 표현식 인덱스의 조건·표현식과 맞춰야 한다. */
-  static final String REVIVE_EXHAUSTED_PURCHASES =
-      """
-      UPDATE settlement.inbox
-      SET status = 'WAITING', attempts = 0, last_error_code = 'PAYMENT_ARRIVED_LATE',
-          next_run_at = clock_timestamp(), updated_at = :now, version = version + 1
-      WHERE consumer = :consumer AND event_type = 'PurchaseConfirmed'
-        AND (status = 'WAITING'
-          OR (status = 'REVIEW_REQUIRED' AND last_error_code = 'PAYMENT_NOT_ARRIVED'
-            AND attempts >= :max))
-        AND (payload->'payload'->>'paymentId')::uuid = :paymentId
-      RETURNING id
-      """;
-
   private final NamedParameterJdbcOperations jdbc;
   private final ObjectMapper mapper;
   private final String consumer;
@@ -258,30 +244,22 @@ class JdbcInboxStore implements InboxStore {
   }
 
   @Override
-  public boolean deferWaiting(UUID inboxId, Duration delay, Instant now) {
-    applyTransactionLimits();
-    return jdbc.update(
-            """
-            UPDATE settlement.inbox
-            SET next_run_at = clock_timestamp() + make_interval(secs => :delay),
-                updated_at = :now, version = version + 1
-            WHERE id = :inboxId AND consumer = :consumer AND status = 'WAITING'
-              AND next_run_at <= clock_timestamp()
-            """,
-            new MapSqlParameterSource("inboxId", inboxId)
-                .addValue("consumer", consumer)
-                .addValue("delay", delay.toMillis() / 1000.0)
-                .addValue("now", now.atOffset(ZoneOffset.UTC)))
-        == 1;
-  }
-
-  @Override
   public List<UUID> reviveExhaustedPurchases(UUID paymentId, int maxAttempts, Instant now) {
     // 시도 상한 조건은 대기 중 결제가 도착한 뒤 다른 사유로 운영 확인에 남은 행(마지막 사유가 그대로 남음)을 거른다.
     // WAITING도 대상이다. 처리기가 잠근 마지막 판정 행은 커밋 전까지 WAITING으로 보이므로 이 문장이 잠금을 기다리고, 처리기가
     // REVIEW_REQUIRED로 커밋하면 바뀐 행으로 조건을 다시 검사해 되살린다. 수신 때 형식을 검사한 UUID라 값으로 비교한다.
     return jdbc.query(
-        REVIVE_EXHAUSTED_PURCHASES,
+        """
+        UPDATE settlement.inbox
+        SET status = 'WAITING', attempts = 0, last_error_code = 'PAYMENT_ARRIVED_LATE',
+            next_run_at = clock_timestamp(), updated_at = :now, version = version + 1
+        WHERE consumer = :consumer AND event_type = 'PurchaseConfirmed'
+          AND (status = 'WAITING'
+            OR (status = 'REVIEW_REQUIRED' AND last_error_code = 'PAYMENT_NOT_ARRIVED'
+              AND attempts >= :max))
+          AND (payload->'payload'->>'paymentId')::uuid = :paymentId
+        RETURNING id
+        """,
         new MapSqlParameterSource("consumer", consumer)
             .addValue("paymentId", paymentId)
             .addValue("max", maxAttempts)
@@ -341,7 +319,16 @@ class JdbcInboxStore implements InboxStore {
   }
 
   private void applyTransactionLimits() {
-    TransactionLimits.apply(jdbc.getJdbcOperations());
+    jdbc.getJdbcOperations()
+        .queryForList(
+            """
+            SELECT set_config(budget.name,
+                least(coalesce(nullif(settings.setting::integer,0),budget.timeout_ms),
+                    budget.timeout_ms)::text,true)
+            FROM (VALUES ('lock_timeout',1000),('statement_timeout',5000))
+                AS budget(name,timeout_ms)
+            JOIN pg_settings settings ON settings.name=budget.name
+            """);
   }
 
   private static String hash(byte[] body) {

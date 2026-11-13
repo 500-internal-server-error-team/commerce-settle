@@ -1,7 +1,6 @@
 package com.commercesettle.payment.infrastructure.persistence.inbox;
 
 import com.commercesettle.payment.application.port.QuarantineStore;
-import com.commercesettle.payment.infrastructure.persistence.TransactionLimits;
 import java.nio.charset.StandardCharsets;
 import java.sql.Types;
 import java.time.Instant;
@@ -39,7 +38,7 @@ public class JdbcQuarantineStore implements QuarantineStore {
 
   @Override
   public UUID capture(Source source, String errorCode, Instant now) {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    limits();
     var params =
         params(now)
             .addValue("id", UUID.randomUUID())
@@ -91,7 +90,7 @@ public class JdbcQuarantineStore implements QuarantineStore {
   @Override
   public Optional<UUID> requestReplay(
       UUID id, long expectedVersion, String operator, String reasonCode, Instant now) {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    limits();
     var params =
         params(now)
             .addValue("id", id)
@@ -129,7 +128,7 @@ public class JdbcQuarantineStore implements QuarantineStore {
   @Override
   public Optional<UUID> resumeDelivery(
       UUID id, long expectedVersion, String operator, String reasonCode, Instant now) {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    limits();
     var params =
         params(now)
             .addValue("id", id)
@@ -189,7 +188,7 @@ public class JdbcQuarantineStore implements QuarantineStore {
 
   @Override
   public List<Delivery> claim(int limit, long leaseMs, int maxAttempts, Instant now) {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    limits();
     var params =
         params(now)
             .addValue("limit", limit)
@@ -249,7 +248,7 @@ public class JdbcQuarantineStore implements QuarantineStore {
   }
 
   private boolean finish(Delivery delivery, Instant now, boolean retry) {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    limits();
     var params = params(now).addValue("id", delivery.id()).addValue("version", delivery.version());
     // 잠금 대기 중 임대가 끝날 수 있다. 잠금을 먼저 얻은 뒤 DB의 현재 시각으로 판정한다.
     jdbc.queryForList(
@@ -458,6 +457,17 @@ public class JdbcQuarantineStore implements QuarantineStore {
 
   private static MapSqlParameterSource params(Instant now) {
     return new MapSqlParameterSource("now", now.atOffset(ZoneOffset.UTC));
+  }
+
+  private void limits() {
+    jdbc.getJdbcTemplate()
+        .queryForList(
+            """
+        SELECT set_config(budget.name,
+          least(coalesce(nullif(settings.setting::integer,0),budget.timeout_ms),budget.timeout_ms)::text,true)
+        FROM (VALUES ('lock_timeout',1000),('statement_timeout',5000)) AS budget(name,timeout_ms)
+        JOIN pg_settings settings ON settings.name=budget.name
+        """);
   }
 
   private record Original(UUID id, String key, byte[] body) {}

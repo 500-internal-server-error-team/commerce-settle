@@ -14,10 +14,13 @@ import com.commercesettle.settlement.application.port.SettlementEventOutbox;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.UUID;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
@@ -26,6 +29,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.FilterType;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -185,9 +190,48 @@ class DurableTraceIntegrationTest {
             assertThat(row.timing().attempts()).isEqualTo(1);
             assertThat(row.timing().previousStatus()).isEqualTo("PENDING");
             assertThat(store.markPublished(row, new OutboxStore.Publication(row.topic(), 0, 42)))
-                .isEqualTo(OutboxStore.PublishResult.PUBLISHED);
+                .isTrue();
           });
+      verifiesLegacyUpgrade(restarted.getBean(JdbcTemplate.class));
     }
+  }
+
+  private void verifiesLegacyUpgrade(JdbcTemplate jdbc) throws Exception {
+    var tables = List.of("outbox", "inbox", "payout_jobs");
+    var snapshots = new LinkedHashMap<String, String>();
+    for (String table : tables) {
+      snapshots.put(table, snapshot(jdbc, table));
+      jdbc.execute("ALTER TABLE settlement." + table + " DROP COLUMN trace_parent");
+    }
+    String upgrade =
+        new ClassPathResource("db/settlement-tracing.sql")
+            .getContentAsString(StandardCharsets.UTF_8);
+    for (int pass = 0; pass < 2; pass++) {
+      jdbc.execute(
+          (ConnectionCallback<Void>)
+              connection -> {
+                try (var statement = connection.createStatement()) {
+                  statement.execute(upgrade);
+                }
+                return null;
+              });
+      for (String table : tables) {
+        assertThat(snapshot(jdbc, table)).isEqualTo(snapshots.get(table));
+        assertThat(
+                jdbc.queryForObject(
+                    "SELECT count(*) FROM settlement." + table + " WHERE trace_parent IS NOT NULL",
+                    Long.class))
+            .isZero();
+      }
+    }
+  }
+
+  private String snapshot(JdbcTemplate jdbc, String table) {
+    return jdbc.queryForObject(
+        "SELECT coalesce(jsonb_agg(to_jsonb(r) - 'trace_parent' - 'observation_state' ORDER BY id), '[]'::jsonb)::text FROM settlement."
+            + table
+            + " r",
+        String.class);
   }
 
   @Configuration

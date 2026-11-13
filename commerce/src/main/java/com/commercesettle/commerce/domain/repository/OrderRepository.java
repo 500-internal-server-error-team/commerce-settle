@@ -30,8 +30,8 @@ public interface OrderRepository {
 
   /** 제한된 후보를 가져온 뒤 각 주문 잠금 아래 조건을 재검사한다. */
   default List<UUID> findDue(java.time.Instant now, int limit) {
-    return findDue(now, limit, null, false);
+    return findDue(now, limit, null);
   }
 
-  List<UUID> findDue(java.time.Instant now, int limit, UUID after, boolean autoShipment);
+  List<UUID> findDue(java.time.Instant now, int limit, UUID after);
 }

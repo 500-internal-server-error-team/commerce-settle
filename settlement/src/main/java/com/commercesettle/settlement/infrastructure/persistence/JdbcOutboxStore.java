@@ -22,10 +22,14 @@ class JdbcOutboxStore implements OutboxStore {
   }
 
   @Override
-  public int reviewExhausted(int limit, int maxAttempts) {
+  public List<Delivery> claim(int limit, long leaseMs, int maxAttempts) {
     applyTransactionLimits();
+    var params =
+        new MapSqlParameterSource("limit", limit)
+            .addValue("lease", leaseMs)
+            .addValue("max", maxAttempts);
     // 첫 상태 조건은 미발행 부분 인덱스의 조건과 같은 모양이어야 한다. 그래야 발행 완료 이력을 훑지 않는다.
-    return jdbc.update(
+    jdbc.update(
         """
         WITH exhausted AS (
             SELECT o.id FROM settlement.outbox o
@@ -38,17 +42,7 @@ class JdbcOutboxStore implements OutboxStore {
             updated_at=clock_timestamp(),version=version+1
         FROM exhausted WHERE o.id=exhausted.id
         """,
-        new MapSqlParameterSource("limit", limit).addValue("max", maxAttempts));
-  }
-
-  @Override
-  public List<Delivery> claim(int limit, long leaseMs, int maxAttempts) {
-    applyTransactionLimits();
-    var params =
-        new MapSqlParameterSource("limit", limit)
-            .addValue("lease", leaseMs)
-            .addValue("max", maxAttempts);
-    // 시도를 다 쓴 행은 attempts 조건으로 거른다. REVIEW_REQUIRED 전환은 복구 주기의 reviewExhausted가 맡는다.
+        params);
     return jdbc.query(
         """
         WITH candidates AS (
@@ -90,31 +84,22 @@ class JdbcOutboxStore implements OutboxStore {
   }
 
   @Override
-  public PublishResult markPublished(Delivery delivery, Publication publication) {
+  public boolean markPublished(Delivery delivery, Publication publication) {
     applyTransactionLimits();
     if (!lockCurrentDelivery(delivery)) {
-      return PublishResult.STALE;
+      return false;
     }
-    List<Boolean> updated =
-        jdbc.query(
+    return jdbc.update(
             """
-            UPDATE settlement.outbox o SET status='PUBLISHED',published_partition=:partition,
+            UPDATE settlement.outbox SET status='PUBLISHED',published_partition=:partition,
                 published_offset=:offset,published_at=clock_timestamp(),lease_until=NULL,
                 updated_at=clock_timestamp(),version=version+1
             WHERE id=:id AND version=:version AND status='RUNNING' AND lease_until > clock_timestamp()
-            RETURNING EXISTS (SELECT 1 FROM settlement.outbox later
-                WHERE later.aggregate_id=o.aggregate_id AND later.id <> o.id
-                  AND later.status IN ('PENDING','RUNNING','RETRY')
-                  AND (later.aggregate_version,later.sequence_no) > (o.aggregate_version,o.sequence_no))
             """,
             position(delivery)
                 .addValue("partition", publication.partition())
-                .addValue("offset", publication.offset()),
-            (rs, row) -> rs.getBoolean(1));
-    if (updated.isEmpty()) {
-      return PublishResult.STALE;
-    }
-    return updated.getFirst() ? PublishResult.PUBLISHED_WITH_SUCCESSOR : PublishResult.PUBLISHED;
+                .addValue("offset", publication.offset()))
+        == 1;
   }
 
   @Override
@@ -135,8 +120,7 @@ class JdbcOutboxStore implements OutboxStore {
   }
 
   private boolean lockCurrentDelivery(Delivery delivery) {
-    // 잠금 대기 중 임대가 만료될 수 있어 시각 조건은 잠금을 얻은 다음 SQL에서 검사한다. 다른 트랜잭션이 행을 바꾸지 않고
-    // 잠금만 쥐고 있으면 PostgreSQL은 UPDATE 조건을 다시 검사하지 않으므로 한 문장으로 합치지 않는다.
+    // 잠금 대기 중 임대가 만료될 수 있어 시각 조건은 잠금을 얻은 다음 SQL에서 검사한다.
     return !jdbc.queryForList(
             """
             SELECT id FROM settlement.outbox
@@ -152,6 +136,15 @@ class JdbcOutboxStore implements OutboxStore {
   }
 
   private void applyTransactionLimits() {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    jdbc.getJdbcTemplate()
+        .queryForList(
+            """
+        SELECT set_config(budget.name,
+            least(coalesce(nullif(settings.setting::integer,0),budget.timeout_ms),
+                budget.timeout_ms)::text,true)
+        FROM (VALUES ('lock_timeout',1000),('statement_timeout',5000))
+            AS budget(name,timeout_ms)
+        JOIN pg_settings settings ON settings.name=budget.name
+        """);
   }
 }

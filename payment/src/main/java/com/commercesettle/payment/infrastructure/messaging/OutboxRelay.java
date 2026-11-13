@@ -108,14 +108,6 @@ public class OutboxRelay {
       initialDelayString = "${app.outbox.recovery-interval-ms:1000}",
       fixedDelayString = "${app.outbox.recovery-interval-ms:1000}")
   public void recover() {
-    if (accepting) {
-      try {
-        // 상한을 넘긴 행은 이미 같은 집계의 후행을 막고 있어 확인 상태로 바꾸는 시점이 발행 순서에 영향을 주지 않는다.
-        service.reviewExhausted(100, maxAttempts);
-      } catch (RuntimeException exception) {
-        LOG.atWarn().addKeyValue("event", "outbox.review-exhausted").log("Outbox review failed");
-      }
-    }
     wakeUp();
   }
 

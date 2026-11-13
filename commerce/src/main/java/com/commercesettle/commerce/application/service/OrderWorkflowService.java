@@ -28,7 +28,6 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,7 +46,6 @@ public class OrderWorkflowService {
   private final Clock clock;
   private final OrderAdmissionService admission;
   private final NotificationService notifications;
-  private final boolean autoShipmentEnabled;
 
   public OrderWorkflowService(
       OrderRepository orders,
@@ -61,8 +59,7 @@ public class OrderWorkflowService {
       AuditLog audit,
       Clock clock,
       OrderAdmissionService admission,
-      NotificationService notifications,
-      @Value("${app.order-workflow.auto-shipment-enabled:false}") boolean autoShipmentEnabled) {
+      NotificationService notifications) {
     this.orders = orders;
     this.accounts = accounts;
     this.products = products;
@@ -75,7 +72,6 @@ public class OrderWorkflowService {
     this.clock = clock;
     this.admission = admission;
     this.notifications = notifications;
-    this.autoShipmentEnabled = autoShipmentEnabled;
   }
 
   @Transactional(readOnly = true)
@@ -241,7 +237,15 @@ public class OrderWorkflowService {
         ignored -> {
           var o = ownedLocked(ActorKind.SELLER, seller, id);
           o.requireVersion(expected);
-          startShipment(o, clock.instant(), "SELLER", seller.toString());
+          var before = o.getStatus();
+          o.ship(clock.instant());
+          orders.save(o);
+          changed(o, before, "SELLER", seller.toString(), "SHIPMENT_STARTED", null);
+          notifications.order(
+              o,
+              com.commercesettle.commerce.domain.model.Notification.Kind.SHIPMENT_STARTED,
+              null,
+              o.getShippedAt());
           return OrderView.from(o);
         },
         replay -> OrderView.from(ownedLocked(ActorKind.SELLER, seller, replay)));
@@ -249,7 +253,7 @@ public class OrderWorkflowService {
 
   @Transactional(readOnly = true)
   public List<UUID> due(int limit, UUID after) {
-    return orders.findDue(clock.instant(), limit, after, autoShipmentEnabled);
+    return orders.findDue(clock.instant(), limit, after);
   }
 
   @Transactional
@@ -257,13 +261,6 @@ public class OrderWorkflowService {
     var o = orders.findLockedById(id).orElseThrow(OrderWorkflowService::notFound);
     var now = clock.instant();
     var before = o.getStatus();
-    if (autoShipmentEnabled
-        && before == Order.Status.PAID
-        && o.getFulfillmentStatus() == Order.FulfillmentStatus.UNSHIPPED) {
-      requireAccount(ActorKind.SELLER, o.getSellerId());
-      startShipment(o, now, "SYSTEM", "demo-seller");
-      return;
-    }
     if ((before == Order.Status.PAYMENT_PENDING || before == Order.Status.DECLINED)
         && !now.isBefore(o.getPaymentWaitUntil())) {
       cancellation(o, UUID.randomUUID(), "SYSTEM", "order-clock");
@@ -313,18 +310,6 @@ public class OrderWorkflowService {
     }
   }
 
-  private void startShipment(Order order, Instant now, String actor, String actorRef) {
-    var before = order.getStatus();
-    order.ship(now);
-    orders.save(order);
-    changed(order, before, actor, actorRef, "SHIPMENT_STARTED", null);
-    notifications.order(
-        order,
-        com.commercesettle.commerce.domain.model.Notification.Kind.SHIPMENT_STARTED,
-        null,
-        order.getShippedAt());
-  }
-
   void cancellation(Order o, UUID requestId, String actor, String ref) {
     var before = o.getStatus();
     if (!o.requestCancellation(clock.instant())) return;
@@ -336,23 +321,6 @@ public class OrderWorkflowService {
         o.getId(),
         new OrderLifecycleEvents.CancellationRequested(
             o.getId(), o.getVersion(), o.getPaymentCycleId(), requestId));
-  }
-
-  /**
-   * 처리 중이라 거절된 취소는 Payment에 다시 판정할 요청으로 남지 않는다. 같은 회차의 확정 거절을 받은 뒤 그 회차의 취소를 다시 요청해 승인 차단을 확정받는다.
-   * eventId·requestId는 거절 이벤트에서 고정해 같은 결과의 재처리가 새 요청을 만들지 않게 한다.
-   */
-  void requestCancellationAfterDecline(Order o, UUID declinedEventId) {
-    var id =
-        UUID.nameUUIDFromBytes(
-            ("PaymentCancellationRequested:" + declinedEventId).getBytes(StandardCharsets.UTF_8));
-    emit(
-        o,
-        id,
-        "PaymentCancellationRequested",
-        o.getId(),
-        new OrderLifecycleEvents.CancellationRequested(
-            o.getId(), o.getVersion(), o.getPaymentCycleId(), id));
   }
 
   void paymentRequested(Order o) {

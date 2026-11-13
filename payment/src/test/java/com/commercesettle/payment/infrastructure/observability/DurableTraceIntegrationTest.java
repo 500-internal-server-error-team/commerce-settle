@@ -17,11 +17,13 @@ import com.commercesettle.payment.application.port.PaymentEventOutbox;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.UUID;
 import javax.sql.DataSource;
@@ -31,6 +33,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.FilterType;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -242,7 +246,8 @@ class DurableTraceIntegrationTest {
       assertThat(retry.timing().previousStatus()).isEqualTo("RETRY");
       assertThat(retry.timing().changedAt()).isEqualTo(now.plusSeconds(33));
       assertThat(retry.timing().eligibleAt()).isEqualTo(now.plusSeconds(50));
-      // 관측 종류가 없는 시도는 재시도 대기로 단정하지 않고 미확인으로 남긴다.
+      // Pre-upgrade attempts have no classification. Keep it unknown rather than claiming a
+      // backoff.
       jdbc.update("UPDATE payment.inbox SET observation_state=NULL WHERE event_id=?", eventId);
       var legacy =
           tx.execute(
@@ -410,7 +415,46 @@ class DurableTraceIntegrationTest {
                                 row, new OutboxStore.Publication(row.topic(), 0, 42)))))
                 .containsExactly(eventId);
           });
+      verifiesLegacyUpgrade(restarted.getBean(JdbcTemplate.class));
     }
+  }
+
+  private void verifiesLegacyUpgrade(JdbcTemplate jdbc) throws Exception {
+    var tables = List.of("outbox", "inbox", "payment_jobs");
+    var snapshots = new LinkedHashMap<String, String>();
+    for (String table : tables) {
+      snapshots.put(table, snapshot(jdbc, table));
+      jdbc.execute("ALTER TABLE payment." + table + " DROP COLUMN trace_parent");
+    }
+    jdbc.execute("ALTER TABLE payment.inbox DROP COLUMN observation_state");
+    String upgrade =
+        new ClassPathResource("db/payment-tracing.sql").getContentAsString(StandardCharsets.UTF_8);
+    for (int pass = 0; pass < 2; pass++) {
+      jdbc.execute(
+          (ConnectionCallback<Void>)
+              connection -> {
+                try (var statement = connection.createStatement()) {
+                  statement.execute(upgrade);
+                }
+                return null;
+              });
+      for (String table : tables) {
+        assertThat(snapshot(jdbc, table)).isEqualTo(snapshots.get(table));
+        assertThat(
+                jdbc.queryForObject(
+                    "SELECT count(*) FROM payment." + table + " WHERE trace_parent IS NOT NULL",
+                    Long.class))
+            .isZero();
+      }
+    }
+  }
+
+  private String snapshot(JdbcTemplate jdbc, String table) {
+    return jdbc.queryForObject(
+        "SELECT coalesce(jsonb_agg(to_jsonb(r) - 'trace_parent' - 'observation_state' ORDER BY id), '[]'::jsonb)::text FROM payment."
+            + table
+            + " r",
+        String.class);
   }
 
   @Configuration

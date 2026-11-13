@@ -741,7 +741,7 @@
 
 임대 소유자·token·만료는 함께 설정/해제하며 선점·회수 때 버전을 증가합니다. 결과 반영은 유효한 token·실행자·Job/금융 상태·회차·예상 버전을 같은 트랜잭션에서 검사합니다. 만료 RUNNING도 회수하며 원대역 조회부터 재개합니다. [금융 Worker 정책](policies.md#금융-worker-임대와-결과-반영)을 따릅니다. 운영 재처리는 같은 행의 원업무 키를 유지한 채 상태를 PENDING으로, `attempts`를 0으로 바꾸고 버전을 올립니다. DONE이거나 유효한 임대 중인 행은 바꾸지 않으며, 이 변경과 `idempotency_records`·`audit_logs`(`PAYMENT_JOB_REPLAYED`) 행을 같은 트랜잭션에 저장합니다.
 
-**인덱스:** (status,next_run_at,lease_until,id); (created_at,id); 선점용 (operation,next_run_at,id) WHERE status IN (PENDING,RETRY,RUNNING).
+**인덱스:** (status,next_run_at,lease_until,id); (created_at,id).
 
 ### payment_attempts
 
@@ -1118,7 +1118,7 @@ Payment Job과 같은 임대 필드 일치·만료 회수·결과 반영 조건�
 
 **제약:** UNIQUE NULLS NOT DISTINCT(channel,channel_account_ref,kind,recipient_kind,recipient_id,dedup_key). MOCK_KAKAO의 계정 참조는 NULL, KAKAO_SELF는 소문자 SHA-256 64자리 필수다. recipient_kind에 맞는 계정을 검증한다. 모의 수신처는 mock:<종류>:<ID>, 실제 수신 참조는 kakao-self:<계정 해시>:<종류>:<ID>다. SALE_COMPLETED만 COLLECTING과 1분 구간을 사용한다. 마감 시 행 잠금 아래 항목 추가를 차단하고 본문·템플릿·합계를 고정한다. 같은 채널·물리 계정·논리 수신자의 동일 구간에 열린 묶음 하나만 존재한다. 그 외 종류의 bucket 값은 NULL이다. SENT에는 sent_at 필수. lease_token과 lease_until은 함께 설정/해제한다. attempt_count/retry_count>=0, retry_count<=10.
 
-**인덱스:** (status,next_run_at,lease_until,id); (recipient_kind,recipient_id,created_at DESC,id DESC); 최근 금융 조치 알림 지표용 (created_at) WHERE kind IN (REFUND_ACTION_REQUIRED,PAYOUT_ACTION_REQUIRED). 알림 지표는 이 인덱스들의 조건으로 미완료·확인 대상·최근 조치 행만 읽고 SENT 이력은 훑지 않습니다.
+**인덱스:** (status,next_run_at,lease_until,id); (recipient_kind,recipient_id,created_at DESC,id DESC).
 
 ### notification_items
 
@@ -1236,7 +1236,7 @@ Outbox·Inbox·금융 Job·격리 기록과 금융/주문 멱등 기록은 [보�
 
 Commerce·Payment·Settlement가 같은 구조를 씁니다. Settlement는 환불 SAGA 응답과 판매자 알림 요청을 저장합니다. 현재 저장 상태는 PENDING/RUNNING/RETRY/PUBLISHED/REVIEW_REQUIRED입니다. 저장 포트는 호출자의 업무 트랜잭션에 참여하며 트랜잭션 밖 호출을 거절합니다. 같은 집계의 append는 트랜잭션 잠금으로 직렬화하고 이전보다 낮은 집계 버전의 신규 삽입을 거절합니다. 같은 버전은 `sequence_no` 순서로 처리하며 identity의 빈 번호는 의미가 없습니다. 선행 미발행 행이 임대·재시도 대기·수동 확인 상태여도 후행을 먼저 발행하지 않습니다. 선점마다 version을 증가하고 유효 임대·version이 맞는 결과만 반영합니다. 이 DB 검사는 이미 시작된 Kafka 전송을 취소하지 못하므로 늦은 중복도 원래 ID로 수용해야 합니다.
 
-**인덱스:** (status,next_run_at,lease_until,id); (occurred_at,created_at,id); 발행기 선점용 (sequence_no) WHERE status IN (PENDING,RUNNING,RETRY); (attempts,sequence_no) WHERE status IN (PENDING,RUNNING,RETRY). 두 부분 인덱스는 미발행 행만 담아 발행 완료 이력이 늘어도 선점 비용이 커지지 않습니다. Payment는 정산 대조 피드용 (created_at,id) WHERE event_type IN (PaymentConfirmed,RefundFinancialCompleted)를 추가로 둡니다.
+**인덱스:** (status,next_run_at,lease_until,id); (occurred_at,created_at,id); 발행기 선점용 (sequence_no) WHERE status IN (PENDING,RUNNING,RETRY); (attempts,sequence_no) WHERE status IN (PENDING,RUNNING,RETRY). 두 부분 인덱스는 미발행 행만 담아 발행 완료 이력이 늘어도 선점 비용이 커지지 않습니다.
 
 Commerce는 추가로 전체 행의 (aggregate_id,aggregate_version,sequence_no)를 인덱싱해 완료 이력을 포함한 최대 버전 조회와 선행 미발행 검사를 지원합니다.
 
@@ -1278,15 +1278,15 @@ Payment는 별도 선점 트랜잭션에서 attempts와 30초 임대를 저장�
 
 Payment의 `result_ref`는 생성·취소된 결제 ID입니다. 결제·마일리지·금융 작업·Outbox·Inbox 완료는 같은 트랜잭션으로 저장합니다. 취소 요청과 결제 요청은 Inbox보다 주문 advisory lock을 먼저 잡습니다. 취소 때 참조한 결제 요청이 WAITING이면 APPLIED로 완료하고 REVIEW_REQUIRED이면 상태·사유를 보존하며 두 경우 모두 결제 참조를 연결합니다. 원요청의 주문·회차·당사자·금액·정책·수단은 재요청에서도 대조합니다. 원문 없이 먼저 온 취소의 결과 참조는 늦게 온 결제 요청을 처리할 때 연결합니다. 원문 금액 오류는 `PAYMENT_CANCELLATION_REQUEST_INVALID`로 남깁니다. 가용 마일리지 부족·지갑 부재는 결제를 만들지 않고 REVIEW_REQUIRED로 남깁니다. 실행·취소 조건은 [Payment 수신 실행](development.md#kafka-전달-기반)을 따릅니다.
 
-Settlement의 `result_ref`는 정산 항목 ID입니다. 선행 결제가 없는 구매확정은 WAITING이며 소진하면 REVIEW_REQUIRED·`PAYMENT_NOT_ARRIVED`가 됩니다. 이후 PaymentConfirmed가 항목을 만들면 **그 사유의 구매확정만** 같은 트랜잭션에서 WAITING으로 되돌립니다. 처리 예외로 롤백된 WAITING 행은 처리기가 별도 트랜잭션에서 시도 횟수·사유를 바꾸지 않고 다음 판정만 재판정 주기(최소 1초) 뒤로 미룹니다. 다른 확인 대상은 자동 재개하지 않으며 [제한된 재판정](#inbox_rejudgement_runs--inbox_rejudgement_targets--inbox_rejudgement_attempts)으로 별도 판정합니다. Listener 버전 충돌은 새 트랜잭션으로 한 번 재판정합니다. [이벤트 연동](api.md#이벤트-연동)을 따릅니다.
+Settlement의 `result_ref`는 정산 항목 ID입니다. 선행 결제가 없는 구매확정은 WAITING이며 소진하면 REVIEW_REQUIRED·`PAYMENT_NOT_ARRIVED`가 됩니다. 이후 PaymentConfirmed가 항목을 만들면 **그 사유의 구매확정만** 같은 트랜잭션에서 WAITING으로 되돌립니다. 다른 확인 대상은 자동 재개하지 않으며 [제한된 재판정](#inbox_rejudgement_runs--inbox_rejudgement_targets--inbox_rejudgement_attempts)으로 별도 판정합니다. Listener 버전 충돌은 새 트랜잭션으로 한 번 재판정합니다. [이벤트 연동](api.md#이벤트-연동)을 따릅니다.
 
 Commerce의 `result_ref`는 주문 ID입니다. 주문 연결·결과 반영과 Inbox 완료를 원자 저장하고 충돌 원문·사유·최초 출처를 보존합니다. 회차·버전·결제 ID 검사는 [결제 접수 결과 수신](development.md#결제-접수-결과-수신)을 따릅니다.
 
-**인덱스:** 공통 (status,created_at,id), 세 서비스 WAITING의 (consumer,next_run_at,id). Commerce는 결제 접수·결과 처리기가 같은 consumer를 쓰므로 WAITING의 (consumer,next_run_at,id)를 event_type=PaymentAccepted와 그 외로 나눈 부분 인덱스 두 개를 추가합니다. Payment는 결과 참조 조회의 `(consumer,result_ref,created_at,id)` 부분 인덱스와 주문·회차 조회의 `(consumer,aggregate_id,paymentCycleId,created_at,id)` 표현식 인덱스를 사용합니다. Settlement는 `RefundReservationRequested`의 `(consumer,payload의 refundId uuid,created_at,id)` 부분 인덱스와, 늦은 결제확정이 대기·소진 구매확정을 되살리는 `PurchaseConfirmed`·WAITING/REVIEW_REQUIRED의 `(consumer,payload의 paymentId uuid)` 부분 인덱스를 추가합니다.
+**인덱스:** 공통 (status,created_at,id), 세 서비스 WAITING의 (consumer,next_run_at,id). Payment는 결과 참조 조회의 `(consumer,result_ref,created_at,id)` 부분 인덱스와 주문·회차 조회의 `(consumer,aggregate_id,paymentCycleId,created_at,id)` 표현식 인덱스를 사용합니다. Settlement는 `RefundReservationRequested`의 `(consumer,payload의 refundId uuid,created_at,id)` 부분 인덱스를 추가합니다.
 
 Payment Inbox의 nullable `observation_state varchar(16)`는 최초 NULL, 선점 커밋 시 CLAIMED, 실패 후 재시도 예약 시 RETRY입니다. WAITING의 `next_run_at`가 임대 만료와 재시도 시각을 함께 표현하므로 대기 종류만 구분하며 업무 상태·선점 조건·버전 검사는 기존 필드를 사용합니다. 기존 시도 행의 NULL은 미확인 종류로 남깁니다. 다른 서비스에는 추가하지 않습니다.
 
-추적 부모는 첫 INSERT 때 현재 문맥만 저장하고, 중복 수신·재시도·운영 재처리가 원문·해시·최초 부모를 덮어쓰지 않습니다. 부모가 없거나 형식이 잘못된 기존 행도 업무 처리는 진행합니다. 추적 컬럼이 없는 기존 실험 DB의 구성은 [DB 적용 절차](migrations.md#최초-배포와-기존-데이터-변경)를 따릅니다.
+추적 부모는 첫 INSERT 때 현재 문맥만 저장하고, 중복 수신·재시도·운영 재처리가 원문·해시·최초 부모를 덮어쓰지 않습니다. 부모가 없거나 형식이 잘못된 기존 행도 업무 처리는 진행합니다. 기존 DB의 추가 순서와 복구는 [DB 적용 절차](migrations.md#기존-db의-추적-컬럼-추가)를 따릅니다.
 
 ### inbox_rejudgement_runs · inbox_rejudgement_targets · inbox_rejudgement_attempts
 
@@ -1480,7 +1480,7 @@ DDL의 enum·부분 유니크·CHECK·인덱스를 실제 PostgreSQL에서 검�
 
 ### 정산 대조 상태
 
-현재 Settlement 초기 DDL의 `reconciliation_runs`는 `cutoff_at` 유일 회차와 최초 `snapshot_at`, 원천별 `stage`·`cursor`·대상 건수·저장 건수, 임대 token/만료·다음 실행·시도 수·최종 오류를 보존합니다. 임대는 60초이며 페이지·종료 저장은 token·만료를 확인하고 갱신합니다. 한 호출(최대 100건)의 판정은 한 문장으로 기록하며, 회차 행을 갱신하지 않고 공유 잠금으로 token·만료만 확인합니다. 실행자가 죽으면 만료 뒤 다른 실행자가 같은 진행 위치를 선점합니다. 외부 읽기 동안 DB 트랜잭션을 잡지 않습니다. 미일치 이벤트는 `(run_id,checked_at,event_id) WHERE status<>'MATCH'` 부분 인덱스로 고릅니다.
+현재 Settlement 초기 DDL의 `reconciliation_runs`는 `cutoff_at` 유일 회차와 최초 `snapshot_at`, 원천별 `stage`·`cursor`·대상 건수·저장 건수, 임대 token/만료·다음 실행·시도 수·최종 오류를 보존합니다. 임대는 60초이며 각 짧은 저장에서 token·만료를 확인하고 갱신합니다. 실행자가 죽으면 만료 뒤 다른 실행자가 같은 진행 위치를 선점합니다. 외부 읽기 동안 DB 트랜잭션을 잡지 않습니다.
 
 `reconciliation_events`는 `(run_id,event_id)`별 원천 금액·ID·시각·원래 페이지 cursor와 최신 발행/성공/차감 증빙, 분류·사유·차액·최초 관측·검사 시각을 보존합니다. 원금액·업무 키가 바뀌면 판정을 중단하며 발행 위치 진행과 최초 성공 관측만 갱신합니다. `reconciliation_checks`는 회차별 내부 참조·금액 검사 결과, `reconciliation_history`는 회차 요청·선점/재개·페이지 커밋·판정 변화·중단 이력을 추가로 보존합니다. 업무 원장·예약을 수정하거나 이 기록을 자동 삭제하지 않습니다.
 

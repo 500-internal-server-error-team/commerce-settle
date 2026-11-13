@@ -49,38 +49,10 @@ interface SpringDataOrderRepository extends JpaRepository<Order, UUID> {
 
   long countBySellerId(UUID sellerId);
 
-  /**
-   * 세 기한 조건은 서로 겹치지 않는 상태라 조건별로 전용 인덱스를 쓰고 UNION ALL로 합친다. OR 한 조건으로 쓰면 id 순서를 위해 기본 키를 전부 훑으며 완료
-   * 주문까지 걸러낸다.
-   */
   @Query(
       value =
-          """
-          SELECT id FROM (
-              SELECT id FROM commerce.orders
-              WHERE :autoShipment AND status = 'PAID' AND fulfillment_status = 'UNSHIPPED'
-                AND delivery_due_at IS NULL
-                AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid))
-              UNION ALL
-              SELECT id FROM commerce.orders
-              WHERE status IN ('PAYMENT_PENDING','DECLINED') AND payment_wait_until <= :now
-                AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid))
-              UNION ALL
-              SELECT id FROM commerce.orders
-              WHERE fulfillment_status = 'SHIPPED' AND status IN ('PAID','REFUND_PENDING')
-                AND delivery_due_at <= :now
-                AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid))
-              UNION ALL
-              SELECT id FROM commerce.orders
-              WHERE status = 'PAID' AND fulfillment_status = 'DELIVERED' AND refund_deadline_at < :now
-                AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid))
-          ) due
-          ORDER BY id LIMIT :limit
-          """,
+          "SELECT id FROM commerce.orders WHERE ((status IN ('PAYMENT_PENDING','DECLINED') AND payment_wait_until <= :now) OR (fulfillment_status = 'SHIPPED' AND status IN ('PAID','REFUND_PENDING') AND delivery_due_at <= :now) OR (status = 'PAID' AND fulfillment_status = 'DELIVERED' AND refund_deadline_at < :now)) AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid)) ORDER BY id LIMIT :limit",
       nativeQuery = true)
   List<UUID> findDue(
-      @Param("now") java.time.Instant now,
-      @Param("limit") int limit,
-      @Param("after") UUID after,
-      @Param("autoShipment") boolean autoShipment);
+      @Param("now") java.time.Instant now, @Param("limit") int limit, @Param("after") UUID after);
 }

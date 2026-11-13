@@ -13,7 +13,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.function.Supplier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -36,10 +35,9 @@ public class JdbcReconciliationStore implements ReconciliationStore {
     this.consumer = consumer;
   }
 
-  /** 클래스 트랜잭션 안에서만 유효한 상한을 왕복 한 번으로 건다. */
   private void limits() {
-    jdbc.queryForList(
-        "SELECT set_config('lock_timeout','1s',true),set_config('statement_timeout','5s',true)");
+    jdbc.execute("SET LOCAL lock_timeout='1s'");
+    jdbc.execute("SET LOCAL statement_timeout='5s'");
   }
 
   private static OffsetDateTime at(Instant i) {
@@ -320,32 +318,24 @@ public class JdbcReconciliationStore implements ReconciliationStore {
             Long.class,
             run.id(),
             target.source())) throw new IllegalStateException("Source membership changed");
-    // 페이지의 기존 원천을 한 번에 읽고, 본문이 바뀐 행만 한 batch로 갱신한다.
-    var priors = new java.util.HashMap<UUID, Event>();
-    jdbc.query(
-        "SELECT event_id,body::text FROM settlement.reconciliation_events WHERE run_id=? AND event_id=ANY(?::text[]::uuid[])",
-        ps -> {
-          ps.setObject(1, run.id());
-          arrays(ps, 2, page.items(), List.of(Event::eventId));
-        },
-        rs -> {
-          priors.put(rs.getObject(1, UUID.class), event(rs.getString(2)));
-        });
-    var bodies = new ArrayList<Object[]>();
     for (Event e : page.items()) {
-      Event prior = priors.get(e.eventId());
-      if (prior == null)
-        throw new org.springframework.dao.EmptyResultDataAccessException(
-            "Fixed source event missing", 1);
+      Event prior =
+          event(
+              jdbc.queryForObject(
+                  "SELECT body::text FROM settlement.reconciliation_events WHERE run_id=? AND event_id=?",
+                  String.class,
+                  run.id(),
+                  e.eventId()));
       if (!immutable(prior).equals(immutable(e))
           || (prior.succeededAt() != null && !prior.succeededAt().equals(e.succeededAt())))
         throw new IllegalStateException("Immutable source changed");
-      String body = json(e);
-      bodies.add(new Object[] {body, body, run.id(), e.eventId(), body});
+      jdbc.update(
+          "UPDATE settlement.reconciliation_events SET status=CASE WHEN source='PAYOUT' AND body IS DISTINCT FROM ?::jsonb THEN 'PENDING' ELSE status END,body=?::jsonb WHERE run_id=? AND event_id=?",
+          json(e),
+          json(e),
+          run.id(),
+          e.eventId());
     }
-    jdbc.batchUpdate(
-        "UPDATE settlement.reconciliation_events SET status=CASE WHEN source='PAYOUT' AND body IS DISTINCT FROM ?::jsonb THEN 'PENDING' ELSE status END,body=?::jsonb WHERE run_id=? AND event_id=? AND body IS DISTINCT FROM ?::jsonb",
-        bodies);
   }
 
   private void requireClosed(Instant cutoff) {
@@ -362,214 +352,113 @@ public class JdbcReconciliationStore implements ReconciliationStore {
   @Override
   @Transactional(readOnly = true)
   public LocalEvent local(Event e, Instant cutoff) {
-    return locals(List.of(e), cutoff).get(e.eventId());
-  }
-
-  /** 검사할 이벤트 묶음의 로컬 기록을 조회 종류마다 한 문장으로 읽는다. 판정 조건은 이벤트별 조회와 같다. */
-  @Override
-  @Transactional(readOnly = true)
-  public Map<UUID, LocalEvent> locals(List<Event> events, Instant cutoff) {
-    var found = new java.util.HashMap<UUID, LocalEvent>();
-    if (events.isEmpty()) return found;
     requireClosed(cutoff);
-    var payouts = events.stream().filter(e -> "PAYOUT".equals(e.eventType())).toList();
-    var payments = events.stream().filter(e -> !"PAYOUT".equals(e.eventType())).toList();
-    if (!payouts.isEmpty()) payouts(payouts, cutoff, found);
-    if (!payments.isEmpty()) payments(payments, found);
-    return found;
-  }
-
-  private static String text(Object value) {
-    return value == null ? null : value.toString();
-  }
-
-  /** 묶음 조회의 입력 배열은 text[]로 보내고 SQL에서 원래 타입으로 변환한다. */
-  private static void arrays(
-      java.sql.PreparedStatement ps,
-      int from,
-      List<Event> events,
-      List<java.util.function.Function<Event, Object>> columns)
-      throws java.sql.SQLException {
-    for (int i = 0; i < columns.size(); i++) {
-      var column = columns.get(i);
-      ps.setArray(
-          from + i,
-          ps.getConnection()
-              .createArrayOf("text", events.stream().map(e -> text(column.apply(e))).toArray()));
+    if ("PAYOUT".equals(e.eventType())) {
+      var rows =
+          jdbc.query(
+              "SELECT status,succeeded_at,amount,CASE WHEN external_ref=? AND funding_account_ref=? THEN 0 ELSE 1 END AS reference_errors FROM settlement.payouts WHERE business_key=? AND created_at<=?",
+              (rs, n) ->
+                  new LocalEvent(
+                      null,
+                      false,
+                      0,
+                      false,
+                      0,
+                      false,
+                      true,
+                      rs.getString(1),
+                      rs.getTimestamp(2) == null ? null : rs.getTimestamp(2).toInstant(),
+                      rs.getLong(3),
+                      rs.getLong(4),
+                      Map.of()),
+              e.eventId(),
+              e.fundingAccountRef(),
+              e.businessKey(),
+              at(cutoff));
+      return rows.isEmpty()
+          ? new LocalEvent(null, false, 0, false, 0, false, false, null, null, 0, 0, Map.of())
+          : rows.getFirst();
     }
-  }
-
-  private void payouts(List<Event> events, Instant cutoff, Map<UUID, LocalEvent> found) {
-    jdbc.query(
-        """
-      SELECT x.event_id,p.status,p.succeeded_at,p.amount,
-        CASE WHEN p.external_ref=x.event_id AND p.funding_account_ref=x.funding THEN 0 ELSE 1 END AS reference_errors
-      FROM unnest(?::text[]::uuid[],?::text[],?::text[]::uuid[]) AS x(event_id,funding,business_key)
-      JOIN settlement.payouts p ON p.business_key=x.business_key AND p.created_at<=?
+    List<String> inbox =
+        jdbc.queryForList(
+            "SELECT status FROM settlement.inbox WHERE consumer=? AND event_id=?",
+            String.class,
+            consumer,
+            e.eventId());
+    boolean quarantined =
+        Boolean.TRUE.equals(
+            jdbc.queryForObject(
+                """
+      SELECT EXISTS(SELECT 1 FROM settlement.inbox_quarantines WHERE consumer=? AND source_topic=? AND source_partition=? AND source_offset=?)
+        OR EXISTS(SELECT 1 FROM settlement.inbox_conflicts WHERE consumer=? AND event_id=?)
       """,
-        ps -> {
-          arrays(
-              ps, 1, events, List.of(Event::eventId, Event::fundingAccountRef, Event::businessKey));
-          ps.setObject(4, at(cutoff));
-        },
-        rs -> {
-          found.putIfAbsent(
-              rs.getObject("event_id", UUID.class),
-              new LocalEvent(
-                  null,
-                  false,
-                  0,
-                  false,
-                  0,
-                  false,
-                  true,
-                  rs.getString("status"),
-                  rs.getTimestamp("succeeded_at") == null
-                      ? null
-                      : rs.getTimestamp("succeeded_at").toInstant(),
-                  rs.getLong("amount"),
-                  rs.getLong("reference_errors"),
-                  Map.of()));
-        });
-    for (Event e : events)
-      found.putIfAbsent(
-          e.eventId(),
-          new LocalEvent(null, false, 0, false, 0, false, false, null, null, 0, 0, Map.of()));
-  }
-
-  private record Receipt(String status, boolean quarantined, long items, long matching) {}
-
-  private void payments(List<Event> events, Map<UUID, LocalEvent> found) {
-    var receipts = new java.util.HashMap<UUID, Receipt>();
-    jdbc.query(
-        """
-      SELECT x.event_id,
-        (SELECT status FROM settlement.inbox WHERE consumer=? AND event_id=x.event_id) AS status,
-        EXISTS(SELECT 1 FROM settlement.inbox_quarantines WHERE consumer=? AND source_topic=x.topic AND source_partition=x.part AND source_offset=x.off)
-          OR EXISTS(SELECT 1 FROM settlement.inbox_conflicts WHERE consumer=? AND event_id=x.event_id) AS quarantined,
-        c.items,c.matching
-      FROM unnest(?::text[]::uuid[],?::text[]::uuid[],?::text[],?::text[]::int[],?::text[]::bigint[],?::text[]::bigint[],?::text[]::bigint[],
-        ?::text[]::bigint[],?::text[]::bigint[],?::text[]::bigint[],?::text[]::bigint[],?::text[])
-        AS x(event_id,payment_id,topic,part,off,external_amount,mileage_amount,platform_coupon_amount,settlement_base_amount,fee_amount,net_amount,event_type)
-      CROSS JOIN LATERAL (SELECT count(*) AS items,count(*) FILTER(WHERE i.external_amount=x.external_amount AND i.mileage_amount=x.mileage_amount
-         AND i.platform_coupon_amount=x.platform_coupon_amount AND i.settlement_base_amount=x.settlement_base_amount
-         AND i.fee_amount=x.fee_amount AND i.net_amount=x.net_amount
-         AND (x.event_type<>'PaymentConfirmed' OR EXISTS(SELECT 1 FROM settlement.inbox n WHERE n.consumer=? AND n.event_id=x.event_id
-           AND n.payload->'payload'->>'sellerId'=i.seller_id::text
-           AND n.payload->'payload'->>'orderId'=i.order_id::text
-           AND n.payload->'payload'->>'productId'=i.product_id::text))) AS matching
-        FROM settlement.settlement_items i WHERE i.payment_id=x.payment_id) c
-      """,
-        ps -> {
-          ps.setString(1, consumer);
-          ps.setString(2, consumer);
-          ps.setString(3, consumer);
-          arrays(
-              ps,
-              4,
-              events,
-              List.of(
-                  Event::eventId,
-                  Event::paymentId,
-                  Event::topic,
-                  Event::partition,
-                  Event::offset,
-                  Event::externalAmount,
-                  Event::mileageAmount,
-                  Event::platformCouponAmount,
-                  Event::settlementBaseAmount,
-                  Event::feeAmount,
-                  Event::sellerNetAmount,
-                  Event::eventType));
-          ps.setString(16, consumer);
-        },
-        rs -> {
-          receipts.put(
-              rs.getObject("event_id", UUID.class),
-              new Receipt(
-                  rs.getString("status"),
-                  rs.getBoolean("quarantined"),
-                  rs.getLong("items"),
-                  rs.getLong("matching")));
-        });
-    var unseen =
-        events.stream()
-            .filter(
-                e ->
-                    receipts.get(e.eventId()).status() == null
-                        && !receipts.get(e.eventId()).quarantined())
-            .toList();
-    var correlated = quarantinedByBody(unseen);
-    var legs = new java.util.HashMap<UUID, List<Map<String, Object>>>();
-    jdbc.query(
-        """
-       SELECT x.event_id AS reconciliation_event_id,e.leg,e.amount,e.item_id,e.business_ref,e.reversal_of,EXISTS(SELECT 1 FROM settlement.settlement_items i WHERE i.id=e.item_id AND i.payment_id=e.payment_id) AS valid_item,
-       CASE WHEN e.reversal_of IS NULL THEN true ELSE EXISTS(SELECT 1 FROM settlement.settlement_entries o WHERE o.id=e.reversal_of AND o.item_id=e.item_id AND o.leg=e.leg AND o.side=e.side AND o.amount=-e.amount AND o.policy_version=e.policy_version AND o.reversal_of IS NULL) END AS valid_reversal
-       FROM unnest(?::text[]::uuid[],?::text[]::uuid[],?::text[]::timestamptz[]) AS x(event_id,payment_id,occurred_at)
-       JOIN settlement.settlement_entries e ON e.source_event_id=x.event_id AND e.payment_id=x.payment_id AND e.source_occurred_at=x.occurred_at
-       """,
-        ps -> arrays(ps, 1, events, List.of(Event::eventId, Event::paymentId, Event::occurredAt)),
-        rs -> {
-          var row = new org.springframework.jdbc.core.ColumnMapRowMapper().mapRow(rs, 0);
-          UUID source = (UUID) row.remove("reconciliation_event_id");
-          legs.computeIfAbsent(source, k -> new ArrayList<>()).add(row);
-        });
-    for (Event e : events) {
-      Receipt receipt = receipts.get(e.eventId());
-      found.put(
-          e.eventId(),
-          payment(
-              e,
-              receipt,
-              receipt.quarantined() || correlated.contains(e.eventId()),
-              legs.getOrDefault(e.eventId(), List.of())));
-    }
-  }
-
-  /** 수신 기록이 없는 이벤트는 같은 topic의 격리 원문에서 eventId를 찾는다. */
-  private java.util.Set<UUID> quarantinedByBody(List<Event> events) {
-    var correlated = new java.util.HashSet<UUID>();
-    if (events.isEmpty()) return correlated;
-    var candidates = new java.util.HashMap<UUID, List<byte[]>>();
-    jdbc.query(
-        """
-      SELECT x.event_id,q.raw_body FROM unnest(?::text[]::uuid[],?::text[]) AS x(event_id,topic)
-      CROSS JOIN LATERAL (SELECT raw_body FROM settlement.inbox_quarantines WHERE consumer=? AND source_topic=x.topic
-        AND raw_body IS NOT NULL AND position(convert_to(x.event_id::text,'UTF8') in raw_body)>0 LIMIT 101) q
-      """,
-        ps -> {
-          arrays(ps, 1, events, List.of(Event::eventId, Event::topic));
-          ps.setString(3, consumer);
-        },
-        rs -> {
-          candidates
-              .computeIfAbsent(rs.getObject("event_id", UUID.class), k -> new ArrayList<>())
-              .add(rs.getBytes("raw_body"));
-        });
-    for (Event e : events) {
-      var raws = candidates.getOrDefault(e.eventId(), List.of());
-      if (raws.size() > 100)
+                Boolean.class,
+                consumer,
+                e.topic(),
+                e.partition(),
+                e.offset(),
+                consumer,
+                e.eventId()));
+    if (inbox.isEmpty() && !quarantined) {
+      var candidates =
+          jdbc.queryForList(
+              "SELECT raw_body FROM settlement.inbox_quarantines WHERE consumer=? AND source_topic=? AND raw_body IS NOT NULL AND position(convert_to(?::text,'UTF8') in raw_body)>0 LIMIT 101",
+              byte[].class,
+              consumer,
+              e.topic(),
+              e.eventId().toString());
+      if (candidates.size() > 100)
         throw new IllegalStateException("Quarantine correlation requires review");
-      for (byte[] raw : raws) {
+      for (byte[] raw : candidates) {
         if (raw.length > 1048576)
           throw new IllegalStateException("Quarantine evidence exceeds budget");
         try {
           var root = mapper.readTree(raw);
           if (root != null
               && root.hasNonNull("eventId")
-              && e.eventId().toString().equals(root.get("eventId").asText()))
-            correlated.add(e.eventId());
+              && e.eventId().toString().equals(root.get("eventId").asText())) quarantined = true;
         } catch (java.io.IOException ignored) {
           /* Invalid bytes cannot prove an event identity. */
         }
       }
     }
-    return correlated;
-  }
-
-  private LocalEvent payment(
-      Event e, Receipt receipt, boolean quarantined, List<Map<String, Object>> legs) {
+    long items =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM settlement.settlement_items WHERE payment_id=?",
+            Long.class,
+            e.paymentId());
+    long matching =
+        jdbc.queryForObject(
+            """
+      SELECT count(*) FROM settlement.settlement_items WHERE payment_id=? AND external_amount=? AND mileage_amount=?
+       AND platform_coupon_amount=? AND settlement_base_amount=? AND fee_amount=? AND net_amount=?
+       AND (?<>'PaymentConfirmed' OR EXISTS(SELECT 1 FROM settlement.inbox n WHERE n.consumer=? AND n.event_id=?
+         AND n.payload->'payload'->>'sellerId'=settlement_items.seller_id::text
+         AND n.payload->'payload'->>'orderId'=settlement_items.order_id::text
+         AND n.payload->'payload'->>'productId'=settlement_items.product_id::text))
+      """,
+            Long.class,
+            e.paymentId(),
+            e.externalAmount(),
+            e.mileageAmount(),
+            e.platformCouponAmount(),
+            e.settlementBaseAmount(),
+            e.feeAmount(),
+            e.sellerNetAmount(),
+            e.eventType(),
+            consumer,
+            e.eventId());
     int sign = "RefundFinancialCompleted".equals(e.eventType()) ? -1 : 1;
+    var legs =
+        jdbc.queryForList(
+            """
+       SELECT e.leg,e.amount,e.item_id,e.business_ref,e.reversal_of,EXISTS(SELECT 1 FROM settlement.settlement_items i WHERE i.id=e.item_id AND i.payment_id=e.payment_id) AS valid_item,
+       CASE WHEN e.reversal_of IS NULL THEN true ELSE EXISTS(SELECT 1 FROM settlement.settlement_entries o WHERE o.id=e.reversal_of AND o.item_id=e.item_id AND o.leg=e.leg AND o.side=e.side AND o.amount=-e.amount AND o.policy_version=e.policy_version AND o.reversal_of IS NULL) END AS valid_reversal
+       FROM settlement.settlement_entries e WHERE e.source_event_id=? AND e.payment_id=? AND e.source_occurred_at=?
+       """,
+            e.eventId(),
+            e.paymentId(),
+            at(e.occurredAt()));
     Map<String, Long> expected =
         Map.of(
             "EXTERNAL",
@@ -604,10 +493,10 @@ public class JdbcReconciliationStore implements ReconciliationStore {
                     .multiply(java.math.BigInteger.valueOf(2L * sign)))
             .longValueExact();
     return new LocalEvent(
-        receipt.status(),
+        inbox.isEmpty() ? null : inbox.getFirst(),
         quarantined,
-        receipt.items(),
-        receipt.matching() == 1,
+        items,
+        matching == 1,
         legs.size(),
         match,
         false,
@@ -740,23 +629,11 @@ public class JdbcReconciliationStore implements ReconciliationStore {
   }
 
   private void progress(List<Finding> checks, String key, String sql, Instant cutoff) {
-    // 전체 건수·최초 시각을 창 함수로 같은 읽기에서 구해 대상 집합을 한 번만 평가한다.
-    var rows =
-        jdbc.queryForList(
-            "SELECT p.*,count(*) OVER() AS progress_total,min(\"createdAt\") OVER() AS progress_oldest FROM ("
-                + sql
-                + ") p ORDER BY id LIMIT 100",
-            at(cutoff));
-    long count = rows.isEmpty() ? 0 : ((Number) rows.getFirst().get("progress_total")).longValue();
+    long count =
+        jdbc.queryForObject("SELECT count(*) FROM (" + sql + ") progress", Long.class, at(cutoff));
     var members =
-        rows.stream()
-            .map(
-                row -> {
-                  var member = new java.util.LinkedHashMap<>(row);
-                  member.remove("progress_total");
-                  member.remove("progress_oldest");
-                  return view(member);
-                })
+        jdbc.queryForList(sql + " ORDER BY id LIMIT 100", at(cutoff)).stream()
+            .map(this::view)
             .toList();
     checks.add(
         new Finding(
@@ -773,9 +650,11 @@ public class JdbcReconciliationStore implements ReconciliationStore {
                 "oldestCreatedAt",
                 count == 0
                     ? ""
-                    : ((java.sql.Timestamp) rows.getFirst().get("progress_oldest"))
-                        .toInstant()
-                        .atZone(java.time.ZoneId.of("Asia/Seoul"))
+                    : jdbc.queryForObject(
+                            "SELECT min(\"createdAt\") FROM (" + sql + ") progress",
+                            OffsetDateTime.class,
+                            at(cutoff))
+                        .atZoneSameInstant(java.time.ZoneId.of("Asia/Seoul"))
                         .toOffsetDateTime()
                         .toString())));
   }
@@ -785,108 +664,62 @@ public class JdbcReconciliationStore implements ReconciliationStore {
     checks.add(new Finding(key, count == 0 ? "MATCH" : "DEFECT", key, count, 0, Map.of()));
   }
 
-  /**
-   * 한 호출의 판정을 한 문장으로 기록한다. 회차 행을 공유 잠금으로 확인해 만료·교체된 실행자의 기록을 막고, 분류·사유가 바뀐 이벤트만 판정 순서대로 이력에 남긴다.
-   */
   @Override
-  public void record(Run run, Map<UUID, Finding> findings) {
-    if (findings.isEmpty()) return;
-    limits();
-    var ids = new ArrayList<String>();
-    var statuses = new ArrayList<String>();
-    var reasons = new ArrayList<String>();
-    var differences = new ArrayList<String>();
-    var evidence = new ArrayList<String>();
-    findings.forEach(
-        (id, f) -> {
-          ids.add(id.toString());
-          statuses.add(f.status());
-          reasons.add(f.reason());
-          differences.add(Long.toString(f.difference()));
-          evidence.add(json(f.evidence()));
-        });
-    long updated =
-        jdbc.query(
-            """
-      WITH lease AS (SELECT id FROM settlement.reconciliation_runs
-        WHERE id=? AND lease_token=? AND lease_until>clock_timestamp() FOR SHARE),
-      x AS (SELECT * FROM unnest(?::text[]::uuid[],?::text[],?::text[],?::text[]::bigint[],?::text[]::jsonb[])
-        WITH ORDINALITY AS x(event_id,status,reason,difference,evidence,n)),
-      u AS (UPDATE settlement.reconciliation_events e SET status=x.status,reason=x.reason,difference=x.difference,
-          evidence=x.evidence,checked_at=clock_timestamp()
-        FROM x,lease WHERE e.run_id=lease.id AND e.event_id=x.event_id
-        RETURNING x.n,e.run_id,e.event_id,e.status,e.reason,e.evidence,old.status AS old_status,old.reason AS old_reason),
-      h AS (INSERT INTO settlement.reconciliation_history(run_id,event_id,status,reason,evidence)
-        SELECT run_id,event_id,status,reason,evidence FROM u
-        WHERE (old_status,coalesce(old_reason,'')) IS DISTINCT FROM (status,reason) ORDER BY n)
-      SELECT count(*) FROM u
-      """,
-            ps -> {
-              ps.setObject(1, run.id());
-              ps.setObject(2, run.token());
-              var c = ps.getConnection();
-              ps.setArray(3, c.createArrayOf("text", ids.toArray()));
-              ps.setArray(4, c.createArrayOf("text", statuses.toArray()));
-              ps.setArray(5, c.createArrayOf("text", reasons.toArray()));
-              ps.setArray(6, c.createArrayOf("text", differences.toArray()));
-              ps.setArray(7, c.createArrayOf("text", evidence.toArray()));
-            },
-            rs -> {
-              rs.next();
-              return rs.getLong(1);
-            });
-    if (updated != findings.size()) throw new IllegalStateException("Reconciliation lease lost");
+  public void result(Run run, Event event, Finding f) {
+    fence(run);
+    List<String> previous =
+        jdbc.queryForList(
+            "SELECT status||':'||coalesce(reason,'') FROM settlement.reconciliation_events WHERE run_id=? AND event_id=?",
+            String.class,
+            run.id(),
+            event.eventId());
+    jdbc.update(
+        "UPDATE settlement.reconciliation_events SET status=?,reason=?,difference=?,evidence=?::jsonb,checked_at=clock_timestamp() WHERE run_id=? AND event_id=?",
+        f.status(),
+        f.reason(),
+        f.difference(),
+        json(f.evidence()),
+        run.id(),
+        event.eventId());
+    if (previous.isEmpty() || !previous.getFirst().equals(f.status() + ":" + f.reason()))
+      history(run, event.eventId(), f.status(), f.reason(), f.evidence());
   }
 
   @Override
-  public void finish(Run run, Supplier<List<Finding>> checks) {
+  public void finish(Run run, List<Finding> local) {
     fence(run);
-    // 이벤트는 임대 보유자만 쓰므로 전체 검사 전후의 건수가 같다. 세 건수를 한 번에 읽는다.
-    var counts =
-        jdbc.queryForMap(
-            """
-      SELECT count(*) FILTER(WHERE status='PENDING') AS untouched,count(*) FILTER(WHERE status<>'MATCH') AS unresolved,
-        count(*) FILTER(WHERE status='DEFECT') AS defects FROM settlement.reconciliation_events WHERE run_id=?
+    for (Finding f : local)
+      jdbc.update(
+          """
+      INSERT INTO settlement.reconciliation_checks VALUES(?,?,?,?,?,?,?::jsonb)
+      ON CONFLICT(run_id,check_key) DO UPDATE SET status=excluded.status,reason=excluded.reason,count=excluded.count,difference=excluded.difference,evidence=excluded.evidence
       """,
+          run.id(),
+          f.key(),
+          f.status(),
+          f.reason(),
+          f.count(),
+          f.difference(),
+          json(f.evidence()));
+    long untouched =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM settlement.reconciliation_events WHERE run_id=? AND status='PENDING'",
+            Long.class,
             run.id());
-    if (((Number) counts.get("untouched")).longValue() > 0) {
+    if (untouched > 0) {
       release(run, "PENDING", 0);
       return;
     }
-    List<Finding> local = checks.get();
-    // 전체 검사가 임대 시간을 쓰므로 기록 전에 임대를 다시 확인한다.
-    fence(run);
-    // 로컬 검사 결과를 한 문장으로 기록하고, 결과가 같은 검사는 다시 쓰지 않는다.
-    if (!local.isEmpty())
-      jdbc.update(
-          """
-      WITH x AS (SELECT * FROM unnest(?::text[],?::text[],?::text[],?::text[]::bigint[],?::text[]::bigint[],?::text[]::jsonb[])
-        AS x(check_key,status,reason,count,difference,evidence))
-      INSERT INTO settlement.reconciliation_checks AS c SELECT ?::uuid,x.* FROM x
-        ON CONFLICT(run_id,check_key) DO UPDATE SET status=excluded.status,reason=excluded.reason,count=excluded.count,
-          difference=excluded.difference,evidence=excluded.evidence
-        WHERE (c.status,c.reason,c.count,c.difference,c.evidence)
-          IS DISTINCT FROM (excluded.status,excluded.reason,excluded.count,excluded.difference,excluded.evidence)
-      """,
-          ps -> {
-            var c = ps.getConnection();
-            ps.setArray(1, c.createArrayOf("text", local.stream().map(Finding::key).toArray()));
-            ps.setArray(2, c.createArrayOf("text", local.stream().map(Finding::status).toArray()));
-            ps.setArray(3, c.createArrayOf("text", local.stream().map(Finding::reason).toArray()));
-            ps.setArray(
-                4,
-                c.createArrayOf(
-                    "text", local.stream().map(f -> Long.toString(f.count())).toArray()));
-            ps.setArray(
-                5,
-                c.createArrayOf(
-                    "text", local.stream().map(f -> Long.toString(f.difference())).toArray()));
-            ps.setArray(
-                6, c.createArrayOf("text", local.stream().map(f -> json(f.evidence())).toArray()));
-            ps.setObject(7, run.id());
-          });
-    long unresolved = ((Number) counts.get("unresolved")).longValue();
-    long defects = ((Number) counts.get("defects")).longValue();
+    long unresolved =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM settlement.reconciliation_events WHERE run_id=? AND status<>'MATCH'",
+            Long.class,
+            run.id());
+    long defects =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM settlement.reconciliation_events WHERE run_id=? AND status='DEFECT'",
+            Long.class,
+            run.id());
     boolean localDefect = local.stream().anyMatch(f -> "DEFECT".equals(f.status()));
     boolean localPending = local.stream().anyMatch(f -> !"MATCH".equals(f.status()));
     String status =

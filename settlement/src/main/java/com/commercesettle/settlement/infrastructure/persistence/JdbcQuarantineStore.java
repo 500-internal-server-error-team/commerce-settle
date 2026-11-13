@@ -404,7 +404,16 @@ class JdbcQuarantineStore implements QuarantineStore {
   }
 
   private void applyTransactionLimits() {
-    TransactionLimits.apply(jdbc.getJdbcOperations());
+    jdbc.getJdbcOperations()
+        .queryForList(
+            """
+            SELECT set_config(budget.name,
+                least(coalesce(nullif(settings.setting::integer,0),budget.timeout_ms),
+                    budget.timeout_ms)::text,true)
+            FROM (VALUES ('lock_timeout',1000),('statement_timeout',5000))
+                AS budget(name,timeout_ms)
+            JOIN pg_settings settings ON settings.name=budget.name
+            """);
   }
 
   private record Original(UUID id, String key, byte[] body) {}

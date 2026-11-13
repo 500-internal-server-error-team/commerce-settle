@@ -146,12 +146,6 @@ public class OrderResultService {
         // 승인·미확정 거절은 예약 해제 근거가 아니다. 최종 결제 확정 또는 승인 차단 취소를 기다린다.
         return true;
       }
-      if (event.eventType().equals("PaymentDeclined")
-          && o.getStatus() == Order.Status.CANCEL_PENDING) {
-        // 처리 중이라 거절된 취소 뒤에 확정 거절됐다. 예약은 그대로 두고 같은 회차의 취소를 다시 요청해 PaymentCancelled를 기다린다.
-        workflow.requestCancellationAfterDecline(o, event.eventId());
-        return true;
-      }
       var result =
           switch (event.eventType()) {
             case "PaymentConfirmed" -> Order.Status.PAID;

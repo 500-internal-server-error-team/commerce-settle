@@ -2,7 +2,6 @@ package com.commercesettle.payment.infrastructure.persistence.outbox;
 
 import com.commercesettle.observability.AsyncObservation.Timing;
 import com.commercesettle.payment.application.port.OutboxStore;
-import com.commercesettle.payment.infrastructure.persistence.TransactionLimits;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -27,12 +26,26 @@ public class JdbcOutboxStore implements OutboxStore {
 
   @Override
   public List<Delivery> claim(int limit, long leaseMs, int maxAttempts) {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    applyTransactionLimits();
     var params =
         new MapSqlParameterSource("limit", limit)
             .addValue("lease", leaseMs)
             .addValue("max", maxAttempts);
     // 첫 상태 조건은 미발행 부분 인덱스의 조건과 같은 모양이어야 한다. 그래야 발행 완료 이력을 훑지 않는다.
+    jdbc.update(
+        """
+        WITH exhausted AS (
+            SELECT o.id FROM payment.outbox o
+            WHERE o.status IN ('PENDING','RUNNING','RETRY') AND o.attempts >= :max
+              AND ((o.status IN ('PENDING','RETRY') AND o.next_run_at <= clock_timestamp())
+                OR (o.status='RUNNING' AND o.lease_until <= clock_timestamp()))
+            ORDER BY o.sequence_no LIMIT :limit FOR UPDATE OF o SKIP LOCKED
+        )
+        UPDATE payment.outbox o SET status='REVIEW_REQUIRED',lease_until=NULL,
+            updated_at=clock_timestamp(),version=version+1
+        FROM exhausted WHERE o.id=exhausted.id
+        """,
+        params);
     return jdbc.query(
         """
         WITH candidates AS (
@@ -77,28 +90,8 @@ public class JdbcOutboxStore implements OutboxStore {
   }
 
   @Override
-  public int reviewExhausted(int limit, int maxAttempts) {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
-    var params = new MapSqlParameterSource("limit", limit).addValue("max", maxAttempts);
-    return jdbc.update(
-        """
-        WITH exhausted AS (
-            SELECT o.id FROM payment.outbox o
-            WHERE o.status IN ('PENDING','RUNNING','RETRY') AND o.attempts >= :max
-              AND ((o.status IN ('PENDING','RETRY') AND o.next_run_at <= clock_timestamp())
-                OR (o.status='RUNNING' AND o.lease_until <= clock_timestamp()))
-            ORDER BY o.sequence_no LIMIT :limit FOR UPDATE OF o SKIP LOCKED
-        )
-        UPDATE payment.outbox o SET status='REVIEW_REQUIRED',lease_until=NULL,
-            updated_at=clock_timestamp(),version=version+1
-        FROM exhausted WHERE o.id=exhausted.id
-        """,
-        params);
-  }
-
-  @Override
   public Set<UUID> markPublished(List<Published> results) {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    applyTransactionLimits();
     var params =
         new MapSqlParameterSource("ids", array(results, r -> r.delivery().id()))
             .addValue("versions", array(results, r -> r.delivery().version()))
@@ -142,7 +135,7 @@ public class JdbcOutboxStore implements OutboxStore {
 
   @Override
   public boolean markFailed(Delivery delivery, int maxAttempts) {
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    applyTransactionLimits();
     if (!lockCurrentDelivery(delivery)) {
       return false;
     }
@@ -171,5 +164,18 @@ public class JdbcOutboxStore implements OutboxStore {
 
   private static MapSqlParameterSource position(Delivery delivery) {
     return new MapSqlParameterSource("id", delivery.id()).addValue("version", delivery.version());
+  }
+
+  private void applyTransactionLimits() {
+    jdbc.getJdbcTemplate()
+        .queryForList(
+            """
+        SELECT set_config(budget.name,
+            least(coalesce(nullif(settings.setting::integer,0),budget.timeout_ms),
+                budget.timeout_ms)::text,true)
+        FROM (VALUES ('lock_timeout',1000),('statement_timeout',5000))
+            AS budget(name,timeout_ms)
+        JOIN pg_settings settings ON settings.name=budget.name
+        """);
   }
 }

@@ -40,36 +40,6 @@ public class OrderBenefitsService implements OrderBenefits {
       UUID eventId,
       Order.ExternalMethod method,
       Instant now) {
-    return quote(
-        buyerId, productId, sellerId, unitPrice, quantity, couponId, eventId, method, now, false);
-  }
-
-  @Override
-  public Offer quoteForOrder(
-      UUID buyerId,
-      UUID productId,
-      UUID sellerId,
-      long unitPrice,
-      int quantity,
-      UUID couponId,
-      UUID eventId,
-      Order.ExternalMethod method,
-      Instant now) {
-    return quote(
-        buyerId, productId, sellerId, unitPrice, quantity, couponId, eventId, method, now, true);
-  }
-
-  private Offer quote(
-      UUID buyerId,
-      UUID productId,
-      UUID sellerId,
-      long unitPrice,
-      int quantity,
-      UUID couponId,
-      UUID eventId,
-      Order.ExternalMethod method,
-      Instant now,
-      boolean lockCoupon) {
     long price = unitPrice;
     Long eventVersion = null;
     if (eventId != null) {
@@ -93,8 +63,7 @@ public class OrderBenefitsService implements OrderBenefits {
             productId,
             Math.multiplyExact(price, quantity),
             method,
-            now,
-            lockCoupon);
+            now);
     return discount.funder() == CouponFunder.SELLER
         ? new Offer(price, eventVersion, discount.amount(), 0)
         : new Offer(price, eventVersion, 0, discount.amount());
@@ -109,13 +78,12 @@ public class OrderBenefitsService implements OrderBenefits {
   @Override
   public void reserve(Order order, Long expectedEventVersion, Instant now) {
     if (order.getBuyerCouponId() != null) {
-      coupons.reserveQuoted(order, now);
+      coupons.reserve(order, now);
     }
     if (order.getEventId() != null) {
-      inventory.reserveNewForEvent(
+      inventory.reserveForEvent(
           order.getId(),
           order.getEventId(),
-          order.getProductId(),
           order.getBuyerId(),
           order.getPaymentCycleId(),
           order.getPaymentWaitUntil());

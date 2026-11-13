@@ -190,21 +190,6 @@ class OutboxRelayIntegrationTest {
   }
 
   @Test
-  @DisplayName("생산자 대기 상한을 임대보다 길게 덮어쓰면 기동을 거절한다")
-  void rejectsProducerTimeoutLongerThanLease() {
-    context(true)
-        .withPropertyValues("spring.kafka.producer.properties.delivery.timeout.ms=30000")
-        .run(
-            context -> {
-              assertThat(context).hasFailed();
-              assertThat(context.getStartupFailure())
-                  .hasRootCauseInstanceOf(IllegalArgumentException.class)
-                  .hasStackTraceContaining(
-                      "Outbox lease must exceed producer metadata wait and delivery timeout");
-            });
-  }
-
-  @Test
   @DisplayName("Worker 역할이 아니면 Outbox를 켜도 Relay를 만들지 않는다")
   void doesNotStartRelayOutsideWorkerRole() {
     context(true)

@@ -14,10 +14,15 @@ import com.commercesettle.observability.AsyncObservation;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import javax.sql.DataSource;
@@ -27,6 +32,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.FilterType;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -172,6 +179,7 @@ class DurableTraceIntegrationTest {
             assertThat(store.markPublished(row, new OutboxStore.Publication(row.topic(), 0, 42)))
                 .isTrue();
           });
+      verifiesLegacyUpgrade(restarted.getBean(JdbcTemplate.class));
     }
   }
 
@@ -230,7 +238,62 @@ class DurableTraceIntegrationTest {
                 assertThat(row.orderAcceptedAt()).isEqualTo(created);
                 assertThat(row.body()).containsExactly(original);
               });
+      var jdbc = restarted.getBean(JdbcTemplate.class);
+      String before =
+          jdbc.queryForObject(
+              "SELECT jsonb_agg(to_jsonb(t)-'order_accepted_at' ORDER BY id)::text FROM commerce.outbox t",
+              String.class);
+      jdbc.execute("ALTER TABLE commerce.outbox DROP COLUMN order_accepted_at");
+      String upgrade =
+          Files.readString(Path.of("../infra/postgres/upgrade/commerce-business-metrics.sql"));
+      for (int i = 0; i < 2; i++)
+        try (var connection = restarted.getBean(DataSource.class).getConnection();
+            var statement = connection.createStatement()) {
+          statement.execute(upgrade);
+        }
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT jsonb_agg(to_jsonb(t)-'order_accepted_at' ORDER BY id)::text FROM commerce.outbox t",
+                  String.class))
+          .isEqualTo(before);
     }
+  }
+
+  private void verifiesLegacyUpgrade(JdbcTemplate jdbc) throws Exception {
+    var tables = List.of("outbox", "inbox");
+    var snapshots = new LinkedHashMap<String, String>();
+    for (String table : tables) {
+      snapshots.put(table, snapshot(jdbc, table));
+      jdbc.execute("ALTER TABLE commerce." + table + " DROP COLUMN trace_parent");
+    }
+    String upgrade =
+        new ClassPathResource("db/commerce-tracing.sql").getContentAsString(StandardCharsets.UTF_8);
+    for (int pass = 0; pass < 2; pass++) {
+      jdbc.execute(
+          (ConnectionCallback<Void>)
+              connection -> {
+                try (var statement = connection.createStatement()) {
+                  statement.execute(upgrade);
+                }
+                return null;
+              });
+      for (String table : tables) {
+        assertThat(snapshot(jdbc, table)).isEqualTo(snapshots.get(table));
+        assertThat(
+                jdbc.queryForObject(
+                    "SELECT count(*) FROM commerce." + table + " WHERE trace_parent IS NOT NULL",
+                    Long.class))
+            .isZero();
+      }
+    }
+  }
+
+  private String snapshot(JdbcTemplate jdbc, String table) {
+    return jdbc.queryForObject(
+        "SELECT coalesce(jsonb_agg(to_jsonb(r) - 'trace_parent' - 'observation_state' ORDER BY id), '[]'::jsonb)::text FROM commerce."
+            + table
+            + " r",
+        String.class);
   }
 
   @Configuration

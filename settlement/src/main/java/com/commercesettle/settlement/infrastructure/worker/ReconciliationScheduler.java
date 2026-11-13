@@ -3,7 +3,6 @@ package com.commercesettle.settlement.infrastructure.worker;
 import com.commercesettle.settlement.application.port.ReconciliationStore;
 import com.commercesettle.settlement.application.service.ReconciliationService;
 import java.time.Clock;
-import java.time.Instant;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -17,8 +16,6 @@ public class ReconciliationScheduler {
   private final ReconciliationService service;
   private final Clock clock;
   private final ReconciliationStore store;
-  // 이미 요청한 당일 마감이면 매초 마지막 회차 조회와 등록을 생략한다. 재기동·다중 인스턴스는 멱등 등록으로 한 번 더 확인한다.
-  private volatile Instant requested;
 
   public ReconciliationScheduler(
       ReconciliationService service, Clock clock, ReconciliationStore store) {
@@ -45,7 +42,6 @@ public class ReconciliationScheduler {
             ? now.toLocalDate().minusDays(1)
             : now.toLocalDate();
     var target = date.atTime(10, 0).atZone(now.getZone()).toInstant();
-    if (target.equals(requested)) return;
     var cutoff =
         store
             .latestCutoff()
@@ -53,6 +49,5 @@ public class ReconciliationScheduler {
             .filter(next -> next.isBefore(target))
             .orElse(target);
     service.request(cutoff, "scheduler");
-    if (cutoff.equals(target)) requested = target;
   }
 }

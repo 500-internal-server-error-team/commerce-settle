@@ -78,6 +78,10 @@ configure(subprojects.findAll { !(it.name in libraries) }) {
     }
 
     tasks.named('processTestResources') {
+        from(rootProject.file('infra/postgres/upgrade')) {
+            include "${project.name}-tracing.sql"
+            into 'db'
+        }
         from(rootProject.file('infra/postgres/schema')) {
             include "${project.name.replace('-', '_')}.sql"
             into 'db'

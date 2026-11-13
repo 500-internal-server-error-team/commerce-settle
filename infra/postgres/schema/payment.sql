@@ -154,9 +154,6 @@ CREATE TABLE payment.payment_jobs (
 );
 CREATE INDEX ix_payment_jobs_status_next_run ON payment.payment_jobs (status, next_run_at, lease_until, id);
 CREATE INDEX ix_payment_jobs_created ON payment.payment_jobs (created_at, id);
--- 작업 선점은 종류별 대기·재시도·임대 작업만 next_run_at 순서로 본다.
-CREATE INDEX ix_payment_jobs_lease ON payment.payment_jobs (operation, next_run_at, id)
-    WHERE status IN ('PENDING','RETRY','RUNNING');
 
 -- 외부 승인 시도. 외부 호출 전에 provider·결제수단·계정·재원·금액·시나리오를 고정해 재전송·조회에 같은 값을 쓴다.
 CREATE TABLE payment.payment_attempts (
@@ -394,9 +391,6 @@ CREATE INDEX outbox_unpublished ON payment.outbox(sequence_no) WHERE status IN (
 CREATE INDEX outbox_unpublished_attempts ON payment.outbox(attempts, sequence_no) WHERE status IN ('PENDING','RUNNING','RETRY');
 CREATE INDEX outbox_occurred ON payment.outbox(occurred_at, created_at, id);
 CREATE INDEX outbox_aggregate ON payment.outbox(aggregate_id, aggregate_version, sequence_no);
--- 정산 대조 피드는 금융 이벤트 두 종류만 created_at DESC,id DESC keyset으로 읽는다.
-CREATE INDEX ix_outbox_reconciliation ON payment.outbox(created_at, id)
-    WHERE event_type IN ('PaymentConfirmed','RefundFinancialCompleted');
 
 -- 유효한 Envelope로 해석할 수 없는 bytes도 보존한다. null과 빈 bytes를 구분한다.
 CREATE TABLE payment.inbox_quarantines (

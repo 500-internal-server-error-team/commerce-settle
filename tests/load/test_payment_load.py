@@ -3,15 +3,12 @@
 import argparse
 import csv
 import contextlib
-from datetime import datetime, timezone
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
-import shutil
 import sqlite3
-import subprocess
 import unittest
 import tempfile
 from unittest.mock import MagicMock, mock_open, patch
@@ -61,7 +58,6 @@ class ReconciliationFixture(unittest.TestCase):
 
     def payment(self, mileage=0, status="CONFIRMED", opening_balance=load.WALLET_BALANCE):
         self.expected = {"order": ("mixed" if mileage else "card", 10000, mileage)}
-        self.other_ledger = {}
         self.db.execute("INSERT INTO payment.payments VALUES (?,?,?,?,?,?,?,?)",
                         ("order", "payment", "cycle", load.buyer(0), status, 10000, mileage, 10000-mileage))
         self.db.execute("INSERT INTO payment.payment_attempts VALUES (?,?,?,?,?)",
@@ -82,46 +78,16 @@ class ReconciliationFixture(unittest.TestCase):
         self.db.execute("INSERT INTO payment.inbox VALUES ('APPLIED')")
         self.db.execute("INSERT INTO payment.payment_jobs VALUES ('DONE')")
 
-    def other_run(self, namespace="r2", mileage=1000, balance_error=0, order="order2"):
-        """같은 스택에서 다른 실행 번호로 실행한 다른 실행의 결제·지갑. 그 실행만의 불일치를 balance_error로 만든다."""
-        payment, cycle, buyer_id = f"{order}-payment", f"{order}-cycle", load.buyer(0, namespace)
-        self.other_ledger[order] = ("mixed", 10000, mileage)
-        self.stack_runs = ["fixture", "other"]
-        self.db.execute("INSERT INTO payment.payments VALUES (?,?,?,?,'CONFIRMED',10000,?,?)",
-                        (order, payment, cycle, buyer_id, mileage, 10000 - mileage))
-        self.db.execute("INSERT INTO payment.payment_attempts VALUES (?,'PG_A',?,?,'APPROVED')",
-                        (payment, cycle, 10000 - mileage))
-        self.db.execute("INSERT INTO finance_mock.mock_transactions VALUES ('PG_A',?,?,'SUCCEEDED',NULL,'APPROVE')",
-                        (cycle, 10000 - mileage))
-        self.db.execute("INSERT INTO finance_mock.mock_accounts VALUES (?,?,0,?,'EASY_PAY',?,'WALLET')",
-                        (f"{order}-wallet", load.WALLET_BALANCE, load.WALLET_BALANCE, load.wallet_ref(0, namespace)))
-        self.db.execute("INSERT INTO payment.mileage_wallets VALUES (?,?,0)",
-                        (buyer_id, load.WALLET_BALANCE - mileage + balance_error))
-        for kind in ("RESERVE", "DEBIT"):
-            self.db.execute("INSERT INTO payment.mileage_entries VALUES (?,?)", (payment, kind))
-        for event in ("PaymentAccepted", "PaymentConfirmed"):
-            self.db.execute("INSERT INTO payment.outbox VALUES (?,?,'PUBLISHED')", (payment, event))
-
     def query(self, database, sql):
         sql = sql.replace("account_id::text", "CAST(account_id AS TEXT)")
         return [["" if v is None else str(v) for v in row] for row in self.db.execute(sql)]
 
-    def ledger(self, runs):
-        rows = {}
-        for run in runs:
-            rows.update(self.expected if run == "fixture" else self.other_ledger)
-        return rows
-
-    def reconcile(self, runs="fixture"):
+    def reconcile(self):
         output = MagicMock()
-        stack = MagicMock()
-        stack.exists.return_value = bool(getattr(self, "stack_runs", None))
-        stack.read_text.return_value = "\n".join(getattr(self, "stack_runs", []))
-        with patch.object(load, "psql", self.query), patch.object(load, "ledger", self.ledger), \
-                patch.object(load, "STACK_RUNS", stack), \
+        with patch.object(load, "psql", self.query), patch.object(load, "ledger", return_value=self.expected), \
                 patch.object(load, "WORK", output), contextlib.redirect_stdout(io.StringIO()):
             try:
-                load.cmd_reconcile(argparse.Namespace(runs=runs, output="report.json"))
+                load.cmd_reconcile(argparse.Namespace(runs="fixture", output="report.json"))
             except SystemExit:
                 pass
         return json.loads(output.__truediv__.return_value.write_text.call_args.args[0])
@@ -137,76 +103,6 @@ class ReconciliationRegressionTest(ReconciliationFixture):
         self.payment(status="DECLINED")
         self.db.execute("DELETE FROM finance_mock.mock_transactions")
         self.assertIn("대역 거래 누락", self.reconcile()["problems"])
-
-
-class ReconciliationScopeTest(ReconciliationFixture):
-    def test_ignores_payments_and_wallets_of_another_run_in_the_same_stack(self):
-        self.payment(mileage=1000)
-        self.other_run(namespace="r2")
-        self.assertEqual({}, self.reconcile()["problems"])
-
-    def test_does_not_count_problems_that_belong_to_another_run(self):
-        self.payment()
-        self.other_run(namespace="r2", balance_error=1)
-        report = self.reconcile()
-        self.assertEqual({}, report["problems"])
-        self.assertEqual({"CONFIRMED": 1}, report["payments"])
-
-    def test_accepts_retried_attempts_of_another_run(self):
-        # 다른 실행 결제의 이전 거절 시도와 현재 승인 시도는 둘 다 그 결제에 연결된 대역 거래다.
-        self.payment()
-        self.other_run(namespace="r2")
-        self.db.execute("INSERT INTO payment.payment_attempts VALUES "
-                        "('order2-payment','PG_A','order2-old-cycle',9000,'DECLINED')")
-        self.db.execute("INSERT INTO finance_mock.mock_transactions VALUES "
-                        "('PG_A','order2-old-cycle',9000,'DECLINED',NULL,'APPROVE')")
-        self.assertEqual({}, self.reconcile()["problems"])
-        self.assertIn("승인 시도 중복", self.reconcile(runs="other")["problems"])
-
-    def test_whole_stack_reconcile_detects_the_problem_of_another_run(self):
-        # 실행 하나만 대조할 때 빼 둔 다른 실행의 불일치는 그 실행이나 스택 전체를 대조할 때 잡혀야 한다.
-        self.payment()
-        self.other_run(namespace="r2")
-        self.db.execute("DELETE FROM payment.outbox WHERE aggregate_id = 'order2-payment'")
-        self.assertEqual({}, self.reconcile()["problems"])
-        self.assertIn("결과 이벤트 누락", self.reconcile(runs=None)["problems"])
-        self.assertIn("결과 이벤트 누락", self.reconcile(runs="other")["problems"])
-
-    def test_same_namespace_wallet_error_is_detected_from_either_run(self):
-        # 같은 실행 번호의 두 실행은 지갑을 함께 쓰므로, 어느 실행을 대조해도 잔액 오류가 잡힌다.
-        self.payment()
-        self.other_run(namespace="", mileage=1000, balance_error=1)
-        self.db.execute("DELETE FROM finance_mock.mock_accounts WHERE id = 'order2-wallet'")
-        self.db.execute("DELETE FROM payment.mileage_wallets WHERE balance = ?", (load.WALLET_BALANCE,))
-        self.assertIn("마일리지 잔액 불일치", self.reconcile()["problems"])
-
-    def test_rejects_an_order_recorded_in_two_runs(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for run in ("fixture", "other"):
-                (root / run).mkdir()
-                (root / run / "requests.csv").write_text("order,card,10000,0\n", encoding="utf-8")
-            (root / "runs").write_text("fixture\nother\n", encoding="utf-8")
-            with patch.object(load, "WORK", root), patch.object(load, "STACK_RUNS", root / "runs"), \
-                    patch.object(load, "psql") as psql, self.assertRaisesRegex(SystemExit, "duplicate orderId"):
-                load.cmd_reconcile(argparse.Namespace(runs="fixture", output="report.json"))
-            psql.assert_not_called()
-
-    def test_still_detects_a_payment_that_no_run_injected(self):
-        self.payment()
-        self.other_run(namespace="r2")
-        self.other_ledger.clear()
-        self.assertIn("원장에 없는 결제", self.reconcile()["problems"])
-
-    def test_counts_mileage_of_another_run_with_the_same_namespace(self):
-        # 같은 실행 번호의 두 실행은 같은 구매자 지갑을 쓰므로 잔액에는 두 실행의 차감이 함께 남는다.
-        self.payment(mileage=1000)
-        self.other_run(namespace="", mileage=500)
-        self.db.execute("DELETE FROM finance_mock.mock_accounts WHERE id = 'order2-wallet'")
-        self.db.execute("DELETE FROM payment.mileage_wallets WHERE balance = ?", (load.WALLET_BALANCE - 500,))
-        self.assertIn("마일리지 잔액 불일치", self.reconcile()["problems"])
-        self.db.execute("UPDATE payment.mileage_wallets SET balance = ?", (load.WALLET_BALANCE - 1500,))
-        self.assertEqual({}, self.reconcile()["problems"])
 
 
 class ReconciliationNormalTest(ReconciliationFixture):
@@ -566,98 +462,6 @@ class WorkerSettingsTest(unittest.TestCase):
         self.assertIn("final", summary)
 
 
-class InjectedAggregationTest(unittest.TestCase):
-    """#254: Worker 중단 중 Kafka에서 기다리거나 drain에 확정된 요청과 drain의 최대 lag가 요약에서 빠지지 않는다."""
-    START = 1_793_664_000.0  # 2026-11-03T00:00:00Z
-
-    def iso(self, offset):
-        return datetime.fromtimestamp(self.START + offset, timezone.utc).isoformat()
-
-    def summary(self, ledger, outcomes, lags):
-        snapshots = iter([{**dict.fromkeys(("received", "confirmed", "declined", "unfinished", "waiting",
-                                            "outboxPending", "jobsReview", "inboxReview"), 0),
-                           "at": "2026-11-03T00:00:00Z", "kafkaLag": lag} for lag in lags])
-        calls = []
-
-        def snapshot():
-            calls.append(1)
-            return next(snapshots)
-
-        class StageThread:
-            # 첫 관측 표본까지는 주입 중이고, 이후는 drain이다. 주입 결과는 join에서 확정한다.
-            def __init__(self, target):
-                self.target = target
-
-            def start(self):
-                pass
-
-            def is_alive(self):
-                return len(calls) < 3
-
-            def join(self):
-                self.target()
-
-        def produce(stages, mix, directory, offset, marks, *_):
-            with open(directory / "requests.csv", "a", newline="", encoding="utf-8") as out:
-                for order, published in ledger:
-                    csv.writer(out).writerow([order, "card", 10000, 0, 0, self.iso(published)])
-            marks.append({"stage": 0, "rate": 100, "seconds": 60, "start": self.iso(0), "end": self.iso(60),
-                          "sent": len(ledger), "stopped": False, "elapsed": 60, "maxBehindSeconds": 0})
-
-        def psql(database, sql):
-            if "percentile_cont" in sql:
-                return [["1", "500.0", "500.0", "500.0", "500.0"]]
-            return [[order, *("" if v is None else str(self.START + v) if isinstance(v, float) else v
-                              for v in outcome)] for order, outcome in outcomes.items()]
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            args = argparse.Namespace(stages="100:60", run="restart", mix="card", offset=0, interval=0,
-                                      drain=60, kill_after=0, scenario=None, stop_file=None)
-            with patch("threading.Thread", StageThread), patch.object(load, "WORK", root), \
-                    patch.object(load, "STACK_RUNS", root / "runs"), patch.object(load, "produce", produce), \
-                    patch.object(load, "snapshot", side_effect=snapshot), patch.object(load, "psql", psql), \
-                    patch.object(load, "worker_settings", return_value=None), \
-                    contextlib.redirect_stdout(io.StringIO()):
-                (root / "restart").mkdir()
-                (root / "restart/requests.csv").write_text(f"old,card,10000,0,0,{self.iso(-100)}\n")
-                load.cmd_ramp(args)
-            return json.loads((root / "restart/summary.json").read_text(encoding="utf-8"))
-
-    def test_counts_kafka_waiting_and_drain_confirmations_in_the_injected_stage(self):
-        ledger = [("in-window", 1.0), ("kafka-wait", 2.0), ("drain", 3.0), ("not-received", 4.0)]
-        outcomes = {"in-window": (1.1, "CONFIRMED", 1.6), "kafka-wait": (70.0, "CONFIRMED", 71.0),
-                    "drain": (3.1, "CONFIRMED", 90.0), "old": (-99.0, "CONFIRMED", -98.0)}
-
-        summary = self.summary(ledger, outcomes, lags=[0, 2690, 3489, 0])
-
-        injected = summary["stages"][0]["injected"]
-        self.assertEqual((4, 3, 3, 1, False), (injected["injected"], injected["received"], injected["confirmed"],
-                                               injected["unresolved"], injected["complete"]))
-        self.assertEqual({"count": 3, "p50Ms": 69000.0, "p95Ms": 85200.0, "p99Ms": 86640.0, "maxMs": 87000.0},
-                         injected["publishToConfirmed"])
-        self.assertEqual(68000.0, injected["publishToReceipt"]["maxMs"])
-        self.assertEqual(86900.0, injected["receiptToConfirmed"]["maxMs"])
-        self.assertEqual(injected, summary["injected"])
-        self.assertEqual(1, summary["stages"][0]["latency"]["count"])
-
-    def test_peak_kafka_lag_includes_drain_samples(self):
-        summary = self.summary([("a", 1.0)], {"a": (1.1, "CONFIRMED", 1.6)}, lags=[0, 2690, 3489, 0])
-
-        self.assertEqual(2690, summary["stages"][0]["maxKafkaLag"])
-        self.assertEqual(3489, summary["peaks"]["kafkaLag"]["value"])
-        self.assertEqual("drain", summary["peaks"]["kafkaLag"]["stage"])
-        self.assertEqual(2, summary["aggregation"]["version"])
-
-    def test_unreadable_consumer_group_lag_is_not_recorded_as_zero(self):
-        rebalancing = "\nConsumer group 'payment.v1' is rebalancing.\n"
-        row = [["2026-11-03 00:00:00+00", *["0"] * 8, str(self.START)]]
-        with patch.object(load, "kafka", return_value=rebalancing), patch.object(load, "psql", return_value=row):
-            sample = load.snapshot()
-
-        self.assertIsNone(sample["kafkaLag"])
-
-
 class NamespaceTest(unittest.TestCase):
     def test_empty_namespace_keeps_existing_identifiers(self):
         self.assertEqual(load.buyer(0, ""), "00000000-0000-4000-8000-100000000000")
@@ -692,99 +496,6 @@ class NamespaceTest(unittest.TestCase):
             module = importlib.util.module_from_spec(spec)
             with self.assertRaises(SystemExit):
                 spec.loader.exec_module(module)
-
-
-class RemoteRoutingTest(unittest.TestCase):
-    REMOTE_SETTINGS = dict(REMOTE=True, APP_SSH="ubuntu@13.125.2.200", INFRA_SSH="ubuntu@10.0.1.20",
-                           SSH_JUMP="ubuntu@13.125.2.200", SSH_KEY="key.pem", REMOTE_DOCKER="docker")
-
-    def test_local_mode_keeps_local_compose_paths(self):
-        with patch.multiple(load, REMOTE=False):
-            argv = load.command_for(["exec", "-T", "postgres", "psql"])
-        self.assertEqual(argv[:4], ["docker", "compose", "-p", load.PROJECT])
-        self.assertIn(str(load.ROOT / "compose.yml"), argv)
-
-    def test_services_map_to_their_hosts(self):
-        self.assertEqual(load.host_for(["payment-worker"]), "app")
-        self.assertEqual(load.host_for(["payment-api"]), "app")
-        self.assertEqual(load.host_for(["kafka"]), "infra")
-        self.assertEqual(load.host_for(["postgres"]), "infra")
-
-    def test_only_exec_runs_in_remote_mode(self):
-        with patch.multiple(load, **self.REMOTE_SETTINGS):
-            for args in (["up", "-d", "--build"], ["up", "-d", "--no-deps", "payment-worker"],
-                         ["kill", "payment-worker"], ["exec", "-T", "unknown", "env"]):
-                with self.subTest(args=args), self.assertRaises(SystemExit):
-                    load.command_for(args)
-
-    def test_infra_command_finds_ecs_container_through_jump_host(self):
-        with patch.multiple(load, **self.REMOTE_SETTINGS):
-            argv = load.command_for(["exec", "-T", "postgres", "psql", "-c", "SELECT 'a b'"])
-        self.assertEqual(argv[0], "ssh")
-        self.assertEqual(argv[argv.index("-J") + 1], "ubuntu@13.125.2.200")
-        self.assertEqual(argv[argv.index("-i") + 1], "key.pem")
-        self.assertEqual(argv[-2], "ubuntu@10.0.1.20")
-        remote = argv[-1]
-        self.assertIn("--filter label=com.amazonaws.ecs.container-name=postgres", remote)
-        self.assertIn("docker exec -i", remote)
-        self.assertIn("psql -c 'SELECT '\"'\"'a b'\"'\"''", remote)
-        self.assertNotIn("compose", remote)
-
-    def test_app_command_skips_jump_host(self):
-        with patch.multiple(load, **self.REMOTE_SETTINGS):
-            argv = load.command_for(["exec", "-T", "payment-worker", "env"])
-        self.assertNotIn("-J", argv)
-        self.assertEqual(argv[-2], "ubuntu@13.125.2.200")
-
-    def test_missing_host_setting_is_refused(self):
-        settings = dict(self.REMOTE_SETTINGS, APP_SSH="")
-        with patch.multiple(load, **settings), self.assertRaises(SystemExit):
-            load.command_for(["exec", "-T", "payment-worker", "env"])
-
-    def test_sudo_docker_is_split_into_words(self):
-        settings = dict(self.REMOTE_SETTINGS, REMOTE_DOCKER="sudo docker")
-        with patch.multiple(load, **settings):
-            remote = load.command_for(["exec", "-T", "kafka", "true"])[-1]
-        self.assertIn("sudo docker ps -q", remote)
-        self.assertIn("sudo docker exec -i", remote)
-
-    @unittest.skipUnless(shutil.which("sh"), "sh not available")
-    def test_remote_script_requires_exactly_one_container(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            fake = Path(tmp) / "docker"
-            fake.write_text('#!/bin/sh\nif [ "$1" = ps ]; then for id in $FAKE_IDS; do echo "$id"; done; '
-                            'else shift; echo "exec:$*"; fi\n', encoding="utf-8", newline="\n")
-            fake.chmod(0o755)
-            with patch.multiple(load, **self.REMOTE_SETTINGS):
-                script = load.command_for(["exec", "-T", "kafka", "echo", "a b"])[-1]
-            path = tmp + os.pathsep + os.environ.get("PATH", "")
-            results = {}
-            for ids in ("", "c1", "c1 c2"):
-                done = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
-                                      env=dict(os.environ, PATH=path, FAKE_IDS=ids))
-                results[ids] = (done.returncode, done.stdout.strip())
-        self.assertEqual(results[""][0], 3)
-        self.assertEqual(results["c1 c2"][0], 3)
-        self.assertEqual(results["c1"], (0, "exec:-i c1 echo a b"))
-
-    def test_remote_mode_skips_redis_run_id_and_rejects_worker_restart(self):
-        with patch.multiple(load, **self.REMOTE_SETTINGS), patch.object(load, "compose") as compose:
-            self.assertIsNone(load.redis_run_id())
-            compose.assert_not_called()
-            args = argparse.Namespace(stages="300:30", kill_after=5)
-            with self.assertRaises(SystemExit):
-                load.cmd_ramp(args)
-            compose.assert_not_called()
-
-    def test_kafka_bootstrap_uses_localhost_in_remote_mode(self):
-        env = dict(os.environ, LOAD_INFRA_SSH="ubuntu@10.0.1.20")
-        env.pop("LOAD_KAFKA_BOOTSTRAP", None)
-        with patch.dict(os.environ, env, clear=True):
-            spec = importlib.util.spec_from_file_location("payment_load_remote", SOURCE)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-        self.assertEqual(module.KAFKA_BOOTSTRAP, "localhost:9092")
-        self.assertEqual(load.KAFKA_BOOTSTRAP, "kafka:9092")
 
 
 if __name__ == "__main__":

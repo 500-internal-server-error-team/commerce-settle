@@ -76,7 +76,7 @@ class ComposeConfigurationTest(unittest.TestCase):
             with self.subTest(service=service, ports=candidate, opted_in=opted_in), self.assertRaises(AssertionError):
                 smoke.check_backend_ports(service, candidate, opted_in)
 
-    def resolve(self, outbox_enabled, *overrides, settings_extra=""):
+    def resolve(self, outbox_enabled, *overrides):
         source = ROOT / "compose.yml"
         variables = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*)", source.read_text()))
         required = set(re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", source.read_text()))
@@ -86,7 +86,7 @@ class ComposeConfigurationTest(unittest.TestCase):
             content = "".join(f"{key}=compose-test-placeholder\n" for key in sorted(required))
             if outbox_enabled is not None:
                 content += f"APP_OUTBOX_ENABLED={outbox_enabled}\n"
-            settings.write_text(content + settings_extra)
+            settings.write_text(content)
             result = subprocess.run(
                 ["docker", "compose", "--project-directory", str(ROOT),
                  "--env-file", str(settings), "-f", str(source),
@@ -108,26 +108,12 @@ class ComposeConfigurationTest(unittest.TestCase):
                         f"Payment opt-in must not enable {name}'s outbox",
                     )
 
-    def test_demo_wallets_follow_the_account_fixture_without_financial_snapshot(self):
-        for setting, expected in [("", "true"), ("COMMERCE_DEV_FIXTURES_ENABLED=false\n", "false")]:
-            with self.subTest(setting=setting):
-                services = self.resolve(None, settings_extra=setting)
-                self.assertEqual(services["payment-api"]["environment"]["APP_DEMO_WALLETS_ENABLED"], expected)
-                self.assertEqual(services["commerce"]["environment"]["APP_DEV_FIXTURES_ENABLED"], expected)
-                # Only the API role seeds wallets; the snapshot fixture and settlement workers keep their defaults.
-                self.assertNotIn("APP_DEMO_WALLETS_ENABLED", services["payment-worker"]["environment"])
-                self.assertEqual(services["payment-api"]["environment"]["APP_DEV_FIXTURES_ENABLED"], "false")
-                settlement = services["settlement"]["environment"]
-                self.assertEqual(settlement["SETTLEMENT_DAILY_BATCH_ENABLED"], "true")
-                self.assertEqual(settlement["SETTLEMENT_PAYOUT_WORKER_ENABLED"], "true")
-
     def test_financial_flow_override_enables_only_the_round_trip_services(self):
         base = self.resolve(None)
         services = self.resolve(None, "compose.financial-flow.yml")
         expected = {
             "commerce": ["APP_OUTBOX_ENABLED", "APP_KAFKA_PAYMENT_ACCEPTED_ENABLED",
-                         "APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED", "APP_ORDER_RESULT_PROCESSOR_ENABLED",
-                         "APP_ORDER_WORKFLOW_ENABLED"],
+                         "APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED", "APP_ORDER_RESULT_PROCESSOR_ENABLED"],
             "payment-worker": ["APP_OUTBOX_ENABLED", "APP_KAFKA_ORDER_PAYMENT_REQUESTED_ENABLED",
                                "APP_PAYMENT_REQUEST_PROCESSOR_ENABLED", "APP_PAYMENT_APPROVAL_ENABLED",
                                "APP_REFUND_ENABLED", "APP_KAFKA_SETTLEMENT_REPLIES_ENABLED"],

@@ -601,59 +601,6 @@ class OrderWorkflowIntegrationTest {
   }
 
   @Test
-  @DisplayName("기본 설정은 결제 완료·미발송 주문을 자동 발송하지 않는다")
-  void keepsAutomaticShipmentDisabledByDefault() throws Exception {
-    var f = fixture();
-    var order = create(f);
-    var id = uuid(order, "id");
-    receive("PaymentConfirmed", confirmed(order, context(id)), true);
-
-    workflow.advance(id);
-
-    assertThat(workflow.due(100, null)).doesNotContain(id);
-    assertThat(buyer(f, id).path("fulfillmentStatus").asText()).isEqualTo("UNSHIPPED");
-    assertThat(buyer(f, id).path("shippedAt").isNull()).isTrue();
-  }
-
-  @Test
-  @DisplayName("기한 도래 조회는 세 기한 조건의 주문을 ID 순서로 이어서 찾고 기한 전·미발송 주문은 제외한다")
-  void findsDueOrdersOfEachDeadlineInIdOrder() {
-    var unpaid = uuid(create(fixture()), "id");
-    var shipped = uuid(create(fixture()), "id");
-    var delivered = uuid(create(fixture()), "id");
-    var unshipped = uuid(create(fixture()), "id");
-    var notYet = uuid(create(fixture()), "id");
-    jdbc.update(
-        "update commerce.orders set status='PAID',fulfillment_status='SHIPPED',shipped_at=?,delivery_due_at=? where id=?",
-        java.sql.Timestamp.from(NOW),
-        java.sql.Timestamp.from(NOW.plusSeconds(100)),
-        shipped);
-    jdbc.update(
-        "update commerce.orders set status='PAID',fulfillment_status='DELIVERED',shipped_at=?,delivery_due_at=?,delivered_at=?,refund_deadline_at=? where id=?",
-        java.sql.Timestamp.from(NOW.minusSeconds(900_000)),
-        java.sql.Timestamp.from(NOW.minusSeconds(800_000)),
-        java.sql.Timestamp.from(NOW.minusSeconds(800_000)),
-        java.sql.Timestamp.from(NOW.minusSeconds(800_000 - 604_800)),
-        delivered);
-    jdbc.update("update commerce.orders set status='PAID' where id=?", unshipped);
-    jdbc.update(
-        "update commerce.orders set status='PAID',fulfillment_status='SHIPPED',shipped_at=?,delivery_due_at=? where id=?",
-        java.sql.Timestamp.from(NOW),
-        java.sql.Timestamp.from(NOW.plusSeconds(3600)),
-        notYet);
-    clock.now.set(NOW.plusSeconds(601));
-
-    var all = workflow.due(100, null);
-    var first = workflow.due(1, null);
-    var rest = workflow.due(100, first.getFirst());
-
-    assertThat(all).contains(unpaid, shipped, delivered).doesNotContain(unshipped, notYet);
-    assertThat(all).isSortedAccordingTo(java.util.Comparator.comparing(UUID::toString));
-    assertThat(first).containsExactly(all.getFirst());
-    assertThat(rest).isEqualTo(all.subList(1, all.size()));
-  }
-
-  @Test
   @DisplayName("미결제 기한 작업은 취소 요청만 저장하고 중복 실행으로 예약을 해제하지 않는다")
   void expiresByRequestingCancellationOnce() {
     var f = fixture();
@@ -669,58 +616,6 @@ class OrderWorkflowIntegrationTest {
                 "select count(*) from commerce.outbox where aggregate_id=? and event_type='PaymentCancellationRequested'",
                 id))
         .isEqualTo(1);
-  }
-
-  @Test
-  @DisplayName("재시도 회차가 처리 중이라 취소가 거절된 뒤 확정 거절되면 같은 회차 취소를 한 번 더 요청하고 취소 확정까지 예약을 유지한다")
-  void requestsCancellationAgainAfterRetryCycleIsDeclined() throws Exception {
-    var f = fixture();
-    var id = uuid(create(f), "id");
-    var payment = UUID.randomUUID();
-    var first = uuid(context(id), "paymentCycleId");
-    receive("PaymentDeclined", result(id, payment, first), true);
-    clock.now.set(NOW.plusSeconds(120));
-    call("BUYER", f.buyer(), "/api/orders/" + id + "/payment-retries", version(buyer(f, id)), 202);
-    var retry = uuid(context(id), "paymentCycleId");
-    assertThat(retry).isNotEqualTo(first);
-    clock.now.set(NOW.plusSeconds(601));
-    workflow.advance(id);
-    assertThat(buyer(f, id).path("status").asText()).isEqualTo("CANCEL_PENDING");
-    var cancelVersion = buyer(f, id).path("version").asLong();
-    String requests =
-        """
-        select count(*) from commerce.outbox where aggregate_id=? and event_type='PaymentCancellationRequested'
-          and payload->'payload'->>'paymentCycleId'=?
-        """;
-    assertThat(number(requests, id, retry.toString())).isEqualTo(1);
-
-    receive("PaymentCancellationRejected", result(id, payment, retry), true);
-    receive("PaymentDeclined", result(id, payment, retry), true);
-    assertThat(buyer(f, id).path("status").asText()).isEqualTo("CANCEL_PENDING");
-    assertStock(f, 1, 1, 0);
-    assertThat(number(requests, id, retry.toString())).isEqualTo(2);
-    assertThat(
-            number(
-                """
-                select count(*) from commerce.outbox where aggregate_id=?
-                  and event_type='PaymentCancellationRequested'
-                  and (payload->'payload'->>'orderVersion')::bigint=?
-                  and payload->'payload'->>'requestId'=payload->>'eventId'
-                """,
-                id,
-                cancelVersion))
-        .isEqualTo(1);
-
-    // 이전 회차의 늦은 거절은 새 요청을 만들지 않는다.
-    receive("PaymentDeclined", result(id, payment, first), true);
-    assertThat(
-            number(
-                "select count(*) from commerce.outbox where aggregate_id=? and event_type='PaymentCancellationRequested'",
-                id))
-        .isEqualTo(2);
-    receive("PaymentCancelled", result(id, payment, retry), true);
-    assertThat(buyer(f, id).path("status").asText()).isEqualTo("CANCELLED");
-    assertStock(f, 2, 0, 0);
   }
 
   @org.junit.jupiter.params.ParameterizedTest

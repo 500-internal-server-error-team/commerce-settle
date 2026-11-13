@@ -63,66 +63,46 @@ public class ReconciliationService {
         // Inbox APPLIED를 먼저 검사하므로 Kafka 장애가 이미 반영된 이벤트 검사를 막지 않는다.
         Map<String, Long> offsets = null;
         var refreshedPages = new java.util.HashMap<String, Map<UUID, Event>>();
-        var targets = new java.util.HashMap<UUID, ReconciliationStore.SourcePage>();
-        var pending = store.pending(run, 100);
-        var locals = store.locals(pending, run.cutoff());
-        // 판정은 묶어서 기록한다. 중간 실패 전 판정은 기존처럼 남기고 실패를 그대로 전달한다.
-        var findings = new java.util.LinkedHashMap<UUID, Finding>();
-        try {
-          for (Event stored : pending) {
-            Event event = stored;
-            LocalEvent local = locals.get(event.eventId());
-            if ("PAYOUT".equals(event.eventType()) || !"APPLIED".equals(local.inboxStatus())) {
-              var target = targets.get(event.eventId());
-              if (target == null) {
-                target = store.sourcePage(run, event.eventId());
-                for (UUID member : target.eventIds()) targets.put(member, target);
-              }
-              String key = target.source() + ":" + target.cursor();
-              var refreshed = refreshedPages.get(key);
-              if (refreshed == null) {
-                Page page =
-                    "PAYMENT".equals(target.source())
-                        ? sources.payments(run.cutoff(), run.snapshot(), target.cursor())
-                        : sources.payouts(run.cutoff(), run.snapshot(), target.cursor());
-                store.refresh(run, target, page);
-                refreshed =
-                    page.items().stream()
-                        .collect(
-                            java.util.stream.Collectors.toMap(
-                                Event::eventId, java.util.function.Function.identity()));
-                refreshedPages.put(key, refreshed);
-              }
-              event = refreshed.get(stored.eventId());
-              if (event == null)
-                throw new IllegalStateException("Pending source event disappeared");
+        for (Event stored : store.pending(run, 100)) {
+          Event event = stored;
+          LocalEvent local = store.local(event, run.cutoff());
+          if ("PAYOUT".equals(event.eventType()) || !"APPLIED".equals(local.inboxStatus())) {
+            var target = store.sourcePage(run, event.eventId());
+            String key = target.source() + ":" + target.cursor();
+            var refreshed = refreshedPages.get(key);
+            if (refreshed == null) {
+              Page page =
+                  "PAYMENT".equals(target.source())
+                      ? sources.payments(run.cutoff(), run.snapshot(), target.cursor())
+                      : sources.payouts(run.cutoff(), run.snapshot(), target.cursor());
+              store.refresh(run, target, page);
+              refreshed =
+                  page.items().stream()
+                      .collect(
+                          java.util.stream.Collectors.toMap(
+                              Event::eventId, java.util.function.Function.identity()));
+              refreshedPages.put(key, refreshed);
             }
-            Finding result;
-            if ("PAYOUT".equals(event.eventType())) result = payout(event, local, run.cutoff());
-            else {
-              if (local.inboxStatus() == null
-                  && !local.quarantined()
-                  && "PUBLISHED".equals(event.publicationState())) {
-                if (offsets == null) offsets = positions.committed();
-                Long committed = offsets.get(event.topic() + ":" + event.partition());
-                // ack는 Inbox 커밋 뒤다. offset 조회 뒤 새 DB 읽기로 소비 중의 정상 커밋을 유실로 오인하지 않는다.
-                if (committed != null && committed > event.offset())
-                  local = store.local(event, run.cutoff());
-              }
-              result = payment(event, local, offsets == null ? Map.of() : offsets);
+            event = refreshed.get(stored.eventId());
+            if (event == null) throw new IllegalStateException("Pending source event disappeared");
+          }
+          Finding result;
+          if ("PAYOUT".equals(event.eventType())) result = payout(event, local, run.cutoff());
+          else {
+            if (local.inboxStatus() == null
+                && !local.quarantined()
+                && "PUBLISHED".equals(event.publicationState())) {
+              if (offsets == null) offsets = positions.committed();
+              Long committed = offsets.get(event.topic() + ":" + event.partition());
+              // ack는 Inbox 커밋 뒤다. offset 조회 뒤 새 DB 읽기로 소비 중의 정상 커밋을 유실로 오인하지 않는다.
+              if (committed != null && committed > event.offset())
+                local = store.local(event, run.cutoff());
             }
-            findings.put(event.eventId(), result);
+            result = payment(event, local, offsets == null ? Map.of() : offsets);
           }
-        } catch (RuntimeException failure) {
-          try {
-            store.record(run, findings);
-          } catch (RuntimeException suppressed) {
-            failure.addSuppressed(suppressed);
-          }
-          throw failure;
+          store.result(run, event, result);
         }
-        store.record(run, findings);
-        store.finish(run, () -> store.localChecks(run.cutoff(), run.snapshot()));
+        store.finish(run, store.localChecks(run.cutoff(), run.snapshot()));
       }
       return true;
     } catch (RuntimeException failure) {

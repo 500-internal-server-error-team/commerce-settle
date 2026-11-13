@@ -17,30 +17,10 @@ public interface OrderBenefits {
       Order.ExternalMethod method,
       Instant now);
 
-  /**
-   * 주문 트랜잭션의 견적. {@link #quote}와 같은 값을 돌려주되 쿠폰 행을 잠그고 읽어, 이어지는 {@link #reserve}가 같은 잠금과 최신 쿠폰 상태를
-   * 쓰게 한다. 예약은 하지 않는다.
-   */
-  default Offer quoteForOrder(
-      UUID buyerId,
-      UUID productId,
-      UUID sellerId,
-      long unitPrice,
-      int quantity,
-      UUID couponId,
-      UUID eventId,
-      Order.ExternalMethod method,
-      Instant now) {
-    return quote(buyerId, productId, sellerId, unitPrice, quantity, couponId, eventId, method, now);
-  }
-
   /** 주문·주소 사본을 만들기 전에 커밋된 이벤트 상태만 읽어 신청할 수 없는 이벤트를 거절한다. 잠금을 잡지 않으며 수량 확보는 reserve가 결정한다. */
   void requireEventOpen(UUID eventId);
 
-  /**
-   * 주문 트랜잭션에 참여하며 같은 트랜잭션의 {@link #quoteForOrder} 뒤에 호출한다. 이벤트 가격/버전·기간·참여 한도와 쿠폰 소유/수단/기한/예산을
-   * 재검사한다.
-   */
+  /** 주문 트랜잭션에 참여한다. 이벤트 가격/버전·기간·참여 한도와 쿠폰 소유/수단/기한/예산을 재검사한다. */
   void reserve(Order order, Long expectedEventVersion, Instant now);
 
   void retry(Order order, Instant now);

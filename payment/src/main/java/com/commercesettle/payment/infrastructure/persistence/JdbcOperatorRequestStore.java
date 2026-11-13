@@ -23,7 +23,16 @@ public class JdbcOperatorRequestStore implements OperatorRequestStore {
   @Transactional(propagation = Propagation.MANDATORY)
   public Optional<Completed> findForUpdate(Scope scope) {
     // 완료 기록이 없는 동시 요청도 같은 키로 직렬화한다. 잠금은 호출자의 트랜잭션이 끝날 때 해제한다.
-    TransactionLimits.apply(jdbc.getJdbcTemplate());
+    jdbc.getJdbcTemplate()
+        .queryForList(
+            """
+        SELECT set_config(budget.name,
+            least(coalesce(nullif(settings.setting::integer,0),budget.timeout_ms),
+                budget.timeout_ms)::text,true)
+        FROM (VALUES ('lock_timeout',1000),('statement_timeout',5000))
+            AS budget(name,timeout_ms)
+        JOIN pg_settings settings ON settings.name=budget.name
+        """);
     jdbc.queryForList(
         """
         SELECT pg_advisory_xact_lock(hashtextextended(

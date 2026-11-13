@@ -2,34 +2,6 @@
 
 [#133](https://github.com/500-internal-server-error-team/commerce-settle/issues/133)의 결제 처리량, PG 장애, Worker 재시작 뒤 정합성을 측정합니다. 지표 정의는 [검증 지표와 완료 기준](../../docs/design.md#검증-지표와-완료-기준)를 따릅니다.
 
-## 실험 준비와 분석
-
-주문 API·Payment 직접 주입·SQL 비교 등 시험 경로에 맞춰 적용합니다. [실험 보고 양식](../../.github/ISSUE_TEMPLATE/experiment-report.md)에 계획과 실행별 근거를 연결하며, 공통 지표 정의와 업무별 완료 조건은 위 검증 기준을 따릅니다.
-
-### 실행 전
-
-1. 가설·변경 변수·주 지표·허용 회귀·오류율, 반복·분석 방법과 중단 조건을 먼저 정합니다. 경로·완료점·구매자/상품 집중도와 초기 데이터, 코드·이미지·자원·병렬도·발생기·관측 설정을 고정합니다. 예열·주입·측정·배출을 나누고 서로 다른 조건은 별도 실험으로 기록합니다.
-2. 판정에 필요한 증거의 출처·수집 방법·주기·보존 위치를 정하고, 짧은 시범 입력으로 실제 수집을 확인합니다. 지표 신선도, 요청/업무 ID·추적·SQL의 연결, 시각 동기와 측정창, 원본 조회 가능 여부를 확인합니다. `UP`이나 대시보드 존재만으로 관측 준비를 통과시키지 않습니다.
-3. 필요한 증거가 빠지면 수집을 보완한 뒤 본 시험을 시작합니다. 탐색적 실행을 먼저 할 때는 미확보 항목·영향·보완 계획을 기록하고 해당 원인·개선 판정을 보류합니다. 수집 자체의 CPU·메모리·DB 부하, timeout·샘플링·보관 한도를 확인하고 전후에 같은 조건을 유지합니다. 관측 실패 시 추가 주입 중단·배출·원키 대조를 수행할 방법도 확인합니다.
-
-### 관측 수단과 한계
-
-| 수단 | 현재 확인하는 범위 | 별도로 확인할 증거 |
-| --- | --- | --- |
-| [호스트 자원 수집](resource_sample.py) | Docker CPU·메모리, `vmstat`·`iostat` 표본 | SQL·잠금 보유자·접수 차단 사유는 수집하지 않음 |
-| [금융 지표·추적](../../docs/development.md#금융-처리-시간과-비동기-추적) | 처리 단계·SQL 시간·연결 풀·대기열과 샘플 trace | 집계 지표와 샘플 trace만으로 모든 요청의 원인을 설명할 수 없음. 필요한 trace·로그를 보관 한도 전에 확보 |
-| [일반 주문 쿼리 비교](#일반-주문-쿼리-비교) | JDBC 실행 수·SQL 시간·연결 획득·잠금 대기 표본 | 네트워크 왕복·전체 서비스 성능과 구분. 변경 경로의 신규·재요청·충돌과 분산·집중 입력을 함께 검토 |
-| [업무 완료 지표 수집](#업무-완료전구간-지연의-전후-비교) | 이미 실행한 부하의 완료량·지연과 실제 DB 측정창 | 부하 주입·실행 조건 검증·금융 대조를 대신하지 않음 |
-
-DB 잠금 원인을 판정하는 시험은 대기/보유 PID·쿼리 식별자 또는 민감값을 제거한 SQL, 트랜잭션 경과시간·잠금 대상의 연결을 별도로 수집합니다. 대기 건수만으로 특정 SQL을 병목으로 확정하지 않습니다. 접수 gate의 동작을 분석할 때는 전환 시각·결정 사유와 판정에 사용한 값·원본 시각·조회 오류를 연결합니다. 현재 상태 지표만으로 과거 차단 사유를 알 수 없으므로 필요한 수집을 따로 준비합니다. 바인딩 값·토큰·개인정보는 저장하지 않습니다.
-
-### 사후 분석과 종료
-
-1. 실제 주입·HTTP 상태별 성공/오류·업무 완료·미완료와 적체·배출 시간을 대조합니다. HTTP·DB 지표의 실제 측정창을 확인해 비교 가능한 구간을 고릅니다. SQL 실행 수 감소와 전체 처리 개선을 구분하고 SQL·연결 획득·잠금·외부 호출·비동기 대기 중 달라진 구간을 확인합니다. 전후 조건·측정창·표본 수가 다르면 그 차이와 판정 한계를 먼저 밝힙니다. 이전 계측이 없던 구간과 새 지표로 개선율을 만들지 않습니다.
-2. 타임아웃·응답 미수신은 미접수의 증거가 아닙니다. 원래 키·실행 원장으로 실제 거래를 확인하고 새 키로 재전송하거나 초기화해 덮지 않습니다. 추가 주입을 멈춰도 접수된 거래를 보존하며, 배출 뒤 시험 범위의 주입 원장·원천별 금액·상태를 대조합니다. 미확정·예약·격리·적체가 남으면 담당자와 복구·재대조 조건을 기록합니다.
-3. 관측 사실·원인 가설·판정·다음 행동을 구분합니다. 도구 종료, 목표 주입 달성, 성능·정합성 통과와 분석 마감을 따로 기록합니다. 원인을 확정하지 못해도 실패 회차와 부족한 증거를 보존하며, 추가 확인의 대상·방법·완료 조건을 남깁니다. 결론은 검토한 경로·입력·측정 범위에 한정합니다.
-4. 실행별 입력·명령·버전/SHA·원장·지표 조회식/시간 구간·필요한 trace/로그·대조 결과를 기존 결과 경로에 보존하고 보고에서 연결합니다. 검토자가 접근할 수 있는 비밀정보 제거 근거를 제공하고, 접근 제한·보존 한도는 명시합니다. 시험용 상품·세션·프로세스·컨테이너와 공유 EC2는 해당 실행 절차대로 정리하거나 유지 담당·종료 조건을 남깁니다. 실패 기록과 필수 복구 근거는 정리로 삭제하지 않습니다.
-
 ## Mac에서 공개 HTTPS 주문 부하 시험
 
 [order_load.py](order_load.py)는 공개 API로 주문을 준비하고 [orders.js](orders.js)를 Mac의 Docker k6에서 실행합니다. 요청은 **공개 HTTPS → Caddy → Gateway → 주문 API**를 거칩니다. Node.js나 서버의 k6 배포는 필요하지 않습니다. Python 3·실행 중인 Docker Desktop과 접근 가능한 배포 주소를 준비한 뒤 저장소 루트에서 실행합니다.
@@ -87,30 +59,9 @@ Grafana의 **Financial processing**, Zipkin, Kafka UI에서 같은 측정 구간
 Commerce가 발행하는 것과 같은 `OrderPaymentRequested` v1을 `commerce-settle.commerce.v1`에 직접 넣고, Payment 수신부터 finance-mock 승인과 결과 Outbox 발행까지 측정합니다. 주문 API·Gateway 구간과 Commerce·Settlement의 결과 반영은 포함하지 않습니다.
 
 - **결제 확정 TPS:** Payment DB에서 `CONFIRMED`가 된 결제의 초당 건수
-- **지연:** 아래 [집계 기준](#지연적체-집계-기준)을 따릅니다. 발행→확정 지연은 Kafka 대기를 포함하고, 수신→확정 지연은 Payment 수신 뒤만 잽니다.
+- **수신→확정 지연:** Inbox 저장 시각(DB)부터 결제 확정 시각까지. 같은 Docker VM의 시계라 호스트 시계 오차가 들어가지 않습니다.
 - **미완료:** `PENDING`·`PROCESSING`·`UNKNOWN` 결제. 처리 대기 결제 요청(Inbox `WAITING`), Kafka lag, 미발행 Outbox는 따로 셉니다.
 - 아래 `ramp --mix` 예제는 카드·혼합(마일리지 1,000점)·간편결제·전액 마일리지를 같은 비율로 섞습니다. `--mix`를 생략하면 카드만 주입합니다.
-
-### 지연·적체 집계 기준
-
-`ramp`·`scenario`의 `summary.json`은 `aggregation`(현재 `version` 2)에 아래 기준을 함께 남깁니다. [#254](https://github.com/500-internal-server-error-team/commerce-settle/issues/254) 전 결과에는 이 필드가 없으며, 그 결과와는 기존 지표끼리만 비교합니다.
-
-| 필드 | 집계 대상 | 시작 → 종료 | 시계 |
-| --- | --- | --- | --- |
-| `stages[].injected`, `injected` | 이번 실행의 주입 원장에 기록한 요청. 원장의 단계 번호로 나누며 수신·확정이 다음 단계나 drain이어도 주입한 단계에 넣습니다. `injected`는 전체 단계입니다. | 아래 세 지연 | 아래 참고 |
-| `publishToConfirmed` | 위 요청 중 확정된 요청 | 주입 원장 기록 시각 → `payments.confirmed_at` | 발생기 호스트 → Payment DB |
-| `publishToReceipt` | 위 요청 중 Payment가 수신한 요청 | 주입 원장 기록 시각 → `inbox.created_at` | 발생기 호스트 → Payment DB |
-| `receiptToConfirmed` | 위 요청 중 확정된 요청 | `inbox.created_at` → `payments.confirmed_at` | Payment DB |
-| `stages[].latency` (기존) | 단계 구간 `[start, end)` 안에 Inbox에 저장된 확정 결제. 구간 밖에 수신된 요청은 빠집니다. | `inbox.created_at` → `payments.confirmed_at` | Payment DB |
-| `stages[].maxKafkaLag` (기존) | 단계 구간에 기록한 표본 | — | — |
-| `peaks` | 초기·주입·drain의 모든 표본. `kafkaLag`·`waiting`·`unfinished`·`outboxPending`의 최댓값과 그 경과 시각·단계 | — | — |
-
-- **발행 시각:** 주입 원장(`requests.csv`)의 기록 시각입니다. 발생기 호스트 시계(UTC)로 producer 표준 입력에 쓴 직후에 기록하므로 Kafka acks보다 조금 이릅니다.
-- **시계 차이:** 발행 시각과 DB 시각은 시계가 다르므로 차이를 보정하지 않고 `clock`에 남깁니다. 표본마다 상태 조회 직전·직후의 호스트 시각과 그 사이에 읽은 DB `clock_timestamp()`로 `DB − 호스트` 범위(ms)를 잽니다. 조회 왕복 시간만큼 불확실하므로, 발행 기준 지연을 이 범위보다 작은 차이로 비교하지 않습니다.
-- **미완료 요청:** 요약 시점(적체가 비거나 `--drain` 제한 시간 도달)에 확정·거절되지 않은 요청은 `unresolved`로 세고 지연 분포에서 뺍니다. `unresolved`가 0보다 크면 `complete=false`이며 지연 분포는 하한입니다. 거절은 `declined`로 세고 확정 지연에서 뺍니다.
-- **백분위수:** 기존 지표의 PostgreSQL `percentile_cont`와 같은 선형 보간이며 ms 단위, 소수 첫째 자리까지입니다.
-- **Kafka lag 미관측:** 그룹 재조정 중처럼 `kafka-consumer-groups --describe`에서 파티션 lag를 읽지 못한 표본은 0이 아니라 `null`로 남기고, `peaks.kafkaLag.unobservedSamples`로 셉니다. 이런 표본이 있으면 적체가 빈 것으로 보지 않습니다.
-- 상태 표본은 `--interval`(`scenario`는 5초) 간격이므로 `peaks`는 표본 사이의 순간 최댓값을 놓칠 수 있습니다.
 
 ## 실행
 
@@ -129,7 +80,7 @@ python3 tests/load/payment_load.py reconcile          # 원장 ↔ Payment ↔ f
 - `ramp`는 단계별 도착률로 넣으며 일정 간격으로 상태를 기록하고, 주입 뒤 적체가 빌 때까지(기본 최대 300초) 기다린 뒤 단계별 처리량·적체·지연을 `summary.json`에 남깁니다.
 - 상태 관측이 실패하면 추가 주입을 중지하고 주입 스레드·요청 원장·producer 종료를 확인한 뒤 오류로 끝납니다. 이때 성공 요약은 만들지 않으며, 이미 접수한 메시지는 취소하지 않습니다. 남은 요청 원장과 실제 Kafka·거래 상태를 대조하세요.
 - `scenario`는 PG 시나리오를 바꿔 Worker를 다시 만들고 초당 100건을 60초 넣은 뒤 대조합니다. `restart`는 시작 25초 뒤 `payment-worker`를 SIGKILL하고 다시 띄웁니다.
-- 결제 요청 처리 슬롯·승인 슬롯·DB 연결 풀은 `LOAD_PAYMENT_REQUEST_CONCURRENCY`(기본 3)·`LOAD_PAYMENT_APPROVAL_CONCURRENCY`(기본 6)·`LOAD_PAYMENT_DB_POOL_SIZE`(기본 20)로 바꿉니다. `enable`·`scenario`가 payment-worker를 다시 만들 때도 같은 값을 지정해야 합니다. `ramp --kill-after`의 재기동은 죽이기 전 Worker의 실제 값을 그대로 넘기므로 다시 지정하지 않아도 되며, 그 값을 `summary.json`의 `fault.workerSettingsBeforeKill`에 남깁니다. `ramp`는 실행 중인 Worker의 실제 값을 `summary.json`의 `workerSettings`에 남기고, Worker를 읽을 수 없으면 `null`로 남깁니다. `scenario`도 내부에서 `ramp`로 주입하므로 같은 값을 남깁니다.
+- 결제 요청 처리 슬롯·승인 슬롯·DB 연결 풀은 `LOAD_PAYMENT_REQUEST_CONCURRENCY`(기본 3)·`LOAD_PAYMENT_APPROVAL_CONCURRENCY`(기본 6)·`LOAD_PAYMENT_DB_POOL_SIZE`(기본 20)로 바꿉니다. `enable`·`scenario`가 payment-worker를 다시 만들 때도 같은 값을 지정해야 합니다. `ramp --kill-after`의 재기동은 죽이기 전 Worker의 실제 값을 그대로 넘기므로 다시 지정하지 않아도 되며, 그 값을 `summary.json`의 `fault.workerSettingsBeforeKill`에 남깁니다. `ramp`는 실행 중인 Worker의 실제 값을 `summary.json`의 `workerSettings`에 남기고, Worker를 읽을 수 없으면 `null`로 남깁니다. 이 기록은 `ramp`만 하며 `scenario` 결과에는 남지 않습니다.
 - `prepare`는 시험 스택의 finance-mock DB에 `load-pg-*` 시나리오를 직접 넣습니다.
 - 새 마일리지·간편결제 시험 지갑의 초기 잔액은 100억 원이며, `prepare`를 다시 실행해도 기존 잔액은 보존합니다. `reconcile`은 함께 생성한 간편결제 지갑의 저장된 초기 잔액을 기준으로 두 지갑을 대조합니다.
 - `replay`는 시험 스택의 `payment-api`에만 운영자 자격(`operator:load`)을 설정합니다. 자격은 `tests/load/work/operator.credential`에 무작위로 만듭니다.
@@ -155,7 +106,7 @@ LOAD_OPERATOR_CREDENTIAL="$(cat "$LOAD_WORK_DIR/operator.credential")" \
 
 ### 대조 항목
 
-`reconcile`은 현재 스택에서 넣은 요청 원장을 기준으로 다음을 확인하고, 하나라도 어긋나면 실패로 끝납니다. `--runs`로 일부 실행만 대조하면 같은 스택의 다른 실행에서 생긴 결제는 그 실행을 대조할 때 확인하고, 어느 실행의 원장에도 없는 결제만 문제로 셉니다. 원장은 스택의 모든 실행을 함께 읽으므로 두 실행에 같은 주문 ID가 있으면 대조를 거절합니다. 마일리지·간편결제 지갑은 현재 `LOAD_NAMESPACE`의 것만 확인하며, 같은 번호를 쓴 다른 실행의 차감도 잔액 계산에 포함합니다. 따라서 반복을 마친 뒤에는 실행 번호마다 그 번호로 `--runs` 없이 한 번씩 대조해, 빼 두었던 다른 실행의 결제와 각 번호의 지갑을 모두 확인합니다.
+`reconcile`은 현재 스택에서 넣은 요청 원장을 기준으로 다음을 확인하고, 하나라도 어긋나면 실패로 끝납니다.
 
 - 요청마다 결제가 정확히 하나이고 총액·마일리지·외부 결제액이 같으며 확정 또는 거절로 끝남
 - 외부 결제액이 있는 결제마다 승인 시도가 하나이고 업무 키가 결제 회차와 같음. finance-mock 거래와 금액·상태(확정↔`SUCCEEDED`, 거절↔`DECLINED`)가 같고, 결제에 연결되지 않은 대역 거래가 없음

@@ -124,21 +124,7 @@ public class CouponService {
       long grossAmount,
       Order.ExternalMethod method,
       Instant now) {
-    return quote(buyerId, couponId, sellerId, productId, grossAmount, method, now, false);
-  }
-
-  /** lock이면 주문 트랜잭션에서 쿠폰 행을 잠그고 읽는다. 이어지는 {@link #reserveQuoted}가 이 잠금을 쓴다. */
-  public Discount quote(
-      UUID buyerId,
-      UUID couponId,
-      UUID sellerId,
-      UUID productId,
-      long grossAmount,
-      Order.ExternalMethod method,
-      Instant now,
-      boolean lock) {
-    BuyerCoupon coupon =
-        owned(lock ? coupons.findByIdForUpdate(couponId) : coupons.findById(couponId), buyerId);
+    BuyerCoupon coupon = owned(coupons.findById(couponId), buyerId);
     long amount = coupon.discountFor(sellerId, productId, grossAmount, method, now);
     return new Discount(amount, coupon.getFunder());
   }
@@ -151,25 +137,6 @@ public class CouponService {
   public void reserve(Order order, Instant now) {
     change(
         order,
-        coupon ->
-            coupon.reserve(
-                order.getId(),
-                order.getPaymentCycleId(),
-                order.getSellerId(),
-                order.getProductId(),
-                order.getAmounts().grossAmount(),
-                order.getExternalMethod(),
-                now));
-  }
-
-  /**
-   * 같은 트랜잭션의 잠금 견적({@link #quote}의 lock) 뒤 주문 생성의 예약. 이미 잠그고 읽은 쿠폰을 영속성 컨텍스트에서 다시 쓰므로 행을 다시 조회하지
-   * 않는다.
-   */
-  @Transactional(propagation = Propagation.MANDATORY)
-  public void reserveQuoted(Order order, Instant now) {
-    apply(
-        owned(coupons.findById(order.getBuyerCouponId()), order.getBuyerId()),
         coupon ->
             coupon.reserve(
                 order.getId(),
@@ -200,12 +167,8 @@ public class CouponService {
   }
 
   private void change(Order order, Function<BuyerCoupon, Optional<CouponHistory>> transition) {
-    apply(
-        owned(coupons.findByIdForUpdate(order.getBuyerCouponId()), order.getBuyerId()), transition);
-  }
-
-  private void apply(
-      BuyerCoupon coupon, Function<BuyerCoupon, Optional<CouponHistory>> transition) {
+    BuyerCoupon coupon =
+        owned(coupons.findByIdForUpdate(order.getBuyerCouponId()), order.getBuyerId());
     Optional<CouponHistory> history = transition.apply(coupon);
     if (history.isPresent()) {
       coupons.save(coupon);

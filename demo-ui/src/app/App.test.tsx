@@ -442,30 +442,6 @@ it('빈 상품 목록에서는 판매자 상품 등록으로 안내하고 자동
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
-it('마일리지 흐름과 지갑 조회에만 시연 계정·준비 방법·미지원 범위를 표시하고 요청을 보내지 않는다', () => {
-  const fetch = setup();
-  const label = (id: string) => scenarios.find(s => s.id === id)!.label;
-  fireEvent.click(screen.getByRole('button', { name: /05.*쿠폰·마일리지/ }));
-  expect(screen.queryByLabelText('마일리지 시연 준비')).toBeNull();
-  for (const id of ['benefit.mixed', 'benefit.allmileage', 'benefit.insufficient']) {
-    fireEvent.click(screen.getByRole('button', { name: label(id) }));
-    const guide = screen.getByLabelText('마일리지 시연 준비');
-    expect(guide.textContent).toContain('fixture-buyer-a@example.test');
-    expect(guide.textContent).toContain('100,000점');
-    expect(guide.textContent).toContain('준비 방법');
-    expect(guide.textContent).toContain('충전');
-    expect(guide.textContent).toContain('pendingAccrualAmount');
-  }
-  fireEvent.click(screen.getByRole('button', { name: label('benefit.coupons') }));
-  expect(screen.queryByLabelText('마일리지 시연 준비')).toBeNull();
-  fireEvent.change(screen.getByLabelText('할 작업'), { target: { value: 'get_api_buyers_me_mileage' } });
-  expect(screen.getByLabelText('마일리지 시연 준비')).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: /07.*내역·알림/ }));
-  fireEvent.click(screen.getByRole('button', { name: label('history.mileage') }));
-  expect(screen.getByLabelText('마일리지 시연 준비')).toBeTruthy();
-  expect(fetch).toHaveBeenCalledTimes(1);
-});
-
 it('판매자의 반품 거절 흐름은 판매자 조회부터 시작한다', () => {
   setup();
   fireEvent.click(screen.getByRole('button', { name: /03.*취소·반품/ }));

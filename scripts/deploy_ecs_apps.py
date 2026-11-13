@@ -106,7 +106,7 @@ def wait_for(aws, cluster, name, task):
     require_stable(describe(aws, cluster, [name])[name], task)
 
 
-def prepare(aws, cluster, images, region, demo_auto_shipment=None):
+def prepare(aws, cluster, images, region):
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,255}", cluster):
         raise ValueError("an explicit ECS cluster name is required")
     account = image_identity(images["gateway"])[0]
@@ -142,15 +142,6 @@ def prepare(aws, cluster, images, region, demo_auto_shipment=None):
                 or not containers[0].get("essential", True)):
             raise RuntimeError("app container name or health check is missing")
         containers[0]["image"] = images[module_for(name)]
-        if demo_auto_shipment is not None and name == "commerce":
-            environment = {item["name"]: item["value"]
-                           for item in containers[0].get("environment", [])}
-            environment["APP_DEMO_AUTO_SHIPMENT_ENABLED"] = str(demo_auto_shipment).lower()
-            if demo_auto_shipment:
-                environment["APP_ORDER_WORKFLOW_ENABLED"] = "true"
-            containers[0]["environment"] = [
-                {"name": key, "value": value} for key, value in sorted(environment.items())
-            ]
         task["tags"] = [tag for tag in response.get("tags", [])
                         if not tag["key"].lower().startswith("aws:")]
         tasks[name] = task
@@ -180,18 +171,17 @@ def verify_https(origin):
                 raise RuntimeError("public Gateway OpenAPI response is missing")
 
 
-def rollback_baseline(services, cluster, images, region, demo_auto_shipment=None):
+def rollback_baseline(services, cluster, images, region):
     return {
         "status": "prepared", "cluster": cluster, "region": region,
         "previous": {name: value["taskDefinition"] for name, value in services.items()},
         "images": images,
-        "demo_auto_shipment": demo_auto_shipment,
     }
 
 
-def deploy(aws, cluster, images, region, verify, save, baseline, demo_auto_shipment=None):
-    services, tasks = prepare(aws, cluster, images, region, demo_auto_shipment)
-    expected = rollback_baseline(services, cluster, images, region, demo_auto_shipment)
+def deploy(aws, cluster, images, region, verify, save, baseline):
+    services, tasks = prepare(aws, cluster, images, region)
+    expected = rollback_baseline(services, cluster, images, region)
     if any(baseline.get(key) != value for key, value in expected.items()):
         raise RuntimeError("saved rollback baseline differs from the current release or services")
     record = {
@@ -252,11 +242,7 @@ def main():
     mode.add_argument("--prepare-only", action="store_true")
     mode.add_argument("--baseline")
     parser.add_argument("--baseline-sha256")
-    parser.add_argument("--demo-auto-shipment", choices=("true", "false", "preserve"),
-                        default="preserve")
     args = parser.parse_args()
-    demo_auto_shipment = (None if args.demo_auto_shipment == "preserve"
-                          else args.demo_auto_shipment == "true")
     try:
         origin = public_origin(args.public_url)
         images = read_images(args.images_directory, args.release, args.commit, args.region)
@@ -269,10 +255,8 @@ def main():
             temporary.replace(target)
 
         if args.prepare_only:
-            services, _ = prepare(Aws(args.region), args.cluster, images, args.region,
-                                  demo_auto_shipment)
-            save(rollback_baseline(services, args.cluster, images, args.region,
-                                   demo_auto_shipment))
+            services, _ = prepare(Aws(args.region), args.cluster, images, args.region)
+            save(rollback_baseline(services, args.cluster, images, args.region))
             print("Rollback baseline prepared; no AWS changes made.")
             return 0
         raw = Path(args.baseline).read_bytes()
@@ -282,7 +266,7 @@ def main():
         if (baseline.get("release"), baseline.get("commit")) != (args.release, args.commit):
             raise ValueError("rollback baseline belongs to another release")
         deploy(Aws(args.region), args.cluster, images, args.region,
-               lambda: verify_https(origin), save, baseline, demo_auto_shipment)
+               lambda: verify_https(origin), save, baseline)
     except (Exception, KeyboardInterrupt) as error:
         # The record contains only image/revision references, never task environments.
         reason = str(error) if isinstance(error, (ValueError, RuntimeError)) else type(error).__name__

@@ -267,30 +267,6 @@ class OutboxRelayTest {
     assertThat(coordinator).isEmpty();
   }
 
-  @Test
-  @DisplayName("슬롯이 남은 선점 뒤의 결과 저장은 후행이 없으면 다시 선점하지 않고 소진 전환은 복구 주기에만 실행한다")
-  void skipsClaimAfterResultWhenSlotsWereNotExhausted() {
-    var delivery = delivery();
-    var reply = new CompletableFuture<SendResult<String, byte[]>>();
-    when(service.claim(2, 240000, 10)).thenReturn(List.of(delivery), List.of());
-    when(template.send(anyString(), anyString(), any(byte[].class))).thenReturn(reply);
-    when(service.markPublished(any(), any())).thenReturn(true);
-    var relay = new OutboxRelay(service, template, 2, 240000, 10, coordinator::add, work::add);
-
-    relay.wakeUp();
-    coordinator.remove().run();
-    work.remove().run();
-    reply.complete(result(delivery, 73));
-    work.remove().run();
-
-    assertThat(coordinator).isEmpty();
-    verify(service).claim(2, 240000, 10);
-    verify(service, never()).expireExhausted(anyInt(), anyInt());
-    relay.recover();
-    coordinator.remove().run();
-    verify(service).expireExhausted(100, 10);
-  }
-
   private OutboxRelay relay() {
     return new OutboxRelay(service, template, 1, 240000, 10, coordinator::add, work::add);
   }

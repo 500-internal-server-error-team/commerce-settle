@@ -12,12 +12,9 @@ import com.commercesettle.payment.application.port.OutboxStore.Published;
 import com.commercesettle.payment.application.port.PaymentEventOutbox;
 import com.commercesettle.payment.application.service.OutboxDeliveryService;
 import com.commercesettle.payment.infrastructure.messaging.OutboxAppended;
-import com.commercesettle.payment.infrastructure.persistence.TransactionLimits;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Duration;
@@ -45,7 +42,6 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.jdbc.datasource.DelegatingDataSource;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
@@ -67,8 +63,6 @@ class PaymentOutboxIntegrationTest {
   private static final UUID CYCLE_ID = new UUID(0, 3);
   private static final OffsetDateTime OCCURRED_AT =
       OffsetDateTime.parse("2026-10-30T00:00:00.123456Z");
-
-  private static final AtomicInteger STATEMENTS = new AtomicInteger();
 
   @Container
   static final PostgreSQLContainer<?> POSTGRES =
@@ -135,57 +129,6 @@ class PaymentOutboxIntegrationTest {
     assertThatThrownBy(() -> inTransaction(() -> outbox.appendPaymentAccepted(event(eventId, 4))))
         .isInstanceOf(IllegalArgumentException.class);
     assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.outbox", Long.class)).isEqualTo(1);
-  }
-
-  @Test
-  @DisplayName("같은 결제의 더 낮은 버전 새 이벤트는 거절하고 이미 저장한 이전 이벤트 재저장은 허용한다")
-  void rejectsLowerVersionButKeepsReplayOfStoredEvent() {
-    EventEnvelope<PaymentAcceptedPayload> older = event(UUID.randomUUID(), PAYMENT_ID, 3, 1);
-    inTransaction(() -> outbox.appendPaymentAccepted(older));
-    inTransaction(() -> outbox.appendPaymentAccepted(event(UUID.randomUUID(), PAYMENT_ID, 3, 2)));
-
-    assertThatThrownBy(
-            () ->
-                inTransaction(
-                    () -> outbox.appendPaymentAccepted(event(UUID.randomUUID(), PAYMENT_ID, 3, 1))))
-        .isInstanceOf(IllegalArgumentException.class)
-        .hasMessageContaining("backwards");
-    inTransaction(() -> outbox.appendPaymentAccepted(older));
-    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.outbox", Long.class)).isEqualTo(2);
-    assertThat(appended).hasValue(2);
-  }
-
-  @Test
-  @DisplayName("한 트랜잭션에서 같은 결제의 이벤트 두 건을 저장해도 SQL 왕복은 잠금 1회와 이벤트당 1회다")
-  void appendsWithOneStatementPerEventAndOneLockPerAggregate() {
-    int statements =
-        new TransactionTemplate(manager)
-            .execute(
-                status -> {
-                  TransactionLimits.apply(jdbc);
-                  int before = STATEMENTS.get();
-                  outbox.appendPaymentAccepted(event(UUID.randomUUID(), PAYMENT_ID, 3, 1));
-                  outbox.appendPaymentAccepted(event(UUID.randomUUID(), PAYMENT_ID, 3, 2));
-                  return STATEMENTS.get() - before;
-                });
-
-    assertThat(statements).isEqualTo(3);
-    assertThat(jdbc.queryForObject("SELECT count(*) FROM payment.outbox", Long.class)).isEqualTo(2);
-  }
-
-  @Test
-  @DisplayName("선점은 시도 상한을 넘긴 행을 건너뛰기만 하고 확인 대상 전환은 주기 정리에서 한다")
-  void reviewsExhaustedRowsOnlyInPeriodicCleanup() {
-    inTransaction(() -> outbox.appendPaymentAccepted(event(UUID.randomUUID(), 3)));
-    jdbc.update(
-        "UPDATE payment.outbox SET status='RETRY',attempts=10,next_run_at=clock_timestamp()");
-
-    assertThat(delivery.claim(10, 240000, 10)).isEmpty();
-    assertThat(jdbc.queryForObject("SELECT status FROM payment.outbox", String.class))
-        .isEqualTo("RETRY");
-    assertThat(delivery.reviewExhausted(100, 10)).isEqualTo(1);
-    assertThat(jdbc.queryForObject("SELECT status FROM payment.outbox", String.class))
-        .isEqualTo("REVIEW_REQUIRED");
   }
 
   @Test
@@ -426,18 +369,13 @@ class PaymentOutboxIntegrationTest {
 
   private static EventEnvelope<PaymentAcceptedPayload> event(
       UUID eventId, UUID paymentId, long orderVersion) {
-    return event(eventId, paymentId, orderVersion, 0);
-  }
-
-  private static EventEnvelope<PaymentAcceptedPayload> event(
-      UUID eventId, UUID paymentId, long orderVersion, long aggregateVersion) {
     return new EventEnvelope<>(
         eventId,
         "PaymentAccepted",
         1,
         OCCURRED_AT,
         paymentId,
-        aggregateVersion,
+        0,
         new PaymentAcceptedPayload(paymentId, ORDER_ID, orderVersion, CYCLE_ID));
   }
 
@@ -447,33 +385,10 @@ class PaymentOutboxIntegrationTest {
     @Bean
     DataSource dataSource() {
       String url = POSTGRES.getJdbcUrl();
-      DataSource target =
-          new DriverManagerDataSource(
-              url + (url.contains("?") ? "&" : "?") + "socketTimeout=10&connectTimeout=5",
-              POSTGRES.getUsername(),
-              POSTGRES.getPassword());
-      // 저장소가 보내는 SQL 문장 수를 세기 위해 문장 생성만 센다.
-      return new DelegatingDataSource(target) {
-        @Override
-        public Connection getConnection() throws SQLException {
-          Connection connection = super.getConnection();
-          return (Connection)
-              Proxy.newProxyInstance(
-                  Connection.class.getClassLoader(),
-                  new Class<?>[] {Connection.class},
-                  (proxy, method, args) -> {
-                    if (method.getName().startsWith("prepare")
-                        || method.getName().equals("createStatement")) {
-                      STATEMENTS.incrementAndGet();
-                    }
-                    try {
-                      return method.invoke(connection, args);
-                    } catch (InvocationTargetException exception) {
-                      throw exception.getCause();
-                    }
-                  });
-        }
-      };
+      return new DriverManagerDataSource(
+          url + (url.contains("?") ? "&" : "?") + "socketTimeout=10&connectTimeout=5",
+          POSTGRES.getUsername(),
+          POSTGRES.getPassword());
     }
 
     @Bean

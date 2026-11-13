@@ -105,8 +105,7 @@ class JpaOrderRepository implements OrderRepository {
   }
 
   @Override
-  public java.util.List<UUID> findDue(
-      java.time.Instant now, int limit, UUID after, boolean autoShipment) {
-    return orders.findDue(now, limit, after, autoShipment);
+  public java.util.List<UUID> findDue(java.time.Instant now, int limit, UUID after) {
+    return orders.findDue(now, limit, after);
   }
 }

@@ -53,10 +53,7 @@ spring:
       properties:
         enable.idempotence: true
         max.in.flight.requests.per.connection: 5
-        # 전송 실패는 영속 Outbox에서 재시도한다. 임대보다 짧게 끝나도록 대기를 함께 제한한다.
-        max.block.ms: 5000
-        delivery.timeout.ms: 15000
-        request.timeout.ms: 5000
+        delivery.timeout.ms: 120000
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
     consumer:
@@ -64,11 +61,6 @@ spring:
       enable-auto-commit: false
       auto-offset-reset: none
       max-poll-records: 100
-      properties:
-        group.protocol: classic
-        # 강제 종료한 이전 멤버를 기본 45초 동안 기다리지 않는다.
-        session.timeout.ms: 10000
-        heartbeat.interval.ms: 3000
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
     listener:
@@ -129,8 +121,6 @@ app:
   dev-fixtures:
     enabled: ${APP_DEV_FIXTURES_ENABLED:false}
     run-scenarios: ${APP_DEV_FIXTURE_SCENARIOS_ENABLED:false}
-    # 시연 구매자 A/B 지갑만 없을 때 만든다(금융 스냅샷과 별개). Compose는 계정 fixture와 같이 켠다.
-    demo-wallets: ${APP_DEMO_WALLETS_ENABLED:false}
   kafka:
     quarantine:
       # 새 초기 SQL과 격리·DLT·재처리 시험을 확인한 환경에서만 켠다.
@@ -201,5 +191,5 @@ app:
     recovery-interval-ms: 1000
     # 동시에 보내는 이벤트 수. 전송 결과를 기다리는 동안 DB 연결을 쥐지 않는다.
     max-in-flight: ${PAYMENT_OUTBOX_MAX_IN_FLIGHT:32}
-    lease-ms: 30000
+    lease-ms: 240000
     max-attempts: 10
