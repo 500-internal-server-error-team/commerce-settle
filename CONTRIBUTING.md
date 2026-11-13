@@ -139,7 +139,7 @@ HTTP 오류는 [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html)의 `appli
 
 - 고정 필드는 Boot의 `logging.structured.json.add`, 작업 필드는 SLF4J 구조화 key-value로 추가합니다. 추적·업무 문맥은 HTTP·Kafka·Job 경계에서 전파하고 처리 후 정리합니다. 재전달의 `eventId`는 유지하며 새 추적으로 재시도해도 업무 ID로 연결합니다. 없는 필드는 생략합니다.
 - 업무 완료는 DB 커밋 후 기록하고 접수·외부 응답과 구분합니다. **타임아웃은 `result=UNKNOWN`**이며 확정 실패로 기록하지 않습니다. 미확정·확인 대상 기록은 추적 샘플링과 관계없이 남깁니다.
-- 등급은 `DEBUG`·`WARN`·`ERROR` 세 가지만 쓰고 `INFO`는 쓰지 않습니다. 기본 등급은 프레임워크를 포함해 `WARN`이며, 진단할 때만 `LOGGING_LEVEL_COM_COMMERCESETTLE=DEBUG`처럼 필요한 범위를 엽니다.
+- 등급은 `DEBUG`·`WARN`·`ERROR` 세 가지만 쓰고 `INFO`는 쓰지 않습니다. 예외로 각 서비스 시작 클래스의 기동 기록(기동마다 약 3줄)만 `INFO`로 남겨 기동·재기동 시점을 표시합니다. 기본 등급은 프레임워크를 포함해 `WARN`이며, 진단할 때만 `LOGGING_LEVEL_COM_COMMERCESETTLE=DEBUG`처럼 필요한 범위를 엽니다.
   - `DEBUG`: 정상 완료, 예상한 업무 거절, 선행 결과 대기(`WAITING`), 중복 무시, 임대 상실·이미 실행 중 같은 정상 경합, 진단
   - `WARN`: 운영자가 확인할 미확정(`UNKNOWN`)·확인 대상 전환(`REVIEW_REQUIRED`)·일시 장애
   - `ERROR`: 재시도 소진, 불변식 위반, 예상 밖 장애
