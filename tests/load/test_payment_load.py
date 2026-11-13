@@ -599,7 +599,7 @@ class InjectedAggregationTest(unittest.TestCase):
                 pass
 
             def is_alive(self):
-                if len(calls) >= 3 and not self.done:
+                if len(calls) >= 2 and not self.done:
                     self.target()
                     self.done = True
                 return not self.done
@@ -660,7 +660,13 @@ class InjectedAggregationTest(unittest.TestCase):
         self.assertEqual(2690, summary["stages"][0]["maxKafkaLag"])
         self.assertEqual(3489, summary["peaks"]["kafkaLag"]["value"])
         self.assertEqual("drain", summary["peaks"]["kafkaLag"]["stage"])
-        self.assertEqual(3, summary["aggregation"]["version"])
+        self.assertEqual(4, summary["aggregation"]["version"])
+
+    def test_reobserves_when_producer_finishes_during_an_empty_snapshot(self):
+        summary = self.summary([("late", 1.0)], {"late": (1.1, "CONFIRMED", 1.6)}, lags=[0, 0, 8, 0])
+        self.assertEqual(8, summary["peaks"]["kafkaLag"]["value"])
+        self.assertEqual("drain", summary["peaks"]["kafkaLag"]["stage"])
+        self.assertTrue(summary["drainComplete"])
 
     def test_unreadable_consumer_group_lag_is_not_recorded_as_zero(self):
         rebalancing = "\nConsumer group 'payment.v1' is rebalancing.\n"
@@ -804,7 +810,8 @@ class RemoteRoutingTest(unittest.TestCase):
 
 class DrainBoundaryTest(unittest.TestCase):
     def sample(self, elapsed, **changes):
-        return {"elapsed": elapsed, "stage": "drain", "unfinished": 0, "waiting": 0,
+        return {"elapsed": elapsed, "observationStarted": elapsed, "observationEnded": elapsed,
+                "stage": "drain", "unfinished": 0, "waiting": 0,
                 "kafkaLag": 0, "outboxPending": 0, "jobsReview": 0, "inboxReview": 0, **changes}
 
     def test_first_zero_observation_keeps_time_before_first_drain_sample(self):
@@ -830,12 +837,29 @@ class DrainBoundaryTest(unittest.TestCase):
         self.assertEqual(1.0, load.distribution([1.0] * 10000)["p99Ms"])
 
     def test_unknown_lag_is_not_evidence_of_nonzero_backlog(self):
-        sample = {"elapsed": 6, "stage": "drain", "unfinished": 0, "waiting": 0,
+        sample = {"elapsed": 6, "observationStarted": 6, "observationEnded": 6,
+                  "stage": "drain", "unfinished": 0, "waiting": 0,
                   "kafkaLag": None, "outboxPending": 0, "jobsReview": 0, "inboxReview": 0}
-        zero = {**sample, "elapsed": 8, "kafkaLag": 0}
+        zero = {**sample, "elapsed": 8, "observationStarted": 8, "observationEnded": 8, "kafkaLag": 0}
         result = load.drain_observation([{"endedMonotonic": 104, "end": "end"}], [sample, zero], 100)
         self.assertEqual(0, result["drainLowerBoundSeconds"])
         self.assertEqual(4, result["drainSeconds"])
+
+    def test_slow_snapshot_return_is_not_the_positive_observation_time(self):
+        marks = [{"endedMonotonic": 10, "end": "end"}]
+        positive = self.sample(16, unfinished=1, observationStarted=11, observationEnded=16)
+        zero = self.sample(20, observationStarted=19, observationEnded=20)
+        result = load.drain_observation(marks, [positive, zero], 0)
+        # The real drain at 13 is three seconds after injection, within these bounds.
+        self.assertEqual(1, result["drainLowerBoundSeconds"])
+        self.assertEqual(10, result["drainSeconds"])
+        self.assertLessEqual(result["drainLowerBoundSeconds"], 3)
+
+    def test_zero_snapshot_started_before_injection_end_cannot_prove_drain(self):
+        sample = self.sample(12, observationStarted=9, observationEnded=12)
+        result = load.drain_observation([{"endedMonotonic": 10, "end": "end"}], [sample], 0)
+        self.assertFalse(result["drainComplete"])
+        self.assertIsNone(result["drainSeconds"])
 
 
 if __name__ == "__main__":

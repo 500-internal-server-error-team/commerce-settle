@@ -20,6 +20,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 import re
 import shlex
@@ -474,7 +475,7 @@ def latency(start, end):
 
 # summary.json의 집계 기준. 기준을 바꾸면 version을 올려 이전 결과와 섞어 비교하지 않게 한다.
 AGGREGATION = {
-    "version": 3,
+    "version": 4,
     "population": "이번 실행에서 주입 원장(requests.csv)에 기록한 요청. 단계는 원장의 단계 번호이며, 수신·확정 시각이 "
                   "단계 구간 밖(다음 단계·drain)이어도 주입한 단계에 넣는다.",
     "publishedAt": "주입 원장 기록 시각. 발생기 호스트 시계(UTC)로 producer stdin에 쓴 직후이며 Kafka acks 전이다.",
@@ -494,8 +495,9 @@ AGGREGATION = {
     "clock": "표본마다 상태 조회 직전·직후의 호스트 시각과 그 사이의 DB clock_timestamp()로 잰 DB − 호스트 범위(ms). "
              "지연 값은 보정하지 않는다.",
     "percentiles": "선형 보간(PostgreSQL percentile_cont와 같음), ms, 소수 첫째 자리 반올림",
-    "drain": "동일 호스트 monotonic 시계의 실제 마지막 주입 종료부터 최초 적체 0 관측까지. "
-             "표본 간격의 상한이며 정확한 복구 순간이 아니다. 미완료·원점 누락은 null이다.",
+    "drain": "동일 호스트 monotonic 시계의 실제 마지막 주입 종료부터 측정한다. "
+             "주입 종료 뒤 시작한 조회만 사용하며 마지막 양수 조회 시작과 최초 적체 0 조회 종료를 하한·상한으로 남긴다. "
+             "정확한 복구 순간이 아니며 미완료·원점 누락은 null이다.",
     "confirmedPerSecond": "첫 표본을 제외한 구간의 확정 증가량 합 / 실제 표본 간격 합. 관측 없으면 null.",
 }
 
@@ -622,17 +624,17 @@ def drain_observation(marks, samples, origin):
         return {"injectionEndedAt": None, "drainSeconds": None, "drainComplete": False,
                 "drainLowerBoundSeconds": None, "drainObservation": "missing injection monotonic timestamp"}
     ended -= origin
-    following = [s for s in samples if s["elapsed"] >= ended]
+    following = [s for s in samples if s["observationStarted"] >= ended]
     completed = next((s for s in following if s.get("stage") == "drain" and is_idle(s)), None)
     previous = [s for s in following
-                if (completed is None or s["elapsed"] < completed["elapsed"])
+                if (completed is None or s["observationEnded"] < completed["observationEnded"])
                 and any(isinstance(s.get(key), (int, float)) and s[key] > 0
                         for key in ("unfinished", "waiting", "kafkaLag", "outboxPending", "jobsReview", "inboxReview"))]
     return {"injectionEndedAt": round(ended, 3),
             "injectionEndedAtHost": marks[-1]["end"],
-            "drainSeconds": round(completed["elapsed"]-ended, 3) if completed else None,
+            "drainSeconds": math.ceil((completed["observationEnded"]-ended)*1000)/1000 if completed else None,
             "drainComplete": completed is not None,
-            "drainLowerBoundSeconds": round(previous[-1]["elapsed"]-ended, 3) if previous else 0,
+            "drainLowerBoundSeconds": math.floor((previous[-1]["observationStarted"]-ended)*1000)/1000 if previous else 0,
             "drainObservation": "host monotonic injection end to first zero-backlog observation; sampling upper bound"}
 
 
@@ -660,8 +662,11 @@ def cmd_ramp(args):
             failure.append(error)
 
     thread = threading.Thread(target=worker)
-    samples = [{**snapshot(), "elapsed": 0.0}]
+    initial_started = time.monotonic()
+    initial = snapshot()
     origin = time.monotonic()
+    samples = [{**initial, "elapsed": 0.0, "observationStarted": initial_started-origin,
+                "observationEnded": 0.0}]
     fault = {}
     fault_thread = None
     if args.kill_after:
@@ -696,8 +701,13 @@ def cmd_ramp(args):
             out.write(json.dumps(samples[0]) + "\n")
             while True:
                 time.sleep(args.interval)
+                stage = len(marks) if thread.is_alive() else "drain"
+                observation_started = time.monotonic()
                 sample = snapshot()
-                sample["elapsed"] = round(time.monotonic() - origin, 2)
+                observation_ended = time.monotonic()
+                sample["elapsed"] = round(observation_ended - origin, 2)
+                sample["observationStarted"] = observation_started-origin
+                sample["observationEnded"] = observation_ended-origin
                 previous = samples[-1]
                 # 상태 조회에도 시간이 걸리므로 설정 간격 대신 실제 경과 시간으로 나눈다.
                 seconds = max(0.001, sample["elapsed"] - previous["elapsed"])
@@ -707,7 +717,7 @@ def cmd_ramp(args):
                 sample["confirmedDelta"] = sample["confirmed"] - previous["confirmed"]
                 sample["receivedPerSecond"] = round(
                     (sample["received"] - previous["received"]) / seconds, 1)
-                sample["stage"] = len(marks) if thread.is_alive() else "drain"
+                sample["stage"] = stage
                 samples.append(sample)
                 out.write(json.dumps(sample) + "\n")
                 out.flush()
@@ -725,6 +735,8 @@ def cmd_ramp(args):
                     if not marks or "endedMonotonic" not in marks[-1]:
                         raise SystemExit("injection end timestamp missing; drain timing is unverified")
                     drain_started = marks[-1]["endedMonotonic"]
+                if sample["stage"] != "drain":
+                    continue  # Re-observe after producer completion, including its final acks.
                 idle = is_idle(sample)
                 if idle and (fault_thread is None or not fault_thread.is_alive()):
                     break

@@ -15,21 +15,6 @@ class RefundTest {
   private static final Instant LATER = Instant.parse("2026-11-02T00:01:00.1234567Z");
 
   @Test
-  @DisplayName("환불 원거래 재조회가 최초 미확정 시각을 갱신하지 않는다")
-  void preservesTheFirstUnknownTimestamp() {
-    var payment = confirmed(new PaymentAmounts(10_000, 3_000, 0, 0));
-    var refund = Refund.accept(payment, UUID.randomUUID(), NOW);
-    refund.reserved(NOW);
-    refund.externalUnknown(LATER);
-    refund.externalRequested(LATER.plusSeconds(100));
-    refund.externalUnknown(LATER.plusSeconds(200));
-    assertThat(refund.getUnknownSince())
-        .isEqualTo(LATER.truncatedTo(java.time.temporal.ChronoUnit.MICROS));
-    assertThat(refund.getUpdatedAt())
-        .isEqualTo(LATER.plusSeconds(200).truncatedTo(java.time.temporal.ChronoUnit.MICROS));
-  }
-
-  @Test
   @DisplayName("확정된 결제의 외부 결제액과 사용 마일리지를 복사해 정산금 예약 대기로 접수한다")
   void acceptsConfirmedPaymentCopyingAmounts() {
     Payment payment = confirmed(new PaymentAmounts(10_000, 0, 0, 2_000));

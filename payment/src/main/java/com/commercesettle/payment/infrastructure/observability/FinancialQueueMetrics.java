@@ -24,11 +24,13 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
   private static final String PREFIX = "commerce_settle_";
   private static final List<String> NAMES =
       List.of(
-          PREFIX + "financial_queue_records", PREFIX + "financial_queue_due_delay_seconds",
+          PREFIX + "financial_queue_records",
+          PREFIX + "financial_queue_due_delay_seconds",
           PREFIX + "admission_observed_timestamp_seconds",
-              PREFIX + "financial_queue_review_required_records",
+          PREFIX + "financial_queue_review_required_records",
           PREFIX + "financial_operation_age_seconds",
-              PREFIX + "financial_operation_observed_timestamp_seconds");
+          PREFIX + "financial_operation_observed_timestamp_seconds",
+          PREFIX + "financial_operation_records");
   private static final List<String> QUEUES =
       List.of("payment.outbox", "payment.inbox", "payment.payment_jobs");
   private static final List<String> OPERATIONS = List.of("payment.unknown", "refund.unknown");
@@ -64,7 +66,7 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
        0, extract(epoch FROM statement_timestamp())::double precision FROM payment.payments WHERE status = 'UNKNOWN'
       UNION ALL
       SELECT 'refund.unknown', 'operation', count(*),
-       coalesce(extract(epoch FROM (statement_timestamp() - min(unknown_since))),0)::double precision,
+       0::double precision,
        0, extract(epoch FROM statement_timestamp())::double precision FROM payment.refunds WHERE status = 'UNKNOWN'
       """;
   private final JdbcTemplate jdbc;
@@ -116,6 +118,7 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
     var review = new ArrayList<GaugeDataPointSnapshot>();
     var operations = new ArrayList<GaugeDataPointSnapshot>();
     var operationTimes = new ArrayList<GaugeDataPointSnapshot>();
+    var operationRecords = new ArrayList<GaugeDataPointSnapshot>();
     for (String queue : QUEUES) {
       var value = current.getOrDefault(queue, new Values(0, 0, 0, 0));
       records.add(point(value.records(), "queue", queue));
@@ -128,7 +131,9 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
     }
     for (String operation : OPERATIONS) {
       var value = current.getOrDefault(operation, new Values(0, 0, 0, 0));
-      operations.add(point(value.age(), "operation", operation));
+      if (operation.equals("payment.unknown"))
+        operations.add(point(value.age(), "operation", operation));
+      operationRecords.add(point(value.records(), "operation", operation));
       operationTimes.add(point(value.observed(), "operation", operation));
     }
     return MetricSnapshots.of(
@@ -137,7 +142,8 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
         metric(2, observed),
         metric(3, review),
         metric(4, operations),
-        metric(5, operationTimes));
+        metric(5, operationTimes),
+        metric(6, operationRecords));
   }
 
   private static GaugeDataPointSnapshot point(double value, String label, String resource) {

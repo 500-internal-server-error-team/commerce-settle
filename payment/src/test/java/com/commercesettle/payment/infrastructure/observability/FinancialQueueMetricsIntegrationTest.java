@@ -20,7 +20,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Testcontainers
 class FinancialQueueMetricsIntegrationTest {
   @Test
-  void refundUnknownUsesFirstUncertaintyRatherThanRepeatedUpdateTime() {
+  void refundUnknownCountsCurrentRowsWithoutASeparateAgeTimestamp() {
     var source =
         new DriverManagerDataSource(
             POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
@@ -29,39 +29,35 @@ class FinancialQueueMetricsIntegrationTest {
     jdbc.update(
         """
         INSERT INTO payment.refunds (id,payment_id,order_refund_request_id,external_amount,mileage_amount,
-          status,business_key,external_status,unknown_since,created_at,updated_at,version)
+          status,business_key,external_status,created_at,updated_at,version)
         VALUES (?,gen_random_uuid(),gen_random_uuid(),1000,0,'UNKNOWN',gen_random_uuid(),'UNKNOWN',
-          statement_timestamp()-interval '901 seconds',statement_timestamp()-interval '1000 seconds',statement_timestamp(),0)
+          statement_timestamp()-interval '1000 seconds',statement_timestamp(),0)
         """,
         id);
     try (var metrics = new FinancialQueueMetrics(source, null)) {
       metrics.refresh();
       assertThat(
               value(
-                  metrics.collect(),
-                  "financial_operation_age_seconds",
-                  "operation",
-                  "refund.unknown"))
-          .isGreaterThanOrEqualTo(901);
+                  metrics.collect(), "financial_operation_records", "operation", "refund.unknown"))
+          .isEqualTo(1);
+      for (var family : metrics.collect())
+        if (family.getMetadata().getName().endsWith("financial_operation_age_seconds"))
+          assertThat(((GaugeSnapshot) family).getDataPoints())
+              .noneMatch(point -> "refund.unknown".equals(point.getLabels().get("operation")));
       jdbc.update(
           "UPDATE payment.refunds SET updated_at=statement_timestamp(),version=version+1 WHERE id=?",
           id);
       metrics.refresh();
       assertThat(
               value(
-                  metrics.collect(),
-                  "financial_operation_age_seconds",
-                  "operation",
-                  "refund.unknown"))
-          .isGreaterThanOrEqualTo(901);
-      jdbc.update("UPDATE payment.refunds SET status='EXTERNAL_PENDING' WHERE id=?", id);
+                  metrics.collect(), "financial_operation_records", "operation", "refund.unknown"))
+          .isEqualTo(1);
+      jdbc.update(
+          "UPDATE payment.refunds SET status='DECLINED',external_status='DECLINED' WHERE id=?", id);
       metrics.refresh();
       assertThat(
               value(
-                  metrics.collect(),
-                  "financial_operation_age_seconds",
-                  "operation",
-                  "refund.unknown"))
+                  metrics.collect(), "financial_operation_records", "operation", "refund.unknown"))
           .isZero();
     } finally {
       jdbc.update("DELETE FROM payment.refunds WHERE id=?", id);

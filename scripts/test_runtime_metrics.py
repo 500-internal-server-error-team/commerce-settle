@@ -127,6 +127,23 @@ class RuntimeMetricsTest(unittest.TestCase):
             metrics.refresh()
         self.assertIn('cpu_usage_ratio{basis="host_shared",service="payment-worker"} 0.1', metrics.render().decode())
 
+    def test_restart_marks_the_unobserved_event_window_even_when_current_state_is_healthy(self):
+        requests = []
+        def fetch(path):
+            if path.startswith('/events?'):
+                requests.append(path)
+                return []  # The exit at 1050 is outside the restarted collector's query.
+            return self.fetch(path)
+        with patch.object(runtime.time, 'time', return_value=1120):
+            restarted = runtime.RuntimeMetrics(fetch)
+            restarted.refresh()
+        self.assertEqual(['/events?since=1089&until=1119'], requests)
+        self.assertIn('runtime_event_gap_timestamp_seconds 1120', restarted.render().decode())
+        for now in range(1135, 1436, 15):
+            with patch.object(runtime.time, 'time', return_value=now):
+                restarted.refresh()
+        self.assertIn('runtime_event_gap_timestamp_seconds 1120', restarted.render().decode())
+
 
 if __name__ == "__main__":
     unittest.main()

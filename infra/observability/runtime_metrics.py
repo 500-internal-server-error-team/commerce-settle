@@ -144,7 +144,8 @@ class RuntimeMetrics:
         self.events = {}
         self.cursor = int(time.time()) - 30
         self.coverage_start = self.cursor
-        self.event_gap = 0
+        # A new process cannot prove coverage before its initial historical query.
+        self.event_gap = time.time()
         self.lock = threading.Lock()
 
     def refresh(self):
