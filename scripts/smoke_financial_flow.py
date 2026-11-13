@@ -4,6 +4,7 @@ Owns a fresh Compose project and removes only its resources. Approval/refund use
 Commerce, Payment and Settlement use real PostgreSQL/Kafka. Payouts/notifications are separate.
 """
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -157,7 +158,7 @@ def observed_business_metrics(prometheus, sql):
         raise AssertionError(str(failure) + "; " + json.dumps(last, sort_keys=True)) from failure
 
 
-def verify():
+def verify(group="all"):
     with stack("cs-financial-flow-", memory_storage=True, commerce_outbox=False) as compose:
         def flow(*args, **kwargs):
             return compose("-f", str(FLOW), *args, **kwargs)
@@ -523,38 +524,40 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
                               "mileage_reservations":"RELEASED,RELEASED","order":"CANCELLED","inventory_reservation":"RELEASED",
                               "duplicates_replayed":True}}),flush=True)
 
+        first_refund = second_refund = None
         try:
-            first_refund, second_refund = timed("base scenarios", scenarios, paid_order, cancel, refund_state, completed,
-                                                inventory, reservation, compose, gate_open)
-            worker_settings("fixture-pg-reject-v1")
-            retry_order, retry_paid = timed("retry approval", paid_order, MILEAGE, retry_after_decline=True)
-            timed("retry approval refund", lambda: (cancel(retry_order), completed(retry_order, retry_paid)))
-            timed("retry decline and cancellation", cancelled_retry, block_approval=False)
-            timed("retry cancellation before approval", cancelled_retry, block_approval=True)
-            # Card, all-mileage (including zero external HTTP calls), and external EASY_PAY wallet.
-            card_order, card_payment = paid_order(0)
-            cancel(card_order)
-            completed(card_order, card_payment, 0)
-            before_calls = mock_calls()
-            mileage_order, mileage_payment = paid_order(PRICE)
-            cancel(mileage_order)
-            completed(mileage_order, mileage_payment, PRICE)
-            assert mock_calls() == before_calls, "E=0 made an external HTTP call"
-            easy_order, easy_payment = paid_order(MILEAGE, "EASY_PAY", "fixture-easy-wallet")
-            cancel(easy_order)
-            completed(easy_order, easy_payment)
-            assert sql("finance_mock", "select balance from finance_mock.mock_accounts where account_ref='fixture-easy-wallet'") == "1000000"
+            if group in {"all", "core"}:
+                first_refund, second_refund = timed("base scenarios", scenarios, paid_order, cancel, refund_state, completed,
+                                                    inventory, reservation, compose, gate_open)
+                worker_settings("fixture-pg-reject-v1")
+                retry_order, retry_paid = timed("retry approval", paid_order, MILEAGE, retry_after_decline=True)
+                timed("retry approval refund", lambda: (cancel(retry_order), completed(retry_order, retry_paid)))
+                timed("retry decline and cancellation", cancelled_retry, block_approval=False)
+                timed("retry cancellation before approval", cancelled_retry, block_approval=True)
+                # Card, all-mileage (including zero external HTTP calls), and external EASY_PAY wallet.
+                card_order, card_payment = paid_order(0)
+                cancel(card_order)
+                completed(card_order, card_payment, 0)
+                before_calls = mock_calls()
+                mileage_order, mileage_payment = paid_order(PRICE)
+                cancel(mileage_order)
+                completed(mileage_order, mileage_payment, PRICE)
+                assert mock_calls() == before_calls, "E=0 made an external HTTP call"
+                easy_order, easy_payment = paid_order(MILEAGE, "EASY_PAY", "fixture-easy-wallet")
+                cancel(easy_order)
+                completed(easy_order, easy_payment)
+                assert sql("finance_mock", "select balance from finance_mock.mock_accounts where account_ref='fixture-easy-wallet'") == "1000000"
 
-            # Move only the owned approval's due date; the real receipt scheduler creates cash before refund.
-            cash_order, cash_payment = paid_order()
-            approval = sql("payment", f"select external_ref from payment.payment_attempts where payment_id='{cash_payment}' and status='APPROVED'")
-            sql("finance_mock", f"update finance_mock.mock_transactions set pg_receipt_due_at=now()-interval '1s' where id='{approval}'")
-            until(lambda: sql("finance_mock", f"select count(*) from finance_mock.mock_cash_entries where transaction_id='{approval}' and kind='PG_RECEIPT'") == "1",
-                  "real PG receipt scheduler did not receive cash", 100)
-            cancel(cash_order)
-            cash_refund = completed(cash_order, cash_payment)
-            cash_external = sql("payment", f"select external_ref from payment.refunds where id='{cash_refund}'")
-            assert sql("finance_mock", f"select amount from finance_mock.mock_cash_entries where transaction_id='{cash_external}' and kind='REFUND_DEBIT'") == str(-(PRICE-MILEAGE))
+                # Move only the owned approval's due date; the real receipt scheduler creates cash before refund.
+                cash_order, cash_payment = paid_order()
+                approval = sql("payment", f"select external_ref from payment.payment_attempts where payment_id='{cash_payment}' and status='APPROVED'")
+                sql("finance_mock", f"update finance_mock.mock_transactions set pg_receipt_due_at=now()-interval '1s' where id='{approval}'")
+                until(lambda: sql("finance_mock", f"select count(*) from finance_mock.mock_cash_entries where transaction_id='{approval}' and kind='PG_RECEIPT'") == "1",
+                      "real PG receipt scheduler did not receive cash", 100)
+                cancel(cash_order)
+                cash_refund = completed(cash_order, cash_payment)
+                cash_external = sql("payment", f"select external_ref from payment.refunds where id='{cash_refund}'")
+                assert sql("finance_mock", f"select amount from finance_mock.mock_cash_entries where transaction_id='{cash_external}' and kind='REFUND_DEBIT'") == str(-(PRICE-MILEAGE))
 
             def refund_info(payment):
                 return sql("payment", f"select id || '/' || business_key from payment.refunds where payment_id='{payment}'").split("/")
@@ -565,141 +568,145 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
             def external_count(key):
                 return sql("finance_mock", f"select count(*) from finance_mock.mock_transactions where operation='REFUND' and business_key='{key}'")
 
-            # Timeout/response loss plus an unavailable lookup endpoint must keep reservation and mileage.
-            worker_settings("flow-delayed-v1", APP_REFUND_HTTP_TIMEOUT="1s")
-            lost_order, lost_payment = paid_order()
-            cancel(lost_order)
-            until(lambda: sql("payment", f"select count(*) from payment.refunds where payment_id='{lost_payment}'") == "1", "refund not accepted")
-            lost_refund, lost_key = refund_info(lost_payment)
-            until(lambda: external_count(lost_key) == "1", "external refund not committed")
-            compose("pause", "finance-mock")
-            try:
-                until(lambda: refund_state(lost_payment) == "UNKNOWN/EXTERNAL_REFUND_PENDING", "timeout was not UNKNOWN")
-                until(lambda: sql("payment", f"select count(*) from payment.payment_jobs where refund_id='{lost_refund}' and attempts>=2 and status='RETRY'") == "1",
-                      "unavailable lookup result was not recorded as a retry")
-                assert reserved(lost_payment) == "ACTIVE"
-                assert sql("payment", f"select count(*) from payment.mileage_entries where payment_id='{lost_payment}' and kind='RESTORE'") == "0"
-            finally:
-                compose("unpause", "finance-mock")
-            completed(lost_order, lost_payment)
-            assert external_count(lost_key) == "1"
-
-            # External success, then SIGKILL before local recording; a new worker queries the old key.
-            worker_settings("flow-crash-v1", APP_REFUND_HTTP_TIMEOUT="20s")
-            crash_order, crash_payment = paid_order()
-            cancel(crash_order)
-            until(lambda: sql("payment", f"select count(*) from payment.refunds where payment_id='{crash_payment}'") == "1", "refund not accepted")
-            crash_refund, crash_key = refund_info(crash_payment)
-            until(lambda: external_count(crash_key) == "1", "external refund not committed before crash")
-            stored = sql("payment", f"select trace_parent from payment.payment_jobs where refund_id='{crash_refund}'").split("-")
-            assert len(stored) == 4 and stored[1] == refund_traces[crash_order]
-            crash_parent = stored[2]
-
-            def parent_exported():
+            if group in {"all", "refund-failures"}:
+                # Timeout/response loss plus an unavailable lookup endpoint must keep reservation and mileage.
+                worker_settings("flow-delayed-v1", APP_REFUND_HTTP_TIMEOUT="1s")
+                lost_order, lost_payment = paid_order()
+                cancel(lost_order)
+                until(lambda: sql("payment", f"select count(*) from payment.refunds where payment_id='{lost_payment}'") == "1", "refund not accepted")
+                lost_refund, lost_key = refund_info(lost_payment)
+                until(lambda: external_count(lost_key) == "1", "external refund not committed")
+                compose("pause", "finance-mock")
                 try:
-                    with urlopen(zipkin + "/api/v2/trace/" + stored[1], timeout=5) as response:
-                        return any(span["id"] == crash_parent for span in json.load(response))
-                except HTTPError as error:
-                    if error.code == 404:
-                        return False
-                    raise
-            # Prove the completed predecessor was collected before SIGKILL. A killed process cannot export
-            # its in-flight spans; do not turn batch-export timing into a false durable-context failure.
-            until(parent_exported, "persisted predecessor was not exported before the crash barrier", 10)
-            assert sql("payment", f"select external_status from payment.refunds where id='{crash_refund}'") == "REQUESTED"
-            assert sql("payment", f"select status from payment.payment_jobs where refund_id='{crash_refund}'") == "RUNNING"
-            compose("kill", "-s", "SIGKILL", "payment-worker")
-            assert reserved(crash_payment) == "ACTIVE"
-            assert sql("payment", f"select count(*) from payment.mileage_entries where payment_id='{crash_payment}' and kind='RESTORE'") == "0"
-            sql("payment", f"update payment.payment_jobs set lease_until=now()-interval '1s' where refund_id='{crash_refund}'")
-            worker_settings()
-            completed(crash_order, crash_payment, recovered_parent=crash_parent)
-            assert external_count(crash_key) == "1"
-            assert int(sql("payment", f"select attempts from payment.payment_jobs where refund_id='{crash_refund}'")) >= 2
+                    until(lambda: refund_state(lost_payment) == "UNKNOWN/EXTERNAL_REFUND_PENDING", "timeout was not UNKNOWN")
+                    until(lambda: sql("payment", f"select count(*) from payment.payment_jobs where refund_id='{lost_refund}' and attempts>=2 and status='RETRY'") == "1",
+                          "unavailable lookup result was not recorded as a retry")
+                    assert reserved(lost_payment) == "ACTIVE"
+                    assert sql("payment", f"select count(*) from payment.mileage_entries where payment_id='{lost_payment}' and kind='RESTORE'") == "0"
+                finally:
+                    compose("unpause", "finance-mock")
+                completed(lost_order, lost_payment)
+                assert external_count(lost_key) == "1"
 
-            # Fence a late SUCCEEDED response. Keep the replacement lease alive until the old call is rejected.
-            # Lease loss is a normal race logged at DEBUG; open it only for this step's worker.
-            worker_settings("flow-late-success-v1", APP_REFUND_HTTP_TIMEOUT="15s",
-                            LOGGING_LEVEL_COM_COMMERCESETTLE_PAYMENT_APPLICATION_SERVICE="DEBUG")
-            late_order, late_payment = paid_order()
-            cancel(late_order)
-            until(lambda: sql("payment", f"select count(*) from payment.refunds where payment_id='{late_payment}'") == "1", "refund not accepted")
-            late_refund, late_key = refund_info(late_payment)
-            until(lambda: external_count(late_key) == "1", "external refund not committed before fencing")
-            late_job = sql("payment", f"select id from payment.payment_jobs where refund_id='{late_refund}'")
-            sql("payment", f"update payment.payment_jobs set lease_token='{uuid.uuid4()}',lease_until=now()+interval '60s' where refund_id='{late_refund}'")
-            until(lambda: any('Refund result was not recorded because the lease was lost' in line for line in
-                             compose("logs", "--no-color", "--no-log-prefix", "--since", "30s", "payment-worker").splitlines()),
-                  "late success was not rejected by the old lease token", 30)
-            assert sql("payment", f"select count(*) from payment.mileage_entries where payment_id='{late_payment}' and kind='RESTORE'") == "0"
-            assert sql("payment", f"select count(*) from payment.outbox where aggregate_id='{late_payment}' and event_type='RefundFinancialCompleted'") == "0"
-            sql("payment", f"update payment.payment_jobs set lease_until=now()-interval '1s' where id='{late_job}'")
-            completed(late_order, late_payment)
-            assert external_count(late_key) == "1"
-            assert int(sql("payment", f"select attempts from payment.payment_jobs where refund_id='{late_refund}'")) >= 2
+                # External success, then SIGKILL before local recording; a new worker queries the old key.
+                worker_settings("flow-crash-v1", APP_REFUND_HTTP_TIMEOUT="20s")
+                crash_order, crash_payment = paid_order()
+                cancel(crash_order)
+                until(lambda: sql("payment", f"select count(*) from payment.refunds where payment_id='{crash_payment}'") == "1", "refund not accepted")
+                crash_refund, crash_key = refund_info(crash_payment)
+                until(lambda: external_count(crash_key) == "1", "external refund not committed before crash")
+                stored = sql("payment", f"select trace_parent from payment.payment_jobs where refund_id='{crash_refund}'").split("-")
+                assert len(stored) == 4 and stored[1] == refund_traces[crash_order]
+                crash_parent = stored[2]
 
-            # Crash-before-POST fixture: REQUESTED is durable but the mock has no transaction.
-            worker_settings(APP_REFUND_ENABLED="false")
-            absent_order, absent_payment = paid_order()
-            cancel(absent_order)
-            until(lambda: refund_state(absent_payment) == "EXTERNAL_PENDING/EXTERNAL_REFUND_PENDING", "reservation not ready")
-            absent_refund, absent_key = refund_info(absent_payment)
-            sql("payment", f"update payment.refunds set external_status='REQUESTED' where id='{absent_refund}'")
-            before_missing = mock_calls("GET", "404")
-            worker_settings()
-            completed(absent_order, absent_payment)
-            assert mock_calls("GET", "404") > before_missing
-            assert external_count(absent_key) == "1"
+                def parent_exported():
+                    try:
+                        with urlopen(zipkin + "/api/v2/trace/" + stored[1], timeout=5) as response:
+                            return any(span["id"] == crash_parent for span in json.load(response))
+                    except HTTPError as error:
+                        if error.code == 404:
+                            return False
+                        raise
+                # Prove the completed predecessor was collected before SIGKILL. A killed process cannot export
+                # its in-flight spans; do not turn batch-export timing into a false durable-context failure.
+                until(parent_exported, "persisted predecessor was not exported before the crash barrier", 10)
+                assert sql("payment", f"select external_status from payment.refunds where id='{crash_refund}'") == "REQUESTED"
+                assert sql("payment", f"select status from payment.payment_jobs where refund_id='{crash_refund}'") == "RUNNING"
+                compose("kill", "-s", "SIGKILL", "payment-worker")
+                assert reserved(crash_payment) == "ACTIVE"
+                assert sql("payment", f"select count(*) from payment.mileage_entries where payment_id='{crash_payment}' and kind='RESTORE'") == "0"
+                sql("payment", f"update payment.payment_jobs set lease_until=now()-interval '1s' where refund_id='{crash_refund}'")
+                worker_settings()
+                completed(crash_order, crash_payment, recovered_parent=crash_parent)
+                assert external_count(crash_key) == "1"
+                assert int(sql("payment", f"select attempts from payment.payment_jobs where refund_id='{crash_refund}'")) >= 2
 
-            # PROCESSING is an explicit DB response fixture; Finance Mock normally commits a terminal result.
-            worker_settings(APP_REFUND_ENABLED="false")
-            processing_order, processing_payment = paid_order()
-            cancel(processing_order)
-            until(lambda: refund_state(processing_payment) == "EXTERNAL_PENDING/EXTERNAL_REFUND_PENDING", "reservation not ready")
-            processing_refund, processing_key = refund_info(processing_payment)
-            original = sql("payment", f"select external_ref from payment.payment_attempts where payment_id='{processing_payment}' and status='APPROVED'")
-            path = f"/mock/providers/PG_A/payments/{original}/refunds"
-            payload = {"businessKey": processing_key, "amount": PRICE-MILEAGE}
-            status, external = mock_request("POST", path, payload)
-            assert status == 202, (status, external)
-            sql("finance_mock", f"update finance_mock.mock_transactions set status='PROCESSING',succeeded_at=null where id='{external['id']}'")
-            sql("payment", f"update payment.refunds set external_status='REQUESTED' where id='{processing_refund}'")
-            posts_before = mock_calls("POST")
-            worker_settings()
-            until(lambda: refund_state(processing_payment) == "UNKNOWN/EXTERNAL_REFUND_PENDING", "PROCESSING was not retained as UNKNOWN")
-            assert reserved(processing_payment) == "ACTIVE"
-            assert mock_calls("POST") == posts_before
-            sql("finance_mock", f"update finance_mock.mock_transactions set status='SUCCEEDED',succeeded_at='{external['succeededAt']}' where id='{external['id']}'")
-            completed(processing_order, processing_payment)
-            status, duplicate = mock_request("POST", path, payload)
-            assert status == 202 and duplicate["id"] == external["id"]
-            assert external_count(processing_key) == "1"
-            assert sql("payment", f"select count(*) from payment.mileage_entries where payment_id='{processing_payment}' and kind='RESTORE'") == "1"
+                # Fence a late SUCCEEDED response. Keep the replacement lease alive until the old call is rejected.
+                # Lease loss is a normal race logged at DEBUG; open it only for this step's worker.
+                worker_settings("flow-late-success-v1", APP_REFUND_HTTP_TIMEOUT="15s",
+                                LOGGING_LEVEL_COM_COMMERCESETTLE_PAYMENT_APPLICATION_SERVICE="DEBUG")
+                late_order, late_payment = paid_order()
+                cancel(late_order)
+                until(lambda: sql("payment", f"select count(*) from payment.refunds where payment_id='{late_payment}'") == "1", "refund not accepted")
+                late_refund, late_key = refund_info(late_payment)
+                until(lambda: external_count(late_key) == "1", "external refund not committed before fencing")
+                late_job = sql("payment", f"select id from payment.payment_jobs where refund_id='{late_refund}'")
+                sql("payment", f"update payment.payment_jobs set lease_token='{uuid.uuid4()}',lease_until=now()+interval '60s' where refund_id='{late_refund}'")
+                until(lambda: any('Refund result was not recorded because the lease was lost' in line for line in
+                                 compose("logs", "--no-color", "--no-log-prefix", "--since", "30s", "payment-worker").splitlines()),
+                      "late success was not rejected by the old lease token", 30)
+                assert sql("payment", f"select count(*) from payment.mileage_entries where payment_id='{late_payment}' and kind='RESTORE'") == "0"
+                assert sql("payment", f"select count(*) from payment.outbox where aggregate_id='{late_payment}' and event_type='RefundFinancialCompleted'") == "0"
+                sql("payment", f"update payment.payment_jobs set lease_until=now()-interval '1s' where id='{late_job}'")
+                completed(late_order, late_payment)
+                assert external_count(late_key) == "1"
+                assert int(sql("payment", f"select attempts from payment.payment_jobs where refund_id='{late_refund}'")) >= 2
 
-            # A confirmed external decline releases the actual Settlement reservation, with no mileage restore.
-            worker_settings("fixture-pg-refund-reject-v1")
-            rejected_order, rejected_payment = paid_order()
-            cancel(rejected_order)
-            until(lambda: refund_state(rejected_payment) == "DECLINED/FAILED", "external decline did not release reservation")
-            assert reserved(rejected_payment) == "RELEASED"
-            assert sql("payment", f"select count(*) from payment.mileage_entries where payment_id='{rejected_payment}' and kind='RESTORE'") == "0"
-            assert sql("settlement", f"select count(*) from settlement.settlement_entries where payment_id='{rejected_payment}' and reversal_of is not null") == "0"
-            assert reservation(rejected_order) == "CONSUMED"
-            assert sql("finance_mock", "select balance from finance_mock.mock_accounts where account_ref='fixture-payout-funding'") == "1000000"
-            assert sql("finance_mock", "select coalesce(sum(amount),0) from finance_mock.mock_cash_entries") == "0"
-            print(json.dumps({"httpRefundCases": "card,mixed,mileage-only,easy-pay,receipt,timeout,lookup-unavailable,crash,late-token,absent,processing,declined",
-                              "processingAndAbsence": "explicit isolated DB fixtures; transport is real HTTP"}), flush=True)
+                # Crash-before-POST fixture: REQUESTED is durable but the mock has no transaction.
+                worker_settings(APP_REFUND_ENABLED="false")
+                absent_order, absent_payment = paid_order()
+                cancel(absent_order)
+                until(lambda: refund_state(absent_payment) == "EXTERNAL_PENDING/EXTERNAL_REFUND_PENDING", "reservation not ready")
+                absent_refund, absent_key = refund_info(absent_payment)
+                sql("payment", f"update payment.refunds set external_status='REQUESTED' where id='{absent_refund}'")
+                before_missing = mock_calls("GET", "404")
+                worker_settings()
+                completed(absent_order, absent_payment)
+                assert mock_calls("GET", "404") > before_missing
+                assert external_count(absent_key) == "1"
 
-            worker_settings()
-            returns(paid_order, request, seller_token, completed, inventory, reservation, compose)
+                # PROCESSING is an explicit DB response fixture; Finance Mock normally commits a terminal result.
+                worker_settings(APP_REFUND_ENABLED="false")
+                processing_order, processing_payment = paid_order()
+                cancel(processing_order)
+                until(lambda: refund_state(processing_payment) == "EXTERNAL_PENDING/EXTERNAL_REFUND_PENDING", "reservation not ready")
+                processing_refund, processing_key = refund_info(processing_payment)
+                original = sql("payment", f"select external_ref from payment.payment_attempts where payment_id='{processing_payment}' and status='APPROVED'")
+                path = f"/mock/providers/PG_A/payments/{original}/refunds"
+                payload = {"businessKey": processing_key, "amount": PRICE-MILEAGE}
+                status, external = mock_request("POST", path, payload)
+                assert status == 202, (status, external)
+                sql("finance_mock", f"update finance_mock.mock_transactions set status='PROCESSING',succeeded_at=null where id='{external['id']}'")
+                sql("payment", f"update payment.refunds set external_status='REQUESTED' where id='{processing_refund}'")
+                posts_before = mock_calls("POST")
+                worker_settings()
+                until(lambda: refund_state(processing_payment) == "UNKNOWN/EXTERNAL_REFUND_PENDING", "PROCESSING was not retained as UNKNOWN")
+                assert reserved(processing_payment) == "ACTIVE"
+                assert mock_calls("POST") == posts_before
+                sql("finance_mock", f"update finance_mock.mock_transactions set status='SUCCEEDED',succeeded_at='{external['succeededAt']}' where id='{external['id']}'")
+                completed(processing_order, processing_payment)
+                status, duplicate = mock_request("POST", path, payload)
+                assert status == 202 and duplicate["id"] == external["id"]
+                assert external_count(processing_key) == "1"
+                assert sql("payment", f"select count(*) from payment.mileage_entries where payment_id='{processing_payment}' and kind='RESTORE'") == "1"
+
+                # A confirmed external decline releases the actual Settlement reservation, with no mileage restore.
+                worker_settings("fixture-pg-refund-reject-v1")
+                rejected_order, rejected_payment = paid_order()
+                cancel(rejected_order)
+                until(lambda: refund_state(rejected_payment) == "DECLINED/FAILED", "external decline did not release reservation")
+                assert reserved(rejected_payment) == "RELEASED"
+                assert sql("payment", f"select count(*) from payment.mileage_entries where payment_id='{rejected_payment}' and kind='RESTORE'") == "0"
+                assert sql("settlement", f"select count(*) from settlement.settlement_entries where payment_id='{rejected_payment}' and reversal_of is not null") == "0"
+                assert reservation(rejected_order) == "CONSUMED"
+                assert sql("finance_mock", "select balance from finance_mock.mock_accounts where account_ref='fixture-payout-funding'") == "1000000"
+                assert sql("finance_mock", "select coalesce(sum(amount),0) from finance_mock.mock_cash_entries") == "0"
+                print(json.dumps({"httpRefundCases": ("card,mixed,mileage-only,easy-pay,receipt," if group == "all" else "mixed,") + "timeout,lookup-unavailable,crash,late-token,absent,processing,declined",
+                                  "processingAndAbsence": "explicit isolated DB fixtures; transport is real HTTP"}), flush=True)
+
+            if group in {"all", "core"}:
+                worker_settings()
+                returns(paid_order, request, seller_token, completed, inventory, reservation, compose)
 
             for database in ["commerce", "payment", "settlement"]:
                 assert sql(database, f"select count(*) from {database}.inbox where status='REVIEW_REQUIRED'") == "0", database
                 until(lambda: sql(database, f"select count(*) from {database}.outbox where status<>'PUBLISHED'") == "0",
                       database + " outbox was not drained", 60)
-            assert sql("payment", f"select balance || '/' || reserved_amount from payment.mileage_wallets where buyer_id='{buyer}'") == f"{10_000-MILEAGE}/0"
-            # The declined refund keeps one sale and the disposed return leaves stock without restoring it.
-            assert inventory() == "8/0/1", inventory()
+            # The rejected refund keeps its debit/sale; the disposed return removes one unit.
+            expected_mileage = 10_000 if group == "core" else 10_000 - MILEAGE
+            expected_inventory = {"all": "8/0/1", "core": "9/0/0", "refund-failures": "9/0/1"}[group]
+            assert sql("payment", f"select balance || '/' || reserved_amount from payment.mileage_wallets where buyer_id='{buyer}'") == f"{expected_mileage}/0"
+            assert inventory() == expected_inventory, inventory()
             counts = observed_business_metrics(prometheus, sql)
             with urlopen(prometheus + "/api/v1/query?"+urlencode({"query":'business:duration_count{window="900",operation="order.settlement.applied"}'}),timeout=5) as response:
                 samples=json.load(response)["data"]["result"]
@@ -724,7 +731,7 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
                                 assert any(float(row["value"][1]) > 0 for row in result["data"]["result"]), (panel["id"], result)
                             evaluations += 1
             print(json.dumps({"businessDashboardPanels": len(dashboard["panels"]), "queryEvaluations": evaluations}), flush=True)
-            print(json.dumps({"result": "PASS", "refunds": [first_refund, second_refund],
+            print(json.dumps({"result": "PASS", "group": group, "refunds": [refund for refund in (first_refund, second_refund) if refund is not None],
                               "externalRefund": PRICE - MILEAGE, "mileageRestored": MILEAGE,
                               "scope": "actual HTTP Finance Mock approval/refund and Commerce, Payment, Settlement over Kafka/Inbox/Outbox"}),
                   flush=True)
@@ -820,4 +827,7 @@ if __name__ == "__main__":
         raise SystemExit(143)
 
     signal.signal(signal.SIGTERM, stop)
-    verify()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--group", choices=("all", "core", "refund-failures"), default="all",
+                        help="Run the complete check, normal/retry/return cases, or uncertain-refund recovery cases")
+    verify(parser.parse_args().group)

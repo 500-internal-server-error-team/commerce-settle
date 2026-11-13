@@ -141,11 +141,11 @@ jobs:
   integration:
     needs: package
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ matrix.scenario == 'financial-flow' && 35 || matrix.scenario == 'reconciliation' && 25 || 15 }}
+    timeout-minutes: ${{ startsWith(matrix.scenario, 'financial-') && 35 || matrix.scenario == 'reconciliation' && 25 || 15 }}
     strategy:
       fail-fast: false
       matrix:
-        scenario: [smoke, redis, retention, admission, financial-flow, reconciliation, demo-ui]
+        scenario: [smoke, redis, retention, admission, financial-flow, financial-core, financial-refund-failures, reconciliation, demo-ui]
     env:
       COMPOSE_PROJECT_NAME: ${{ matrix.scenario == 'demo-ui' && 'commerce-settle-ui-ci' || 'commerce-settle-ci' }}
       COMPOSE_FILE: ${{ matrix.scenario == 'demo-ui' && 'compose.yml:compose.demo-ui.yml' || 'compose.yml' }}
@@ -174,13 +174,15 @@ jobs:
         if: matrix.scenario == 'admission'
         run: python3 scripts/test_admission.py
       - name: Verify the order, payment, settlement and refund round trip
-        if: matrix.scenario == 'financial-flow'
-        run: python3 -B scripts/smoke_financial_flow.py
+        if: startsWith(matrix.scenario, 'financial-')
+        env:
+          FINANCIAL_GROUP: ${{ matrix.scenario == 'financial-core' && 'core' || matrix.scenario == 'financial-refund-failures' && 'refund-failures' || 'all' }}
+        run: python3 -B scripts/smoke_financial_flow.py --group "$FINANCIAL_GROUP"
       - name: Verify fixed reconciliation delivery wait, outage and restart
         if: matrix.scenario == 'reconciliation'
         run: python3 -B scripts/test_reconciliation.py
       - name: Start the stack from empty volumes
-        if: matrix.scenario != 'admission' && matrix.scenario != 'financial-flow' && matrix.scenario != 'reconciliation' && matrix.scenario != 'demo-ui'
+        if: matrix.scenario != 'admission' && !startsWith(matrix.scenario, 'financial-') && matrix.scenario != 'reconciliation' && matrix.scenario != 'demo-ui'
         run: |
           python3 scripts/sync_redis_run_id.py
           docker compose up -d --build --wait --wait-timeout 300
