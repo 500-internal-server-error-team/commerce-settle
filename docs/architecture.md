@@ -67,7 +67,7 @@ GitHub Actions는 테스트·JAR 패키징·Compose 통합 검증을 통과한 `
 
 이미지가 모두 게시되면 현재 `main` 커밋을 가리키는 태그만 ECS 앱 서비스를 순차 갱신합니다. 같은 릴리스의 digest를 기존 Task Definition에 넣어 환경·자격·포트를 보존하며, ECS 안정화 뒤 실제 실행 정의와 공개 HTTPS의 서비스별 OpenAPI 응답을 확인합니다. 실패하면 이번 실행이 갱신을 시도한 서비스를 직전 실행 정의로 복구합니다. 서비스 간 전환은 원자적이지 않으며 앱 호스트 한 대의 고정 포트를 교체하므로 중단 시간이 있습니다. EC2의 ECS 에이전트가 [ECR에서 이미지를 가져와](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/pull-behavior.html) 실행합니다.
 
-최초 앱·SSM·IAM·HTTPS 연결과 실제 AWS 배포 검증은 별도로 수행해야 합니다. GitHub 변수·서비스 이름·허용 포트·배포 기록·실패 복구는 [앱 배포 절차](development.md#ecs-ec2-앱과-태그-배포)가 기준입니다. DB·Kafka·Redis·관측 도구·Caddy는 앱 태그 배포에 포함하지 않습니다. ECR 수명 주기 정책은 모듈별 접두사로 구분합니다. GitHub 호스팅 러너와 ECR은 EC2 2대에 포함되는 추가 호스트가 아닙니다.
+최초 앱·SSM·IAM·HTTPS 연결과 실제 AWS 배포 검증은 별도로 수행해야 합니다. GitHub 변수·서비스 이름·허용 포트·배포 기록·실패 복구는 [앱 배포 절차](development.md#ecs-ec2-앱과-태그-배포)가 기준입니다. DB·Kafka·Redis·관측 도구·Caddy는 앱 태그 배포에 포함하지 않습니다. ECR 앱 이미지는 배포 성공과 실제 실행 digest 검증 후 모듈별 1개를 보관합니다. 정리 조건과 권한은 [ECR 이미지 자동 정리](development.md#ecr-이미지-자동-정리)를 따릅니다. GitHub 호스팅 러너와 ECR은 EC2 2대에 포함되는 추가 호스트가 아닙니다.
 
 ### 애플리케이션과 인프라
 

@@ -309,7 +309,7 @@ class CiGateTest(unittest.TestCase):
         gate = self.workflow.split("\n  build-and-smoke:\n", 1)[1]
         self.script = textwrap.dedent(gate.split("        run: |\n", 1)[1])
         self.results = {name: {"result": "success"} for name in
-                        ("checks", "package", "tests", "observability", "integration", "demo-ui")}
+                        ("checks", "deployment-checks", "package", "tests", "observability", "integration", "demo-ui")}
 
     def result(self, jobs):
         return subprocess.run(["bash", "-e", "-c", self.script],
