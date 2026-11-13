@@ -4,6 +4,7 @@ import com.commercesettle.commerce.domain.exception.EventAdmissionClosedExceptio
 import com.commercesettle.commerce.domain.exception.EventAdmissionClosedException.Reason;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.exception.SaleEventNotFoundException;
+import com.commercesettle.commerce.domain.exception.VersionConflictException;
 import com.commercesettle.commerce.domain.model.EventAdmission;
 import com.commercesettle.commerce.domain.model.EventParticipation;
 import com.commercesettle.commerce.domain.model.InventoryOperation;
@@ -89,6 +90,28 @@ public class InventoryReservationService {
         order.getPaymentCycleId(),
         order.getPaymentWaitUntil());
     return order;
+  }
+
+  /** 주문·주소·Outbox를 준비한 뒤, 최신 상품 검증과 재고 예약만 잠금 아래 수행한다. 실패하면 전체 주문을 롤백한다. */
+  public void reserveNewOrder(Order order, long expectedProductVersion) {
+    if (order.getEventId() != null || order.getBuyerCouponId() != null) {
+      throw new IllegalArgumentException("late reservation requires a couponless regular order");
+    }
+    UUID productId = order.getProductId();
+    ProductInventory inventory = lockInventory(productId);
+    long version =
+        products
+            .findOrderableVersion(productId)
+            .orElseThrow(() -> new ProductNotFoundException(productId));
+    if (version != expectedProductVersion) {
+      throw new VersionConflictException("product", expectedProductVersion, version);
+    }
+    reserveNew(
+        order.getId(),
+        inventory,
+        order.getQuantity(),
+        order.getPaymentCycleId(),
+        order.getPaymentWaitUntil());
   }
 
   /**

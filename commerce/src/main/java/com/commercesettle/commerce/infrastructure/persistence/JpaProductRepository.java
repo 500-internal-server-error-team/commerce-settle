@@ -39,6 +39,17 @@ class JpaProductRepository implements ProductRepository {
   }
 
   @Override
+  public Optional<Long> findOrderableVersion(UUID productId) {
+    return jdbc
+        .query(
+            "select version from commerce.products where id=? and status='ON_SALE' and deleted_at is null",
+            (row, index) -> row.getLong(1),
+            productId)
+        .stream()
+        .findFirst();
+  }
+
+  @Override
   public PageResult<Product> findBySeller(UUID sellerId, int page, int size) {
     return toResult(products.findBySellerIdAndDeletedAtIsNull(sellerId, newestFirst(page, size)));
   }

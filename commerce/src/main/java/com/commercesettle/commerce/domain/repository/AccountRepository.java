@@ -16,6 +16,9 @@ public interface AccountRepository {
   /** 인증 정보를 바꾸는 동안 같은 계정의 다른 변경을 기다리게 행을 잠근다. 트랜잭션 안에서만 호출한다. */
   Optional<Account> findLockedById(ActorKind kind, UUID id);
 
+  /** 주문 동안 계정·주소 변경을 막되 다른 주문의 공유 잠금은 허용한다. 트랜잭션 안에서만 호출한다. */
+  Optional<BuyerAccount> findBuyerForOrder(UUID id);
+
   /** 지급 컨텍스트용 조회. 삭제한 판매자도 DELETED 상태로 돌려줘 정상 판매자로 오인하지 않게 한다. */
   Optional<SellerAccount> findSellerIncludingDeleted(UUID id);
 

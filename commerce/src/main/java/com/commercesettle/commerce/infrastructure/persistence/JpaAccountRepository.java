@@ -58,6 +58,12 @@ class JpaAccountRepository implements AccountRepository {
   }
 
   @Override
+  public Optional<BuyerAccount> findBuyerForOrder(UUID id) {
+    TransactionLimits.apply(jdbc);
+    return buyers.findForOrder(id);
+  }
+
+  @Override
   public Optional<SellerAccount> findSellerIncludingDeleted(UUID id) {
     return sellers.findById(id);
   }

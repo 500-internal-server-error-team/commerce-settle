@@ -130,9 +130,9 @@ public class OrderService {
   }
 
   private OrderView createInTransaction(UUID buyerId, String key, RegularOrderCommand command) {
-    // 주소록 변경도 같은 구매자 행을 먼저 잠그므로 검사와 사본 생성 사이에 주소가 바뀌지 않는다.
+    // 주문끼리는 공유하고 주소·계정 변경의 배타 잠금과는 충돌해, 검사와 사본 생성 사이의 변경을 막는다.
     accounts
-        .findLockedById(ActorKind.BUYER, buyerId)
+        .findBuyerForOrder(buyerId)
         .filter(Account::canLogIn)
         .orElseThrow(AuthenticationFailedException::new);
     UUID orderId = UUID.randomUUID();
@@ -175,8 +175,9 @@ public class OrderService {
             .findById(command.addressId())
             .filter(a -> !a.isDeleted() && a.isOwnedBy(buyerId))
             .orElseThrow(() -> new BuyerAddressNotFoundException(command.addressId()));
+    boolean reserveLast = command.eventId() == null && command.buyerCouponId() == null;
     Order saved =
-        command.eventId() == null
+        command.eventId() == null && !reserveLast
             ? inventory.createAndReserve(
                 command.productId(),
                 product -> createOrder(buyerId, orderId, command, address, product))
@@ -189,6 +190,7 @@ public class OrderService {
                     .findById(command.productId())
                     .orElseThrow(() -> new ProductNotFoundException(command.productId())));
     appendPaymentRequest(saved);
+    if (reserveLast) inventory.reserveNewOrder(saved, command.expectedProductVersion());
     return OrderView.from(saved);
   }
 

@@ -17,5 +17,9 @@ interface SpringDataBuyerAccountRepository extends JpaRepository<BuyerAccount, U
   @Query("select a from BuyerAccount a where a.id = :id and a.deletedAt is null")
   Optional<BuyerAccount> findLockedById(UUID id);
 
+  @Lock(LockModeType.PESSIMISTIC_READ)
+  @Query("select a from BuyerAccount a where a.id = :id and a.deletedAt is null")
+  Optional<BuyerAccount> findForOrder(UUID id);
+
   boolean existsByEmailNormalized(String emailNormalized);
 }

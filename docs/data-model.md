@@ -96,7 +96,7 @@
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 | `deleted_at` | `timestamptz?` | 논리삭제 |
 
-**제약:** 부분 UNIQUE(buyer_id) WHERE is_default AND deleted_at IS NULL. CHECK(삭제한 주소는 기본 아님). 세 암호문은 AES-GCM이며 주소 ID·칸 이름에 묶습니다. 주소록 쓰기는 구매자 계정 행을 잠가 직렬화하며 없거나 삭제된 계정은 인증 실패입니다. 타인 주소 접근 금지.
+**제약:** 부분 UNIQUE(buyer_id) WHERE is_default AND deleted_at IS NULL. CHECK(삭제한 주소는 기본 아님). 세 암호문은 AES-GCM이며 주소 ID·칸 이름에 묶습니다. 주소록 쓰기는 구매자 계정 행의 배타 잠금으로 직렬화합니다. 주문은 같은 행을 공유 잠금해 주문끼리 병렬 처리하되 주소 변경과 겹치지 않습니다. 없거나 삭제된 계정은 인증 실패입니다. 타인 주소 접근 금지.
 
 **인덱스:** (buyer_id,deleted_at,created_at,id).
 
@@ -116,7 +116,7 @@
 | `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(product_id). 모든 수량>=0. 이벤트 공개·일반 주문·상품 변경·재고 조정은 이 행을 products보다 먼저 잠금([트랜잭션과 관계](#트랜잭션과-관계)). `sold_qty`는 환불·반품 복원을 뺀 순판매량이며 누적 판매량은 inventory_movements에서 계산. 수량별 증감은 [재고 예약과 복원](policies.md#재고-예약과-복원)을 따름.
+**제약:** UNIQUE(product_id). 모든 수량>=0. 이벤트 공개·일반 주문 예약·상품 변경·재고 조정은 이 행을 잠근 뒤 최신 상품을 검증하거나 변경([트랜잭션과 관계](#트랜잭션과-관계)). `sold_qty`는 환불·반품 복원을 뺀 순판매량이며 누적 판매량은 inventory_movements에서 계산. 수량별 증감은 [재고 예약과 복원](policies.md#재고-예약과-복원)을 따름.
 
 **인덱스:** UNIQUE(product_id).
 
@@ -1426,7 +1426,9 @@ Finance Mock 준비 API는 `actor_kind=OPERATOR`, `operation=MOCK:ACCOUNT:CREATE
 
 - `buyer_accounts/seller_accounts`는 독립 계정이다. Redis 세션과 password_reset_tokens의 계정 종류+ID가 해당 계정을 선택한다. 로그인 세션은 Redis, 복구 토큰과 인증 버전은 PostgreSQL에 두며 두 저장소의 변경을 단일 트랜잭션으로 취급하지 않는다.
 - 주문·주소 사본·재고/쿠폰/이벤트 예약·Outbox를 커머스 한 트랜잭션으로 저장한다. 멱등 기록도 같은 트랜잭션에 완료한다.
-- 기존 주문의 재고 수량을 바꾸는 트랜잭션은 orders → product_inventory → sale_events → event_participations 순서로 행을 잠근다. products와 product_inventory를 함께 다루는 트랜잭션(신규 일반 주문, 상품 이름·가격·상태 변경과 논리삭제, 판매자 재고 조정, 이벤트 공개·종료)은 product_inventory를 먼저 배타 잠금한 뒤 products를 읽거나 갱신한다. products를 먼저 잠그거나 products에 공유 잠금을 걸지 않는다. 상품 변경은 이 잠금 아래 공개 후 종료 전 이벤트가 없는지 확인하고 버전을 증가시킨다. 선착순 예약은 products·재고 행을 잠그지 않고 sale_events의 조건부 갱신(`status=OPEN AND sold_count+reserved_count<quota`) 한 번으로 R을 늘린다. 잠금 경합 검증은 상품 상태 중단/가격 변경과 신규 주문의 잠금 획득 순서를 각각 확인한다. 주문이 먼저 잠그면 주문 저장 뒤 상품 변경이 진행되고, 상품 변경이 먼저 커밋되면 주문은 새 상태·버전을 반영해 거절되어야 한다.
+- 기존 주문의 재고 변경은 orders → product_inventory → sale_events → event_participations 순서로 행을 잠근다. 상품 변경·논리삭제·재고 조정·이벤트 공개/종료는 product_inventory를 먼저 배타 잠금한 뒤 products를 검증하거나 갱신한다. 상품 변경은 이 잠금 아래 공개 후 종료 전 이벤트가 없는지 확인하고 버전을 증가시킨다. products를 먼저 잠그거나 공유 잠금하지 않는다.
+- 쿠폰 없는 신규 일반 주문은 상품 조회·주문·주소·Outbox 저장 뒤 재고를 잠근다. 잠금 뒤 DB에서 판매 가능 여부·버전을 다시 읽고 예약하며, 영속성 컨텍스트의 이전 상품 사본으로 재검증하지 않는다. 거절되면 멱등 기록을 포함한 전체 저장을 롤백한다. 쿠폰 일반 주문은 재고 잠금 뒤 견적·저장·쿠폰 예약을 수행한다. 주문이 먼저 재고를 잠그면 상품 변경은 주문 커밋 뒤 진행하고, 상품 변경이 먼저 커밋되면 주문은 새 상태·버전으로 거절되어야 한다.
+- 선착순 예약은 products·재고 행을 잠그지 않고 sale_events의 조건부 갱신(`status=OPEN AND sold_count+reserved_count<quota`) 한 번으로 R을 늘린다.
 - 마일리지 잔액의 reserved_amount는 활성 예약 합계와 일치해야 한다. 사용 시 예약/잔액 차감·DEBIT·결제 확정·Outbox를 한 번에 기록하고, 환불 시 원외부 환불 확인 뒤 RESTORE·잔액·환불 상태·Outbox를 한 번에 기록한다.
 - outbox/inbox/idempotency_records 정의는 commerce/payment/settlement/finance_mock 각각에 적용한다. 서비스 간 공유 테이블이나 SQL join은 만들지 않는다. inbox의 event_id는 발신 outbox id와 논리적으로 대응하며 여러 consumer가 각각 수신할 수 있다.
 - 로컬 주문 전이·알림 항목, 외부 알림 Inbox·항목은 각각 커머스 한 트랜잭션에 저장한다. 알림 모의 수신은 별도 트랜잭션으로 기록하고 금융 DB를 갱신하지 않는다.

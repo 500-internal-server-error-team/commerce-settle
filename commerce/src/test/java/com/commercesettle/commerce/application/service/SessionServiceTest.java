@@ -158,6 +158,11 @@ class SessionServiceTest {
     }
 
     @Override
+    public Optional<BuyerAccount> findBuyerForOrder(UUID id) {
+      return findById(ActorKind.BUYER, id).map(BuyerAccount.class::cast);
+    }
+
+    @Override
     public Optional<SellerAccount> findSellerIncludingDeleted(UUID id) {
       throw new UnsupportedOperationException();
     }
