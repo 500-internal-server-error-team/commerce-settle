@@ -59,7 +59,7 @@ public class OutboxConfiguration {
       @Qualifier("outboxExecutor") Executor executor,
       @Qualifier("outboxCoordinator") Executor coordinator,
       @Value("${app.outbox.max-in-flight:32}") int maxInFlight,
-      @Value("${app.outbox.lease-ms:240000}") long leaseMs,
+      @Value("${app.outbox.lease-ms:30000}") long leaseMs,
       @Value("${app.outbox.max-attempts:10}") int maxAttempts,
       @Value("${app.outbox.recovery-interval-ms:1000}") long recoveryIntervalMs,
       ObjectProvider<AsyncObservation> observations) {
