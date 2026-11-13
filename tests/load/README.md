@@ -38,9 +38,9 @@ DB 잠금 원인을 판정하는 시험은 대기/보유 PID·쿼리 식별자 �
 python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN
 ```
 
-기본값은 **한 구매자·한 상품에 200건/초·60초(12,000건)**입니다. 먼저 낮은 부하로 실행 경로를 확인하려면 `--tps 2 --seconds 3`을 붙입니다. 기존 로컬 `order.json`이나 `.env`는 읽거나 덮어쓰지 않습니다.
+기본값은 **한 구매자·한 상품에 200건/초·60초(12,000건)**인 짧은 경로 시험입니다. 먼저 낮은 부하로 확인하려면 `--tps 2 --seconds 3`을 붙입니다. 기존 로컬 `order.json`이나 `.env`는 읽거나 덮어쓰지 않습니다.
 
-`--tps`로 초당 주문 요청 수를 **1~1000**에서 선택합니다. 기존 `--rate`도 같은 옵션입니다. 실행 시간은 `--seconds`로 1~60초를 지정하며 기본값은 60초입니다.
+`--tps`로 초당 주문 요청 수를 **1~1000**에서 선택합니다. 기존 `--rate`도 같은 옵션입니다. `--seconds`는 1~900초·기본 60초, `--warmup-seconds`는 0~300초·기본 0초입니다.
 
 ```bash
 python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN --tps 200
@@ -48,7 +48,16 @@ python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN --tps 400
 python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN --tps 1000
 ```
 
-기본 사전 VU는 `max(400, TPS×2)`, 최대 VU는 `max(1200, TPS×6)`이며 `--pre-allocated-vus`·`--max-vus`로 1~10000 안에서 조정합니다. 실제 선택값은 요약에 남습니다. 지정 TPS는 요청 도착률이며 서버의 결제 완료 TPS나 달성 보장이 아닙니다.
+프로젝트의 **200 TPS·15분 지속 목표**는 별도 수동/전용 실험에서 검증합니다. 아래 명령은 60초 예열의 PAID 배출 뒤 새 900초 측정 구간을 시작합니다. `conditions.json`은 기존 [성능 수집 metadata](#업무-완료전구간-지연의-전후-비교)로 준비한 실제 배포 source/image·자원·설정·입력·시계 조건이며 토큰이나 `.env`를 넣지 않습니다.
+
+```bash
+python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN \
+  --tps 200 --warmup-seconds 60 --seconds 900 --performance-metadata conditions.json
+```
+
+180,000건은 이 명령의 **측정분 요청 예정 수**입니다. 지속 성능 통과에는 같은 실제 900초 구간의 Payment DB 확정 처리량·적체 추세·오류·배포 API 지연과 배출 뒤 재고/예약/금액 대조가 필요합니다. 예열·사전 주문·다른 실행의 완료량과 측정 종료 뒤 완료분을 소급해 넣지 않습니다. 짧은 회귀·탐색은 유지하며 CI에서 실제 15분 부하를 실행하지 않습니다.
+
+기본 사전 VU는 `max(400, TPS×2)`, 최대 VU는 `max(1200, TPS×6)`이며 `--pre-allocated-vus`·`--max-vus`로 1~10000 안에서 조정합니다. 실제 선택값은 요약에 남습니다. 필요한 동시성은 주입률과 실제 요청 점유시간에 따라 달라지므로 Mac의 CPU·메모리·네트워크·실제 주입률·`dropped_iterations`도 확인합니다. 기본 VU가 목표 달성을 보장하지 않습니다.
 
 실행기는 생성한 주문 본문을 컨테이너의 `ORDER_FILE=/work/order.json`으로 전달합니다. `orders.js`를 직접 실행할 때도 `ORDER_FILE`에 준비된 주문 JSON을 지정할 수 있으며, 로그인 본문·잘못된 JSON은 요청 전에 거절합니다. 직접 k6 실행은 Python 실행기의 사전 PAID 확인·원장 저장·배출 대조·상품/세션 정리를 수행하지 않으므로, 전후 비교에는 위 Python 명령을 사용합니다.
 
@@ -56,9 +65,10 @@ python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN --tps 1000
 
 - 팀과 시험 시간을 맞추고 앱·데이터 EC2와 기존 ECS 서비스를 기동합니다. 연결된 탄력적 IP를 유지한 같은 인스턴스의 재기동에서는 DNS를 바꾸지 않습니다. Redis 재시작 뒤 로그인 차단은 [인증 복구](../../docs/development.md#redis-세션-검증과-복구)로 해결하고, 기존 DB·토픽·offset을 초기화하지 않습니다.
 - 관측 대상의 `UP`, `commerce_order_admission_open=1`, 금융 Worker·Outbox·Consumer 활성화를 확인합니다. 접수 gate는 정상 조건을 60초 연속 충족한 뒤 열립니다. 실제 이미지·CPU/메모리·DB 풀·Worker 동시성·샘플링과 시험 시각은 [전후 비교 조건](../../docs/development.md#병목-개선-전후-비교)대로 기록합니다.
-- 개발 fixture를 켠 환경에서는 구매자 A·판매자 A를 기존 Swagger 로그인 경로로 인증합니다. fixture를 쓰지 않는 환경은 유효한 `BUYER_TOKEN`·`SELLER_TOKEN`을 환경 변수로 전달합니다. 두 계정은 시험 계정이어야 하며 토큰·비밀번호를 파일·명령 인자에 쓰지 않습니다. 이 도구가 발급한 세션만 끝에 로그아웃하고 전달받은 기존 세션은 유지합니다.
+- 개발 fixture를 켠 환경에서는 구매자 A·판매자 A를 기존 Swagger 로그인 경로로 인증합니다. 고정 30분 만료를 연장하지 않으며 단계 전에 실제 `expiresAt`과 시간 예산을 검사합니다. 자체 발급 세션이 부족하면 단계 사이에 기존 인증 경로로 같은 계정인지 확인하며 재인증합니다.
+- 기존 세션을 쓰면 `BUYER_TOKEN`·`SELLER_TOKEN`과 원래 로그인 응답의 `BUYER_TOKEN_EXPIRES_AT`·`SELLER_TOKEN_EXPIRES_AT`을 환경 변수로 전달합니다. 기존 세션은 자동 갱신하지 않으며 준비·예열/측정·배출 예산이 부족하면 거절합니다. 두 계정은 시험 계정이어야 하며 토큰·비밀번호를 파일·명령 인자에 쓰지 않습니다. 이 도구가 발급한 세션만 로그아웃하고 기존 세션은 유지합니다.
 
-도구는 구매자의 기존 배송지를 선택하며 없을 때만 가상 주소를 등록합니다. 판매자 계정으로 새 `k6-<실행 ID>` 일반 상품을 만들고 재고를 **예정 주문 수 + 사전 주문 1개 + 여유분(최소 100개·10%)**만큼 준비합니다. 기존 fixture 상품이나 다른 상품의 재고는 바꾸지 않습니다. 실제 견적에서 상품 버전·금액을 받아 주문 본문을 만들고, 사전 주문 한 건의 `PAID` 반영을 확인한 뒤에만 k6를 시작합니다. 명시적인 접수 gate 거절은 30초 간격으로 두 번 더 확인하고 다른 변경 요청은 자동 재시도하지 않습니다.
+도구는 구매자의 기존 배송지를 선택하며 없을 때만 가상 주소를 등록합니다. 판매자 계정으로 새 `k6-<실행 ID>` 일반 상품을 만들고 재고를 **예열+측정 예정 주문 수 + 사전 주문 1개 + 여유분(최소 100개·10%)**만큼 준비합니다. 기존 fixture 상품이나 다른 상품의 재고는 바꾸지 않습니다. 실제 견적에서 상품 버전·금액을 받아 주문 본문을 만들고, 사전 주문 한 건의 `PAID` 반영을 확인한 뒤에만 k6를 시작합니다. 명시적인 접수 gate 거절은 30초 간격으로 두 번 더 확인하고 다른 변경 요청은 자동 재시도하지 않습니다.
 
 로그인·준비·사전 주문까지만 검증하려면 `--prepare-only`를 사용합니다. 이때 새 상품과 재고는 유지하며 200건/초 주입은 하지 않습니다. 이후 일반 실행은 별도 상품·실행 ID를 새로 만듭니다. 준비가 성공해도 부하 시험을 통과했다는 의미는 아닙니다.
 
@@ -70,17 +80,34 @@ python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN --tps 1000
 | --- | --- |
 | `plan.json`, `order.json` | 대상·실행 ID·시험 상품·준비 재고·사전 주문과 실제 견적을 반영한 주문 본문. 토큰 없음 |
 | `requests.jsonl` | 전송 전 `started`·응답 후 `completed` 행을 반복 번호로 연결. 요청 시각·HTTP 상태·주문 ID·오류 코드·지연. 멱등키는 `<runId>-load-<iteration>`으로 복원 |
-| `k6-summary.json` | 실제 요청 수, p95/p99·오류율·`dropped_iterations`와 임계값 결과 |
-| `order-states.json` | 사전 주문을 뺀 상품별 주문 상태·누락된 접수 주문·201 원장이 없는 주문과 결제 시각별 건수 |
-| `summary.json` | 입력·VU 조건·측정 시작/끝·결과·준비/수집/정리 실패 |
+| `k6-summary.json`, `k6-warmup-summary.json` | 측정/예열 각각의 요청 수, p50/p95/p99·오류율·`dropped_iterations`와 임계값 결과 |
+| `order-states.json`, `warmup-states.json` | 사전 주문을 뺀 상태·측정분 상태·누락된 접수 주문·201 원장 없는 주문·미확인 요청과 부분 관측 |
+| `summary.json` | 입력·VU·발생기 source/image 식별값·실제 시각·세션 예산 검사·주입/배출 판정·준비/수집/정리 실패 |
+| `performance-metadata.json` | metadata를 지정했을 때만 생성. 기존 배포 조건을 유지하고 `loadRun`에 실행 ID·측정창·원장/요약 SHA·주입/배출 상태를 연결 |
 
-`summary.json`의 `passed=true`는 **예정 요청 전부 시작·201·서로 다른 주문 ID·미시작 반복 0·조회된 주문 전부 PAID**가 함께 확인됐다는 뜻입니다. 배출 대기 기준은 기본 300초이며 `--drain-seconds`로 바꿉니다. 진행 중 조회 한 건의 timeout(10초)만큼 더 걸릴 수 있습니다. 목표 주입을 놓치거나 관측이 실패하면 실패로 끝내고 원장과 거래를 보존합니다. `completed`가 없는 `started`와 요청 timeout은 접수되지 않았다는 증거가 아니므로, 미확정 거래를 다음 시험으로 덮거나 DB 초기화로 없애지 않습니다.
+원장의 `phase`는 예열/측정을 구분합니다. 키는 측정 `<runId>-load-<iteration>`, 예열 `<runId>-warmup-<iteration>`으로 분리합니다. `phase` 행의 시각은 k6 scenario 시작과 설정한 종료이며, Python/Docker 전체 실행 시각과 구분합니다. 요청별 실제 시작/응답 시각도 보존합니다. k6의 `clientErrorCode`와 민감값을 제거한 오류 설명을 기록하며 HTTP 0만으로 timeout을 확정하지 않습니다.
 
-Grafana의 **Financial processing**, Zipkin, Kafka UI에서 같은 측정 구간의 단계·SQL·PG 호출·대기열·lag를 확인합니다. `paymentConfirmedAtCounts`는 Commerce가 돌려준 결제 확정시각의 집계이며 Payment DB의 직접 측정과 구분합니다. 단계 실행 횟수·HTTP 201을 결제 확정 TPS로 해석하지 않습니다. **Settlement·대역 원장·금액 대조와 15분 지속 성능 판정은 이 도구의 성공 판정에 포함하지 않습니다.** [정산 대조](../../docs/development.md#정산-대조-실행과-재개)와 시험 원장의 주문 ID를 별도로 대조합니다.
+`injectionPassed`는 측정 구간의 예정 요청 전부 시작·서로 다른 201 주문 ID·drop 0·정상 원장을 확인합니다. `drainComplete`는 조회 누락·미종결·미확인 요청이 없는 관측이며 금융 대조를 뜻하지 않습니다. `passed=true`도 이 두 조건과 측정분 PAID 반영을 확인한 **API 경로 판정**입니다. `performanceVerification.status`는 별도의 Payment DB/적체/지연/재고·금액 증거를 평가하기 전까지 `UNVERIFIED`로 남습니다.
+
+배출 예산은 기본 300초·최대 900초이며 진행 중 GET 한 건의 timeout(10초)만큼 더 걸릴 수 있습니다. 시작 원장만 있거나 응답이 유실된 요청, 불완전 행은 미확인으로 남깁니다. 첫 빈 조회나 짧은 무변화로 미접수를 확정하지 않습니다. `unresolvedAcceptedOrders`는 **201로 확인한 주문 중 조회된 미종결 건수**만 뜻하며 전체 미확인을 나타내지 않습니다. `unresolvedRequests`·원장 오류·누락 ID·`recoveryRequired`를 함께 확인합니다.
+
+원장은 행 단위로 읽고 추적용 flags·ID만 유지하지만 메모리는 요청 수에 비례합니다. 기존 주문 목록 API는 구매자의 전체 주문을 훑으므로 180,000건만으로도 약 1,800페이지 이상입니다. 조회 시간만큼 다음 전수 조회를 늦추고 `queryCosts`에 GET 수·페이지·조회 행 수를 기록합니다. 기한 때문에 페이지를 다 읽지 못하면 `snapshotComplete=false`로 남기며 조회 실패가 이전 관측을 지우지 않습니다.
+
+첫 중단·실행 예외에도 추가 주입을 멈춘 뒤 원장을 재독하고 제한된 배출을 수행합니다. 배출 중 다시 중단하면 마지막 checkpoint와 미해결 상태를 남깁니다. 강제 종료에서는 finally 실행을 보장할 수 없으므로 남은 원장과 계획을 보존합니다. 나중에 다음 명령으로 **추가 주문 없이** 재관측할 수 있습니다. 기존 실패·원장을 덮어쓰지 않고 새 `recovery-<ID>/`에 결과를 남기며 상품/자체 세션은 정상 종료 절차로 정리합니다.
+
+```bash
+python3 -B tests/load/order_load.py --resume tests/load/work/orders-RUN_ID --drain-seconds 300
+```
+
+공개 GET에는 원키→주문 ID 확정 조회가 없으므로 끝내 확인되지 않는 요청은 원키 대조 대상으로 유지합니다. 같은 키 POST도 신규 거래를 만들 수 있어 조회 대신 자동 사용하지 않습니다. 새 키 재전송·DB/토픽/offset 초기화로 미확정을 없애지 않습니다.
+
+성능 수집에는 생성된 metadata와 기존 `tests/load/performance.py`를 사용합니다. `loadRun.measurementWindow`는 발생기 UTC이므로 수집 결과의 실제 `dbWindowStart/End`·시계 불확실성·모집단과 일치하는지 확인합니다. 수집 명령의 `--at`만 맞췄다고 실제 DB 측정창도 같다고 가정하지 않습니다. 준비 실패(`loadExecuted=false`)는 부하 실행 실패와 구분합니다.
+
+Grafana의 **Financial processing**, Zipkin, Kafka UI에서 같은 구간의 단계·SQL·PG 호출·대기열·lag를 확인합니다. `paymentConfirmedAtCounts`·`commerceConfirmedWithinMeasurement`는 Commerce가 돌려준 시각이며 Payment DB 직접 측정과 구분합니다. 단계 실행 횟수·HTTP 201·배출 뒤 PAID를 15분 완료 TPS로 해석하지 않습니다. PG 거절·미확정은 따로 집계하고 [정산 대조](../../docs/development.md#정산-대조-실행과-재개), 최종 재고/예약·금액과 시험 원장을 대조한 뒤 전체 성능을 판정합니다.
 
 일반 실행이 끝나면 자체 k6 컨테이너·발급 세션을 정리하고 새 시험 상품을 판매 중지합니다. 주문·재고 이력·시험 결과는 삭제하지 않습니다. 중단·정리 실패는 요약에 남으며 다음 시험 전에 미확정 거래를 확인합니다. 로컬 도구가 EC2를 종료하지는 않습니다. 공유 환경의 적체 배출·대조와 팀 사용 여부를 확인한 뒤 담당자가 EC2를 중지합니다.
 
-준비·실패·결과 판정 회귀 검사는 `python3 -B -m unittest discover -s tests/load -p 'test_order_load.py'`로 실행합니다. API 계약 대역 검사는 실제 배포 환경의 준비·부하 실행을 대신하지 않습니다.
+짧은 회귀 검사는 `python3 -B -m unittest discover -s tests/load -p 'test_order_load.py'`로 실행합니다. 지연 생성·중단·부분 관측·세션·900초 설정을 대역/가상 시계로 검사하며 실제 900초를 기다리지 않습니다. Node.js가 있으면 JS의 단계별 키·900초 설정·경계 초과 POST 차단·오류 필드도 VM 대역으로 검사합니다. 이 검사는 실제 배포 환경의 부하·지속 성능을 대신하지 않습니다.
 
 ## 측정 범위
 

@@ -26,14 +26,16 @@ if (!order || Array.isArray(order) || typeof order !== 'object'
 const baseUrl = (__ENV.BASE_URL || '').replace(/\/+$/, '');
 const rate = Number(__ENV.RATE || 200);
 const seconds = Number(__ENV.DURATION_SECONDS || 60);
+const phase = __ENV.LOAD_PHASE || 'measurement';
 const preallocated = Number(__ENV.PRE_ALLOCATED_VUS || Math.max(400, rate * 2));
 const maximum = Number(__ENV.MAX_VUS || Math.max(1200, rate * 6));
 if (!/^https?:\/\//.test(baseUrl) || !__ENV.BUYER_TOKEN || !__ENV.RUN_ID
     || !Number.isInteger(rate) || rate < 1 || rate > 1000
-    || !Number.isInteger(seconds) || seconds < 1 || seconds > 60
+    || !Number.isInteger(seconds) || seconds < 1 || seconds > 900
+    || !['warmup', 'measurement'].includes(phase)
     || !Number.isInteger(preallocated) || preallocated < 1
     || !Number.isInteger(maximum) || maximum < preallocated || maximum > 10000) {
-  throw new Error('BASE_URL·BUYER_TOKEN·RUN_ID와 rate=1..1000, seconds=1..60, VU=1..10000을 확인하세요.');
+  throw new Error('BASE_URL·BUYER_TOKEN·RUN_ID·LOAD_PHASE와 rate=1..1000, seconds=1..900, VU=1..10000을 확인하세요.');
 }
 
 export const options = {
@@ -48,7 +50,7 @@ export const options = {
       gracefulStop: '6s',
     },
   },
-  summaryTrendStats: ['avg', 'p(95)', 'p(99)', 'max'],
+  summaryTrendStats: ['avg', 'p(50)', 'p(95)', 'p(99)', 'max'],
   thresholds: {
     checks: ['rate==1'],
     http_req_failed: ['rate==0'],
@@ -59,13 +61,20 @@ export const options = {
 export default function () {
   const iteration = exec.scenario.iterationInTest;
   if (iteration >= rate * seconds) return;
+  if (iteration === 0) {
+    console.log('ORDER_PHASE ' + JSON.stringify({
+      phase,
+      measurementStart: new Date(exec.scenario.startTime).toISOString(),
+      measurementEnd: new Date(exec.scenario.startTime + seconds * 1000).toISOString(),
+    }));
+  }
   const startedAt = new Date().toISOString();
-  console.log('ORDER_START ' + JSON.stringify({ iteration, startedAt }));
+  console.log('ORDER_START ' + JSON.stringify({ phase, iteration, startedAt }));
   const response = http.post(`${baseUrl}/api/orders`, body, {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${__ENV.BUYER_TOKEN}`,
-      'Idempotency-Key': `${__ENV.RUN_ID}-load-${iteration}`,
+      'Idempotency-Key': `${__ENV.RUN_ID}-${phase === 'measurement' ? 'load' : 'warmup'}-${iteration}`,
     },
     tags: { name: 'POST /api/orders' },
     timeout: '5s',
@@ -82,7 +91,13 @@ export default function () {
     '주문 접수 201과 주문 ID': (r) => r.status === 201 && id !== null,
   });
   console.log('ORDER ' + JSON.stringify({
-    iteration, startedAt, status: response.status, orderId: id, code, traceId,
+    phase, iteration, startedAt, completedAt: new Date().toISOString(),
+    status: response.status, orderId: id, code, traceId,
+    clientErrorCode: response.error_code || null,
+    clientError: response.error
+      ? String(response.error).split(__ENV.BUYER_TOKEN).join('<redacted>')
+        .replace(/https?:\/\/\S+/g, '<url>').replace(/[\r\n]/g, ' ').slice(0, 200)
+      : null,
     durationMs: response.timings.duration,
   }));
 }

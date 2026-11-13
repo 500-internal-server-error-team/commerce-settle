@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 
@@ -30,7 +31,9 @@ class ApiFixture:
     def call(self, method, path, body=None, token=None, key=None):
         self.calls.append((method, path, body, token, key))
         if path == "/swagger-ui/fixture-sessions":
-            return {"token": body["account"] + "-" * 40}
+            return {"token": body["account"] + "-" * 40,
+                    "expiresAt": (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
+                    "account": {"id": body["account"]}}
         if path == "/api/buyers/me/addresses?size=100":
             return {"items": [{"id": "address"}]}
         if path == "/api/sellers/me/products":
@@ -49,6 +52,9 @@ class ApiFixture:
         if path == "/api/orders" and method == "POST":
             assert set(body) == set(SCHEMAS["OrderCreate"]["required"])
             return {"id": "smoke", "status": "PAID" if self.paid else "DECLINED"}
+        if path.startswith("/api/orders?"):
+            return {"totalPages": 1, "items": [{"id": "smoke", "productId": "product",
+                    "status": "PAID" if self.paid else "DECLINED", "paymentConfirmedAt": None}]}
         if path == "/api/sellers/me/products/product":
             if method == "GET":
                 return {"name": "owned-product", "unitPrice": 1200, "version": 9}
@@ -107,7 +113,9 @@ class PreparationTest(unittest.TestCase):
     def test_prepare_only_keeps_new_product_and_does_not_logout_borrowed_tokens(self):
         fixture = ApiFixture("https://load.test")
         with tempfile.TemporaryDirectory() as tmp, \
-                patch.dict(os.environ, {"BUYER_TOKEN": "borrowed-buyer", "SELLER_TOKEN": "borrowed-seller"}), \
+                patch.dict(os.environ, {"BUYER_TOKEN": "borrowed-buyer", "SELLER_TOKEN": "borrowed-seller",
+                    "BUYER_TOKEN_EXPIRES_AT": (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
+                    "SELLER_TOKEN_EXPIRES_AT": (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()}), \
                 patch.object(load, "Api", return_value=fixture), contextlib.redirect_stdout(io.StringIO()):
             target = Path(tmp) / "result"
             self.assertEqual(load.main(["--base-url", fixture.base, "--prepare-only",
@@ -145,27 +153,48 @@ class ResultTest(unittest.TestCase):
         self.records = [{"iteration": n, "status": 201, "orderId": str(n)} for n in range(2)]
         self.summary = {"metrics": {"http_reqs": {"count": 2}, "dropped_iterations": {"count": 0}}}
         self.observed = {"missingAcceptedOrderIds": [], "ordersWithout201Receipt": [],
-                         "snapshotComplete": True, "states": {"PAID": 2}}
+                         "snapshotComplete": True, "drainComplete": True,
+                         "measurementStates": {"PAID": 2}, "states": {"PAID": 2}}
+
+    def ledger(self, records=None):
+        records = self.records if records is None else records
+        rows = [{"event": "phase", "phase": "measurement",
+                 "measurementStart": "2026-11-12T00:00:00Z", "measurementEnd": "2026-11-12T00:01:00Z"}]
+        for record in records:
+            rows += [{"event": "started", "startedAt": "2026-11-12T00:00:00Z",
+                      "iteration": record["iteration"]},
+                     {"event": "completed", "startedAt": "2026-11-12T00:00:00Z", **record}]
+        return load.read_ledger(map(json.dumps, rows))
 
     def test_zero_errors_does_not_hide_drops_missing_or_duplicate_orders(self):
-        self.assertTrue(load.verdict(self.plan, self.records, self.summary, 0, self.observed))
+        self.assertTrue(load.verdict(self.plan, self.ledger(), self.summary, 0, self.observed))
         self.summary["metrics"]["dropped_iterations"]["count"] = 1
-        self.assertFalse(load.verdict(self.plan, self.records, self.summary, 0, self.observed))
+        self.assertFalse(load.verdict(self.plan, self.ledger(), self.summary, 0, self.observed))
         self.summary["metrics"]["dropped_iterations"]["count"] = 0
         self.records[1]["orderId"] = "0"
-        self.assertFalse(load.verdict(self.plan, self.records, self.summary, 0, self.observed))
+        self.assertFalse(load.verdict(self.plan, self.ledger(), self.summary, 0, self.observed))
 
     def test_pending_or_missing_metrics_is_not_success(self):
         self.observed["states"] = {"PAID": 1, "PAYMENT_PENDING": 1}
-        self.assertFalse(load.verdict(self.plan, self.records, self.summary, 0, self.observed))
+        self.observed["measurementStates"] = self.observed["states"]
+        self.assertFalse(load.verdict(self.plan, self.ledger(), self.summary, 0, self.observed))
+
+    def test_wrong_duration_or_starts_outside_window_fail_injection(self):
+        ledger = self.ledger()
+        ledger["windows"]["measurement"]["end"] += 1
+        self.assertFalse(load.injection_passed(self.plan, ledger, self.summary, 0))
+        ledger = self.ledger()
+        ledger["firstStartedAt"]["measurement"] -= 1
+        self.assertFalse(load.injection_passed(self.plan, ledger, self.summary, 0))
 
     def test_partial_snapshot_does_not_claim_all_orders_checked(self):
         self.observed["snapshotComplete"] = False
-        self.assertFalse(load.verdict(self.plan, self.records, self.summary, 0, self.observed))
+        self.observed["drainComplete"] = False
+        self.assertFalse(load.verdict(self.plan, self.ledger(), self.summary, 0, self.observed))
         class SlowPages:
             def call(self, *args, **kwargs):
                 return {"items": [], "totalPages": 100}
-        value, complete = load.orders_for_product(SlowPages(), "buyer", "product", 0)
+        value, complete, error = load.orders_for_product(SlowPages(), "buyer", "product", 0)
         self.assertFalse(complete)
         self.assertEqual(value, {})
 
@@ -177,7 +206,7 @@ class ResultTest(unittest.TestCase):
             load.cleanup_container("own", "run")
         self.observed["states"] = {"PAID": 2}
         del self.summary["metrics"]["dropped_iterations"]
-        self.assertFalse(load.verdict(self.plan, self.records, self.summary, 0, self.observed))
+        self.assertFalse(load.verdict(self.plan, self.ledger(), self.summary, 0, self.observed))
 
     def test_drain_excludes_smoke_and_reports_unacknowledged_created_order(self):
         class Orders:
@@ -187,18 +216,18 @@ class ResultTest(unittest.TestCase):
                      "paymentConfirmedAt": "2026-11-12T10:00:00+09:00"}
                     for ident in ("smoke", "0", "1", "unknown")]}
         value = load.drain(Orders(), "buyer", {"productId": "product", "smokeOrderId": "smoke"},
-                           self.records, 0)
+                           self.ledger(), 0)
         self.assertEqual(value["states"], {"PAID": 3})
         self.assertEqual(value["ordersWithout201Receipt"], ["unknown"])
         self.assertEqual(sum(value["paymentConfirmedAtCounts"].values()), 3)
-        self.assertIn("미수행", value["financialReconciliation"])
+        self.assertIn("UNVERIFIED", value["financialReconciliation"])
 
     def test_drain_waits_for_order_created_without_201_receipt(self):
         pending = {"unknown": {"id": "unknown", "status": "PAYMENT_PENDING"}}
         paid = {"unknown": {"id": "unknown", "status": "PAID"}}
-        with patch.object(load, "orders_for_product", side_effect=[(pending, True), (paid, True)]), \
+        with patch.object(load, "orders_for_product", side_effect=[(pending, True, None), (paid, True, None)]), \
                 patch.object(load.time, "sleep") as sleep:
-            value = load.drain(None, "buyer", {"productId": "product", "smokeOrderId": "smoke"}, [], 30)
+            value = load.drain(None, "buyer", {"productId": "product", "smokeOrderId": "smoke"}, self.ledger([]), 30)
         sleep.assert_called_once_with(3)
         self.assertEqual(value["states"], {"PAID": 1})
         self.assertEqual(value["ordersWithout201Receipt"], ["unknown"])
@@ -220,7 +249,7 @@ class ResultTest(unittest.TestCase):
             rows = [json.loads(line) for line in (Path(tmp) / "requests.jsonl").read_text().splitlines()]
         self.assertEqual(rows, [{"iteration": 0, "startedAt": "2026-11-12T00:00:00Z", "event": "started"}])
         process.terminate.assert_called_once()
-        cleanup.assert_called_once_with("cs-orders-run", "run")
+        cleanup.assert_called_once_with("cs-orders-run-measurement", "run")
 
     def test_inject_uses_canonical_script_and_generated_container_input(self):
         from types import SimpleNamespace
@@ -234,7 +263,7 @@ class ResultTest(unittest.TestCase):
                 patch.dict(os.environ, {"ORDER_FILE": "/outside/unrelated.json"}), \
                 patch.object(load.subprocess, "Popen", return_value=process) as start, \
                 patch.object(load, "cleanup_container"):
-            code, records = load.inject("https://load.test", "secret", {"runId": "run"}, Path(tmp), args)
+            code = load.inject("https://load.test", "secret", {"runId": "run"}, Path(tmp), args)
         command = start.call_args.args[0]
         environment = start.call_args.kwargs["env"]
         self.assertEqual(command[-1], "/scripts/orders.js")
@@ -243,7 +272,7 @@ class ResultTest(unittest.TestCase):
         self.assertEqual(environment["ORDER_FILE"], "/work/order.json")
         self.assertEqual(environment["RATE"], "2")
         self.assertEqual(environment["DURATION_SECONDS"], "3")
-        self.assertEqual((code, records), (0, []))
+        self.assertEqual(code, 0)
 
     def test_tps_option_keeps_rate_alias(self):
         self.assertEqual(load.parser().parse_args(["--base-url", "https://load.test"]).rate, 200)
@@ -290,6 +319,420 @@ class ResultTest(unittest.TestCase):
     def test_redirect_does_not_forward_authorization(self):
         self.assertIsNone(load.NoRedirect().redirect_request(
             None, None, 302, "", {}, "https://other.test"))
+
+
+@contextlib.contextmanager
+def fake_clock():
+    current = [0.0]
+    with patch.object(load.time, "monotonic", side_effect=lambda: current[0]), \
+            patch.object(load.time, "sleep", side_effect=lambda seconds: current.__setitem__(0, current[0] + seconds)):
+        yield current
+
+
+class RecoveryTest(unittest.TestCase):
+    def unknown(self):
+        return load.read_ledger(map(json.dumps, [
+            {"event": "started", "iteration": 0, "startedAt": "2026-11-13T00:00:00Z"},
+            {"event": "completed", "iteration": 0, "startedAt": "2026-11-13T00:00:00Z",
+             "status": 0, "orderId": None, "clientErrorCode": 1050},
+        ]))
+
+    def test_empty_then_pending_then_paid_does_not_erase_unknown_receipt(self):
+        class Delayed:
+            calls = 0
+
+            def call(self, method, path, **kwargs):
+                self.calls += 1
+                assert method == "GET"
+                return {"totalPages": 1, "items": [] if self.calls == 1 else [
+                    {"id": "late", "productId": "p", "status": "PAYMENT_PENDING" if self.calls == 2 else "PAID"}]}
+        api, checkpoints = Delayed(), []
+        with fake_clock() as clock:
+            value = load.drain(api, "buyer", {"productId": "p"}, self.unknown(), 6, checkpoints.append)
+        self.assertEqual((api.calls, clock[0]), (3, 6))
+        self.assertEqual(value["states"], {"PAID": 1})
+        self.assertEqual(value["ordersWithout201Receipt"], ["late"])
+        self.assertEqual(value["unresolvedAcceptedOrders"], 0)
+        self.assertEqual(value["unresolvedRequests"][0]["reason"], "acceptance_unknown")
+        self.assertTrue(value["recoveryRequired"])
+        self.assertFalse(value["drainComplete"])
+        self.assertEqual(value["stopReason"], "deadline")
+        self.assertEqual(len(checkpoints), 3)
+
+    def test_permanently_invisible_request_remains_unknown_after_budget(self):
+        class Empty:
+            def call(self, method, *args, **kwargs):
+                assert method == "GET"
+                return {"totalPages": 1, "items": []}
+        with fake_clock():
+            value = load.drain(Empty(), "buyer", {"productId": "p"}, self.unknown(), 6)
+        self.assertEqual(value["queryCosts"]["queries"], 3)
+        self.assertEqual(len(value["unresolvedRequests"]), 1)
+        self.assertFalse(value["drainComplete"])
+
+    def test_started_only_corrupt_tail_and_nonobject_rows_are_collection_failures(self):
+        rows = [json.dumps({"event": "started", "iteration": 7, "startedAt": "2026-11-13T00:00:00Z"}),
+                '{"event":', "null", "[]"]
+        value = load.read_ledger(rows)
+        self.assertFalse(value["ledgerComplete"])
+        self.assertEqual(value["invalidRows"], 3)
+        self.assertEqual(value["unknown"], [{"phase": "measurement", "iteration": 7, "reason": "response_missing"}])
+
+    def test_page_failure_keeps_partial_snapshot_and_costs(self):
+        class Fails:
+            calls = 0
+
+            def call(self, method, *args, **kwargs):
+                assert method == "GET"
+                self.calls += 1
+                if self.calls == 2:
+                    raise load.ApiError("GET", "/api/orders", 503, "COMMON_TEMPORARILY_UNAVAILABLE")
+                return {"totalPages": 2, "items": [{"id": "late", "productId": "p", "status": "PAYMENT_PENDING"}]}
+        captured = []
+        value = load.drain(Fails(), "buyer", {"productId": "p"}, self.unknown(), 30, captured.append)
+        self.assertEqual(value["states"], {"PAYMENT_PENDING": 1})
+        self.assertFalse(value["snapshotComplete"])
+        self.assertEqual(value["observationError"]["status"], 503)
+        self.assertEqual(value["queryCosts"]["queries"], 2)
+        self.assertEqual(captured[-1], value)
+
+    def test_malformed_second_page_keeps_the_first_page(self):
+        class InvalidPage:
+            calls = 0
+            def call(self, *args, **kwargs):
+                self.calls += 1
+                return {"totalPages": 2, "items": [
+                    {"id": "late", "productId": "p", "status": "PAYMENT_PENDING"}] if self.calls == 1 else None}
+        value = load.drain(InvalidPage(), "buyer", {"productId": "p"}, self.unknown(), 30)
+        self.assertEqual(value["states"], {"PAYMENT_PENDING": 1})
+        self.assertEqual(value["observationError"], {"errorType": "ValueError"})
+        self.assertFalse(value["drainComplete"])
+
+    def test_main_interrupt_and_exception_read_original_ledger_before_cleanup(self):
+        import subprocess
+        for failure in (KeyboardInterrupt, RuntimeError):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
+                fixture, target = ApiFixture("https://load.test"), Path(tmp) / "run"
+                def interrupt(*args):
+                    (target / "requests.jsonl").write_text(json.dumps({
+                        "event": "started", "iteration": 0, "startedAt": "2026-11-13T00:00:00Z"}) + "\n")
+                    raise failure
+                docker = subprocess.CompletedProcess([], 0, '[{"Id":"sha256:fixture","RepoDigests":[]}]')
+                with patch.dict(os.environ, {}, clear=True), patch.object(load, "Api", return_value=fixture), \
+                        patch.object(load.shutil, "which", return_value="docker"), \
+                        patch.object(load.subprocess, "run", return_value=docker), \
+                        patch.object(load, "inject", side_effect=interrupt), \
+                        patch.object(load, "drain", wraps=load.drain) as drain, \
+                        contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    code = load.main(["--base-url", fixture.base, "--tps", "1", "--seconds", "1",
+                                      "--drain-seconds", "0", "--output-dir", str(target)])
+                report = json.loads((target / "summary.json").read_text())
+                self.assertEqual(code, 130 if failure is KeyboardInterrupt else 1)
+                self.assertEqual(drain.call_count, 1)
+                self.assertTrue(report["recoveryRequired"])
+                self.assertTrue(any(row["reason"] == "response_missing" for row in report["unresolvedRequests"]))
+                self.assertFalse(report["passed"])
+                self.assertEqual(sum(method == "POST" and path == "/api/orders"
+                                     for method, path, *_ in fixture.calls), 1)  # Smoke only.
+
+    def test_resume_preserves_failed_run_and_never_creates_an_order(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            original = Path(tmp)
+            values = {"plan.json": {"runId": "run", "baseUrl": "https://load.test",
+                       "productId": "product", "plannedOrders": 1, "smokeOrderId": "smoke", "smokePaid": True},
+                      "summary.json": {"passed": False, "failure": "original failure"}}
+            for name, value in values.items():
+                (original / name).write_text(json.dumps(value))
+            (original / "requests.jsonl").write_text(json.dumps({
+                "event": "started", "iteration": 0, "startedAt": "2026-11-13T00:00:00Z"}) + "\n")
+            before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in original.iterdir()}
+            fixture = ApiFixture("https://load.test")
+            with patch.dict(os.environ, {}, clear=True), patch.object(load, "Api", return_value=fixture), \
+                    patch.object(load, "inject") as inject, contextlib.redirect_stdout(io.StringIO()):
+                code = load.main(["--resume", str(original), "--drain-seconds", "0"])
+            self.assertEqual(code, 1)
+            inject.assert_not_called()
+            self.assertFalse(any(method == "POST" and path == "/api/orders" for method, path, *_ in fixture.calls))
+            for name, digest in before.items():
+                self.assertEqual(hashlib.sha256((original / name).read_bytes()).hexdigest(), digest)
+            recovered = json.loads(next(original.glob("recovery-*/summary.json")).read_text())
+            self.assertTrue(recovered["recoveryRequired"])
+            self.assertFalse(recovered["loadExecuted"])
+
+    def test_cleanup_failure_preserves_primary_failure_and_drain_checkpoint(self):
+        import subprocess
+        class CleanupFails(ApiFixture):
+            def call(self, method, path, *args, **kwargs):
+                if method in {"PUT", "DELETE"}:
+                    raise load.ApiError(method, path, 503)
+                return super().call(method, path, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture, target = CleanupFails("https://load.test"), Path(tmp) / "run"
+            def fail(*args):
+                (target / "requests.jsonl").write_text(json.dumps({
+                    "event": "started", "iteration": 0, "startedAt": "2026-11-13T00:00:00Z"}) + "\n")
+                (target / "k6-summary.json").write_text('{"metrics":')
+                raise RuntimeError("primary injection failure")
+            docker = subprocess.CompletedProcess([], 0, '[{"Id":"fixture"}]')
+            with patch.dict(os.environ, {}, clear=True), patch.object(load, "Api", return_value=fixture), \
+                    patch.object(load.shutil, "which", return_value="docker"), \
+                    patch.object(load.subprocess, "run", return_value=docker), \
+                    patch.object(load, "inject", side_effect=fail), contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                code = load.main(["--base-url", fixture.base, "--drain-seconds", "0", "--output-dir", str(target)])
+            report = json.loads((target / "summary.json").read_text())
+            self.assertEqual(code, 1)
+            self.assertEqual(report["failure"], "primary injection failure")
+            self.assertEqual(len(report["cleanupErrors"]), 3)
+            self.assertEqual(report["k6SummaryErrors"]["measurement"], "JSONDecodeError")
+            self.assertTrue((target / "order-states.json").is_file())
+
+    def test_resume_accepts_borrowed_session_that_covers_only_recovery(self):
+        class Known(ApiFixture):
+            def call(self, method, path, *args, **kwargs):
+                if path.startswith("/api/orders?"):
+                    return {"totalPages": 1, "items": [{"id": "known", "productId": "product", "status": "PAID"}]}
+                return super().call(method, path, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as tmp:
+            original = Path(tmp)
+            (original / "plan.json").write_text(json.dumps({"runId": "run", "baseUrl": "https://load.test",
+                "productId": "product", "plannedOrders": 1, "measurementSeconds": 60}))
+            rows = [{"event": event, "iteration": 0, "startedAt": "2026-11-13T00:00:00Z",
+                     "status": 201, "orderId": "known"} for event in ("started", "completed")]
+            (original / "requests.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+            load.write_json(original / "k6-summary.json", {"metrics": {"http_reqs": {"count": 1}}})
+            expiry = (datetime.now(timezone.utc) + timedelta(seconds=600)).isoformat()
+            fixture = Known("https://load.test")
+            with patch.dict(os.environ, {"BUYER_TOKEN": "borrowed-buyer", "SELLER_TOKEN": "borrowed-seller",
+                    "BUYER_TOKEN_EXPIRES_AT": expiry, "SELLER_TOKEN_EXPIRES_AT": expiry}, clear=True), \
+                    patch.object(load, "Api", return_value=fixture), contextlib.redirect_stdout(io.StringIO()):
+                code = load.main(["--resume", str(original), "--drain-seconds", "300"])
+            self.assertEqual(code, 0)
+            self.assertFalse(any(path == "/swagger-ui/fixture-sessions" for _, path, *_ in fixture.calls))
+
+    def test_docker_preparation_failure_is_not_a_load_execution(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(load.shutil, "which", return_value=None), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            target = Path(tmp) / "run"
+            code = load.main(["--base-url", "https://load.test", "--output-dir", str(target)])
+            report = json.loads((target / "summary.json").read_text())
+        self.assertEqual(code, 1)
+        self.assertFalse(report["loadExecuted"])
+        self.assertEqual(report["failurePhase"], "preparation")
+
+
+class SessionTest(unittest.TestCase):
+    def test_owned_session_renews_between_phases_without_extending_policy(self):
+        class Sessions:
+            issued = 0
+
+            def call(self, *args, **kwargs):
+                self.issued += 1
+                return {"token": str(self.issued) + "x" * 40, "account": {"id": "same-buyer"},
+                        "expiresAt": datetime.fromtimestamp(load.time.time() + 1800, timezone.utc).isoformat()}
+        api, owned, sessions = Sessions(), [], {}
+        with patch.dict(os.environ, {}, clear=True), patch.object(load.time, "time", return_value=1000):
+            first = load.login(api, "BUYER", owned, sessions)
+        with patch.object(load.time, "time", return_value=2000):
+            second = load.session_for(api, "BUYER", owned, sessions, 900)
+        self.assertNotEqual(first, second)
+        self.assertEqual(len(owned), 2)
+        self.assertEqual(sessions["BUYER"]["expiry"], 3800)
+        self.assertEqual(sessions["_issued"][first], 2800)
+
+    def test_borrowed_session_with_insufficient_budget_never_renews(self):
+        sessions = {"BUYER": {"token": "borrowed", "owned": False, "expiry": 1000}}
+        with patch.object(load.time, "time", return_value=900), patch.object(load, "login") as login, \
+                self.assertRaisesRegex(RuntimeError, "만료"):
+            load.session_for(None, "BUYER", [], sessions, 900)
+        login.assert_not_called()
+
+    def test_invalid_borrowed_expiry_is_preparation_failure_before_any_product(self):
+        fixture = ApiFixture("https://load.test")
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.dict(os.environ, {"BUYER_TOKEN": "secret"}, clear=True), \
+                patch.object(load, "Api", return_value=fixture), contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            target = Path(tmp) / "run"
+            code = load.main(["--base-url", fixture.base, "--prepare-only", "--output-dir", str(target)])
+            report = json.loads((target / "summary.json").read_text())
+        self.assertEqual(code, 1)
+        self.assertFalse(report["loadExecuted"])
+        self.assertFalse(fixture.calls)
+        self.assertNotIn("secret", json.dumps(report))
+
+
+class PhaseTest(unittest.TestCase):
+    def test_missing_warmup_pair_blocks_measurement_even_when_all_server_orders_are_paid(self):
+        import subprocess
+        class Warmup(ApiFixture):
+            def call(self, method, path, *args, **kwargs):
+                if path.startswith("/api/orders?"):
+                    return {"totalPages": 1, "items": [{"id": key, "productId": "product", "status": "PAID"}
+                                                      for key in ("smoke", "warm-0", "unlogged")]}
+                return super().call(method, path, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as tmp:
+            target, fixture = Path(tmp) / "run", Warmup("https://load.test")
+            def partial(base, buyer, plan, directory, args, phase):
+                self.assertEqual(phase, "warmup")
+                rows = [{"event": "phase", "phase": "warmup", "measurementStart": "2026-11-13T00:00:00Z",
+                         "measurementEnd": "2026-11-13T00:00:02Z"}]
+                rows += [{"event": event, "phase": "warmup", "iteration": 0,
+                          "startedAt": "2026-11-13T00:00:00Z", "status": 201, "orderId": "warm-0"}
+                         for event in ("started", "completed")]
+                (directory / "requests.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+                load.write_json(directory / "k6-warmup-summary.json", {"metrics": {
+                    "http_reqs": {"count": 2}, "dropped_iterations": {"count": 0}}})
+                return 0
+            docker = subprocess.CompletedProcess([], 0, '[{"Id":"fixture"}]')
+            with patch.dict(os.environ, {}, clear=True), patch.object(load, "Api", return_value=fixture), \
+                    patch.object(load.shutil, "which", return_value="docker"), \
+                    patch.object(load.subprocess, "run", return_value=docker), \
+                    patch.object(load, "inject", side_effect=partial) as inject, \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                code = load.main(["--base-url", fixture.base, "--tps", "1", "--seconds", "900",
+                    "--warmup-seconds", "2", "--drain-seconds", "0", "--output-dir", str(target)])
+            report = json.loads((target / "summary.json").read_text())
+            self.assertEqual(code, 1)
+            self.assertEqual(inject.call_count, 1)
+            self.assertFalse(report["warmupInjectionPassed"])
+            self.assertNotIn("measurement", report["k6PhaseExitCodes"])
+            self.assertTrue(report["recoveryRequired"])
+
+    def test_k6_phase_keys_window_error_fields_and_boundary_cap_with_short_vm(self):
+        import shutil
+        import subprocess
+        if not shutil.which("node"):
+            self.skipTest("Optional k6 script VM check requires the repository frontend's Node.js runtime")
+        body = load.prepare_order(ApiFixture("https://load.test"), "buyer", "seller",
+                                  load.prepare(ApiFixture("https://load.test"), "buyer", "seller", "run", 1))
+        script = r"""
+const fs = require('fs'), vm = require('vm');
+const source = fs.readFileSync(process.argv[1], 'utf8')
+  .replace(/^import .*;\r?\n/gm, '')
+  .replace('export const options =', 'const options =')
+  .replace('export default function ()', 'function run()');
+const results = [];
+for (const phase of ['warmup', 'measurement']) {
+  const logs = [], keys = [];
+  const context = {
+    logs, keys,
+    __ENV: {BASE_URL:'https://fixture.test',BUYER_TOKEN:'fixture-secret',RUN_ID:'run',
+      RATE:'200',DURATION_SECONDS:'900',LOAD_PHASE:phase},
+    open: () => process.argv[2],
+    exec: {scenario:{iterationInTest:0,startTime:1794528000000}},
+    check: () => false,
+    console:{log: value => logs.push(value)},
+    http:{post:(url,body,params) => {
+      keys.push(params.headers['Idempotency-Key']);
+      return {status:0,error_code:1050,error:'fixture-secret https://fixture.test/secret',
+              timings:{duration:5000},json:()=>({})};
+    }},
+  };
+  results.push(JSON.parse(vm.runInNewContext(source +
+    ';run();exec.scenario.iterationInTest=180000;run();JSON.stringify({options,logs,keys});', context)));
+}
+process.stdout.write(JSON.stringify(results));
+"""
+        result = subprocess.run(["node", "-e", script, str(HERE / "orders.js"), json.dumps(body)],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        warmup, measured = json.loads(result.stdout)
+        self.assertEqual(warmup["keys"], ["run-warmup-0"])
+        self.assertEqual(measured["keys"], ["run-load-0"])
+        self.assertEqual(measured["options"]["scenarios"]["orders"]["duration"], "900s")
+        window = json.loads(measured["logs"][0].split(" ", 1)[1])
+        self.assertEqual(load.timestamp(window["measurementEnd"]) - load.timestamp(window["measurementStart"]), 900)
+        row = json.loads(measured["logs"][-1].split(" ", 1)[1])
+        self.assertEqual(row["clientErrorCode"], 1050)
+        self.assertNotIn("fixture-secret", row["clientError"])
+        self.assertNotIn("https://", row["clientError"])
+
+    def test_900_second_measurement_separates_warmup_and_late_completions_without_waiting(self):
+        import subprocess
+        from urllib.parse import parse_qs, urlsplit
+
+        class FullApi(ApiFixture):
+            orders = {}
+
+            def call(self, method, path, *args, **kwargs):
+                if path.startswith("/api/orders?"):
+                    page = int(parse_qs(urlsplit(path).query)["page"][0])
+                    rows = list(self.orders.values())
+                    return {"totalPages": max(1, (len(rows) + 99) // 100), "items": rows[page * 100:(page + 1) * 100]}
+                value = super().call(method, path, *args, **kwargs)
+                if method == "POST" and path == "/api/orders":
+                    self.orders[value["id"]] = {**value, "productId": "product"}
+                return value
+
+        fixture = FullApi("https://load.test")
+        def inject(base, buyer, plan, directory, args, phase):
+            duration = args.warmup_seconds if phase == "warmup" else args.seconds
+            start = datetime(2026, 11, 13, tzinfo=timezone.utc) - timedelta(seconds=10 if phase == "warmup" else 0)
+            end = start + timedelta(seconds=duration)
+            with (directory / "requests.jsonl").open("a") as output:
+                output.write(json.dumps({"event": "phase", "phase": phase,
+                    "measurementStart": start.isoformat(), "measurementEnd": end.isoformat()}) + "\n")
+                for n in range(args.rate * duration):
+                    ident = phase + "-" + str(n)
+                    output.write(json.dumps({"phase": phase, "event": "started", "iteration": n,
+                                             "startedAt": start.isoformat()}) + "\n")
+                    output.write(json.dumps({"phase": phase, "event": "completed", "iteration": n,
+                        "startedAt": start.isoformat(), "status": 201, "orderId": ident}) + "\n")
+                    fixture.orders[ident] = {"id": ident, "productId": "product", "status": "PAID",
+                        "paymentConfirmedAt": (end + timedelta(seconds=1)).isoformat()}
+            name = "k6-summary.json" if phase == "measurement" else "k6-warmup-summary.json"
+            load.write_json(directory / name, {"metrics": {"http_reqs": {"count": args.rate * duration},
+                                                          "dropped_iterations": {"count": 0}}})
+            return 0
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "run"
+            metadata = Path(tmp) / "conditions.json"
+            metadata.write_text(json.dumps({"revision": "a" * 40, "conditions": {"scenario": "fixture"}}))
+            docker = subprocess.CompletedProcess([], 0, '[{"Id":"sha256:fixture","RepoDigests":[]}]')
+            with patch.dict(os.environ, {}, clear=True), patch.object(load, "Api", return_value=fixture), \
+                    patch.object(load.shutil, "which", return_value="docker"), \
+                    patch.object(load.subprocess, "run", return_value=docker), patch.object(load, "inject", side_effect=inject), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                code = load.main(["--base-url", fixture.base, "--tps", "1", "--seconds", "900",
+                    "--warmup-seconds", "2", "--drain-seconds", "1", "--output-dir", str(target),
+                    "--performance-metadata", str(metadata)])
+            report = json.loads((target / "summary.json").read_text())
+            states = json.loads((target / "order-states.json").read_text())
+            linked = json.loads((target / "performance-metadata.json").read_text())
+            self.assertEqual(code, 0, {key: report.get(key) for key in ("failure", "drainFailure", "drainComplete")})
+            self.assertTrue(report["injectionPassed"])
+            self.assertEqual(report["plannedOrders"], 900)
+            self.assertEqual(states["measurementStates"], {"PAID": 900})
+            self.assertEqual(states["states"], {"PAID": 902})
+            self.assertEqual(states["commerceConfirmedWithinMeasurement"], 0)
+            self.assertEqual(report["performanceVerification"]["status"], "UNVERIFIED")
+            self.assertEqual(report["measurementWindow"]["end"] - report["measurementWindow"]["start"], 900)
+            self.assertEqual(linked["revision"], "a" * 40)
+            self.assertEqual(linked["loadRun"]["summary"]["sha256"], load.file_sha(target / "summary.json"))
+            self.assertEqual(linked["loadRun"]["ledger"]["sha256"], load.file_sha(target / "requests.jsonl"))
+            self.assertEqual(json.loads(metadata.read_text()), {"revision": "a" * 40, "conditions": {"scenario": "fixture"}})
+
+    def test_900_second_inventory_includes_warmup_and_smoke(self):
+        fixture = ApiFixture("https://load.test")
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=True), \
+                patch.object(load, "Api", return_value=fixture), contextlib.redirect_stdout(io.StringIO()):
+            target = Path(tmp) / "run"
+            code = load.main(["--base-url", fixture.base, "--tps", "200", "--seconds", "900",
+                             "--warmup-seconds", "60", "--prepare-only", "--output-dir", str(target)])
+            plan = json.loads((target / "plan.json").read_text())
+        self.assertEqual(code, 0)
+        self.assertEqual((plan["plannedOrders"], plan["warmupOrders"], plan["stockPrepared"]), (180000, 12000, 211201))
+
+    def test_python_transport_failure_preserves_type_without_raw_secret(self):
+        from urllib.error import URLError
+        api = load.Api("https://load.test")
+        with patch.object(api.opener, "open", side_effect=URLError(TimeoutError("secret transport detail"))), \
+                self.assertRaises(load.ApiError) as caught:
+            api.call("GET", "/api/orders")
+        self.assertEqual(caught.exception.evidence()["transportErrorType"], "TimeoutError")
+        self.assertNotIn("secret", str(caught.exception))
 
 
 if __name__ == "__main__":
