@@ -26,6 +26,15 @@ APPS = ["commerce", "payment-worker", "settlement"]
 PRICE, MILEAGE = 1000, 300
 
 
+def timed(stage, action, *args, **kwargs):
+    """Run one smoke stage and print its wall time so CI logs show where the job budget goes."""
+    started = time.monotonic()
+    try:
+        return action(*args, **kwargs)
+    finally:
+        print(json.dumps({"stage": stage, "elapsedSeconds": round(time.monotonic() - started, 1)}), flush=True)
+
+
 def verify():
     with stack("cs-financial-flow-", memory_storage=True, commerce_outbox=False) as compose:
         def flow(*args, **kwargs):
@@ -146,8 +155,9 @@ def verify():
 
         def worker_settings(version="fixture-pg-normal-v1", **extra):
             environment = {"PAYMENT_SCENARIO_VERSION": version, **extra}
-            flow("-f", "-", "up", "-d", "--no-deps", "--wait", "payment-worker",
-                 input_text=json.dumps({"services": {"payment-worker": {"environment": environment}}}), timeout=180)
+            timed("payment-worker restart: " + ",".join(f"{k}={v}" for k, v in environment.items()),
+                  flow, "-f", "-", "up", "-d", "--no-deps", "--wait", "payment-worker",
+                  input_text=json.dumps({"services": {"payment-worker": {"environment": environment}}}), timeout=180)
 
         # Immutable delay scenarios: one loses responses, one returns a late success for fencing.
         for version, loss, delay in [("flow-delayed-v1", 1, 7000), ("flow-late-success-v1", 0, 7000),
@@ -283,11 +293,13 @@ and aggregate_id='{aggregate}' and payload->'payload'->>'paymentCycleId'='{cycle
             compose("exec","-T","kafka","/opt/kafka/bin/kafka-console-producer.sh","--bootstrap-server","kafka:9092",
                     "--topic",topic,"--property","parse.key=true","--property","key.separator=\t",input_text=key+"\t"+body+"\n")
 
-        def drained(group):
-            # The group has committed every record, including replays, of its subscribed topics.
+        def wait_drained(groups=("commerce.v1","payment.v1"), seconds=60):
+            # Fix the log end once after the replays, then poll only each group's committed position.
             ends=bounds(compose,partitions(compose),"latest")
-            offsets=group_offsets(compose,group)
-            return all(offsets.get(key)==end for key,end in ends.items() if key[0] in SUBSCRIPTIONS[group])
+            for group in groups:
+                target={key:end for key,end in ends.items() if key[0] in SUBSCRIPTIONS[group]}
+                until(lambda: all(group_offsets(compose,group).get(key,0)>=end for key,end in target.items()),
+                      f"{group} did not consume the replayed records",seconds)
 
         def paid_order(mileage=MILEAGE, method="CREDIT_CARD", account="test-card", *, recover_admission=True, retry_after_decline=False):
             order, trace_id = place_order(mileage, method, account, recover_admission=recover_admission)
@@ -324,7 +336,7 @@ and aggregate_id='{aggregate}' and payload->'payload'->>'paymentCycleId'='{cycle
                 before=(history,mileage_history(payment),order_status(order["id"]))
                 replay("payment",outbox_event("payment","PaymentDeclined",payment,first_cycle))
                 replay("commerce",outbox_event("commerce","OrderPaymentRequested",order["id"],first_cycle))
-                until(lambda: drained("commerce.v1") and drained("payment.v1"),"replayed records were not consumed",60)
+                timed("replay drain",wait_drained)
                 assert (attempts(payment),mileage_history(payment),order_status(order["id"])) == before
                 assert sql("payment",f"select status || '/' || current_cycle_id from payment.payments where id='{payment}'") == f"CONFIRMED/{cycle}"
                 print(json.dumps({"paymentRetryCase":{"retry_completed":True,"settlement_items":settlement_items,"approved_current_attempts":approved,"old_attempt_status":history.split(',')[0].split(':')[1],"new_attempt_no":int(history.split(',')[1].split(':')[0]),"mileage":mileage,"origin_preserved":accepted == captured == persisted == received == order_created}}),flush=True)
@@ -454,7 +466,7 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
             replay("payment",outbox_event("payment","PaymentCancelled",payment,cycle))
             replay("commerce",outbox_event("commerce","OrderPaymentRequested",order_id,cycle))
             replay("commerce",outbox_event("commerce","PaymentCancellationRequested",order_id,cycle))
-            until(lambda: drained("commerce.v1") and drained("payment.v1"),"replayed records were not consumed",60)
+            timed("replay drain",wait_drained)
             assert (attempts(payment),mileage_history(payment),order_status(order_id),reservation(order_id),inventory()) == before
             assert mock_calls("POST") == posts + (0 if block_approval else 1)
             print(json.dumps({"paymentRetryCancellationCase":{"approval_blocked":block_approval,"attempts":expected_attempts,
@@ -462,14 +474,13 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
                               "duplicates_replayed":True}}),flush=True)
 
         try:
-            first_refund, second_refund = scenarios(paid_order, cancel, refund_state, completed, inventory, reservation,
-                                                    compose, gate_open)
+            first_refund, second_refund = timed("base scenarios", scenarios, paid_order, cancel, refund_state, completed,
+                                                inventory, reservation, compose, gate_open)
             worker_settings("fixture-pg-reject-v1")
-            retry_order, retry_paid = paid_order(MILEAGE, retry_after_decline=True)
-            cancel(retry_order)
-            completed(retry_order, retry_paid)
-            cancelled_retry(block_approval=False)
-            cancelled_retry(block_approval=True)
+            retry_order, retry_paid = timed("retry approval", paid_order, MILEAGE, retry_after_decline=True)
+            timed("retry approval refund", lambda: (cancel(retry_order), completed(retry_order, retry_paid)))
+            timed("retry decline and cancellation", cancelled_retry, block_approval=False)
+            timed("retry cancellation before approval", cancelled_retry, block_approval=True)
             # Card, all-mileage (including zero external HTTP calls), and external EASY_PAY wallet.
             card_order, card_payment = paid_order(0)
             cancel(card_order)
