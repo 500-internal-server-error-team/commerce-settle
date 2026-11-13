@@ -31,10 +31,13 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
@@ -59,6 +62,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     })
 @Testcontainers
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@ExtendWith(OutputCaptureExtension.class)
 class DailySettlementJobIntegrationTest {
   @Container @ServiceConnection
   static final PostgreSQLContainer<?> POSTGRES =
@@ -87,7 +91,7 @@ class DailySettlementJobIntegrationTest {
 
   @Test
   @DisplayName("마감 전 지급 대상만 선점해 배치·지급·지급 작업·지급 예약을 한 번에 만든다")
-  void reservesPayableItemsBeforeCutoff() {
+  void reservesPayableItemsBeforeCutoff(CapturedOutput output) {
     LocalDate batchDate = LocalDate.of(2026, 9, 1);
     Instant cutoff = SettlementBatch.cutoffOf(batchDate);
     UUID seller = UUID.randomUUID();
@@ -101,6 +105,7 @@ class DailySettlementJobIntegrationTest {
     BatchStatus status = launcher.run(batchDate);
 
     assertThat(status).isEqualTo(BatchStatus.COMPLETED);
+    assertThat(output).contains("Daily settlement finished");
     assertThat(lastExitCode()).isEqualTo("COMPLETED");
     Map<String, Object> batch = single("settlement_batches WHERE seller_id = ?", seller);
     assertThat(batch)
