@@ -20,8 +20,11 @@ public class OrderWorkflowConfiguration {
 
   @Bean
   @ConditionalOnProperty(name = "app.order-result-processor.enabled", havingValue = "true")
-  OrderResults orderResults(OrderResultService results) {
-    return new OrderResults(results);
+  OrderResults orderResults(
+      OrderResultService results,
+      @org.springframework.beans.factory.annotation.Value("${app.inbox-processor.max-run-ms:10000}")
+          long maxRunMs) {
+    return new OrderResults(results, maxRunMs * 1_000_000L);
   }
 
   static class OrderClock {
@@ -57,8 +60,11 @@ public class OrderWorkflowConfiguration {
     private final OrderResultService results;
     private final RepeatedWarning paused = new RepeatedWarning();
 
-    OrderResults(OrderResultService results) {
+    private final long maxRunNanos;
+
+    OrderResults(OrderResultService results, long maxRunNanos) {
       this.results = results;
+      this.maxRunNanos = maxRunNanos;
     }
 
     @Scheduled(
@@ -66,7 +72,7 @@ public class OrderWorkflowConfiguration {
         fixedDelayString = "${app.order-result-processor.interval-ms:1000}")
     public void run() {
       try {
-        PaymentAcceptedProcessor.drain(results::processNext, 100);
+        PaymentAcceptedProcessor.drain(results::processNext, 100, maxRunNanos);
       } catch (RuntimeException e) {
         paused.at(LoggerFactory.getLogger(OrderResults.class)).log(
             "Order result processing paused: errorCode=INBOX_UNAVAILABLE");

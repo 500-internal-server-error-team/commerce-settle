@@ -20,4 +20,15 @@ class PaymentAcceptedProcessorTest {
 
     verify(service, times(6)).processNext();
   }
+
+  @Test
+  @DisplayName("대기 건이 남아 있어도 실행 상한을 넘기면 묶음 경계에서 멈추고 다음 주기로 넘긴다")
+  void stopsAtBatchBoundaryAfterMaxRun() {
+    var service = mock(PaymentAcceptedService.class);
+    when(service.processNext()).thenReturn(true);
+
+    new PaymentAcceptedProcessor(service, 3, 1).run();
+
+    verify(service, times(3)).processNext();
+  }
 }
