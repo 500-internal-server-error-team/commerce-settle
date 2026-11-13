@@ -33,7 +33,7 @@ type은 `feat`, `fix`, `refactor`, `docs`, `test`, `style`, `build`, `ci`, `chor
 1. 이슈에 범위와 완료 조건을 적고 작업 브랜치를 만듭니다. 최초 bootstrap은 위 예외 브랜치를 사용합니다.
 2. PR에 변경 이유·주요 변경·검증 결과·연결 이슈를 적습니다. `연결 이슈`에는 `Closes #번호`를 한 줄에 하나씩 필수로 적습니다. `Refs`나 빈 항목은 허용하지 않습니다.
 3. 팀원 리뷰와 승인은 선택입니다. API·이벤트·DB 계약 변경은 영향을 받는 담당자와 합의하고, 합의한 내용과 이유를 PR에 남깁니다.
-4. 최신 base와 최종 커밋 기준 `build-and-smoke`·`pr-body-format` 통과와 미해결 대화가 없는지 확인하고 **Rebase and merge**합니다. base 동기화도 rebase합니다.
+4. 최종 커밋 기준 `build-and-smoke`·`pr-body-format` 통과와 미해결 대화가 없는지 확인하고 **Rebase and merge**합니다.
 
 PR의 `검증`은 항목 사이 빈 줄이 없는 단일 체크리스트로 작성하고 결과·근거·미실행 이유를 해당 항목에 씁니다. 결과 목록과 확인 체크리스트를 중복으로 붙이지 않습니다. 본문 수정은 `python3 scripts/pr_body.py publish --repo OWNER/REPO --pr NUMBER --account LOGIN --body-file /path/to/body.md`, 새 PR 생성은 같은 도구의 `create --repo OWNER/REPO --base develop --head BRANCH --title TITLE --account LOGIN --body-file /path/to/body.md`를 사용합니다. 형식·현재 계정·대상이 맞지 않으면 GitHub 쓰기 전에 중단합니다. 게시 없는 로컬 검사는 `check --body-file`로 실행합니다.
 
