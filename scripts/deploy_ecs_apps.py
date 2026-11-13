@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 
@@ -26,7 +27,7 @@ class Aws:
     def __init__(self, region):
         self.region = region
 
-    def __call__(self, service, operation, *arguments, payload=None):
+    def __call__(self, service, operation, *arguments, payload=None, timeout=None):
         command = ["aws", "--region", self.region, "--output", "json", "--no-cli-pager",
                    service, operation, *arguments]
         try:
@@ -40,7 +41,7 @@ class Aws:
                     command += ["--cli-input-json", "file://" + parameters.name]
                 result = subprocess.run(
                     command, capture_output=True, text=True, check=True,
-                    timeout=660 if operation == "wait" else 60,
+                    timeout=timeout if timeout is not None else (660 if operation == "wait" else 60),
                 )
         except (OSError, subprocess.SubprocessError) as error:
             # Do not send task environment values or AWS response bodies to CI logs.
@@ -77,9 +78,9 @@ def service_name(name):
     return "commerce-settle-" + name
 
 
-def describe(aws, cluster, names):
+def describe(aws, cluster, names, *, timeout=None):
     response = aws("ecs", "describe-services", "--cluster", cluster, "--services",
-                   *[service_name(name) for name in names])
+                   *[service_name(name) for name in names], timeout=timeout)
     services = response.get("services", [])
     if response.get("failures") or {item["serviceName"] for item in services} != {
         service_name(name) for name in names
@@ -100,10 +101,38 @@ def require_stable(service, task):
 
 
 def wait_for(aws, cluster, name, task):
+    deadline = time.monotonic() + 600
     aws("ecs", "wait", "services-stable", "--cluster", cluster,
-        "--services", service_name(name))
-    # A circuit-breaker rollback can satisfy the waiter. Check the revision too.
-    require_stable(describe(aws, cluster, [name])[name], task)
+        "--services", service_name(name), timeout=600)
+    # The waiter checks deployment/running counts, not rollout completion or revision.
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining < 0:
+            raise RuntimeError(f"{name} deployment completion timed out before the final observation")
+        current = describe(aws, cluster, [name], timeout=min(60, remaining))[name]
+        expired = time.monotonic() > deadline
+        try:
+            if expired:
+                raise RuntimeError("completion budget expired during the service observation")
+            require_stable(current, task)
+            return
+        except RuntimeError as error:
+            primary = next((item for item in current.get("deployments", [])
+                            if item.get("status") == "PRIMARY"), {})
+            summary = {key: current.get(key) for key in
+                       ("status", "taskDefinition", "desiredCount", "runningCount", "pendingCount")}
+            summary["rolloutState"] = primary.get("rolloutState")
+            if expired:
+                raise RuntimeError(f"{name} deployment completion timed out: {summary}") from error
+            if (current.get("status") != "ACTIVE" or current.get("desiredCount") != 1
+                    or current.get("taskDefinition") != task
+                    or primary.get("taskDefinition") != task
+                    or primary.get("rolloutState") not in ("IN_PROGRESS", "COMPLETED")):
+                raise RuntimeError(f"{name} did not retain the expected deployment: {summary}") from error
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"{name} deployment completion timed out: {summary}") from error
+            time.sleep(min(15, remaining))
 
 
 def prepare(aws, cluster, images, region, demo_auto_shipment=None):
