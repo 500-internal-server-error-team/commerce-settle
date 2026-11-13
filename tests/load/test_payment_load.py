@@ -151,6 +151,17 @@ class ReconciliationScopeTest(ReconciliationFixture):
         self.assertEqual({}, report["problems"])
         self.assertEqual({"CONFIRMED": 1}, report["payments"])
 
+    def test_accepts_retried_attempts_of_another_run(self):
+        # 다른 실행 결제의 이전 거절 시도와 현재 승인 시도는 둘 다 그 결제에 연결된 대역 거래다.
+        self.payment()
+        self.other_run(namespace="r2")
+        self.db.execute("INSERT INTO payment.payment_attempts VALUES "
+                        "('order2-payment','PG_A','order2-old-cycle',9000,'DECLINED')")
+        self.db.execute("INSERT INTO finance_mock.mock_transactions VALUES "
+                        "('PG_A','order2-old-cycle',9000,'DECLINED',NULL,'APPROVE')")
+        self.assertEqual({}, self.reconcile()["problems"])
+        self.assertIn("승인 시도 중복", self.reconcile(runs="other")["problems"])
+
     def test_whole_stack_reconcile_detects_the_problem_of_another_run(self):
         # 실행 하나만 대조할 때 빼 둔 다른 실행의 불일치는 그 실행이나 스택 전체를 대조할 때 잡혀야 한다.
         self.payment()
