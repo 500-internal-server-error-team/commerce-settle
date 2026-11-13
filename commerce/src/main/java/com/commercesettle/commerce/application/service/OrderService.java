@@ -5,7 +5,6 @@ import com.commercesettle.commerce.application.dto.RegularOrderCommand;
 import com.commercesettle.commerce.application.event.EventEnvelope;
 import com.commercesettle.commerce.application.event.OrderPaymentRequestedPayload;
 import com.commercesettle.commerce.application.exception.AuthenticationFailedException;
-import com.commercesettle.commerce.application.exception.OrderCapacityExceededException;
 import com.commercesettle.commerce.application.exception.OrderRequestException;
 import com.commercesettle.commerce.application.exception.OrderRequestException.Kind;
 import com.commercesettle.commerce.application.port.AddressCipher;
@@ -31,7 +30,6 @@ import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.Semaphore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -59,7 +57,6 @@ public class OrderService {
   private final TransactionTemplate transactions;
   private final TransactionTemplate replayReads;
   private final MileageAccrualSettings accrual;
-  private final Semaphore regularSlots;
 
   public OrderService(
       OrderRepository orders,
@@ -76,9 +73,7 @@ public class OrderService {
       EventOrderConcurrencyLimiter eventSlots,
       PlatformTransactionManager manager,
       MileageAccrualSettings accrual,
-      @Value("${app.orders.simulation-seed:67}") long seed,
-      @Value("${app.orders.max-concurrent:3}") int maxConcurrent) {
-    if (maxConcurrent < 1) throw new IllegalArgumentException("maxConcurrent must be positive");
+      @Value("${app.orders.simulation-seed:67}") long seed) {
     this.orders = orders;
     this.accounts = accounts;
     this.addresses = addresses;
@@ -96,56 +91,21 @@ public class OrderService {
     this.replayReads = new TransactionTemplate(manager);
     this.replayReads.setReadOnly(true);
     this.accrual = accrual;
-    this.regularSlots = new Semaphore(maxConcurrent);
   }
 
   /**
-   * 일반 주문은 쓰기 트랜잭션 진입 전에 인스턴스별 슬롯을 받는다. 접수가 닫혔거나 슬롯이 없으면 짧은 읽기로 기존 멱등 결과·본문 충돌을 확인하고 신규 요청만 거절한다.
-   * 신규 선착순 이벤트 주문은 짧은 읽기 트랜잭션에서 기존 멱등 결과·본문 충돌과 신규 거절(접수 제한·입력·매진/종료)을 먼저 판정한 뒤, DB 커넥션 없이 이벤트별 동시
-   * 실행 슬롯을 받고 주문 트랜잭션을 실행한다. 슬롯은 트랜잭션이 끝난 뒤 반납한다.
+   * 일반 주문은 바로 주문 트랜잭션을 실행한다. 신규 선착순 이벤트 주문은 짧은 읽기 트랜잭션에서 기존 멱등 결과·본문 충돌과 신규 거절(접수 제한·입력·매진/종료)을 먼저
+   * 판정한 뒤, DB 커넥션 없이 이벤트별 동시 실행 슬롯을 받고 주문 트랜잭션을 실행한다. 슬롯은 트랜잭션이 끝난 뒤 반납한다.
    */
   @Transactional(propagation = Propagation.NEVER)
   public OrderView create(UUID buyerId, String key, RegularOrderCommand command) {
-    if (command.eventId() == null) return createRegular(buyerId, key, command);
+    if (command.eventId() == null)
+      return transactions.execute(status -> createInTransaction(buyerId, key, command));
     var prior = replayReads.execute(status -> precheckEventOrder(buyerId, key, command));
     if (prior.isPresent()) return prior.get();
     try (var permit = eventSlots.acquire(command.eventId())) {
       return transactions.execute(status -> createInTransaction(buyerId, key, command));
     }
-  }
-
-  private OrderView createRegular(UUID buyerId, String key, RegularOrderCommand command) {
-    try {
-      // 메모리 상태만 확인한다. 정상 경로에는 사전 DB 조회를 추가하지 않는다.
-      admission.requireAdmission();
-    } catch (OrderCapacityExceededException unavailable) {
-      return replayRegularOrReject(buyerId, key, command, unavailable);
-    }
-    if (!regularSlots.tryAcquire()) {
-      return replayRegularOrReject(buyerId, key, command, new OrderCapacityExceededException(1));
-    }
-    try {
-      return transactions.execute(status -> createInTransaction(buyerId, key, command));
-    } finally {
-      // 커밋·롤백을 마친 뒤 다음 주문에 슬롯을 돌려준다.
-      regularSlots.release();
-    }
-  }
-
-  private OrderView replayRegularOrReject(
-      UUID buyerId,
-      String key,
-      RegularOrderCommand command,
-      OrderCapacityExceededException unavailable) {
-    return replayReads.execute(
-        status -> {
-          requireBuyer(buyerId);
-          return idempotency
-              .replayPermanent(
-                  createRequest(buyerId, key, command),
-                  existingId -> OrderView.from(owned(buyerId, existingId)))
-              .orElseThrow(() -> unavailable);
-        });
   }
 
   /**

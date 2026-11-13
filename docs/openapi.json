@@ -4443,7 +4443,7 @@
         "x-owner-service": "commerce",
         "x-actor": "BUYER",
         "x-implemented": true,
-        "description": "주문·주소 사본·재고/혜택 예약·영구 멱등 기록·OrderPaymentRequested Outbox를 원자 저장한다. 쿠폰과 선착순 이벤트는 OrderBenefits 구현이 같은 트랜잭션에서 예약하며 한 주문에 쿠폰 한 장과 이벤트를 함께 쓸 수 있다. 쿠폰의 최소 주문금액은 이벤트 가격을 반영한 상품대금으로 판단하고, 쿠폰과 마일리지는 함께 쓸 수 없다. 결제 결과는 영속 Inbox를 통해 반영한다. 마일리지 예약·외부 승인은 Payment 책임이다. 신규 접수는 용량 부족 시 503 COMMON_CAPACITY_EXCEEDED와 Retry-After: 30으로 제한된다. 일반 주문은 인스턴스별 쓰기 슬롯이 없으면 기존 멱등 결과·본문 충돌을 확인한 뒤 신규만 같은 코드와 Retry-After: 1로 거절된다. 신규 선착순 이벤트 주문은 기존 멱등 결과·본문 충돌·매진 판정 뒤 이벤트별 동시 실행 상한을 넘으면 같은 코드와 Retry-After: 1로 거절된다.",
+        "description": "주문·주소 사본·재고/혜택 예약·영구 멱등 기록·OrderPaymentRequested Outbox를 원자 저장한다. 쿠폰과 선착순 이벤트는 OrderBenefits 구현이 같은 트랜잭션에서 예약하며 한 주문에 쿠폰 한 장과 이벤트를 함께 쓸 수 있다. 쿠폰의 최소 주문금액은 이벤트 가격을 반영한 상품대금으로 판단하고, 쿠폰과 마일리지는 함께 쓸 수 없다. 결제 결과는 영속 Inbox를 통해 반영한다. 마일리지 예약·외부 승인은 Payment 책임이다. 신규 접수는 용량 부족 시 503 COMMON_CAPACITY_EXCEEDED와 Retry-After: 30으로 제한된다. 신규 선착순 이벤트 주문은 기존 멱등 결과·본문 충돌·매진 판정 뒤 이벤트별 동시 실행 상한을 넘으면 같은 코드와 Retry-After: 1로 거절된다.",
         "security": [
           {
             "accountSession": []
