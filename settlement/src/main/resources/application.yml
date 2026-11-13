@@ -90,7 +90,7 @@ settlement:
     # 지급 생성 전 상품·판매자 지급 컨텍스트를 조회하는 커머스 내부 API.
     base-url: ${COMMERCE_URL:http://commerce:8080}
     # 커머스가 service:settlement로 확인하는 내부 호출 자격. 없거나 43자 미만이면 기동하지 않는다.
-    credential: ${COMMERCE_SETTLEMENT_CREDENTIAL}
+    outbound-credential: ${COMMERCE_SETTLEMENT_CREDENTIAL}
     # 지급 생성 트랜잭션 안에서 호출하므로 짧게 둔다. 넘기면 그 판매자는 이번 실행에서 건너뛴다.
     http-timeout: 5s
   daily-batch:
