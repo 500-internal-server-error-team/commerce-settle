@@ -167,7 +167,6 @@ def verify(group="all"):
             # Keep the same credentials, funding source and loopback ports on every recreation.
             overlay = {"services": {"finance-mock": {"ports": ["127.0.0.1::8080", "127.0.0.1::9091"]},
                 "settlement": {"ports": ["127.0.0.1::8080"], "environment": {
-                    "LOGGING_STRUCTURED_FORMAT_CONSOLE": "logstash",
                     "PAYOUT_FUNDING_ACCOUNT_REF": "measurement-payout-funding", "PAYOUT_SCENARIO_VERSION": "fixture-normal-v1",
                     "PAYOUT_LOOKUP_SCENARIO_VERSION": "fixture-normal-v1",
                     "SPRING_APPLICATION_JSON": json.dumps({"app": {"internal-auth": {"senders": {"[operator:measurement]": {"current": operator}}}}})}}}}

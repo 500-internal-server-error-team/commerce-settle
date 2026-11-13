@@ -17,7 +17,7 @@ public class CommerceClientConfiguration {
   ProductSettlementContextReader productSettlementContextReader(
       RestClient.Builder builder,
       @Value("${settlement.commerce.base-url}") String baseUrl,
-      @Value("${settlement.commerce.credential}") String credential,
+      @Value("${settlement.commerce.outbound-credential}") String credential,
       @Value("${settlement.commerce.http-timeout}") Duration timeout) {
     HttpClient http = HttpClient.newBuilder().connectTimeout(timeout).build();
     JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(http);

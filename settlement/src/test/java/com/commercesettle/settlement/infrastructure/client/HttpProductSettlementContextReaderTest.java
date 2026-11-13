@@ -8,8 +8,14 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 
 import com.commercesettle.settlement.application.exception.ProductSettlementContextUnavailableException;
+import com.commercesettle.settlement.application.port.ProductSettlementContextReader;
 import com.commercesettle.settlement.domain.model.ProductSettlementContext;
+import com.commercesettle.settlement.infrastructure.config.CommerceClientConfiguration;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,10 +23,16 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.boot.convert.ApplicationConversionService;
+import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.core.env.SystemEnvironmentPropertySource;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.mock.http.client.MockClientHttpResponse;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.test.web.client.ResponseCreator;
 import org.springframework.web.client.RestClient;
@@ -40,6 +52,68 @@ class HttpProductSettlementContextReaderTest {
     RestClient.Builder builder = RestClient.builder().baseUrl("http://commerce");
     server = MockRestServiceServer.bindTo(builder).build();
     reader = new HttpProductSettlementContextReader(builder.build(), CREDENTIAL);
+  }
+
+  @Test
+  void outboundContextUsesCommerceReceiverCredentialWhenBothDirectionsAreConfigured() {
+    String inbound = "A".repeat(43), outbound = "B".repeat(43);
+    new ApplicationContextRunner()
+        .withInitializer(
+            context -> {
+              context
+                  .getBeanFactory()
+                  .setConversionService(ApplicationConversionService.getSharedInstance());
+              try {
+                for (var source :
+                    new YamlPropertySourceLoader()
+                        .load("application", new ClassPathResource("application.yml")))
+                  context.getEnvironment().getPropertySources().addLast(source);
+              } catch (IOException failure) {
+                throw new UncheckedIOException(failure);
+              }
+              context
+                  .getEnvironment()
+                  .getPropertySources()
+                  .addFirst(
+                      new SystemEnvironmentPropertySource(
+                          "directions",
+                          Map.of(
+                              "SETTLEMENT_COMMERCE_CREDENTIAL",
+                              inbound,
+                              "COMMERCE_SETTLEMENT_CREDENTIAL",
+                              outbound)));
+            })
+        .withUserConfiguration(CommerceClientConfiguration.class)
+        .withBean(
+            RestClient.Builder.class,
+            () ->
+                RestClient.builder()
+                    .requestInterceptor(
+                        (request, body, execution) -> {
+                          assertThat(request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION))
+                              .isEqualTo("Bearer " + outbound);
+                          var response =
+                              new MockClientHttpResponse(
+                                  ("{\"productId\":\""
+                                          + PRODUCT
+                                          + "\",\"sellerId\":\""
+                                          + SELLER
+                                          + "\",\"payoutAccountRef\":\"seller-account\",\"sellerVersion\":3,\"sellerStatus\":\"ACTIVE\"}")
+                                      .getBytes(StandardCharsets.UTF_8),
+                                  HttpStatus.OK);
+                          response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
+                          return response;
+                        }))
+        .run(
+            context -> {
+              assertThat(context).hasNotFailed();
+              assertThat(
+                      context
+                          .getBean(ProductSettlementContextReader.class)
+                          .read(SELLER, Set.of(PRODUCT)))
+                  .containsExactly(
+                      new ProductSettlementContext(PRODUCT, SELLER, true, "seller-account", 3));
+            });
   }
 
   @Test
