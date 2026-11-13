@@ -1,13 +1,25 @@
 # 결제 부하·복구 시험(#133) 전용 overlay. 기존 개발 볼륨을 건드리지 않도록 별도 프로젝트 이름으로 띄운다.
 #   docker compose -p commerce-settle-load -f compose.yml -f tests/load/compose.load.yml up -d --build
 # 수신 그룹 offset을 준비하기 전에는 이 overlay의 Listener를 켜지 않는다. 순서는 tests/load/README.md를 따른다.
+# 토픽은 payment_load.py up이 LOAD_KAFKA_PARTITIONS·LOAD_KAFKA_DLT_PARTITIONS(기본 3)로 먼저 만든다.
+# 앱의 자동 생성은 기존 토픽의 파티션을 코드 값(3)까지 늘리므로, 토픽을 만드는 서비스에서 끈다.
+x-load-topics: &load-topics
+  SPRING_KAFKA_ADMIN_AUTOCREATE: 'false'
 services:
+  commerce:
+    environment:
+      <<: *load-topics
+  settlement:
+    environment:
+      <<: *load-topics
   payment-api:
     environment:
+      <<: *load-topics
       # 운영 재처리 시험용 운영자 자격. payment_load.py가 tests/load/work/operator.credential에 무작위로 만든다.
       SPRING_APPLICATION_JSON: '{"app":{"internal-auth":{"senders":{"[operator:load]":{"current":"${LOAD_OPERATOR_CREDENTIAL:?Run tests/load/payment_load.py}"}}}}}'
   payment-worker:
     environment:
+      <<: *load-topics
       APP_KAFKA_ORDERPAYMENTREQUESTED_ENABLED: ${LOAD_PAYMENT_LISTENER_ENABLED:-false}
       APP_PAYMENTREQUESTPROCESSOR_ENABLED: 'true'
       APP_PAYMENTAPPROVAL_ENABLED: 'true'
@@ -18,3 +30,5 @@ services:
       PAYMENT_REQUEST_CONCURRENCY: ${LOAD_PAYMENT_REQUEST_CONCURRENCY:-3}
       PAYMENT_APPROVAL_CONCURRENCY: ${LOAD_PAYMENT_APPROVAL_CONCURRENCY:-6}
       PAYMENT_DB_POOL_SIZE: ${LOAD_PAYMENT_DB_POOL_SIZE:-20}
+      # 수신 Listener 동시 실행. payment_load.py가 commerce 토픽 파티션 수 이하로 맞춘다.
+      PAYMENT_KAFKA_LISTENER_CONCURRENCY: ${LOAD_PAYMENT_KAFKA_LISTENER_CONCURRENCY:-3}

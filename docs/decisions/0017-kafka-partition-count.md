@@ -80,15 +80,11 @@
 - 실험 시작 전 미발행 Outbox·Kafka lag·이전 실행의 잔여 처리가 0인지 확인합니다.
 - 시험 PC·Docker 자원·이미지 revision을 실행 기록에 남깁니다.
 
-### 도구 변경
+### 도구
 
-현재 도구는 파티션 수를 바꿀 수 없습니다. 측정 전에 다음을 구현하고 회귀 검사를 추가합니다.
+후보는 [결제 부하 도구](../../tests/load/README.md#실행)의 `LOAD_KAFKA_PARTITIONS`·`LOAD_KAFKA_DLT_PARTITIONS`·`LOAD_PAYMENT_KAFKA_LISTENER_CONCURRENCY`로 지정합니다. `up`이 앱보다 먼저 토픽을 만들고, 앱의 토픽 자동 생성은 끕니다. 자동 생성을 켜 두면 앱이 기동하면서 기존 토픽의 파티션을 코드 값 3까지 늘리는 것을 확인했습니다. `ramp`는 실제 파티션 수와 Consumer 배정을 `summary.json`의 `kafka`에 남기므로, 실행마다 후보가 실제로 적용됐는지 확인합니다. 자원은 `tests/load/resource_sample.py`로 시험과 같은 시간 동안 기록합니다.
 
-1. 서비스 기동 전에 지정한 파티션 수로 원본·DLT 토픽을 만드는 옵션(예: `LOAD_KAFKA_PARTITIONS`, `LOAD_KAFKA_DLT_PARTITIONS`)
-2. `payment-worker`의 `PAYMENT_KAFKA_LISTENER_CONCURRENCY` 전달
-3. 실행마다 실제 `PartitionCount`와 그룹별 Consumer 배정을 `summary.json`에 기록
-
-자원은 기존 `tests/load/resource_sample.py`로 시험과 같은 시간 동안 기록합니다.
+같은 스택에서 실행 번호를 바꿔 반복하기 전에, `reconcile`이 다른 실행 번호의 마일리지 지갑을 초기 잔액 누락으로 세는 문제를 해결해야 합니다. 해결 전에는 후보·반복마다 새 스택을 사용합니다.
 
 ### 실행
 

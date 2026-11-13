@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import sqlite3
@@ -536,7 +537,8 @@ class WorkerSettingsTest(unittest.TestCase):
         compose.assert_called_once_with("exec", "-T", "payment-worker", "env", check=False)
         self.assertEqual(settings, {"PAYMENT_REQUEST_CONCURRENCY": "6",
                                     "PAYMENT_APPROVAL_CONCURRENCY": None,
-                                    "PAYMENT_DB_POOL_SIZE": "20"})
+                                    "PAYMENT_DB_POOL_SIZE": "20",
+                                    "PAYMENT_KAFKA_LISTENER_CONCURRENCY": None})
 
     def test_ramp_summary_contains_worker_settings(self):
         settings = {"PAYMENT_REQUEST_CONCURRENCY": "6"}
@@ -618,6 +620,7 @@ class InjectedAggregationTest(unittest.TestCase):
                     patch.object(load, "STACK_RUNS", root / "runs"), patch.object(load, "produce", produce), \
                     patch.object(load, "snapshot", side_effect=snapshot), patch.object(load, "psql", psql), \
                     patch.object(load, "worker_settings", return_value=None), \
+                    patch.object(load, "kafka_layout", return_value=None), \
                     contextlib.redirect_stdout(io.StringIO()):
                 (root / "restart").mkdir()
                 (root / "restart/requests.csv").write_text(f"old,card,10000,0,0,{self.iso(-100)}\n")
@@ -656,6 +659,106 @@ class InjectedAggregationTest(unittest.TestCase):
             sample = load.snapshot()
 
         self.assertIsNone(sample["kafkaLag"])
+
+
+class KafkaPartitionTest(unittest.TestCase):
+    ROOT = Path(__file__).resolve().parents[2]
+
+    def test_default_partitions_match_the_application_and_dlt_follows_the_source(self):
+        self.assertEqual(load.partition_counts({}), (3, 3))
+        self.assertEqual(load.partition_counts({"LOAD_KAFKA_PARTITIONS": "2"}), (2, 2))
+        self.assertEqual(load.partition_counts({"LOAD_KAFKA_PARTITIONS": "2",
+                                                "LOAD_KAFKA_DLT_PARTITIONS": "1"}), (2, 1))
+
+    def test_rejects_invalid_partition_counts(self):
+        for value in ("0", "13", "-1", "two"):
+            with self.subTest(value=value), self.assertRaises(SystemExit):
+                load.partition_counts({"LOAD_KAFKA_PARTITIONS": value})
+
+    def test_topic_plan_matches_the_topics_the_applications_declare(self):
+        declared = {}
+        for module in ("commerce", "payment", "settlement"):
+            path = next((self.ROOT / module / "src" / "main" / "java").rglob("KafkaTopicConfiguration.java"))
+            declared.update(re.findall(r'topic\("([^"]+)", "(\d+)"\)', path.read_text(encoding="utf-8")))
+        plan = load.topic_plan(2, 1)
+        self.assertEqual({name: retention for name, (_, retention) in plan.items()}, declared)
+        self.assertEqual({name: count for name, (count, _) in plan.items()},
+                         {name: 1 if name.endswith(".dlt") else 2 for name in declared})
+
+    def test_creates_missing_topics_and_refuses_a_different_existing_count(self):
+        calls = []
+        with patch.object(load, "topic_partitions", return_value={"commerce-settle.commerce.v1": 1}), \
+                patch.object(load, "kafka", side_effect=lambda *a: calls.append(a)):
+            load.create_topics({"commerce-settle.commerce.v1": (1, "86400000"),
+                                "commerce-settle.payment.v1.dlt": (1, "604800000")})
+        self.assertEqual(calls, [("kafka-topics.sh", "--create", "--topic", "commerce-settle.payment.v1.dlt",
+                                  "--partitions", "1", "--replication-factor", "1",
+                                  "--config", "cleanup.policy=delete", "--config", "retention.ms=604800000",
+                                  "--config", "retention.bytes=-1")])
+        with patch.object(load, "topic_partitions", return_value={"commerce-settle.commerce.v1": 3}), \
+                patch.object(load, "kafka") as kafka, self.assertRaises(SystemExit):
+            load.create_topics({"commerce-settle.commerce.v1": (1, "86400000")})
+        kafka.assert_not_called()
+
+    def test_listener_concurrency_defaults_to_the_partition_count_and_never_exceeds_it(self):
+        self.assertEqual(load.listener_env({}, 1)["LOAD_PAYMENT_KAFKA_LISTENER_CONCURRENCY"], "1")
+        self.assertEqual(load.listener_env({}, 3)["LOAD_PAYMENT_KAFKA_LISTENER_CONCURRENCY"], "3")
+        self.assertEqual(load.listener_env({"LOAD_PAYMENT_KAFKA_LISTENER_CONCURRENCY": "1"}, 2)
+                         ["LOAD_PAYMENT_KAFKA_LISTENER_CONCURRENCY"], "1")
+        with self.assertRaises(SystemExit):
+            load.listener_env({"LOAD_PAYMENT_KAFKA_LISTENER_CONCURRENCY": "3"}, 2)
+
+    def test_up_creates_topics_after_kafka_and_before_the_applications(self):
+        calls = []
+        with patch.dict(os.environ, {"LOAD_KAFKA_PARTITIONS": "2", "LOAD_KAFKA_DLT_PARTITIONS": "1"}), \
+                patch.object(load, "redis_run_id"), patch.object(load, "compose_env", return_value={}), \
+                patch.object(load, "compose", side_effect=lambda *a, **k: calls.append(("compose", a, k))), \
+                patch.object(load, "create_topics", side_effect=lambda plan: calls.append(("create", plan))), \
+                patch.object(load, "STACK_RUNS", Path(tempfile.gettempdir()) / "absent-stack-runs"), \
+                contextlib.redirect_stdout(io.StringIO()):
+            load.cmd_up(argparse.Namespace())
+        self.assertEqual([c[0] for c in calls], ["compose", "create", "compose"])
+        self.assertEqual(calls[0][1][-1], "kafka")
+        self.assertEqual(calls[1][1]["commerce-settle.commerce.v1"], (2, "86400000"))
+        self.assertEqual(calls[1][1]["commerce-settle.commerce.v1.dlt"], (1, "604800000"))
+        self.assertEqual(calls[2][2]["env"]["LOAD_PAYMENT_KAFKA_LISTENER_CONCURRENCY"], "2")
+
+    def test_records_partitions_and_member_assignment(self):
+        groups = (
+            "GROUP CONSUMER-ID HOST CLIENT-ID #PARTITIONS CURRENT-EPOCH CURRENT-ASSIGNMENT TARGET-EPOCH TARGET-ASSIGNMENT\n"
+            "payment.v1 consumer-payment.v1-2-a /172.18.0.9 consumer-payment.v1-2 1 - commerce-settle.commerce.v1:1 - -\n"
+            "payment.v1 consumer-payment.v1-1-b /172.18.0.9 consumer-payment.v1-1 1 - commerce-settle.commerce.v1:0 - -\n"
+            "payment.v1 consumer-payment.v1-3-c /172.18.0.9 consumer-payment.v1-3 0 - - - -\n")
+        with patch.object(load, "topic_partitions", return_value={"commerce-settle.commerce.v1": 2}), \
+                patch.object(load, "kafka", return_value=groups):
+            layout = load.kafka_layout()
+        self.assertEqual(layout["partitions"], {"commerce-settle.commerce.v1": 2})
+        self.assertEqual(layout["members"], [
+            {"clientId": "consumer-payment.v1-1", "partitions": 1, "assignment": "commerce-settle.commerce.v1:0"},
+            {"clientId": "consumer-payment.v1-2", "partitions": 1, "assignment": "commerce-settle.commerce.v1:1"},
+            {"clientId": "consumer-payment.v1-3", "partitions": 0, "assignment": ""}])
+
+    def test_reads_topic_partition_counts_and_tolerates_an_empty_cluster(self):
+        out = ("Topic: commerce-settle.commerce.v1\tTopicId: a\tPartitionCount: 2\tReplicationFactor: 1\tConfigs: x\n"
+               "\tTopic: commerce-settle.commerce.v1\tPartition: 0\tLeader: 1\n"
+               "Topic: commerce-settle.commerce.v1.dlt\tTopicId: b\tPartitionCount: 1\tReplicationFactor: 1\n")
+        with patch.object(load, "kafka", return_value=out) as kafka:
+            self.assertEqual(load.topic_partitions(), {"commerce-settle.commerce.v1": 2,
+                                                       "commerce-settle.commerce.v1.dlt": 1})
+        self.assertIn("--if-exists", kafka.call_args.args)
+        with patch.object(load, "kafka", return_value=""):
+            self.assertEqual(load.topic_partitions(), {})
+
+    def test_layout_is_null_when_kafka_cannot_be_read(self):
+        with patch.object(load, "topic_partitions", side_effect=SystemExit("kafka down")), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertIsNone(load.kafka_layout())
+
+    def test_ramp_summary_contains_kafka_layout(self):
+        layout = {"partitions": {"commerce-settle.commerce.v1": 1}, "group": "payment.v1", "members": []}
+        with patch.object(load, "kafka_layout", return_value=layout):
+            summary = RestartRegressionTest().ramp()
+        self.assertEqual(summary["kafka"], layout)
 
 
 class NamespaceTest(unittest.TestCase):

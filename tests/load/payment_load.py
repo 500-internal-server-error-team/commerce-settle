@@ -172,10 +172,68 @@ def kafka(script, *args):
                    "--bootstrap-server", KAFKA_BOOTSTRAP, *args)
 
 
+def partition_counts(env=None):
+    """원본·DLT 토픽의 파티션 수. 기본은 앱 코드와 같은 3이며 DLT는 지정하지 않으면 원본과 같다."""
+    env = os.environ if env is None else env
+    counts = []
+    for name, default in (("LOAD_KAFKA_PARTITIONS", "3"), ("LOAD_KAFKA_DLT_PARTITIONS", None)):
+        raw = env.get(name) or default or str(counts[0])
+        if not raw.isdigit() or not 1 <= int(raw) <= 12:
+            raise SystemExit(f"{name} must be an integer between 1 and 12")
+        counts.append(int(raw))
+    return tuple(counts)
+
+
+def topic_plan(partitions, dlt_partitions):
+    """앱의 KafkaTopicConfiguration과 같은 이름·보존 설정에 파티션 수만 바꾼 토픽 목록."""
+    plan = {}
+    for owner in ("commerce", "payment", "settlement"):
+        plan[f"commerce-settle.{owner}.v1"] = (partitions, "86400000")
+        plan[f"commerce-settle.{owner}.v1.dlt"] = (dlt_partitions, "604800000")
+    plan["commerce-settle.commerce-notifications.v1.dlt"] = (dlt_partitions, "604800000")
+    return plan
+
+
+def topic_partitions():
+    """Kafka에 실제로 있는 commerce-settle 토픽별 파티션 수."""
+    # 빈 Kafka에서 --describe는 오류로 끝나므로 --if-exists로 빈 결과를 받는다.
+    out = kafka("kafka-topics.sh", "--describe", "--if-exists", "--topic", r"commerce-settle\..*")
+    return {name: int(count) for name, count in
+            re.findall(r"Topic:\s*(\S+)\s.*?PartitionCount:\s*(\d+)", out)}
+
+
+def create_topics(plan):
+    """앱보다 먼저 토픽을 만든다. 앱의 자동 생성은 기존 토픽의 파티션을 코드 값까지 늘리므로 overlay에서 끈다."""
+    existing = topic_partitions()
+    for name, (count, retention) in plan.items():
+        if name in existing:
+            if existing[name] != count:
+                raise SystemExit(f"{name} already has {existing[name]} partitions, not {count}. "
+                                 "Partitions cannot be reduced; tear down the stack first")
+            continue
+        kafka("kafka-topics.sh", "--create", "--topic", name, "--partitions", str(count),
+              "--replication-factor", "1", "--config", "cleanup.policy=delete",
+              "--config", f"retention.ms={retention}", "--config", "retention.bytes=-1")
+
+
+def listener_env(env, partitions):
+    """수신 동시 실행은 파티션 수를 넘지 않게 한다. 넘는 Consumer는 파티션을 받지 못하고 논다."""
+    raw = env.get("LOAD_PAYMENT_KAFKA_LISTENER_CONCURRENCY") or str(min(3, partitions))
+    if not raw.isdigit() or not 1 <= int(raw) <= partitions:
+        raise SystemExit(f"LOAD_PAYMENT_KAFKA_LISTENER_CONCURRENCY must be between 1 and "
+                         f"the {TOPIC} partition count {partitions}")
+    env["LOAD_PAYMENT_KAFKA_LISTENER_CONCURRENCY"] = raw
+    return env
+
+
 def cmd_up(args):
+    partitions, dlt_partitions = partition_counts()
     redis_run_id()
     env = compose_env()
     env["LOAD_PAYMENT_LISTENER_ENABLED"] = "false"
+    listener_env(env, partitions)
+    compose("up", "-d", "--wait", "kafka", capture=False, env=env)
+    create_topics(topic_plan(partitions, dlt_partitions))
     compose("up", "-d", "--build", "--wait", "--wait-timeout", "600", capture=False, env=env)
     if STACK_RUNS.exists():
         STACK_RUNS.unlink()
@@ -272,9 +330,14 @@ def cmd_enable(args):
     env["LOAD_PAYMENT_LISTENER_ENABLED"] = "true"
     if args.scenario:
         env["LOAD_PG_SCENARIO"] = args.scenario
+    partitions = topic_partitions().get(TOPIC)
+    if partitions is None:
+        raise SystemExit(f"{TOPIC} does not exist; run up first")
+    listener_env(env, partitions)
     compose("up", "-d", "--wait", "--no-deps", "--force-recreate", "payment-worker",
             capture=False, env=env)
-    print(f"payment-worker listens on {TOPIC} with scenario "
+    print(f"payment-worker listens on {TOPIC} ({partitions} partitions, "
+          f"{env['LOAD_PAYMENT_KAFKA_LISTENER_CONCURRENCY']} consumers) with scenario "
           f"{env.get('LOAD_PG_SCENARIO', 'load-pg-normal-v1')}")
 
 
@@ -587,7 +650,29 @@ def clock_summary(samples):
             "samples": len(ranges)}
 
 
-WORKER_SETTINGS = ("PAYMENT_REQUEST_CONCURRENCY", "PAYMENT_APPROVAL_CONCURRENCY", "PAYMENT_DB_POOL_SIZE")
+WORKER_SETTINGS = ("PAYMENT_REQUEST_CONCURRENCY", "PAYMENT_APPROVAL_CONCURRENCY", "PAYMENT_DB_POOL_SIZE",
+                   "PAYMENT_KAFKA_LISTENER_CONCURRENCY")
+
+
+def kafka_layout():
+    """실행 중인 토픽별 파티션 수와 수신 그룹의 Consumer별 배정. 읽지 못하면 None을 남기고 요약은 계속 쓴다."""
+    try:
+        partitions = topic_partitions()
+        out = kafka("kafka-consumer-groups.sh", "--describe", "--group", GROUP, "--members", "--verbose")
+    except (SystemExit, OSError, subprocess.SubprocessError) as error:
+        print(f"Kafka layout unavailable ({error}); recording kafka as null", file=sys.stderr)
+        return None
+    members = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 5 or parts[0] != GROUP or not parts[4].isdigit():
+            continue
+        assigned = next((p for p in parts[5:] if ":" in p and p.startswith("commerce-settle.")), "")
+        members.append({"clientId": parts[3], "partitions": int(parts[4]), "assignment": assigned})
+    if not partitions:
+        print("Kafka layout unavailable; recording kafka as null", file=sys.stderr)
+        return None
+    return {"partitions": partitions, "group": GROUP, "members": sorted(members, key=lambda m: m["clientId"])}
 
 
 def worker_settings():
@@ -711,7 +796,8 @@ def cmd_ramp(args):
             raise SystemExit("worker restart did not complete")
 
     summary = {"run": run, "mix": args.mix, "scenario": args.scenario, "fault": fault,
-               "workerSettings": worker_settings(), "aggregation": AGGREGATION, "stages": []}
+               "workerSettings": worker_settings(), "kafka": kafka_layout(),
+               "aggregation": AGGREGATION, "stages": []}
     requests = injected_requests(directory / "requests.csv", marks[0]["start"]) if marks else []
     outcomes = request_outcomes() if requests else {}
     for mark in marks:

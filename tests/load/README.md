@@ -130,6 +130,8 @@ python3 tests/load/payment_load.py reconcile          # 원장 ↔ Payment ↔ f
 - 상태 관측이 실패하면 추가 주입을 중지하고 주입 스레드·요청 원장·producer 종료를 확인한 뒤 오류로 끝납니다. 이때 성공 요약은 만들지 않으며, 이미 접수한 메시지는 취소하지 않습니다. 남은 요청 원장과 실제 Kafka·거래 상태를 대조하세요.
 - `scenario`는 PG 시나리오를 바꿔 Worker를 다시 만들고 초당 100건을 60초 넣은 뒤 대조합니다. `restart`는 시작 25초 뒤 `payment-worker`를 SIGKILL하고 다시 띄웁니다.
 - 결제 요청 처리 슬롯·승인 슬롯·DB 연결 풀은 `LOAD_PAYMENT_REQUEST_CONCURRENCY`(기본 3)·`LOAD_PAYMENT_APPROVAL_CONCURRENCY`(기본 6)·`LOAD_PAYMENT_DB_POOL_SIZE`(기본 20)로 바꿉니다. `enable`·`scenario`가 payment-worker를 다시 만들 때도 같은 값을 지정해야 합니다. `ramp --kill-after`의 재기동은 죽이기 전 Worker의 실제 값을 그대로 넘기므로 다시 지정하지 않아도 되며, 그 값을 `summary.json`의 `fault.workerSettingsBeforeKill`에 남깁니다. `ramp`는 실행 중인 Worker의 실제 값을 `summary.json`의 `workerSettings`에 남기고, Worker를 읽을 수 없으면 `null`로 남깁니다. `scenario`도 내부에서 `ramp`로 주입하므로 같은 값을 남깁니다.
+- 토픽은 `up`이 앱보다 먼저 만듭니다. 파티션 수는 `LOAD_KAFKA_PARTITIONS`(원본, 기본 3)·`LOAD_KAFKA_DLT_PARTITIONS`(DLT, 기본 원본과 같음)로 정하며, 이름·보존 설정은 앱의 토픽 선언과 같습니다. 앱의 토픽 자동 생성은 기존 토픽의 파티션을 코드 값(3)까지 늘리므로 overlay가 끕니다. Kafka는 파티션을 줄이지 못하므로, 이미 다른 수로 만들어진 토픽이 있으면 `up`이 거절합니다. 파티션 수를 바꿀 때는 스택을 내리고 다시 띄웁니다.
+- 수신 Listener 동시 실행은 `LOAD_PAYMENT_KAFKA_LISTENER_CONCURRENCY`로 정합니다. 비우면 원본 파티션 수(최대 3)를 쓰고, 파티션 수보다 크면 `up`·`enable`이 거절합니다. `ramp`는 실제 토픽별 파티션 수와 `payment.v1` 그룹의 Consumer별 배정을 `summary.json`의 `kafka`에 남기고, 읽지 못하면 `null`로 남깁니다.
 - `prepare`는 시험 스택의 finance-mock DB에 `load-pg-*` 시나리오를 직접 넣습니다.
 - 새 마일리지·간편결제 시험 지갑의 초기 잔액은 100억 원이며, `prepare`를 다시 실행해도 기존 잔액은 보존합니다. `reconcile`은 함께 생성한 간편결제 지갑의 저장된 초기 잔액을 기준으로 두 지갑을 대조합니다.
 - `replay`는 시험 스택의 `payment-api`에만 운영자 자격(`operator:load`)을 설정합니다. 자격은 `tests/load/work/operator.credential`에 무작위로 만듭니다.
