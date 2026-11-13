@@ -253,7 +253,7 @@ OIDC 신뢰는 해당 저장소의 `refs/tags/v*`와 `sts.amazonaws.com` audienc
 
 실패하면 이번 실행이 갱신을 시도한 앱을 역순으로 되돌립니다. 조회 시 다른 revision을 감지한 서비스는 변경하지 않습니다. 다만 ECS의 조회와 갱신은 원자적이지 않아 조회 직후의 수동 변경까지 막지는 못합니다. **CI 배포가 시작되면 완료·복구까지 콘솔·CLI 수동 갱신을 중단합니다.** CI의 동시 실행 제한이 수동 AWS 작업을 잠그지는 않습니다.
 
-`rollback_errors`에 남은 서비스는 현재 revision·로그를 대조해 적용자가 복구합니다. 강제 종료로 결과 artifact가 없더라도 사전에 보관한 `rollback-plan.json`의 `previous`를 사용합니다. 이 값은 시작 상태이므로 실제 변경된 서비스는 현재 AWS 상태로 확인합니다. 결과 기록이 없으면 현재 Task Definition의 이미지와 계획의 digest를 대조해 이번 실행의 변경인지 확인합니다. 수동 복구도 AWS 계정·리전·클러스터와 현재/직전/이번 등록 revision을 대조한 뒤 수행합니다. SSM 값 복구는 별도이며 스키마 변경은 [DB 적용 정책](migrations.md)을 따릅니다.
+`rollback_errors`에 남은 서비스는 현재 revision·로그를 대조해 적용자가 복구합니다. 아래 수동 롤백은 **이미지 정리 시작 전의 배포 실패이며, `previous`가 참조하는 이미지가 ECR에 모두 존재함을 확인한 경우**에만 사용합니다. 강제 종료로 결과 artifact가 없으면 현재 서비스·실행 digest·health와 동일 릴리스의 이미지 기록을 먼저 대조합니다. 정리가 시작됐을 가능성이 있으면 이전 실행 정의로 교체하지 않고 [정리 중단 복구](#ecr-이미지-자동-정리)를 따릅니다. 수동 복구도 AWS 계정·리전·클러스터와 현재/직전/이번 등록 revision을 대조한 뒤 수행합니다. SSM 값 복구는 별도이며 스키마 변경은 [DB 적용 정책](migrations.md)을 따릅니다.
 
 ```bash
 jq '.status, .previous' work/rollback-plan.json
@@ -286,6 +286,36 @@ python3 -B scripts/deploy_ecs_apps.py \
   --public-url "$PUBLIC_BASE_URL" --record work/deployment.json \
   --cleanup-only work/deployment.json
 ```
+
+강제 종료로 배포 결과 기록이 사라져도 이전 이미지는 이미 삭제됐을 수 있습니다. 기존 롤백 계획으로 되돌리지 않고, 동일 릴리스의 이미지 artifact와 현재 실행본을 대조합니다. 다음 절차는 현재 여섯 서비스가 모두 해당 릴리스의 digest로 정상 실행되고 공개 HTTPS도 통과할 때만 성공 기록을 복원합니다. 확인이 실패하면 현재 서비스를 유지한 채 배포 원인을 진단하며 삭제·롤백을 실행하지 않습니다.
+
+먼저 현재 서비스 ARN을 별도 파일에 관측합니다. 원래 `rollback-plan.json`은 덮어쓰지 않습니다.
+
+```bash
+python3 -B scripts/deploy_ecs_apps.py \
+  --cluster "$ECS_CLUSTER" --region "$AWS_REGION" \
+  --images-directory work/images --release "$RELEASE" --commit "$COMMIT" \
+  --public-url "$PUBLIC_BASE_URL" --record work/current-release.json --prepare-only
+
+PUBLIC_BASE_URL="$PUBLIC_BASE_URL" python3 -B - <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+
+sys.path.insert(0, "scripts")
+from deploy_ecs_apps import Aws, public_origin, require_running_release, verify_https
+
+record = json.loads(Path("work/current-release.json").read_text())
+require_running_release(Aws(record["region"]), record["cluster"],
+                        record["images"], record["previous"])
+verify_https(public_origin(os.environ["PUBLIC_BASE_URL"]))
+record.update(status="success", registered=record["previous"], recovered_from_current_state=True)
+Path("work/deployment.json").write_text(json.dumps(record, indent=2) + "\n")
+PY
+```
+
+복원된 기록으로 앞의 `--cleanup-only` 명령을 실행합니다. 삭제 직전에 현재 revision·digest를 다시 검사하므로 복원 이후 실행본이 바뀌어도 이전 관측만으로 삭제하지 않습니다.
 
 빠른 관련 검사는 `python3 -B scripts/test_ecs_apps.py`입니다. CI의 `deployment-checks` 잡은 Java 빌드와 독립적으로 배포·롤백·정리 경계를 검사합니다. 전체 `build-and-smoke`는 이 잡을 포함한 기존 필수 검사를 모두 요구합니다. PR 게시 시 빠른 검사 결과를 먼저 확인할 수 있으며 병합 조건은 줄이지 않습니다.
 
