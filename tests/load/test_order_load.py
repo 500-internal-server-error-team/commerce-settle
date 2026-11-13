@@ -511,6 +511,91 @@ class RecoveryTest(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertFalse(any(path == "/swagger-ui/fixture-sessions" for _, path, *_ in fixture.calls))
 
+    def test_resume_checks_empty_and_phase_only_ledgers_against_execution_evidence(self):
+        for phase_only in (False, True):
+            for summary_present in (False, True):
+                with self.subTest(phase_only=phase_only, summary_present=summary_present), \
+                        tempfile.TemporaryDirectory() as tmp:
+                    original = Path(tmp)
+                    load.write_json(original / "plan.json", {"runId": "run", "baseUrl": "https://load.test",
+                        "productId": "product", "plannedOrders": 2, "measurementSeconds": 60,
+                        "smokeOrderId": "smoke", "smokeAttempted": True, "smokePaid": True})
+                    rows = [{"event": "phase", "phase": "measurement",
+                        "measurementStart": "2026-11-13T00:00:00Z",
+                        "measurementEnd": "2026-11-13T00:01:00Z"}] if phase_only else []
+                    (original / "requests.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+                    if summary_present:
+                        load.write_json(original / "k6-summary.json", {"metrics": {"http_reqs": {"count": 2}}})
+                    fixture = ApiFixture("https://load.test")
+                    with patch.dict(os.environ, {}, clear=True), patch.object(load, "Api", return_value=fixture), \
+                            contextlib.redirect_stdout(io.StringIO()):
+                        code = load.main(["--resume", str(original), "--drain-seconds", "0"])
+                    report = json.loads(next(original.glob("recovery-*/summary.json")).read_text())
+                    self.assertEqual(code, 1)
+                    self.assertTrue(report["recoveryRequired"])
+                    self.assertFalse(report["recoveryComplete"])
+                    self.assertEqual(report["unresolvedRequests"][0]["reason"], "k6_ledger_coverage_unverified")
+                    self.assertFalse(any(method == "POST" and path == "/api/orders"
+                                         for method, path, *_ in fixture.calls))
+
+    def test_resume_after_warmup_failure_does_not_require_unstarted_measurement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original = Path(tmp)
+            load.write_json(original / "plan.json", {"runId": "run", "baseUrl": "https://load.test",
+                "productId": "product", "plannedOrders": 2, "warmupOrders": 1, "measurementSeconds": 60,
+                "smokeOrderId": "smoke", "smokePaid": True})
+            load.write_json(original / "summary.json", {"loadExecuted": True, "phaseBeforeRecovery": "warmup",
+                                                       "failure": "warmup threshold failure"})
+            rows = [{"event": event, "phase": "warmup", "iteration": 0,
+                     "startedAt": "2026-11-13T00:00:00Z", "status": 201, "orderId": "known"}
+                    for event in ("started", "completed")]
+            (original / "requests.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+            load.write_json(original / "k6-warmup-summary.json", {"metrics": {"http_reqs": {"count": 1}}})
+            fixture = ApiFixture("https://load.test")
+            original_call = fixture.call
+            def known(method, path, *args, **kwargs):
+                if path.startswith("/api/orders?"):
+                    return {"totalPages": 1, "items": [{"id": "known", "productId": "product", "status": "PAID"}]}
+                return original_call(method, path, *args, **kwargs)
+            fixture.call = known
+            with patch.dict(os.environ, {}, clear=True), patch.object(load, "Api", return_value=fixture), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                code = load.main(["--resume", str(original), "--drain-seconds", "0"])
+            report = json.loads(next(original.glob("recovery-*/summary.json")).read_text())
+            self.assertEqual(code, 0)
+            self.assertTrue(report["recoveryComplete"])
+            self.assertNotIn("k6SummaryErrors", report)
+
+    def test_cleanup_parse_failures_keep_primary_failure_summary_and_remaining_logouts(self):
+        class InvalidCleanup(ApiFixture):
+            fail_inventory = False
+            def call(self, method, path, *args, **kwargs):
+                if path.endswith("/inventory") and self.fail_inventory:
+                    raise json.JSONDecodeError("private response", "", 0)
+                if path == "/api/sessions/current":
+                    self.logouts.append(kwargs.get("token"))
+                    if len(self.logouts) == 1:
+                        raise json.JSONDecodeError("private response", "", 0)
+                    return {}
+                value = super().call(method, path, *args, **kwargs)
+                if method == "POST" and path == "/api/orders":
+                    self.fail_inventory = True
+                return value
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture, target = InvalidCleanup("https://load.test"), Path(tmp) / "run"
+            fixture.paid = False
+            with patch.dict(os.environ, {}, clear=True), patch.object(load, "Api", return_value=fixture), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                code = load.main(["--base-url", fixture.base, "--prepare-only", "--output-dir", str(target)])
+            report = json.loads((target / "summary.json").read_text())
+            self.assertEqual(code, 1)
+            self.assertIn("사전 주문이 PAID", report["failure"])
+            self.assertEqual(len(fixture.logouts), 2)
+            self.assertEqual(len(report["cleanupErrors"]), 2)
+            self.assertTrue(any("재고" in error for error in report["cleanupErrors"]))
+            self.assertNotIn("private response", json.dumps(report))
+            self.assertTrue((target / "order-states.json").is_file())
+
     def test_docker_preparation_failure_is_not_a_load_execution(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(load.shutil, "which", return_value=None), \
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
