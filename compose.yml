@@ -74,6 +74,8 @@ services:
       STORAGE_TYPE: mem
       MEM_MAX_SPANS: 10000
       JAVA_OPTS: -Xms64m -Xmx192m
+    healthcheck:
+      start_period: 120s
     mem_limit: 384m
     ports:
       - 127.0.0.1:${ZIPKIN_PORT:-9411}:9411
@@ -338,10 +340,42 @@ services:
       - ./infra/prometheus/quarantine.rules.yml:/etc/prometheus/quarantine.rules.yml:ro
       - ./infra/prometheus/notification.rules.yml:/etc/prometheus/notification.rules.yml:ro
       - ./infra/prometheus/financial.rules.yml:/etc/prometheus/financial.rules.yml:ro
+      - ./infra/prometheus/runtime.rules.yml:/etc/prometheus/runtime.rules.yml:ro
       - prometheus-data:/prometheus
     ports:
       - 127.0.0.1:${PROMETHEUS_PORT:-9090}:9090
     networks: [backend]
+
+  docker-metrics-proxy:
+    image: python:3.13.7-alpine
+    restart: unless-stopped
+    command: [python, -B, /runtime_metrics.py, --proxy]
+    environment:
+      OBSERVER_PROJECT: ${COMPOSE_PROJECT_NAME:-commerce-settle}
+      OBSERVER_SERVICES: gateway,commerce,payment-api,payment-worker,settlement,finance-mock,postgres,kafka,redis,prometheus,grafana,alertmanager,zipkin,data-storage-metrics,container-metrics,docker-metrics-proxy
+    volumes:
+      - ./infra/observability/runtime_metrics.py:/runtime_metrics.py:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    cap_drop: [ALL]
+    mem_limit: 64m
+    networks: [runtime-observation]
+
+  container-metrics:
+    image: python:3.13.7-alpine
+    restart: unless-stopped
+    command: [python, -B, /runtime_metrics.py]
+    environment:
+      DOCKER_METRICS_URL: http://docker-metrics-proxy:2375
+      OBSERVER_REQUIRED_SERVICES: gateway,commerce,payment-api,payment-worker,settlement,finance-mock,postgres,kafka,redis,prometheus,data-storage-metrics
+    volumes:
+      - ./infra/observability/runtime_metrics.py:/runtime_metrics.py:ro
+    user: '65534:65534'
+    read_only: true
+    cap_drop: [ALL]
+    mem_limit: 64m
+    networks: [backend, runtime-observation]
+    depends_on: [docker-metrics-proxy]
 
   data-storage-metrics:
     image: python:3.13.7-alpine
@@ -401,6 +435,8 @@ services:
     networks: [backend]
 
 networks:
+  runtime-observation:
+    internal: true
   backend:
 
 volumes:

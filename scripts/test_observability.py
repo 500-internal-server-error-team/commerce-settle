@@ -56,7 +56,17 @@ def integration_rules(production):
     return re.sub(r"(?m)^    interval: [^\n]+$", "    interval: 1s", production)
 
 
+def verify_dashboard_quantiles():
+    for name in ("business-performance", "payment-worker"):
+        dashboard = json.loads((ROOT / "infra/grafana/dashboards" / (name + ".json")).read_text())
+        p99 = [target["expr"] for panel in dashboard["panels"] for target in panel.get("targets", [])
+               if re.search(r"histogram_quantile\(0?\.99", target.get("expr", ""))]
+        assert p99 and all(re.search(r">=\s*10000", expression) for expression in p99), name
+        assert all("window" in expression for expression in p99), name
+
+
 def verify():
+    verify_dashboard_quantiles()
     project = "cs-quarantine-observation-" + secrets.token_hex(5)
     with owned_settings(project) as directory:
         password = secrets.token_urlsafe(24)
@@ -76,9 +86,17 @@ def verify():
         (directory / "notification.integration.rules.yml").write_text(integration_rules(
             (ROOT / "infra/prometheus/notification.rules.yml").read_text(),
         ))
+        financial = (ROOT / "infra/prometheus/financial.rules.yml").read_text()
+        selected = [block for block in re.findall(r"(?ms)^      - (?:record|alert):.*?(?=^      - |^  - name:|\Z)", financial)
+                    if re.match(r"      - (?:record: financial:operation_(?:current|age)|alert: FinancialUnknown)\n", block)]
+        assert len(selected) == 4
+        runtime = (ROOT / "infra/prometheus/runtime.rules.yml").read_text()
+        (directory / "runtime.integration.rules.yml").write_text(integration_rules(re.sub(r"(?m)^(\s+)for: [^\n]+$", r"\1for: 2s", runtime)))
+        (directory / "financial.integration.rules.yml").write_text(integration_rules(
+            "groups:\n  - name: financial-transport\n    interval: 15s\n    rules:\n" + "".join(selected)))
         (directory / "prometheus.yml").write_text(
             "global:\n  scrape_interval: 1s\n  evaluation_interval: 1s\n"
-            "rule_files: [/etc/prometheus/integration.rules.yml, /etc/prometheus/notification.integration.rules.yml]\n"
+            "rule_files: [/etc/prometheus/integration.rules.yml, /etc/prometheus/notification.integration.rules.yml, /etc/prometheus/runtime.integration.rules.yml, /etc/prometheus/financial.integration.rules.yml]\n"
             "alerting:\n  alertmanagers:\n    - static_configs:\n        - targets: [alertmanager:9093]\n"
             "scrape_configs:\n  - job_name: commerce-settle\n    static_configs:\n      - targets: [fixture:8000]\n"
         )
@@ -101,6 +119,10 @@ def verify():
                         mount(ROOT / "infra/prometheus/prometheus.yml", "/etc/prometheus/production.yml"),
                         mount(ROOT / "infra/prometheus/quarantine.rules.yml", "/etc/prometheus/quarantine.rules.yml"),
                         mount(ROOT / "infra/prometheus/financial.rules.yml", "/etc/prometheus/financial.rules.yml"),
+                        mount(ROOT / "infra/prometheus/runtime.rules.yml", "/etc/prometheus/runtime.rules.yml"),
+                        mount(ROOT / "infra/prometheus/runtime.rules.test.yml", "/etc/prometheus/runtime.rules.test.yml"),
+                        mount(directory / "runtime.integration.rules.yml", "/etc/prometheus/runtime.integration.rules.yml"),
+                        mount(directory / "financial.integration.rules.yml", "/etc/prometheus/financial.integration.rules.yml"),
                         mount(ROOT / "infra/prometheus/financial.rules.test.yml", "/etc/prometheus/financial.rules.test.yml"),
                         mount(directory / "integration.rules.yml", "/etc/prometheus/integration.rules.yml"),
                         mount(directory / "notification.integration.rules.yml", "/etc/prometheus/notification.integration.rules.yml"),
@@ -153,6 +175,7 @@ def verify():
             cli("run", "--rm", "--no-deps", "--workdir", "/etc/prometheus", "--entrypoint", "/bin/promtool", "prometheus", "test", "rules", "/etc/prometheus/quarantine.rules.test.yml")
             cli("run", "--rm", "--no-deps", "--workdir", "/etc/prometheus", "--entrypoint", "/bin/promtool", "prometheus", "test", "rules", "/etc/prometheus/notification.rules.test.yml")
             cli("run", "--rm", "--no-deps", "--workdir", "/etc/prometheus", "--entrypoint", "/bin/promtool", "prometheus", "test", "rules", "/etc/prometheus/financial.rules.test.yml")
+            cli("run", "--rm", "--no-deps", "--workdir", "/etc/prometheus", "--entrypoint", "/bin/promtool", "prometheus", "test", "rules", "/etc/prometheus/runtime.rules.test.yml")
             cli("run", "--rm", "--no-deps", "--entrypoint", "/bin/amtool", "alertmanager", "check-config", "/etc/alertmanager/base.yml", "/etc/alertmanager/slack.yml")
             cli("up", "-d", "--wait", "--wait-timeout", "120")
             fixture = endpoint("fixture", 8000)
@@ -165,6 +188,13 @@ def verify():
                 "quarantine dashboard was not provisioned",
             )
             assert len(dashboard["dashboard"]["panels"]) == 8
+            for uid in ['commerce-settle-business-performance', 'commerce-settle-payment-worker', 'commerce-settle-overview']:
+                definition = http(grafana + "/api/dashboards/uid/" + uid, authorization=authorization)
+                assert definition["dashboard"]["panels"], uid
+            sources = http(grafana + "/api/datasources", authorization=authorization)
+            source = next(item for item in sources if item["type"] == "prometheus")
+            proxy_url = grafana + "/api/datasources/proxy/uid/" + source["uid"]
+            until(lambda: http(proxy_url + "/api/v1/query?query=commerce_settle_runtime_observed_timestamp_seconds", authorization=authorization)["data"]["result"], "Grafana datasource did not read live Prometheus")
             assert all(target.get("instant") and not target.get("range") for panel in dashboard["dashboard"]["panels"] if panel["type"] == "stat" for target in panel["targets"])
             until(lambda: http(prometheus + "/api/v1/query?query=payment:quarantine_originals:max")["data"]["result"], "metrics were not scraped and recorded")
             until(lambda: http(alertmanager + "/api/v2/status"), "Alertmanager was not ready")
@@ -174,6 +204,7 @@ def verify():
                 "PaymentQuarantineCaptured", "PaymentQuarantineReviewRequired", "PaymentQuarantineDeliveryOverdue",
                 "NotificationDeliveryOverdue", "NotificationReviewRequired", "NotificationRetryExhausted",
                 "NotificationFinancialActionRequired", "KakaoReauthenticationRequired",
+                "FinancialUnknown", "ContainerMemoryCritical", "ContainerOom", "ContainerAbnormalExit",
             }
 
             def firing():

@@ -600,3 +600,9 @@ CREATE INDEX reconciliation_events_unmatched ON settlement.reconciliation_events
  WHERE status <> 'MATCH';
 
 CREATE INDEX ix_settlement_items_observation_created ON settlement.settlement_items (created_at, id);
+
+-- Bounded completion-window observations avoid scanning terminal history on every refresh.
+CREATE INDEX ix_outbox_observation_published ON settlement.outbox (published_at, id) WHERE status='PUBLISHED';
+CREATE INDEX ix_inbox_observation_applied ON settlement.inbox (consumer, updated_at, id) WHERE status='APPLIED';
+CREATE INDEX ix_payouts_observation_succeeded ON settlement.payouts (succeeded_at, id) WHERE succeeded_at IS NOT NULL;
+CREATE INDEX ix_settlement_items_cohort ON settlement.settlement_items (status, ready_at, id) WHERE status <> 'PAID';

@@ -93,6 +93,116 @@
           "legendFormat": "{{instance}}"
         }
       ]
+    },
+    {
+      "id": 5,
+      "title": "컨테이너 메모리 / 실제 제한",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "commerce_settle_container_memory_usage_ratio{basis=\"limit\"}",
+          "legendFormat": "{{service}} {{basis}} {{__name__}}"
+        }
+      ],
+      "description": "명시한 Compose 프로젝트만 수집합니다. host_shared는 컨테이너 CPU quota가 아니며, 호스트 수치는 Docker의 Linux 호스트/VM입니다. 표본이 오래됐거나 이벤트 관측이 끊긴 구간은 정상 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 6,
+      "title": "컨테이너 CPU / quota 또는 공유 호스트",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "commerce_settle_container_cpu_usage_ratio",
+          "legendFormat": "{{service}} {{basis}} {{__name__}}"
+        }
+      ],
+      "description": "명시한 Compose 프로젝트만 수집합니다. host_shared는 컨테이너 CPU quota가 아니며, 호스트 수치는 Docker의 Linux 호스트/VM입니다. 표본이 오래됐거나 이벤트 관측이 끊긴 구간은 정상 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 7,
+      "title": "관측한 OOM·비정상 종료 시각",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "{__name__=~\"commerce_settle_container_last_(oom|abnormal_exit)_timestamp_seconds\"}",
+          "legendFormat": "{{service}} {{basis}} {{__name__}}"
+        }
+      ],
+      "description": "명시한 Compose 프로젝트만 수집합니다. host_shared는 컨테이너 CPU quota가 아니며, 호스트 수치는 Docker의 Linux 호스트/VM입니다. 표본이 오래됐거나 이벤트 관측이 끊긴 구간은 정상 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 8,
+      "title": "Docker 호스트/VM 자원 · Mac 전체와 별도",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "commerce_settle_docker_host_cpu_usage_ratio or commerce_settle_docker_host_memory_available_ratio",
+          "legendFormat": "{{service}} {{basis}} {{__name__}}"
+        }
+      ],
+      "description": "명시한 Compose 프로젝트만 수집합니다. host_shared는 컨테이너 CPU quota가 아니며, 호스트 수치는 Docker의 Linux 호스트/VM입니다. 표본이 오래됐거나 이벤트 관측이 끊긴 구간은 정상 0으로 해석하지 않습니다."
+    },
+    {
+      "id": 9,
+      "title": "컨테이너 관측 표본 나이",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "time()-commerce_settle_runtime_observed_timestamp_seconds",
+          "legendFormat": "{{service}} {{basis}} {{__name__}}"
+        }
+      ],
+      "description": "명시한 Compose 프로젝트만 수집합니다. host_shared는 컨테이너 CPU quota가 아니며, 호스트 수치는 Docker의 Linux 호스트/VM입니다. 표본이 오래됐거나 이벤트 관측이 끊긴 구간은 정상 0으로 해석하지 않습니다."
     }
   ]
 }

@@ -49,7 +49,7 @@ class BusinessMetricsIntegrationTest {
   @BeforeEach
   void clear() {
     jdbc.execute(
-        "TRUNCATE settlement.settlement_items,settlement.settlement_entries,settlement.inbox");
+        "TRUNCATE settlement.settlement_items,settlement.settlement_entries,settlement.inbox,settlement.payouts,settlement.reconciliation_events,settlement.reconciliation_runs");
   }
 
   @Test
@@ -140,7 +140,7 @@ class BusinessMetricsIntegrationTest {
             "payment.settlement.applied",
             "SELECT completed_at, confirmed_at AS started_at FROM (" + legacy + ") facts");
     var sources = BusinessMetricsConfiguration.sources();
-    assertThat(sources).containsOnlyKeys(expected.keySet());
+    assertThat(sources.keySet()).containsAll(expected.keySet());
     for (var operation : expected.keySet()) {
       var before = rows(expected.get(operation));
       assertThat(before).hasSize(7).anyMatch(row -> row.endsWith("|null"));
@@ -310,8 +310,154 @@ class BusinessMetricsIntegrationTest {
         at.minusSeconds(5).toString());
   }
 
+  @Test
+  void sourcePopulationShowsMissingItemsAndIncompleteLatestCapture() {
+    UUID run = UUID.randomUUID(), payment = UUID.randomUUID();
+    try (var metrics = metrics()) {
+      metrics.refresh();
+      assertThat(cohort(metrics, "capture_complete", "payout.unapplied", "pending")).isZero();
+      assertThat(cohort(metrics, "records", "payout.unapplied", "pending")).isNaN();
+      jdbc.update(
+          """
+        INSERT INTO settlement.reconciliation_runs(id,cutoff_at,snapshot_at,stage,status,requested_by)
+        VALUES (?,now()-interval '10 minutes',now(),'PAYOUT','WAITING','test')
+        """,
+          run);
+      jdbc.update(
+          """
+        INSERT INTO settlement.reconciliation_events(run_id,event_id,source,body,status)
+        VALUES (?,gen_random_uuid(),'PAYMENT',jsonb_build_object('eventType','PaymentConfirmed',
+          'paymentId',?::text,'occurredAt',now()-interval '20 minutes'),'WAIT_DELIVERY')
+        """,
+          run,
+          payment);
+      metrics.refresh();
+      assertThat(cohort(metrics, "records", "payout.unapplied", "wait_delivery")).isEqualTo(1);
+      assertThat(cohort(metrics, "oldest_age_seconds", "payout.unapplied", "wait_delivery"))
+          .isGreaterThanOrEqualTo(1200);
+      assertThat(cohort(metrics, "capture_complete", "payout.unapplied", "wait_delivery"))
+          .isEqualTo(1);
+      UUID applied = fact(12);
+      jdbc.update(
+          "UPDATE settlement.settlement_items SET payment_id=? WHERE id=?", payment, applied);
+      metrics.refresh();
+      assertThat(cohort(metrics, "records", "payout.unapplied", "wait_delivery")).isZero();
+      jdbc.update(
+          "UPDATE settlement.reconciliation_runs SET last_error='SOURCE_UNAVAILABLE',status='UNVERIFIED' WHERE id=?",
+          run);
+      metrics.refresh();
+      assertThat(cohort(metrics, "capture_complete", "payout.unapplied", "wait_delivery")).isZero();
+      assertThat(cohort(metrics, "records", "payout.unapplied", "wait_delivery")).isNaN();
+      jdbc.update(
+          "UPDATE settlement.reconciliation_runs SET last_error=NULL,status='RUNNING',stage='PAYMENT' WHERE id=?",
+          run);
+      metrics.refresh();
+      assertThat(cohort(metrics, "capture_complete", "payout.unapplied", "wait_delivery")).isZero();
+    }
+  }
+
   private BusinessMetrics metrics() {
-    return new BusinessMetrics(source, null, BusinessMetricsConfiguration.sources());
+    return new BusinessMetrics(
+        source,
+        null,
+        BusinessMetricsConfiguration.sources(),
+        BusinessMetricsConfiguration.cohorts());
+  }
+
+  @Test
+  void unpaidCohortSkipsLargePaidHistory() {
+    fact(12);
+    jdbc.execute(
+        """
+        INSERT INTO settlement.settlement_items (id,payment_id,order_id,product_id,seller_id,
+          total_amount,platform_coupon_amount,settlement_base_amount,external_amount,mileage_amount,
+          fee_amount,net_amount,status,order_version,created_at,updated_at,version)
+        SELECT gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),
+          10000,0,10000,10000,0,1500,8500,'PAID',0,now()-interval '30 days',now(),0
+        FROM generate_series(1,20000)
+        """);
+    UUID run = UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO settlement.reconciliation_runs(id,cutoff_at,snapshot_at,stage,status,requested_by) VALUES (?,now()-interval '10 minutes',now(),'CHECK','COMPLETED','test')",
+        run);
+    jdbc.update(
+        """
+        INSERT INTO settlement.reconciliation_events(run_id,event_id,source,body,status)
+        SELECT ?,gen_random_uuid(),'PAYMENT',jsonb_build_object('eventType','PaymentConfirmed',
+          'paymentId',payment_id,'occurredAt',created_at),'MATCH'
+        FROM settlement.settlement_items WHERE status='PAID'
+        """,
+        run);
+    jdbc.execute("ANALYZE settlement.reconciliation_events");
+    String sourcePlan =
+        jdbc.queryForObject(
+            "EXPLAIN (ANALYZE, FORMAT JSON) "
+                + BusinessMetricsConfiguration.cohorts().get("payout.unapplied"),
+            String.class);
+    assertThat(sourcePlan).contains("reconciliation_events_unmatched");
+    jdbc.execute("ANALYZE settlement.settlement_items");
+    for (var query :
+        BusinessMetricsConfiguration.cohorts().entrySet().stream()
+            .filter(e -> !e.getKey().equals("payout.unapplied"))
+            .map(java.util.Map.Entry::getValue)
+            .toList()) {
+      String plan = jdbc.queryForObject("EXPLAIN (ANALYZE, FORMAT JSON) " + query, String.class);
+      assertThat(plan).contains("ix_settlement_items_cohort");
+    }
+    try (var metrics = metrics()) {
+      metrics.refresh();
+      assertThat(cohort(metrics, "records", "payout.total", "purchase_pending")).isEqualTo(1);
+    }
+  }
+
+  @Test
+  void payoutCountsEachItemOnceAndKeepsUnpaidAndRefundTerminalCohortsSeparate() {
+    UUID paid = fact(12), unpaid = fact(15), refunded = fact(20), missing = fact(25);
+    jdbc.update("DELETE FROM settlement.inbox WHERE result_ref=?", missing);
+    jdbc.update("UPDATE settlement.settlement_items SET status='REFUNDED' WHERE id=?", refunded);
+    jdbc.update(
+        "UPDATE settlement.settlement_items SET purchase_confirmed_at=created_at,eligible_received_at=created_at,ready_at=created_at WHERE id=?",
+        paid);
+    UUID payout = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO settlement.payouts (id,batch_id,seller_id,recipient_account_ref,
+          recipient_account_version,funding_account_ref,scenario_version,succeeded_at,amount,
+          business_key,status,created_at,updated_at,version)
+        SELECT ?,gen_random_uuid(),seller_id,'recipient',0,'funding','v1',created_at+interval '2 seconds',
+          net_amount,gen_random_uuid(),'SUCCEEDED',created_at,created_at,0
+        FROM settlement.settlement_items WHERE id=?
+        """,
+        payout,
+        paid);
+    jdbc.update(
+        "UPDATE settlement.settlement_items SET payout_id=?,status='PAID' WHERE id=?",
+        payout,
+        paid);
+    try (var metrics = metrics()) {
+      metrics.refresh();
+      assertThat(value(metrics, "completions", "payment.payout.succeeded")).isEqualTo(1);
+      assertThat(value(metrics, "duration_seconds_sum", "payment.payout.succeeded")).isEqualTo(7);
+      assertThat(value(metrics, "duration_seconds_sum", "ready.payout.succeeded")).isEqualTo(2);
+      assertThat(cohort(metrics, "records", "payout.total", "purchase_pending")).isEqualTo(2);
+      assertThat(cohort(metrics, "records", "payout.total", "refunded")).isEqualTo(1);
+      assertThat(cohort(metrics, "missing_origin_records", "payout.total", "purchase_pending"))
+          .isEqualTo(1);
+      assertThat(cohort(metrics, "records", "payout.ready", "purchase_pending")).isZero();
+      assertThat(cohort(metrics, "oldest_age_seconds", "payout.total", "refunded")).isZero();
+      assertThat(value(metrics, "completions", "settlement.inbox.applied")).isEqualTo(6);
+      assertThat(value(metrics, "duration_seconds_sum", "settlement.inbox.applied")).isEqualTo(30);
+    }
+  }
+
+  private static double cohort(
+      BusinessMetrics metrics, String suffix, String operation, String reason) {
+    for (var metric : metrics.collect())
+      if (metric.getMetadata().getName().equals("commerce_settle_business_cohort_" + suffix))
+        for (var point : ((GaugeSnapshot) metric).getDataPoints())
+          if (operation.equals(point.getLabels().get("operation"))
+              && reason.equals(point.getLabels().get("reason"))) return point.getValue();
+    throw new AssertionError(suffix);
   }
 
   private static double value(BusinessMetrics metrics, String suffix, String operation) {

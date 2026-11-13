@@ -12,7 +12,7 @@ def metadata():
                            "generator": "same-host", "resources": {"appCpu": 2},
                            "runtime": {"jdk": "21"}, "warmupSeconds": 60},
             "http": {"application": "gateway", "uri": "/api/orders", "method": "POST"},
-            "operations": list(performance.OPERATIONS)}
+            "operations": ["payment.confirmed", "refund.completed", "order.settlement.applied", "payment.settlement.applied"]}
 
 
 def vector(value, operation=None):
@@ -31,6 +31,58 @@ def fetch(expression, samples=20000):
 
 
 class PerformanceTest(unittest.TestCase):
+    def test_payout_comparison_includes_unpaid_cohorts_and_missing_origins(self):
+        item = metadata()
+        item["operations"] = ["payment.payout.succeeded", "ready.payout.succeeded"]
+        item["payoutPopulationCutoff"] = 900
+        reasons = ("purchase_pending", "refund_pending", "batch_wait", "payout_pending",
+                   "payout_unknown", "payout_declined", "refunded")
+
+        def query(expression):
+            if expression == "business:cohort_source":
+                return [vector(990, op) for op in ("payout.total", "payout.ready", "payout.unapplied")]
+            if expression in ("business:cohort_cutoff", "business:cohort_snapshot", "business:cohort_capture_complete"):
+                return [vector({"business:cohort_cutoff": 910, "business:cohort_snapshot": 950,
+                                "business:cohort_capture_complete": 1}[expression], "payout.unapplied")]
+            if expression.startswith("business:cohort_"):
+                return [{"metric": {"operation": op, "reason": reason}, "value": [1000, "1"]}
+                        for op in ("payout.total", "payout.ready", "payout.unapplied")
+                        for reason in (reasons if op != "payout.unapplied" else
+                                       ("wait_publication", "wait_delivery", "wait_application", "quarantined",
+                                        "defect", "pending", "unverified", "unclassified"))]
+            return fetch(expression)
+
+        report = performance.capture(item, 300, 1000, query)
+        self.assertEqual(set(report["cohorts"]), {"payout.total", "payout.ready", "payout.unapplied"})
+        self.assertFalse(performance.compare(report, report)["complete"])
+        for key in ("cohorts", "payoutPopulation"):
+            broken = deepcopy(report)
+            broken.pop(key)
+            with self.assertRaisesRegex(ValueError, "payout report"):
+                performance.compare(broken, broken)
+        broken = deepcopy(report)
+        invalid = deepcopy(report)
+        invalid["metadata"]["payoutPopulationCutoff"] = True
+        invalid["payoutPopulation"]["requestedCutoff"] = True
+        with self.assertRaises(ValueError):
+            performance.compare(invalid, report)
+        invalid["payoutPopulation"]["requestedCutoff"] = 1
+        with self.assertRaises(ValueError):
+            performance.compare(invalid, invalid)
+        invalid = deepcopy(report)
+        invalid["metadata"].pop("operations")
+        invalid.pop("payoutPopulation")
+        invalid.pop("cohorts")
+        with self.assertRaises(ValueError):
+            performance.compare(invalid, invalid)
+        broken["payoutPopulation"]["capture_complete"] = 0
+        with self.assertRaises(ValueError):
+            performance.compare(broken, report)
+
+        with self.assertRaises(ValueError):
+            performance.capture(item, 300, 1000,
+                                lambda expr: [] if expr == "business:cohort_source" else query(expr))
+
     def test_captures_actual_completion_tps_and_window_quantiles(self):
         result=performance.capture(metadata(),300,1000,fetch)
         self.assertAlmostEqual(result["business"]["payment.confirmed"]["tps"],20000/300)

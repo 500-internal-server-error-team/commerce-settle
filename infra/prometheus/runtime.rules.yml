@@ -1,0 +1,67 @@
+groups:
+  - name: runtime-health
+    interval: 15s
+    rules:
+      - alert: AppMetricsTargetDown
+        expr: up{job="commerce-settle",instance=~"gateway:9091|commerce:9091|finance-mock:9091"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: 앱 관측 대상의 기동·의존 서비스와 로그를 확인하세요.
+      - alert: HttpServerErrors
+        expr: (sum by(application, uri, method) (increase(http_server_requests_seconds_count{uri!~"/actuator.*",status=~"5.."}[5m])) / sum by(application, uri, method) (increase(http_server_requests_seconds_count{uri!~"/actuator.*"}[5m])) > 0.05) and on(application, uri, method) (sum by(application, uri, method) (increase(http_server_requests_seconds_count{uri!~"/actuator.*"}[5m])) >= 100)
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: 경로별 서버 오류와 클라이언트 타임아웃을 함께 확인하세요.
+      - record: runtime:current
+        expr: (commerce_settle_runtime_observed_timestamp_seconds > 0) and (commerce_settle_runtime_observed_timestamp_seconds <= time()) and (time() - commerce_settle_runtime_observed_timestamp_seconds <= 45)
+      - alert: RuntimeObservationUnavailable
+        expr: absent(runtime:current) or (up{job="container-runtime"} == 0)
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: 컨테이너 관측의 프로젝트·서비스 범위와 GET 프록시를 확인하세요.
+      - alert: ContainerMemoryPressure
+        expr: (commerce_settle_container_memory_usage_ratio{basis="limit"} > 0.9) and on(job, instance) runtime:current
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: 컨테이너 전체 메모리 사용량과 제한·GC를 확인하세요.
+      - alert: ContainerMemoryCritical
+        expr: (commerce_settle_container_memory_usage_ratio{basis="limit"} > 0.95) and on(job, instance) runtime:current
+        labels: {severity: critical}
+        annotations:
+          summary: 컨테이너 여유 메모리가 5% 미만입니다.
+      - alert: ContainerCpuPressure
+        expr: (commerce_settle_container_cpu_usage_ratio{basis="quota"} > 0.9) and on(job, instance) runtime:current
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: 설정한 CPU quota 대비 사용량과 병렬도·대기를 확인하세요.
+      - alert: ContainerOom
+        expr: ((commerce_settle_container_oom_killed > 0) or (commerce_settle_container_last_oom_timestamp_seconds > time()-300)) and on(job, instance) runtime:current
+        labels: {severity: critical}
+        annotations:
+          summary: 관측된 OOM과 컨테이너 메모리 제한·종료 원인을 확인하세요.
+      - alert: ContainerAbnormalExit
+        expr: ((commerce_settle_container_last_exit_code != 0) or (commerce_settle_container_last_abnormal_exit_timestamp_seconds > time()-300)) and on(job, instance) runtime:current
+        labels: {severity: critical}
+        annotations:
+          summary: 비정상 종료 코드·재시작과 미완료 금융 작업을 확인하세요.
+      - alert: DockerHostCpuPressure
+        expr: (commerce_settle_docker_host_cpu_usage_ratio > 0.9) and on(job, instance) runtime:current
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: Docker 호스트의 공유 CPU 포화와 프로젝트 외 부하도 확인하세요.
+      - alert: DockerHostMemoryCritical
+        expr: (commerce_settle_docker_host_memory_available_ratio < 0.05) and on(job, instance) runtime:current
+        labels: {severity: critical}
+        annotations:
+          summary: Docker 호스트의 가용 메모리가 5% 미만입니다.
+      - alert: RuntimeEventCoverageGap
+        expr: (commerce_settle_runtime_event_gap_timestamp_seconds > time()-300) and on(job, instance) runtime:current
+        labels: {severity: warning}
+        annotations:
+          summary: 수집 중단으로 빠진 종료 이벤트 구간과 현재 컨테이너 상태를 대조하세요.

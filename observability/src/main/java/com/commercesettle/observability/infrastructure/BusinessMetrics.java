@@ -47,6 +47,9 @@ public final class BusinessMetrics implements MultiCollector, AutoCloseable {
   private final DataSource dataSource;
   private final PrometheusRegistry registry;
   private final Map<String, String> queries;
+  private final Map<String, String> cohorts;
+  private final AtomicReference<Map<String, List<Cohort>>> cohortSnapshot =
+      new AtomicReference<>(Map.of());
   private final AtomicReference<Map<String, Map<Integer, Values>>> snapshot =
       new AtomicReference<>(Map.of());
   private final ScheduledExecutorService observer =
@@ -56,15 +59,35 @@ public final class BusinessMetrics implements MultiCollector, AutoCloseable {
   /** Each trusted SQL source selects completed_at and nullable started_at, bounded to 900s. */
   public BusinessMetrics(
       DataSource dataSource, PrometheusRegistry registry, Map<String, String> sources) {
+    this(dataSource, registry, sources, Map.of());
+  }
+
+  public BusinessMetrics(
+      DataSource dataSource,
+      PrometheusRegistry registry,
+      Map<String, String> sources,
+      Map<String, String> cohorts) {
     this.dataSource = dataSource;
     this.registry = registry;
     this.queries = Map.copyOf(sources);
+    this.cohorts = Map.copyOf(cohorts);
     if (registry != null) registry.register(this);
   }
 
   @Override
   public List<String> getPrometheusNames() {
-    return NAMES;
+    var names = new ArrayList<>(NAMES);
+    if (!cohorts.isEmpty())
+      names.addAll(
+          List.of(
+              "commerce_settle_business_cohort_records",
+              "commerce_settle_business_cohort_oldest_age_seconds",
+              "commerce_settle_business_cohort_missing_origin_records",
+              "commerce_settle_business_cohort_observed_timestamp_seconds",
+              "commerce_settle_business_cohort_cutoff_timestamp_seconds",
+              "commerce_settle_business_cohort_snapshot_timestamp_seconds",
+              "commerce_settle_business_cohort_capture_complete"));
+    return names;
   }
 
   @Override
@@ -117,6 +140,46 @@ public final class BusinessMetrics implements MultiCollector, AutoCloseable {
                   NAMES.get(index),
                   "Committed owner DB rolling-window facts; gauges; timestamp zero means unavailable"),
               points.get(index)));
+    if (!cohorts.isEmpty()) {
+      var currentCohorts = cohortSnapshot.get();
+      var cohortNames = getPrometheusNames().subList(NAMES.size(), getPrometheusNames().size());
+      for (int index = 0; index < cohortNames.size(); index++) {
+        var values = new ArrayList<GaugeDataPointSnapshot>();
+        for (String operation : cohorts.keySet()) {
+          List<Cohort> rows = currentCohorts.get(operation);
+          if (rows == null) {
+            values.add(
+                new GaugeDataPointSnapshot(
+                    index == 3 ? 0 : Double.NaN,
+                    Labels.of("operation", operation, "reason", "unavailable"),
+                    null));
+            continue;
+          }
+          for (var row : rows) {
+            double[] fields = {
+              row.records(),
+              row.oldest(),
+              row.missing(),
+              row.observed(),
+              row.cutoff(),
+              row.snapshot(),
+              row.complete()
+            };
+            values.add(
+                new GaugeDataPointSnapshot(
+                    fields[index],
+                    Labels.of("operation", operation, "reason", row.reason()),
+                    null));
+          }
+        }
+        metrics.add(
+            new GaugeSnapshot(
+                new MetricMetadata(
+                    cohortNames.get(index),
+                    "Owner DB payout cohorts; terminal refunds are separate from unpaid records"),
+                values));
+      }
+    }
     return new MetricSnapshots(metrics);
   }
 
@@ -177,6 +240,67 @@ public final class BusinessMetrics implements MultiCollector, AutoCloseable {
       next.put(source.getKey(), Map.copyOf(windows));
     }
     snapshot.set(Map.copyOf(next));
+    var pending = new HashMap<>(cohortSnapshot.get());
+    for (var source : cohorts.entrySet()) {
+      var values = new ArrayList<Cohort>();
+      try (Connection connection = dataSource.getConnection()) {
+        connection.setReadOnly(true);
+        connection.setAutoCommit(false);
+        try (var statement = connection.prepareStatement(source.getValue())) {
+          statement.setQueryTimeout(2);
+          try (var rows = statement.executeQuery()) {
+            while (rows.next()) {
+              String reason = rows.getString("reason");
+              if (reason == null || !reason.matches("[a-z_]{1,40}"))
+                throw new SQLException("Unbounded cohort reason");
+              values.add(
+                  new Cohort(
+                      reason,
+                      rows.getDouble("records"),
+                      rows.getDouble("oldest"),
+                      rows.getDouble("missing"),
+                      rows.getDouble("observed"),
+                      rows.getDouble("cutoff"),
+                      rows.getDouble("snapshot"),
+                      rows.getDouble("complete")));
+            }
+            if (values.isEmpty()) throw new SQLException("Incomplete cohort snapshot");
+          }
+        } finally {
+          connection.rollback();
+        }
+      } catch (SQLException | RuntimeException failure) {
+        refreshFailed.at(LOG).log(
+            "Business cohort refresh failed for {} ({})",
+            source.getKey(),
+            failure.getClass().getSimpleName());
+        continue;
+      }
+      pending.put(source.getKey(), List.copyOf(values));
+    }
+    cohortSnapshot.set(Map.copyOf(pending));
+  }
+
+  /** Whole committed delivery intervals, independent of execution attempts and trace sampling. */
+  public static Map<String, String> deliverySources(String schema) {
+    if (!List.of("commerce", "payment", "settlement").contains(schema))
+      throw new IllegalArgumentException("Unknown owner schema");
+    return Map.of(
+        schema + ".outbox.published",
+        "SELECT published_at completed_at, created_at started_at FROM "
+            + schema
+            + ".outbox"
+            + " WHERE status='PUBLISHED' AND published_at >= statement_timestamp()-interval '900 seconds'"
+            + " AND published_at < statement_timestamp()",
+        schema + ".inbox.applied",
+        "SELECT updated_at completed_at, occurred_at started_at FROM "
+            + schema
+            + ".inbox"
+            + " WHERE consumer='"
+            + schema
+            + ".v1' AND status='APPLIED'"
+            + " AND updated_at >= statement_timestamp()-interval '900 seconds'"
+            + " AND updated_at < statement_timestamp()");
   }
 
   private static String sql(String source) {
@@ -210,4 +334,14 @@ public final class BusinessMetrics implements MultiCollector, AutoCloseable {
 
   private record Values(
       double completed, double valid, double sum, double observed, double[] buckets) {}
+
+  private record Cohort(
+      String reason,
+      double records,
+      double oldest,
+      double missing,
+      double observed,
+      double cutoff,
+      double snapshot,
+      double complete) {}
 }

@@ -374,12 +374,14 @@ def produce(stages, mix, directory, offset, marks, stop_file=None, stop_event=No
                     if step % max(1, rate // 10) == 0:
                         producer.stdin.flush()
                 producer.stdin.flush()
+                ended = time.monotonic()
                 marks.append({"stage": number, "rate": rate, "seconds": seconds,
                               "start": begin_wall.isoformat(),
                               "end": datetime.now(timezone.utc).isoformat(),
+                              "endedMonotonic": ended,
                               "sent": sent,
                               "stopped": sent < rate * seconds,
-                              "elapsed": round(time.monotonic() - begin, 2),
+                              "elapsed": round(ended - begin, 2),
                               "maxBehindSeconds": round(behind, 2)})
                 if sent < rate * seconds:
                     break
@@ -459,7 +461,8 @@ def latency(start, end):
         SELECT count(*),
           round(percentile_cont(0.50) WITHIN GROUP (ORDER BY ms)::numeric, 1),
           round(percentile_cont(0.95) WITHIN GROUP (ORDER BY ms)::numeric, 1),
-          round(percentile_cont(0.99) WITHIN GROUP (ORDER BY ms)::numeric, 1),
+          CASE WHEN count(*) >= 10000
+            THEN round(percentile_cont(0.99) WITHIN GROUP (ORDER BY ms)::numeric, 1) END,
           round(max(ms)::numeric, 1)
         FROM (SELECT extract(epoch FROM p.confirmed_at - i.created_at) * 1000 AS ms
               FROM payment.inbox i JOIN payment.payments p ON p.order_id = i.aggregate_id
@@ -471,7 +474,7 @@ def latency(start, end):
 
 # summary.json의 집계 기준. 기준을 바꾸면 version을 올려 이전 결과와 섞어 비교하지 않게 한다.
 AGGREGATION = {
-    "version": 2,
+    "version": 3,
     "population": "이번 실행에서 주입 원장(requests.csv)에 기록한 요청. 단계는 원장의 단계 번호이며, 수신·확정 시각이 "
                   "단계 구간 밖(다음 단계·drain)이어도 주입한 단계에 넣는다.",
     "publishedAt": "주입 원장 기록 시각. 발생기 호스트 시계(UTC)로 producer stdin에 쓴 직후이며 Kafka acks 전이다.",
@@ -491,6 +494,9 @@ AGGREGATION = {
     "clock": "표본마다 상태 조회 직전·직후의 호스트 시각과 그 사이의 DB clock_timestamp()로 잰 DB − 호스트 범위(ms). "
              "지연 값은 보정하지 않는다.",
     "percentiles": "선형 보간(PostgreSQL percentile_cont와 같음), ms, 소수 첫째 자리 반올림",
+    "drain": "동일 호스트 monotonic 시계의 실제 마지막 주입 종료부터 최초 적체 0 관측까지. "
+             "표본 간격의 상한이며 정확한 복구 순간이 아니다. 미완료·원점 누락은 null이다.",
+    "confirmedPerSecond": "첫 표본을 제외한 구간의 확정 증가량 합 / 실제 표본 간격 합. 관측 없으면 null.",
 }
 
 
@@ -508,7 +514,8 @@ def distribution(values_ms):
         return {"count": 0, "p50Ms": None, "p95Ms": None, "p99Ms": None, "maxMs": None}
     return {"count": len(values),
             **{key: round(percentile(values, q), 1)
-               for key, q in (("p50Ms", .50), ("p95Ms", .95), ("p99Ms", .99))},
+               for key, q in (("p50Ms", .50), ("p95Ms", .95))},
+            "p99Ms": round(percentile(values, .99), 1) if len(values) >= 10000 else None,
             "maxMs": round(values[-1], 1)}
 
 
@@ -603,6 +610,32 @@ def worker_settings():
     return {name: values.get(name) for name in WORKER_SETTINGS}
 
 
+def is_idle(sample):
+    return all(sample.get(key) == 0 for key in
+               ("unfinished", "waiting", "kafkaLag", "outboxPending", "jobsReview", "inboxReview"))
+
+
+def drain_observation(marks, samples, origin):
+    """Report the first observed drain completion and its sampling bounds, never a false exact zero."""
+    ended = marks[-1].get("endedMonotonic") if marks else None
+    if ended is None:
+        return {"injectionEndedAt": None, "drainSeconds": None, "drainComplete": False,
+                "drainLowerBoundSeconds": None, "drainObservation": "missing injection monotonic timestamp"}
+    ended -= origin
+    following = [s for s in samples if s["elapsed"] >= ended]
+    completed = next((s for s in following if s.get("stage") == "drain" and is_idle(s)), None)
+    previous = [s for s in following
+                if (completed is None or s["elapsed"] < completed["elapsed"])
+                and any(isinstance(s.get(key), (int, float)) and s[key] > 0
+                        for key in ("unfinished", "waiting", "kafkaLag", "outboxPending", "jobsReview", "inboxReview"))]
+    return {"injectionEndedAt": round(ended, 3),
+            "injectionEndedAtHost": marks[-1]["end"],
+            "drainSeconds": round(completed["elapsed"]-ended, 3) if completed else None,
+            "drainComplete": completed is not None,
+            "drainLowerBoundSeconds": round(previous[-1]["elapsed"]-ended, 3) if previous else 0,
+            "drainObservation": "host monotonic injection end to first zero-backlog observation; sampling upper bound"}
+
+
 def cmd_ramp(args):
     """단계적으로 도착률을 올리며 일정 간격으로 상태를 기록하고, 끝나면 단계별 처리량·적체·지연을 요약한다."""
     import threading
@@ -670,6 +703,8 @@ def cmd_ramp(args):
                 seconds = max(0.001, sample["elapsed"] - previous["elapsed"])
                 sample["confirmedPerSecond"] = round(
                     (sample["confirmed"] - previous["confirmed"]) / seconds, 1)
+                sample["intervalSeconds"] = seconds
+                sample["confirmedDelta"] = sample["confirmed"] - previous["confirmed"]
                 sample["receivedPerSecond"] = round(
                     (sample["received"] - previous["received"]) / seconds, 1)
                 sample["stage"] = len(marks) if thread.is_alive() else "drain"
@@ -683,9 +718,14 @@ def cmd_ramp(args):
                     raise SystemExit(f"load worker failed: {failure[0]}")
                 if thread.is_alive():
                     continue
-                drain_started = drain_started or time.monotonic()
-                idle = (sample["unfinished"] == 0 and sample["waiting"] == 0
-                        and sample["kafkaLag"] == 0 and sample["outboxPending"] == 0)
+                if drain_started is None:
+                    thread.join()
+                    if failure:
+                        raise SystemExit(f"load worker failed: {failure[0]}")
+                    if not marks or "endedMonotonic" not in marks[-1]:
+                        raise SystemExit("injection end timestamp missing; drain timing is unverified")
+                    drain_started = marks[-1]["endedMonotonic"]
+                idle = is_idle(sample)
                 if idle and (fault_thread is None or not fault_thread.is_alive()):
                     break
                 if time.monotonic() - drain_started > args.drain:
@@ -719,8 +759,9 @@ def cmd_ramp(args):
         steady = in_stage[1:] or in_stage  # 첫 구간은 warm-up으로 뺀다
         summary["stages"].append({
             **mark,
-            "confirmedPerSecond": round(
-                sum(s["confirmedPerSecond"] for s in steady) / max(1, len(steady)), 1),
+            "confirmedPerSecond": (round(sum(s["confirmedDelta"] for s in steady)
+                                         / sum(s["intervalSeconds"] for s in steady), 1)
+                                   if steady else None),
             "unfinishedStart": in_stage[0]["unfinished"] if in_stage else None,
             "unfinishedEnd": in_stage[-1]["unfinished"] if in_stage else None,
             "maxKafkaLag": max((s["kafkaLag"] for s in in_stage if s["kafkaLag"] is not None),
@@ -731,9 +772,7 @@ def cmd_ramp(args):
     summary["injected"] = injected_stats(requests, outcomes)
     summary["peaks"] = peaks(samples)
     summary["clock"] = clock_summary(samples)
-    drain = [s for s in samples[1:] if s.get("stage") == "drain"]
-    summary["drainSeconds"] = round(samples[-1]["elapsed"] - drain[0]["elapsed"], 1) if drain else 0
-    summary["injectionEndedAt"] = drain[0]["elapsed"] if drain else None
+    summary.update(drain_observation(marks, samples, origin))
     final = samples[-1]
     summary["final"] = {k: final[k] for k in (
         "received", "confirmed", "declined", "unfinished", "waiting", "kafkaLag",
