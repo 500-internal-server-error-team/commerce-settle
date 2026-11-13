@@ -947,6 +947,8 @@ Payment 환불 SAGA는 `PAYMENT_ROLE=worker`에서 `app.refund.enabled=true`로 
 
 Commerce Outbox는 커밋 신호로 발행하며 누락 신호·재시도·만료 임대를 기본 1초마다 복구합니다. 기본값은 미완료 발행 8건·조회 100건·임대 240초·재시도 1~60초/10회이며 회수도 횟수에 포함합니다. 임대는 Kafka 대기 상한의 합보다 길어야 하고 설정 불일치는 기동을 거절합니다. 결과 저장 뒤에는 직전 선점이 빈 슬롯을 모두 채웠거나 같은 집계의 후행이 기다릴 때만 바로 다시 선점합니다. 같은 집계의 선행 미완료 건을 추월하지 않으며 소진은 복구 주기에 REVIEW_REQUIRED로 전환해 보존합니다. 종료 대기는 최대 30초, 운영 HTTP 재처리는 지원하지 않습니다. 실행 풀·대기열의 세부값은 [Commerce 설정](../commerce/src/main/resources/application.yml)을 따릅니다.
 
+Payment 수신 그룹은 classic 프로토콜에서 heartbeat 3초·session timeout 10초를 사용합니다. broker의 허용 session 범위에 10초가 포함돼야 합니다. 이 값은 이전 멤버의 heartbeat 만료 기준이며 앱 기동·재균형·적체 처리 시간은 별도입니다. Payment Outbox 임대는 30초, Kafka 생산자의 metadata/buffer 대기는 최대 5초·전송 완료는 15초·개별 요청은 5초입니다. 임대가 앞의 두 대기 상한 합보다 길어야 하며 잘못된 덮어쓰기는 기동을 거절합니다. 전송 실패는 같은 원문·eventId로 영속 재시도하고 10회 소진 시 REVIEW_REQUIRED로 보존합니다. 전송 제한 시간이 짧아져 장기 broker 장애에서는 이 상태에 더 빨리 도달할 수 있습니다. 재기동 때 RUNNING을 일괄 해제하지 않고 만료·버전 검증과 같은 집계의 선행 순서를 유지합니다.
+
 Kafka template·listener의 observation을 활성화해 실제 발행 시도의 traceparent를 소비자 처리로 전파합니다. Outbox·Inbox·금융 Job의 저장 부모 복원과 재시도·재시작 뒤의 연결은 [금융 처리 시간과 비동기 추적](#금융-처리-시간과-비동기-추적)을 따릅니다. Kafka 통합 시험은 원본 헤더와 소비자 span의 traceId·parentId, 재전달 뒤에도 같은 원본 parent를 유지하는지 확인합니다.
 
 Consumer는 `auto.offset.reset=none`이므로 새 그룹에 offset이 없거나 보존 범위를 벗어나면 자동으로 처음/끝으로 이동하지 않습니다. **첫 생산자를 열기 전에**, 새 구독 토픽의 모든 파티션이 비어 있고 기존 그룹 offset도 없음을 확인한 경우에만 초기화합니다. 현재 Payment 수신 경계의 예시는 다음과 같습니다.
