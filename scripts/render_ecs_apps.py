@@ -97,7 +97,7 @@ def render(service, services, image, region, role, parameter_prefix, app_ip, dat
     health = source["healthcheck"]
     container = {
         "name": service, "image": image, "essential": True,
-        "memory": 1024 if service == "commerce" else 512,
+        "memory": 2048 if service == "commerce" else 512,
         "environment": [{"name": name, "value": value}
                         for name, value in sorted(environment.items())],
         "secrets": [{"name": name, "valueFrom": value}
