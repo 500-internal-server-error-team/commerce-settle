@@ -601,6 +601,21 @@ class OrderWorkflowIntegrationTest {
   }
 
   @Test
+  @DisplayName("기본 설정은 결제 완료·미발송 주문을 자동 발송하지 않는다")
+  void keepsAutomaticShipmentDisabledByDefault() throws Exception {
+    var f = fixture();
+    var order = create(f);
+    var id = uuid(order, "id");
+    receive("PaymentConfirmed", confirmed(order, context(id)), true);
+
+    workflow.advance(id);
+
+    assertThat(workflow.due(100, null)).doesNotContain(id);
+    assertThat(buyer(f, id).path("fulfillmentStatus").asText()).isEqualTo("UNSHIPPED");
+    assertThat(buyer(f, id).path("shippedAt").isNull()).isTrue();
+  }
+
+  @Test
   @DisplayName("기한 도래 조회는 세 기한 조건의 주문을 ID 순서로 이어서 찾고 기한 전·미발송 주문은 제외한다")
   void findsDueOrdersOfEachDeadlineInIdOrder() {
     var unpaid = uuid(create(fixture()), "id");

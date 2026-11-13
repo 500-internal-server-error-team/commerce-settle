@@ -58,6 +58,11 @@ interface SpringDataOrderRepository extends JpaRepository<Order, UUID> {
           """
           SELECT id FROM (
               SELECT id FROM commerce.orders
+              WHERE :autoShipment AND status = 'PAID' AND fulfillment_status = 'UNSHIPPED'
+                AND delivery_due_at IS NULL
+                AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid))
+              UNION ALL
+              SELECT id FROM commerce.orders
               WHERE status IN ('PAYMENT_PENDING','DECLINED') AND payment_wait_until <= :now
                 AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid))
               UNION ALL
@@ -74,5 +79,8 @@ interface SpringDataOrderRepository extends JpaRepository<Order, UUID> {
           """,
       nativeQuery = true)
   List<UUID> findDue(
-      @Param("now") java.time.Instant now, @Param("limit") int limit, @Param("after") UUID after);
+      @Param("now") java.time.Instant now,
+      @Param("limit") int limit,
+      @Param("after") UUID after,
+      @Param("autoShipment") boolean autoShipment);
 }
