@@ -209,7 +209,7 @@ class RenderTest(unittest.TestCase):
             secrets = {item["name"]: item["valueFrom"] for item in container["secrets"]}
             self.assertEqual(definition["networkMode"], "bridge")
             self.assertEqual(definition["runtimePlatform"]["cpuArchitecture"], "ARM64")
-            self.assertEqual(container["memory"], 1024 if name == "commerce" else 512)
+            self.assertEqual(container["memory"], 2048 if name == "commerce" else 512)
             self.assertNotIn("memory", definition)
             self.assertEqual(container["healthCheck"]["command"],
                              ["CMD", "curl", "--fail", "--silent",

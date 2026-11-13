@@ -179,7 +179,7 @@ ECS 안정화 후 앱 호스트에서 세 사설 포트 도달 여부, 서비스
 
 앱 보안 그룹의 `8080–8085`는 앱 측 사설 통신에, `9091–9096`은 데이터 보안 그룹의 메트릭 수집에만 허용합니다. 데이터의 `5432/6379/9092/9411`과 Commerce가 조회하는 Prometheus `9090`은 앱 보안 그룹만 허용합니다. 공개 진입은 Caddy의 `80/443`을 유지합니다. 실제 EC2·포트 도달 여부를 확인하며 Compose 이름이나 루프백 주소를 다른 호스트에 사용하지 않습니다.
 
-생성 Task의 컨테이너 메모리는 Commerce 1GiB·나머지 앱 512MiB입니다. 컨테이너 상한에는 JVM heap 외에 Metaspace·코드 캐시·스레드 등도 포함됩니다. 기존 Task의 메모리를 조정할 때는 현재 Task 정의를 바탕으로 해당 컨테이너의 `memory`만 바꾼 개정을 등록하고, 기존 이미지·환경·자격 참조·배치·볼륨을 보존합니다. 앱 전체·Caddy·ECS 에이전트·운영체제의 CPU·메모리 여유와 실제 사용량·OOM을 확인한 뒤 서비스를 갱신하며, 정상 기동만으로 부하 처리를 검증했다고 판단하지 않습니다. Task 전체 CPU·메모리 제한은 넣지 않으며 기존 EC2의 cgroup driver를 바꾸지 않습니다. 로그 그룹 `/ecs/commerce-settle/<접미사>` 여섯 개와 7일 보존, 실행 역할의 ECR pull·SSM·KMS·로그 전송 권한을 준비합니다. 호스트 속성·실행 역할·에이전트 조건은 [데이터 서비스](#ecs-ec2-데이터-서비스)와 [HTTPS 네트워크 준비](#네트워크와-저장소-준비)를 함께 확인합니다.
+생성 Task의 컨테이너 메모리는 Commerce 2GiB·나머지 앱 512MiB입니다. 컨테이너 상한에는 JVM heap 외에 Metaspace·코드 캐시·스레드 등도 포함됩니다. 기존 Task의 메모리를 조정할 때는 현재 Task 정의를 바탕으로 해당 컨테이너의 `memory`만 바꾼 개정을 등록하고, 기존 이미지·환경·자격 참조·배치·볼륨을 보존합니다. 앱 전체·Caddy·ECS 에이전트·운영체제의 CPU·메모리 여유와 실제 사용량·OOM을 확인한 뒤 서비스를 갱신하며, 정상 기동만으로 부하 처리를 검증했다고 판단하지 않습니다. Task 전체 CPU·메모리 제한은 넣지 않으며 기존 EC2의 cgroup driver를 바꾸지 않습니다. 로그 그룹 `/ecs/commerce-settle/<접미사>` 여섯 개와 7일 보존, 실행 역할의 ECR pull·SSM·KMS·로그 전송 권한을 준비합니다. 호스트 속성·실행 역할·에이전트 조건은 [데이터 서비스](#ecs-ec2-데이터-서비스)와 [HTTPS 네트워크 준비](#네트워크와-저장소-준비)를 함께 확인합니다.
 
 SSM의 `SecureString`은 `APP_SSM_PARAMETER_ARN_PREFIX=arn:aws:ssm:<리전>:<계정>:parameter/commerce-settle/app/` 아래에 준비합니다. DB·Redis 자격은 데이터 서비스와 같아야 합니다. Gateway·Commerce의 `AUTH_SESSION_EPOCH`·`AUTH_REDIS_RUN_ID`는 같은 승인값을 쓰며 임의 생성하거나 오래된 값을 재사용하지 않습니다. 필요한 ARN 전체는 생성 JSON의 `secrets`에서 확인합니다.
 
@@ -328,7 +328,7 @@ aws ecs describe-container-instances --cluster "$ECS_CLUSTER" \
 ```
 
 - Caddy는 `bridge` 모드로 실행합니다. Gateway가 `awsvpc`이면 Task ENI의 사설 IPv4와 업무 포트, `bridge`이면 배치된 EC2의 사설 IPv4와 실제 `hostPort`를 `GATEWAY_UPSTREAM=<IP>:<port>`로 지정합니다. `host` 모드도 EC2의 사설 IPv4와 업무 포트를 사용합니다. Gateway 재생성으로 ENI·포트가 바뀌면 주소를 다시 조회하고 Caddy Task를 갱신합니다.
-- 앱 EC2에만 `workload=app` ECS 속성을 설정하고 Caddy 한 개를 배치합니다. TCP 80/443을 쓰는 기존 프로세스가 없어야 합니다. Caddy의 128 CPU 단위·128 MiB 제한은 시작값이며 실제 부하의 CPU·메모리·OOM을 확인해 조정합니다.
+- 앱 EC2에만 `workload=app` ECS 속성을 설정하고 Caddy 한 개를 배치합니다. TCP 80/443을 쓰는 기존 프로세스가 없어야 합니다. Caddy의 128 CPU 단위·512MiB 메모리 제한은 시작값이며 실제 부하의 CPU·메모리·OOM을 확인해 조정합니다.
 - 앱 EC2 보안 그룹은 공개 TCP 80/443만 허용합니다. 80은 HTTPS 전환·HTTP 인증서 검증, 443은 HTTPS·TLS 인증서 검증에 사용합니다. IPv6를 제공할 때만 IPv6 DNS·라우팅·보안 그룹도 함께 엽니다. 이 설정은 HTTP/1.1·HTTP/2만 사용하므로 UDP 443은 열지 않습니다.
 - Gateway 업무 포트는 Caddy가 있는 앱 호스트의 사설 통신에만 허용합니다. `awsvpc`는 Gateway Task 보안 그룹에서, `bridge`·`host`는 해당 EC2의 보안 그룹에서 제한합니다. 실제 Caddy 컨테이너에서의 도달 여부를 확인합니다. 업무·DB·Kafka·Redis·9091 관리 포트·2019 Caddy 관리 API를 인터넷에 열지 않습니다. Caddy 관리 API는 설정에서도 끕니다. 운영 접속은 기존 승인된 관리 경로를 사용합니다.
 - Caddy의 외부 DNS 조회와 HTTPS 발급·갱신 통신을 허용하고 Docker Hub 이미지 pull·CloudWatch Logs 전송 경로를 준비합니다. `/ecs/commerce-settle/caddy` 로그 그룹은 기존 로그 정책대로 7일 보존하며 실행 역할·ECS 에이전트의 `awslogs` 권한을 확인합니다.
