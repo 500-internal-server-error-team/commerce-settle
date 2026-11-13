@@ -683,7 +683,8 @@
       "targets": [
         {
           "expr": "business:cohort_records{reason!=\"refunded\"}",
-          "legendFormat": "{{operation}} / {{reason}}"
+          "legendFormat": "{{operation}} / {{reason}}",
+          "refId": "A"
         }
       ],
       "description": "지급 전체 대기와 readyAt 이후 대기는 서로 겹치므로 합산하지 않습니다. 환불 종결은 미지급에서 제외하며, 원천 누락은 실제 0초가 아닙니다. 수집 신선도 45초 이내의 단일 소유 DB 표본입니다."
@@ -705,7 +706,8 @@
       "targets": [
         {
           "expr": "business:cohort_age_seconds{reason!=\"refunded\"}",
-          "legendFormat": "{{operation}} / {{reason}}"
+          "legendFormat": "{{operation}} / {{reason}}",
+          "refId": "A"
         }
       ],
       "description": "지급 전체 대기와 readyAt 이후 대기는 서로 겹치므로 합산하지 않습니다. 환불 종결은 미지급에서 제외하며, 원천 누락은 실제 0초가 아닙니다. 수집 신선도 45초 이내의 단일 소유 DB 표본입니다."
@@ -727,7 +729,8 @@
       "targets": [
         {
           "expr": "business:cohort_missing_origin",
-          "legendFormat": "{{operation}} / {{reason}}"
+          "legendFormat": "{{operation}} / {{reason}}",
+          "refId": "A"
         }
       ],
       "description": "지급 전체 대기와 readyAt 이후 대기는 서로 겹치므로 합산하지 않습니다. 환불 종결은 미지급에서 제외하며, 원천 누락은 실제 0초가 아닙니다. 수집 신선도 45초 이내의 단일 소유 DB 표본입니다."
@@ -749,7 +752,8 @@
       "targets": [
         {
           "expr": "business:cohort_records{reason=\"refunded\"}",
-          "legendFormat": "{{operation}} / {{reason}}"
+          "legendFormat": "{{operation}} / {{reason}}",
+          "refId": "A"
         }
       ],
       "description": "지급 전체 대기와 readyAt 이후 대기는 서로 겹치므로 합산하지 않습니다. 환불 종결은 미지급에서 제외하며, 원천 누락은 실제 0초가 아닙니다. 수집 신선도 45초 이내의 단일 소유 DB 표본입니다."

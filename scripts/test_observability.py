@@ -1,6 +1,8 @@
 """Check production rules and an isolated metrics -> alert -> resolved notification flow."""
 
 import base64
+from copy import deepcopy
+from smoke_financial_flow import assert_payout_trace
 from contextlib import contextmanager
 import json
 from pathlib import Path
@@ -57,16 +59,46 @@ def integration_rules(production):
 
 
 def verify_dashboard_quantiles():
-    for name in ("business-performance", "payment-worker"):
+    for name in ("business-performance", "payment-worker", "overview"):
         dashboard = json.loads((ROOT / "infra/grafana/dashboards" / (name + ".json")).read_text())
+        for panel in dashboard["panels"]:
+            refs = [target.get("refId") for target in panel.get("targets", [])]
+            assert all(isinstance(ref, str) and ref for ref in refs) and len(refs) == len(set(refs)), (name, panel["id"])
+        if name == "overview":
+            continue
         p99 = [target["expr"] for panel in dashboard["panels"] for target in panel.get("targets", [])
                if re.search(r"histogram_quantile\(0?\.99", target.get("expr", ""))]
         assert p99 and all(re.search(r">=\s*10000", expression) for expression in p99), name
         assert all("window" in expression for expression in p99), name
 
 
+def verify_payout_trace_guards():
+    trace = "1" * 32
+    saved = {"jobId": "job", "payoutId": "payout", "traceparent": "00-" + trace + "-" + "a"*16 + "-01"}
+    def span(identity, name, service, parent=None, kind=None, tags=None):
+        return {"id": identity*16, "traceId": trace, "name": name, "parentId": parent*16 if parent else None,
+                "localEndpoint": {"serviceName": service}, "kind": kind, "tags": tags or {}}
+    spans = [span("a", "batch API", "settlement", kind="SERVER", tags={"method":"POST", "uri":"/internal/settlement-batches"}),
+             span("b", "settlement.payout.process", "settlement", "a", tags={"job.id":"job", "payout.id":"payout"}),
+             span("c", "settlement.payout.gateway", "settlement", "b"),
+             span("d", "HTTP client", "settlement", "c", "CLIENT"),
+             span("e", "HTTP server", "finance-mock", "d", "SERVER", {"method":"POST", "uri":"/mock/payouts"})]
+    assert_payout_trace(spans, trace, saved)
+    cases = [spans[1:]]
+    for index, key, value in [(1,"parentId","f"*16), (4,"parentId",None), (3,"parentId","a"*16)]:
+        broken = deepcopy(spans);broken[index][key] = value;cases.append(broken)
+    broken = deepcopy(spans);broken[1]["tags"]["job.id"] = "unrelated";cases.append(broken)
+    for broken in cases:
+        try:
+            assert_payout_trace(broken, trace, saved)
+        except AssertionError:
+            continue
+        raise AssertionError("unrelated payout trace passed saved-parent/HTTP ancestry checks")
+
+
 def verify():
     verify_dashboard_quantiles()
+    verify_payout_trace_guards()
     project = "cs-quarantine-observation-" + secrets.token_hex(5)
     with owned_settings(project) as directory:
         password = secrets.token_urlsafe(24)
@@ -204,16 +236,20 @@ def verify():
                 "PaymentQuarantineCaptured", "PaymentQuarantineReviewRequired", "PaymentQuarantineDeliveryOverdue",
                 "NotificationDeliveryOverdue", "NotificationReviewRequired", "NotificationRetryExhausted",
                 "NotificationFinancialActionRequired", "KakaoReauthenticationRequired",
-                "FinancialUnknown", "ContainerMemoryCritical", "ContainerOom", "ContainerAbnormalExit",
+                "FinancialUnknown", "ContainerMemoryPressure", "ContainerMemoryCritical", "ContainerOom", "ContainerAbnormalExit",
             }
 
             def firing():
                 alerts = [a for notification in http(fixture + "/notifications") if notification["status"] == "firing" for a in notification["alerts"]]
                 names = {a["labels"]["alertname"] for a in alerts}
-                return alerts if expected_alerts <= names else None
+                required_scopes = {("critical", "payment-worker"), ("warning", "settlement")}
+                scopes = {(a["labels"]["severity"], a["labels"].get("service")) for a in alerts if a["labels"]["alertname"] in {"ContainerMemoryPressure", "ContainerMemoryCritical"}}
+                return alerts if expected_alerts <= names and required_scopes <= scopes else None
 
             delivered = until(firing, "firing notifications were not delivered")
-            assert all(a["labels"]["severity"] == "critical" for a in delivered)
+            assert all(a["labels"]["severity"] == "critical" or
+                       (a["labels"]["alertname"] == "ContainerMemoryPressure" and a["labels"].get("service") == "settlement") for a in delivered)
+            assert not any(a["labels"]["alertname"] == "ContainerMemoryPressure" and a["labels"]["severity"] == "warning" and a["labels"].get("service") == "payment-worker" for a in delivered)
             assert all(not ({"buyerId", "sellerId", "orderId", "recipientId", "token", "body"} & set(a["labels"])) for a in delivered)
             http(fixture + "/state", {"active": False})
             def resolved():
@@ -224,7 +260,10 @@ def verify():
                     for a in notification["alerts"]
                     if a["status"] == "resolved"
                 }
-                return expected_alerts <= names
+                memory_scopes = {(a["labels"]["severity"], a["labels"].get("service"))
+                                 for notification in http(fixture + "/notifications") if notification["status"] == "resolved"
+                                 for a in notification["alerts"] if a["status"] == "resolved" and a["labels"]["alertname"] in {"ContainerMemoryPressure", "ContainerMemoryCritical"}}
+                return expected_alerts <= names and {("critical", "payment-worker"), ("warning", "settlement")} <= memory_scopes
 
             until(resolved, "resolved notifications were not delivered for all firing alerts")
             print("PASS observability: rule boundaries, stale/duplicate samples, provisioned dashboard, firing/inhibition/resolution delivery")
