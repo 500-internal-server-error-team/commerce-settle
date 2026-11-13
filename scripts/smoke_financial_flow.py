@@ -689,8 +689,6 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
                 assert sql("payment", f"select count(*) from payment.mileage_entries where payment_id='{rejected_payment}' and kind='RESTORE'") == "0"
                 assert sql("settlement", f"select count(*) from settlement.settlement_entries where payment_id='{rejected_payment}' and reversal_of is not null") == "0"
                 assert reservation(rejected_order) == "CONSUMED"
-                assert sql("finance_mock", "select balance from finance_mock.mock_accounts where account_ref='fixture-payout-funding'") == "1000000"
-                assert sql("finance_mock", "select coalesce(sum(amount),0) from finance_mock.mock_cash_entries") == "0"
                 print(json.dumps({"httpRefundCases": ("card,mixed,mileage-only,easy-pay,receipt," if group == "all" else "mixed,") + "timeout,lookup-unavailable,crash,late-token,absent,processing,declined",
                                   "processingAndAbsence": "explicit isolated DB fixtures; transport is real HTTP"}), flush=True)
 
@@ -702,6 +700,8 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
                 assert sql(database, f"select count(*) from {database}.inbox where status='REVIEW_REQUIRED'") == "0", database
                 until(lambda: sql(database, f"select count(*) from {database}.outbox where status<>'PUBLISHED'") == "0",
                       database + " outbox was not drained", 60)
+            assert sql("finance_mock", "select balance from finance_mock.mock_accounts where account_ref='fixture-payout-funding'") == "1000000"
+            assert sql("finance_mock", "select coalesce(sum(amount),0) from finance_mock.mock_cash_entries") == "0"
             # The rejected refund keeps its debit/sale; the disposed return removes one unit.
             expected_mileage = 10_000 if group == "core" else 10_000 - MILEAGE
             expected_inventory = {"all": "8/0/1", "core": "9/0/0", "refund-failures": "9/0/1"}[group]
