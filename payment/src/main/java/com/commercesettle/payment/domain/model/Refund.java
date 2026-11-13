@@ -34,7 +34,6 @@ public class Refund extends AuditableEntity {
 
   private UUID externalRef;
   private Instant mileageRestoredAt;
-  private Instant unknownSince;
   @Version private Long version;
 
   protected Refund() {}
@@ -109,7 +108,6 @@ public class Refund extends AuditableEntity {
     requireExternalOpen();
     if (status != RefundStatus.UNKNOWN) {
       transitionTo(RefundStatus.UNKNOWN, now);
-      unknownSince = getUpdatedAt();
     } else {
       touch(now);
     }
@@ -194,9 +192,5 @@ public class Refund extends AuditableEntity {
 
   public Long getVersion() {
     return version;
-  }
-
-  public Instant getUnknownSince() {
-    return unknownSince;
   }
 }

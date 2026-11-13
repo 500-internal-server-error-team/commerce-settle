@@ -682,7 +682,7 @@
       },
       "targets": [
         {
-          "expr": "business:cohort_records{reason!=\"refunded\"}",
+          "expr": "business:cohort_records{operation=~\"payout.total|payout.ready\",reason!=\"refunded\"}",
           "legendFormat": "{{operation}} / {{reason}}",
           "refId": "A"
         }
@@ -705,7 +705,7 @@
       },
       "targets": [
         {
-          "expr": "business:cohort_age_seconds{reason!=\"refunded\"}",
+          "expr": "business:cohort_age_seconds{operation=~\"payout.total|payout.ready\",reason!=\"refunded\"}",
           "legendFormat": "{{operation}} / {{reason}}",
           "refId": "A"
         }

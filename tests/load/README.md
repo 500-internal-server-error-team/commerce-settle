@@ -93,7 +93,7 @@ Commerce가 발행하는 것과 같은 `OrderPaymentRequested` v1을 `commerce-s
 
 ### 지연·적체 집계 기준
 
-`ramp`·`scenario`의 `summary.json`은 `aggregation`(현재 `version` 3)에 아래 기준을 함께 남깁니다. [#254](https://github.com/500-internal-server-error-team/commerce-settle/issues/254) 전 결과에는 이 필드가 없으며, 그 결과와는 기존 지표끼리만 비교합니다.
+`ramp`·`scenario`의 `summary.json`은 `aggregation`(현재 `version` 4)에 아래 기준을 함께 남깁니다. [#254](https://github.com/500-internal-server-error-team/commerce-settle/issues/254) 전 결과에는 이 필드가 없으며, 그 결과와는 기존 지표끼리만 비교합니다.
 
 | 필드 | 집계 대상 | 시작 → 종료 | 시계 |
 | --- | --- | --- | --- |
@@ -108,7 +108,7 @@ Commerce가 발행하는 것과 같은 `OrderPaymentRequested` v1을 `commerce-s
 - **발행 시각:** 주입 원장(`requests.csv`)의 기록 시각입니다. 발생기 호스트 시계(UTC)로 producer 표준 입력에 쓴 직후에 기록하므로 Kafka acks보다 조금 이릅니다.
 - **시계 차이:** 발행 시각과 DB 시각은 시계가 다르므로 차이를 보정하지 않고 `clock`에 남깁니다. 표본마다 상태 조회 직전·직후의 호스트 시각과 그 사이에 읽은 DB `clock_timestamp()`로 `DB − 호스트` 범위(ms)를 잽니다. 조회 왕복 시간만큼 불확실하므로, 발행 기준 지연을 이 범위보다 작은 차이로 비교하지 않습니다.
 - **미완료 요청:** 요약 시점(적체가 비거나 `--drain` 제한 시간 도달)에 확정·거절되지 않은 요청은 `unresolved`로 세고 지연 분포에서 뺍니다. `unresolved`가 0보다 크면 `complete=false`이며 지연 분포는 하한입니다. 거절은 `declined`로 세고 확정 지연에서 뺍니다.
-- **배출 시간:** `drainSeconds`는 실제 주입 종료 monotonic 시각부터 처음 모든 적체가 0인 drain 관측까지의 상한입니다. `drainLowerBoundSeconds`와 함께 표본 사이의 불확실성을 기록하고, 미관측 lag·수동 확인 건·timeout은 `drainComplete=false`로 남깁니다. 단계 TPS는 관측 구간의 확정 증가 합계/실제 시간 합계입니다.
+- **배출 시간:** producer stdin의 마지막 주입·flush 직후 monotonic 시각을 원점으로 삼으며 최종 확인 응답 대기도 배출 시간에 포함합니다. 각 표본의 조회 시작·종료를 기록하고, producer가 최종 확인 응답까지 끝난 뒤 시작한 조회만 배출 판정에 사용합니다. `drainLowerBoundSeconds`는 마지막 양수 조회 시작, `drainSeconds`는 최초 모든 적체가 0인 조회 종료까지이며 실제 배출 순간의 범위를 나타냅니다. 미관측 lag·수동 확인 건·timeout은 `drainComplete=false`로 남깁니다. 단계 TPS는 관측 구간의 확정 증가 합계/실제 시간 합계입니다.
 - **백분위수:** p99는 해당 구간 표본 10,000건 미만이면 `null`입니다. 기존 지표의 PostgreSQL `percentile_cont`와 같은 선형 보간이며 ms 단위, 소수 첫째 자리까지입니다.
 - **Kafka lag 미관측:** 그룹 재조정 중처럼 `kafka-consumer-groups --describe`에서 파티션 lag를 읽지 못한 표본은 0이 아니라 `null`로 남기고, `peaks.kafkaLag.unobservedSamples`로 셉니다. 이런 표본이 있으면 적체가 빈 것으로 보지 않습니다.
 - 상태 표본은 `--interval`(`scenario`는 5초) 간격이므로 `peaks`는 표본 사이의 순간 최댓값을 놓칠 수 있습니다.

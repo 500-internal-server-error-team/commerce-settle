@@ -32,6 +32,15 @@ groups:
         expr: (commerce_settle_financial_operation_observed_timestamp_seconds == on (operation) group_left max by (operation) (commerce_settle_financial_operation_observed_timestamp_seconds)) and (commerce_settle_financial_operation_observed_timestamp_seconds > 0) and (time() - commerce_settle_financial_operation_observed_timestamp_seconds <= 45) and (commerce_settle_financial_operation_observed_timestamp_seconds <= time())
       - record: financial:operation_age
         expr: max by (operation) (commerce_settle_financial_operation_age_seconds and on (job, instance, operation) financial:operation_current)
+      - record: financial:operation_records
+        expr: max by (operation) (commerce_settle_financial_operation_records and on (job, instance, operation) financial:operation_current)
+      - alert: FinancialRefundUnknown
+        expr: financial:operation_records{operation="refund.unknown"} > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: 환불 미확정 건수와 원거래 조회 결과를 확인하세요.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
       - alert: FinancialQueueOverdue
         expr: financial:due_queue_value > 300
         labels:
@@ -40,7 +49,7 @@ groups:
           summary: 금융 대기열의 자동 처리 도래 지연을 확인하세요.
           runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
       - alert: FinancialUnknown
-        expr: financial:operation_age{operation=~"payment.unknown|refund.unknown|settlement.unknown"} > 300
+        expr: financial:operation_age{operation=~"payment.unknown|settlement.unknown"} > 300
         labels:
           severity: warning
         annotations:
@@ -54,7 +63,7 @@ groups:
           summary: 금융 대기열의 자동 처리 도래 지연을 확인하세요.
           runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
       - alert: FinancialUnknown
-        expr: financial:operation_age{operation=~"payment.unknown|refund.unknown|settlement.unknown"} > 900
+        expr: financial:operation_age{operation=~"payment.unknown|settlement.unknown"} > 900
         labels:
           severity: critical
         annotations:
@@ -118,7 +127,7 @@ groups:
           summary: 데이터 저장소 압박으로 신규 주문 접수를 중단합니다.
           runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
       - alert: FinancialObservationUnavailable
-        expr: (count(financial:queue_value) != 8) or absent(financial:queue_value) or (count(financial:due_queue_value) != 8) or absent(financial:due_queue_value) or (count(financial:group_value) != 3) or absent(financial:group_value) or (count(financial:store_value) != 2) or absent(financial:store_value) or (count(financial:operation_age) != 5) or absent(financial:operation_age)
+        expr: (count(financial:queue_value) != 8) or absent(financial:queue_value) or (count(financial:due_queue_value) != 8) or absent(financial:due_queue_value) or (count(financial:group_value) != 3) or absent(financial:group_value) or (count(financial:store_value) != 2) or absent(financial:store_value) or (count(financial:operation_age) != 4) or absent(financial:operation_age) or absent(financial:operation_records{operation="refund.unknown"})
         for: 1m
         labels:
           severity: critical

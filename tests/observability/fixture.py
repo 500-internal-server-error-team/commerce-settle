@@ -38,11 +38,19 @@ class Handler(BaseHTTPRequestHandler):
                     f'commerce_settle_runtime_observed_timestamp_seconds {time.time()-1}',
                     f'commerce_settle_container_memory_usage_ratio{{service="payment-worker",basis="limit"}} {0.99 if active else 0.2}',
                     f'commerce_settle_container_memory_usage_ratio{{service="settlement",basis="limit"}} {0.91 if active else 0.2}',
+                    'commerce_settle_docker_host_cpu_usage_ratio 0.6',
+                    'commerce_settle_docker_host_memory_available_ratio 0.2',
+                    f'commerce_settle_runtime_event_gap_timestamp_seconds {time.time()-1 if active else 0}',
                     f'commerce_settle_container_oom_killed{{service="payment-worker"}} {active}',
                     f'commerce_settle_container_last_exit_code{{service="payment-worker"}} {137 if active else 0}',
-                    f'commerce_settle_financial_operation_age_seconds{{operation="refund.unknown"}} {901 if active else 0}',
+                    f'commerce_settle_financial_operation_age_seconds{{operation="payment.unknown"}} {901 if active else 0}',
+                    f'commerce_settle_financial_operation_observed_timestamp_seconds{{operation="payment.unknown"}} {time.time()-1}',
+                    f'commerce_settle_financial_operation_records{{operation="refund.unknown"}} {active}',
                     f'commerce_settle_financial_operation_observed_timestamp_seconds{{operation="refund.unknown"}} {time.time()-1}',
                 ]
+                for operation, value in (("payout.total", 1), ("payout.ready", 2), ("payout.unapplied", 3)):
+                    for metric in ("records", "age_seconds"):
+                        lines.append(f'business:cohort_{metric}{{operation="{operation}",reason="pending"}} {value}')
                 raw = ("\n".join(lines) + "\n").encode()
             elif self.path == "/notifications":
                 raw = json.dumps(STATE["notifications"]).encode()
