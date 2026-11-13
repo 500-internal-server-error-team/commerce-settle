@@ -145,7 +145,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [smoke, redis, retention, admission, financial-flow, financial-core, financial-refund-failures, reconciliation, demo-ui]
+        scenario: [smoke, redis, retention, admission, financial-core, financial-refund-failures, reconciliation, demo-ui]
     env:
       COMPOSE_PROJECT_NAME: ${{ matrix.scenario == 'demo-ui' && 'commerce-settle-ui-ci' || 'commerce-settle-ci' }}
       COMPOSE_FILE: ${{ matrix.scenario == 'demo-ui' && 'compose.yml:compose.demo-ui.yml' || 'compose.yml' }}
@@ -176,8 +176,8 @@ jobs:
       - name: Verify the order, payment, settlement and refund round trip
         if: startsWith(matrix.scenario, 'financial-')
         env:
-          FINANCIAL_GROUP: ${{ matrix.scenario == 'financial-core' && 'core' || matrix.scenario == 'financial-refund-failures' && 'refund-failures' || 'all' }}
-        run: python3 -B scripts/smoke_financial_flow.py --group "$FINANCIAL_GROUP"
+          FINANCIAL_GROUP: ${{ matrix.scenario }}
+        run: python3 -B scripts/smoke_financial_flow.py --group "${FINANCIAL_GROUP#financial-}"
       - name: Verify fixed reconciliation delivery wait, outage and restart
         if: matrix.scenario == 'reconciliation'
         run: python3 -B scripts/test_reconciliation.py
