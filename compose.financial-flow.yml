@@ -9,6 +9,7 @@ services:
       APP_KAFKA_PAYMENT_ACCEPTED_ENABLED: 'true'
       APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED: 'true'
       APP_ORDER_RESULT_PROCESSOR_ENABLED: 'true'
+      APP_ORDER_WORKFLOW_ENABLED: 'true'
   payment-worker:
     environment:
       APP_OUTBOX_ENABLED: 'true'

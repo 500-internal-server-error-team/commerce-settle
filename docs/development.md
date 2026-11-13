@@ -615,7 +615,7 @@ Commerce의 `PaymentAccepted` Listener와 처리기는 기본 비활성입니다
 
 호출 순서·본문·권한·완료 의미는 [주문·환불 사용 순서](api.md#주문환불-사용-순서)와 [OpenAPI](openapi.json)를 따릅니다. 변경 요청에는 멱등키와 최신 조회의 `expectedVersion`을 사용합니다. 반품 입고는 판매자가 실제 도착·재판매 가능 검수 뒤 확정하며 금융 결과만으로 자동 생성하지 않습니다.
 
-주문 스케줄러는 `APP_ORDER_WORKFLOW_ENABLED=true`, 결과 처리기는 `APP_ORDER_RESULT_PROCESSOR_ENABLED=true`로 시험 인스턴스에서 활성화합니다. 결과 수신은 기존 `APP_KAFKA_PAYMENT_ACCEPTED_ENABLED=true`를 공유하며, 접수 ID 처리기는 기존 플래그를 별도로 유지합니다. 기본값은 모두 false입니다. 이 설정은 인스턴스 환경에 전달해야 하며 `.env` 추가만으로 기존 Compose 컨테이너에 전달되지 않습니다. 빈 전용 DB에는 갱신한 초기 SQL을 적용하고 기존 볼륨을 초기화하지 않습니다.
+주문 스케줄러는 `APP_ORDER_WORKFLOW_ENABLED=true`, 결과 처리기는 `APP_ORDER_RESULT_PROCESSOR_ENABLED=true`로 시험 인스턴스에서 활성화합니다. 결과 수신은 기존 `APP_KAFKA_PAYMENT_ACCEPTED_ENABLED=true`를 공유하며, 접수 ID 처리기는 기존 플래그를 별도로 유지합니다. 기본값은 모두 false입니다. 변경한 환경은 Compose 컨테이너 재생성 또는 새 ECS Task Definition으로 적용합니다. 빈 전용 DB에는 갱신한 초기 SQL을 적용하고 기존 볼륨을 초기화하지 않습니다.
 
 Payment 내부 조회와 운영 종결은 `service:payment`·`operator:<식별자>` 자격을 인스턴스의 `app.internal-auth.senders`에 설정해야 합니다. 사용자 토큰이나 Gateway 자격으로 호출할 수 없습니다. 운영 종결은 [소유 증빙과 구매자 확인](api.md#실패-환불의-운영-종결)을 모두 대조하는 `RefundClosureEvidence`를 사용합니다. 기본은 비활성(503)이며 금융 실패만으로 주문을 PAID로 되돌리거나 자동 구매확정을 진행하지 않습니다.
 
@@ -636,6 +636,16 @@ Payment 내부 조회와 운영 종결은 `service:payment`·`operator:<식별�
 ```
 
 이 명령은 전용 PostgreSQL·Kafka와 명시적 계약 결과 대역으로 구매자/판매자 HTTP 흐름, 중복·역순·기한 경합·잠금 상한·롤백을 확인합니다. 실제 PG·마일리지·정산 금융 정합성 완료를 뜻하지 않습니다.
+
+### 실험실 자동 발송
+
+판매자 없는 실험실은 `APP_ORDER_WORKFLOW_ENABLED=true`와 `APP_DEMO_AUTO_SHIPMENT_ENABLED=true`를 함께 사용합니다. 기존 주문 시계가 결제 완료·미발송 주문을 찾아 판매자 대역으로 발송하며, 기본값은 비활성입니다. 활성화한 환경의 기존 주문도 포함하므로 실험실에서만 켭니다. 새 테이블·인덱스는 필요하지 않습니다.
+
+Compose의 금융 왕복 overlay는 주문 시계를 켭니다. 해당 환경에서 자동 발송 옵션을 켜고 Commerce를 재생성합니다. ECS 태그 배포는 저장소 변수 `APP_DEMO_AUTO_SHIPMENT_ENABLED=true`로 두 플래그를 함께 적용합니다. 수동 배포는 `deploy_ecs_apps.py`의 준비·실행 양쪽에 `--demo-auto-shipment true`를 전달하며, 준비 후 선택을 바꾸면 거절합니다.
+
+자동 발송을 끄려면 Compose 환경값 또는 ECS 배포 변수를 `false`로 바꾸고 재배포합니다. ECS 변수를 비워 두거나 CLI에서 `preserve`를 선택하면 기존 설정을 유지합니다. 이미 발송한 주문의 배송·구매확정은 주문 시계가 계속 처리하며 발송 시각·거래 이력을 되돌리지 않습니다.
+
+금융 왕복·정산 일배치·지급 Worker가 활성화돼 있어야 결제→자동 발송→모의 배송완료→자동 구매확정→정산·지급이 이어집니다. [배송·환불 기한](policies.md#배송환불-기한과-자동-구매확정)은 그대로이며 서버가 해당 시각에 실행 중이어야 합니다. PostgreSQL·주입 Clock 검증과 실제 자연 기한을 기다린 지급 결과를 구분합니다. 배포 뒤에는 자기 시험 주문의 발송 시각과 `SYSTEM/demo-seller` 감사, 도착 예정·환불 마감·구매확정, 이후 일배치와 지급 결과를 순서대로 대조합니다.
 
 ## 주문·결제·정산·환불 왕복
 

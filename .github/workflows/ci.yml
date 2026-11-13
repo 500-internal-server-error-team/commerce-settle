@@ -300,6 +300,7 @@ jobs:
       AWS_REGION: ap-northeast-2
       ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
       PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+      DEMO_AUTO_SHIPMENT: ${{ vars.APP_DEMO_AUTO_SHIPMENT_ENABLED || 'preserve' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -327,7 +328,8 @@ jobs:
           python3 -B scripts/deploy_ecs_apps.py \
             --cluster "$ECS_CLUSTER" --region "$AWS_REGION" \
             --images-directory work/images --release "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" \
-            --public-url "$PUBLIC_BASE_URL" --record work/rollback-plan.json --prepare-only
+            --public-url "$PUBLIC_BASE_URL" --record work/rollback-plan.json --prepare-only \
+            --demo-auto-shipment "$DEMO_AUTO_SHIPMENT"
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import hashlib
           from pathlib import Path
@@ -348,7 +350,8 @@ jobs:
             --cluster "$ECS_CLUSTER" --region "$AWS_REGION" \
             --images-directory work/images --release "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" \
             --public-url "$PUBLIC_BASE_URL" --record work/deployment.json \
-            --baseline work/rollback-plan.json --baseline-sha256 "$BASELINE_SHA256"
+            --baseline work/rollback-plan.json --baseline-sha256 "$BASELINE_SHA256" \
+            --demo-auto-shipment "$DEMO_AUTO_SHIPMENT"
       - name: Keep deployment and rollback references
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
