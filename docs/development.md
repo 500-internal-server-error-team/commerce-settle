@@ -609,7 +609,9 @@ DB 주문의 신규 접수와 새 결제 회차에는 기본으로 gate를 적�
 
 실험에서는 `logging.level.com.commercesettle.commerce.application.service.OrderAdmissionService=DEBUG`로 해당 로거를 켜고 기록을 보존합니다. 차단·초기 실패는 `WARN`, 정상 회복 대기·재개는 `DEBUG`이며 기본 `WARN`에서도 최초 차단 사유는 남습니다. `event=commerce.order.admission`은 접수 차단·재개 전환과 초기 준비 사유 변경을 기록합니다. `sequence`는 인스턴스 내 순서이며, 반복 거절 요청마다 같은 로그를 남기지 않습니다. `reason`으로 지표 조회 실패(`METRICS_UNAVAILABLE`), 원본 관측 만료(`STALE_SAMPLE`), 누락·잘못된 값·미래 시각, 임계값 초과, 운영 중단을 구분합니다. `initial=true`는 한 번도 접수를 열지 못한 준비 상태이며 회복 대기·재개 기준 미충족도 표시합니다. 재개 기록에는 `recoveryStartedAt`과 판정에 사용한 필수 지표 목록(`observations`)을 함께 남깁니다.
 
-판정에 사용한 `signal`·`resource`·`value`·`observedAt`·`limit`와 `decidedAt`을 같은 기록에서 확인합니다. 요청 경로에서 캐시가 만료돼 닫힌 경우도 기록하며, 새 표본을 받기 전에 이전 표본의 만료가 먼저 차단했다면 그 최초 근거를 유지합니다. `refreshDurationMs`는 해당 지표 조회·판정 호출의 소요 시간으로, 앞서 실행한 DB 대기열 수집 시간은 포함하지 않습니다. 시각은 KST(`+09:00`)로 출력합니다. 조회 예외는 `errorType`·`causeType`만 남기며 비동기 래퍼 안의 실제 예외 종류를 구분합니다. 원문 메시지·URL·자격은 출력하지 않습니다.
+판정에 사용한 `signal`·`resource`·`value`·`observedAt`·`limit`와 `decidedAt`을 같은 기록에서 확인합니다. 요청 경로에서 캐시가 만료돼 닫힌 경우도 기록하며, 새 표본을 받기 전에 이전 표본의 만료가 먼저 차단했다면 그 최초 근거를 유지합니다. `refreshDurationMs`는 해당 지표 조회·판정 호출의 소요 시간으로, 앞서 실행한 DB 대기열 수집 시간은 포함하지 않습니다. 시각은 KST(`+09:00`)로 출력합니다.
+
+조회 실패는 상태 전환과 별도로 `event=commerce.order.admission.refresh-failed`에 `failedAt`·`refreshDurationMs`·`errorType`·`causeType`을 남깁니다. 이미 닫힌 뒤 발생한 실패도 기록하며, 같은 호출 위치에서 첫 실패와 이후 1분마다 한 번은 `WARN`, 그 사이는 `DEBUG`로 남기고 다음 `WARN`에 `suppressed` 건수를 붙입니다. 비동기 래퍼 안의 실제 예외 종류를 구분하며 원문 메시지·URL·자격은 출력하지 않습니다.
 
 실험에서는 앱 인스턴스·revision과 측정 구간을 고정하고 이 로그를 기존 실행 결과 경로에 보존합니다. Prometheus의 사후 지표만으로 당시 앱이 사용한 캐시나 조회 실패를 대신하지 않습니다. 이 기록은 이후 차단의 원인 진단을 위한 것이며 과거 실험의 최초 원인이나 TPS 개선을 입증하지 않습니다.
 

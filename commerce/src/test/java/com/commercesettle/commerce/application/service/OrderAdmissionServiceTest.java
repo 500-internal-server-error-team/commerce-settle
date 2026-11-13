@@ -79,7 +79,7 @@ class OrderAdmissionServiceTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"direct", "execution", "completion"})
-  @DisplayName("지표 조회 실패는 최초 차단에만 정제한 실제 예외와 소요 시간을 기록한다")
+  @DisplayName("지표 조회 실패는 차단 전환과 별도로 실제 예외와 소요 시간을 기록한다")
   void recordsFailureWithoutSecretsOrRepeatedRequestLogs(String wrapper) {
     Clock clock = mock(Clock.class);
     AdmissionMetrics source = mock(AdmissionMetrics.class);
@@ -98,13 +98,15 @@ class OrderAdmissionServiceTest {
             .isInstanceOf(OrderCapacityExceededException.class);
       service.refresh();
 
-      assertThat(logs.appender.list).hasSize(1);
-      var event = logs.appender.list.getFirst();
-      var fields = fields(event);
-      assertThat(fields)
+      assertThat(logs.appender.list).hasSize(2);
+      assertThat(fields(logs.appender.list.getFirst()))
           .containsEntry("reason", OrderAdmissionState.Reason.METRICS_UNAVAILABLE)
           .containsEntry("state", "CLOSED")
-          .containsEntry("initial", false)
+          .containsEntry("initial", false);
+      var event = logs.appender.list.getLast();
+      var fields = fields(event);
+      assertThat(fields)
+          .containsEntry("event", "commerce.order.admission.refresh-failed")
           .containsEntry("errorType", "IllegalStateException")
           .containsEntry("causeType", "HttpTimeoutException");
       assertThat((Double) fields.get("refreshDurationMs")).isGreaterThanOrEqualTo(0);
@@ -114,7 +116,7 @@ class OrderAdmissionServiceTest {
       layout.setPattern("%kvp%n");
       layout.start();
       assertThat(layout.doLayout(event))
-          .contains("+09:00", "METRICS_UNAVAILABLE")
+          .contains("+09:00", "commerce.order.admission.refresh-failed")
           .doesNotContain("sensitive://", "hidden");
       layout.stop();
       assertThat(event.getThrowableProxy()).isNull();
@@ -169,6 +171,58 @@ class OrderAdmissionServiceTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"WARN", "DEBUG"})
+  @DisplayName("캐시 만료 뒤 조회 실패도 기록하고 반복 실패는 DEBUG로 내린다")
+  void recordsRefreshFailureAfterCachedExpiry(String level) {
+    Clock clock = mock(Clock.class);
+    AdmissionMetrics source = mock(AdmissionMetrics.class);
+    var service = opened(source, clock);
+    when(clock.instant()).thenReturn(NOW.plusSeconds(106));
+
+    try (var logs = new Logs(ch.qos.logback.classic.Level.valueOf(level))) {
+      assertThatThrownBy(service::requireAdmission)
+          .isInstanceOf(OrderCapacityExceededException.class);
+      when(clock.instant()).thenReturn(NOW.plusSeconds(107));
+      when(source.read())
+          .thenThrow(
+              new IllegalStateException(
+                  "sensitive://host?token=hidden",
+                  new java.net.http.HttpTimeoutException("credential=hidden")));
+      service.refresh();
+      service.refresh();
+      for (int i = 0; i < 100; i++)
+        assertThatThrownBy(service::requireAdmission)
+            .isInstanceOf(OrderCapacityExceededException.class);
+
+      var transitions =
+          logs.appender.list.stream()
+              .filter(e -> "commerce.order.admission".equals(fields(e).get("event")))
+              .toList();
+      assertThat(transitions).hasSize(1);
+      assertThat(fields(transitions.getFirst()))
+          .containsEntry("reason", OrderAdmissionState.Reason.STALE_SAMPLE);
+      var failures =
+          logs.appender.list.stream()
+              .filter(e -> "commerce.order.admission.refresh-failed".equals(fields(e).get("event")))
+              .toList();
+      assertThat(failures).hasSize(level.equals("WARN") ? 1 : 2);
+      assertThat(failures)
+          .filteredOn(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+          .hasSize(1);
+      for (var failure : failures) {
+        var values = fields(failure);
+        assertThat(values)
+            .containsEntry("failedAt", "2026-11-02T10:01:47+09:00")
+            .containsEntry("errorType", "IllegalStateException")
+            .containsEntry("causeType", "HttpTimeoutException");
+        assertThat((Double) values.get("refreshDurationMs")).isGreaterThanOrEqualTo(0);
+        assertThat(failure.getThrowableProxy()).isNull();
+        assertThat(failure.getFormattedMessage() + values).doesNotContain("hidden", "sensitive://");
+      }
+    }
+  }
+
   @Test
   @DisplayName("최초 준비 중 반복 조회 실패도 원인을 한번 남기며 운영 중단과 구분한다")
   void recordsInitialCollectionFailureAndPause() {
@@ -179,11 +233,11 @@ class OrderAdmissionServiceTest {
         };
     var service =
         new OrderAdmissionService(new OrderAdmissionState(Set.of(KEY)), source, clock, false);
-    try (var logs = new Logs()) {
+    try (var logs = new Logs(ch.qos.logback.classic.Level.WARN)) {
       service.refresh();
       service.refresh();
       for (int i = 0; i < 100; i++) assertThat(service.isOpen()).isFalse();
-      assertThat(logs.appender.list).hasSize(1);
+      assertThat(logs.appender.list).hasSize(2);
       assertThat(fields(logs.appender.list.getFirst()))
           .containsEntry("initial", true)
           .containsEntry("reason", OrderAdmissionState.Reason.METRICS_UNAVAILABLE);
@@ -191,7 +245,7 @@ class OrderAdmissionServiceTest {
           new OrderAdmissionService(new OrderAdmissionState(Set.of(KEY)), source, clock, true);
       assertThat(paused.isOpen()).isFalse();
       paused.refresh();
-      assertThat(logs.appender.list).hasSize(2);
+      assertThat(logs.appender.list).hasSize(3);
       assertThat(fields(logs.appender.list.getLast()))
           .containsEntry("reason", OrderAdmissionState.Reason.OPERATOR_PAUSED);
     }
