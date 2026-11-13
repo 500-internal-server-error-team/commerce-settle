@@ -334,7 +334,7 @@ Gateway는 빌드에 포함한 [OpenAPI](openapi.json)의 `/api/` 작업을 HTTP
 
 현재 Compose에서는 KST 시각·`+09:00`이 있는 콘솔 로그를 `docker compose logs`로 확인하며, JSON 출력·중앙 로그 수집은 지원하지 않습니다. 기록 항목·민감값 처리는 [공통 로그 계약](../CONTRIBUTING.md#로그)을 따릅니다.
 
-ECS 배포에서는 Task 정의의 `awslogs` 로그 드라이버로 컨테이너의 표준 출력·오류를 CloudWatch Logs에 모읍니다. 서비스별 로그 그룹과 Task별 스트림을 사용하고, 로그 그룹의 보존 기간은 우선 7일로 정합니다. 앱·프레임워크 기본 등급은 `WARN`이며 `INFO`는 쓰지 않고 상시 `DEBUG` 출력을 끕니다. 등급 기준은 [공통 로그 계약](../CONTRIBUTING.md#로그)을 따릅니다. 지표·추적은 기존 Prometheus·Grafana·Zipkin 구성을 유지하며, Container Insights는 초기 계획에 포함하지 않습니다. [ECS 로그 연동](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html)을 기준으로 전송 권한·통신 경로와 실제 수집·조회·보존 설정을 적용 전에 검증합니다.
+ECS 배포에서는 Task 정의의 `awslogs` 로그 드라이버로 컨테이너의 표준 출력·오류를 CloudWatch Logs에 모읍니다. 서비스별 로그 그룹과 Task별 스트림을 사용하고, 로그 그룹의 보존 기간은 우선 7일로 정합니다. 앱·프레임워크 기본 등급은 `WARN`이며 기동 기록 외의 `INFO`는 쓰지 않고 상시 `DEBUG` 출력을 끕니다. 등급 기준은 [공통 로그 계약](../CONTRIBUTING.md#로그)을 따릅니다. 지표·추적은 기존 Prometheus·Grafana·Zipkin 구성을 유지하며, Container Insights는 초기 계획에 포함하지 않습니다. [ECS 로그 연동](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/using_awslogs.html)을 기준으로 전송 권한·통신 경로와 실제 수집·조회·보존 설정을 적용 전에 검증합니다.
 
 CloudWatch Logs 비용은 수집·저장·조회량과 리전에 따라 달라지므로 로그량과 청구액을 확인해 보존 기간·출력량을 조정합니다. 7일 보관은 팀 공용 환경의 초기 진단용 기준이며 금융 원장·행위 감사의 보존 정책을 대체하지 않습니다. [AWS 요금 안내](https://aws.amazon.com/cloudwatch/pricing/)를 기준으로 예산에 포함합니다.
 

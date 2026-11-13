@@ -573,7 +573,9 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
             assert int(sql("payment", f"select attempts from payment.payment_jobs where refund_id='{crash_refund}'")) >= 2
 
             # Fence a late SUCCEEDED response. Keep the replacement lease alive until the old call is rejected.
-            worker_settings("flow-late-success-v1", APP_REFUND_HTTP_TIMEOUT="15s")
+            # Lease loss is a normal race logged at DEBUG; open it only for this step's worker.
+            worker_settings("flow-late-success-v1", APP_REFUND_HTTP_TIMEOUT="15s",
+                            LOGGING_LEVEL_COM_COMMERCESETTLE_PAYMENT_APPLICATION_SERVICE="DEBUG")
             late_order, late_payment = paid_order()
             cancel(late_order)
             until(lambda: sql("payment", f"select count(*) from payment.refunds where payment_id='{late_payment}'") == "1", "refund not accepted")
