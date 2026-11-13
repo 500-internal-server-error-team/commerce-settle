@@ -51,6 +51,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "management.server.port=0",
       "management.tracing.enabled=false",
       "app.coupons.expiry-scheduler-enabled=false",
+      "app.orders.max-concurrent=5",
       "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
       "app.auth.rate-limit.identifier-hmac-key=coupon-order-test-hmac-key-32bytes-long",
       "app.auth.password-reset.delivery-key=coupon-order-test-delivery-key-32bytes",

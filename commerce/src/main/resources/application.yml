@@ -149,6 +149,9 @@ app:
   kafka:
     payment-accepted:
       enabled: ${APP_KAFKA_PAYMENT_ACCEPTED_ENABLED:false}
+  orders:
+    # 인스턴스별 일반 주문 쓰기 상한. 슬롯 대기 없이 신규만 503 + Retry-After 1로 거절한다.
+    max-concurrent: ${APP_ORDERS_MAX_CONCURRENT:3}
   order-workflow:
     enabled: ${APP_ORDER_WORKFLOW_ENABLED:false}
     # 판매자 없는 실험실에서만 켠다. 배송·환불·구매확정 기한은 유지한다.
