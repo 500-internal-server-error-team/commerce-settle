@@ -1,3 +1,10 @@
+import contextlib
+import io
+import os
+import types
+from unittest.mock import patch
+import resource_sample as resource
+
 import json
 import tempfile
 import unittest
@@ -108,6 +115,63 @@ class MainTest(unittest.TestCase):
     def test_rejects_non_positive_interval(self):
         with self.assertRaises(SystemExit):
             rs.main(["--out-dir", "unused", "--interval", "0"])
+
+
+class ResourceTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.path = self.root / "resources.jsonl"
+        self.run = "a" * 32
+
+    def test_cannot_append_to_foreign_run_partial_or_linked_resource_evidence(self):
+        original = json.dumps({"runId": self.run, "hostRole": "app"}) + "\n"
+        self.path.write_text(original)
+        with self.assertRaises(ValueError):
+            resource.output_file(self.path, "b" * 32, "app")
+        self.assertEqual(self.path.read_text(), original)
+        with resource.output_file(self.path, self.run, "app") as handle:
+            handle.write(original)
+        self.path.write_text(original.rstrip())
+        with self.assertRaises(ValueError):
+            resource.output_file(self.path, self.run, "app")
+        self.path.unlink()
+        other = self.root / "keep"; other.write_text(original)
+        self.path.symlink_to(other)
+        with self.assertRaises(ValueError):
+            resource.output_file(self.path, self.run, "app")
+        self.path.unlink(); os.link(other, self.path)
+        with self.assertRaises(ValueError):
+            resource.output_file(self.path, self.run, "app")
+        self.assertEqual(other.read_text(), original)
+
+    def test_postgres_query_is_bounded_read_only_and_excludes_sql_text_and_parameters(self):
+        statement = resource.POSTGRES_OBSERVATION
+        self.assertIn("BEGIN READ ONLY", statement)
+        self.assertIn("statement_timeout='2000ms'", statement)
+        self.assertIn("pg_blocking_pids(pid)", statement)
+        self.assertNotRegex(statement, r"\bquery\b|query_params")
+        self.assertIn("LIMIT 200", statement); self.assertIn("LIMIT 400", statement)
+        with patch.object(resource, "_run", return_value='{"activity":[],"locks":[]}') as command:
+            self.assertEqual(resource.postgres_sample("experiment-postgres")["activity"], [])
+            self.assertEqual(command.call_args.args[0][:5], ["docker", "exec", "--user", "postgres", "experiment-postgres"])
+        with self.assertRaises(ValueError):
+            resource.postgres_sample("--privileged")
+
+    def test_byte_or_disk_exhaustion_preserves_existing_data_and_emits_no_success(self):
+        for maximum, free in ((128 * 1024, 10**9), (1024 * 1024, 0)):
+            self.path.unlink(missing_ok=True)
+            resource._stop = False
+            with patch.object(resource, "sample", return_value={"payload": "x" * (256 * 1024)}), \
+                    patch.object(resource.signal, "signal"), \
+                    patch.object(resource.shutil, "disk_usage", return_value=types.SimpleNamespace(free=free)), \
+                    contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
+                code = resource.main(["--out-dir", str(self.root), "--run-id", self.run,
+                    "--host-role", "app", "--stdout", "--seconds", "0", "--max-bytes", str(maximum), "--reserve-bytes", "1"])
+            self.assertEqual(code, 2)
+            self.assertEqual(self.path.read_bytes(), b"")
+            self.assertEqual(output.getvalue(), "")
 
 
 if __name__ == "__main__":

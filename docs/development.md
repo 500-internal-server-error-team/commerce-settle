@@ -799,6 +799,29 @@ JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업은 비활성화합니
 
 `python3 -B scripts/test_observability.py`는 production 규칙의 경계·지속 시간·수집 누락을 promtool로 검사하고 실제 Prometheus·Grafana·Alertmanager에서 통제한 표본의 발생·억제·복구 전달을 확인합니다. 외부 Slack 전송은 하지 않습니다. `python3 -B scripts/smoke_financial_flow.py`는 실제 업무 수집·Zipkin 연결과 여섯 전송 구간의 소유 DB 건수, 과거 준비 항목 두 건의 실제 지급·분포·저장 부모의 Zipkin 연결·Grafana 데이터소스 조회를 대조합니다. cgroup v2의 전용 시험 컨테이너에서 자식의 커널 OOM kill 증가와 실제 Docker OOM 이벤트 수집을 확인한 뒤 137 종료·production 경보를 대조합니다. 시험 리소스는 종료 시 제거합니다.
 
+#### ECS 실험의 관측 연결
+
+태그 배포는 앱 이미지 여섯 서비스를 교체하며 DB·Task 환경·Caddy·관측 도구의 설정은 보존합니다. 따라서 새 이미지의 CI 성공만으로 현재 DDL·업무 처리기·관측 설정이 적용됐다고 판단하지 않습니다. 스키마가 다르면 [실험 환경 초기화](migrations.md#최초-배포와-기존-데이터-변경)를 먼저 계획하고 이전 증거를 보존합니다. 같은 거래의 장애 복구는 초기화하지 않습니다.
+
+[관측 설정 생성기](../scripts/render_ecs_observability.py)는 기존 Compose 이미지·production 규칙·Alertmanager 경로를 재사용합니다. 실제 ECS 클러스터 ARN, 서로 다른 두 호스트의 사설 IPv4, 기존 data 관측 Compose project를 지정합니다. 앱 지표는 실제 bridge 관리 포트 9091~9096으로 수집하고, `instance`는 기존 서비스 이름을 유지해 대상 중단 경보가 동작하게 합니다. 실제 주소는 `target_address`에 따로 남습니다. 런타임은 양쪽 호스트의 9109를 각각 수집합니다.
+
+```bash
+OBSERVATION_ARGS=(--cluster-arn "$ECS_CLUSTER_ARN" --app-private-ip "$APP_PRIVATE_IP" --data-private-ip "$DATA_PRIVATE_IP" --data-compose-project "$DATA_OBSERVATION_PROJECT")
+python3 -B scripts/render_ecs_observability.py app "${OBSERVATION_ARGS[@]}" > runtime-app.json
+python3 -B scripts/render_ecs_observability.py data "${OBSERVATION_ARGS[@]}" > runtime-data.json
+python3 -B scripts/render_ecs_observability.py prometheus "${OBSERVATION_ARGS[@]}" > prometheus-ecs.yml
+```
+
+동일 revision의 `infra/observability/runtime_metrics.py`를 두 EC2의 `/srv/commerce-settle/observability/runtime_metrics.py`에 읽을 수 있는 소스 파일로 설치합니다. app에서는 `docker compose -p commerce-runtime-app -f runtime-app.json up -d`, data에서는 기존 project를 유지해 `docker compose -p "$DATA_OBSERVATION_PROJECT" -f runtime-data.json up -d`로 수집기 두 개만 갱신합니다. 기존 서비스를 제거하는 `--remove-orphans`는 사용하지 않습니다. 생성한 Prometheus 설정은 현재 Task/컨테이너가 사용하는 실제 설정 mount에 반영하고 기존 재기동 절차로 적용합니다. 생성 결과와 같은 production 규칙 네 파일이 모두 mount돼야 합니다.
+
+프록시는 Docker socket을 가진 내부 네트워크에만 있고 host 포트를 열지 않습니다. 수집기는 사설 주소에만 9109를 bind합니다. data에서 app으로 9109, app 관리 포트 9091~9096에 도달해야 하므로 현재 보안 그룹을 먼저 조회하고 필요한 사설 통신만 허용합니다. 9109·Docker API·관리 포트를 인터넷에 공개하지 않습니다. data 저장소 수집은 기존 실제 볼륨 mount를 유지합니다. data 관측 project·서비스 목록이 실제 배치와 다르면 누락을 허용하지 말고 적용 전에 배치를 맞춥니다.
+
+각 프록시·수집기는 64MiB·CPU 0.25개로 제한합니다. app의 앱 hard limit 합계 4.5GiB·Caddy 512MiB와 합치면 5.125GiB입니다. 8GiB 호스트의 나머지 2.875GiB에는 OS·ECS·캐시 등도 들어갑니다. 이는 템플릿 산술이며 실제 EC2 여유나 200 TPS의 보장이 아닙니다. data의 PostgreSQL 512MiB·Kafka 1GiB·Redis 256MiB·Zipkin 384MiB와 관측 수집기뿐 아니라, Prometheus·Grafana·Alertmanager의 실제 한도·보존량도 예산에 포함합니다. 기본 Compose에서 이 세 도구의 메모리 상한은 지정하지 않습니다.
+
+본 시험 전 실제 image digest·Task revision·환경 선택값·DDL/fixture SHA와 두 호스트의 가용 메모리·디스크·시간 동기, 업무 처리기·Kafka 소비 위치·Redis 인증을 대조합니다. 공개 HTTPS·관측 인증과 원시 관리 포트 차단, 모든 지표의 원본 시각, 실제 사전 주문의 비동기 trace, 통제한 경보 발생·복구와 선택한 수신처도 확인합니다. 기본 수신처는 Alertmanager 화면이며 Slack은 기존 별도 연결을 적용했을 때만 해당합니다.
+
+기존 로컬 200 TPS 비교는 목표 주입 실패·스왑·실제 입력 차이가 있어 최적 풀이나 배포 성능의 근거로 사용할 수 없습니다. Commerce 예약 작업 경합 등 [남은 처리 병목](https://github.com/500-internal-server-error-team/commerce-settle/issues/376)도 관측 보완과 별도로 검증합니다. 위 준비가 빠지거나 critical 경보·용량 부족·미확정 이전 거래가 남으면 본 시험을 시작하지 않습니다. 예열·주입·중단·배출·대조와 증거 보존은 [주문 부하 절차](../tests/load/README.md#15분-시험의-관측-준비)를 따릅니다. 실제 환경의 이 확인과 15분 결과가 없으면 준비 완료·200 TPS 달성을 선언하지 않습니다.
+
 #### 병목 개선 전후 비교
 
 대시보드의 `이전 구간 간격`(1시간·6시간·1일·7일)은 현재와 이전 구간의 같은 집계식을 겹쳐 표시합니다. 과거 표본이 없는 선은 빈 값이며 0이 아닙니다. 개선 전에도 새 계측을 적용한 기준선을 먼저 수집해야 합니다. 배포·워밍업·측정·배출을 섞지 않은 동일 길이의 측정 구간을 선택하고, 이전 구간 간격을 두 실행의 시작 시각 차이에 맞춥니다. 지원 간격에 맞지 않으면 각 실행의 절대 시간 구간을 따로 선택해 동일 질의 결과를 비교합니다.

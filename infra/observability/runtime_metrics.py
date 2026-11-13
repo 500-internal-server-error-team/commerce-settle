@@ -34,16 +34,44 @@ class UnixConnection(http.client.HTTPConnection):
 
 
 class DockerReadProxy:
-    def __init__(self, project, services, engine=None):
-        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,100}", project):
+    def __init__(self, project, services, engine=None, *, ecs_cluster=None):
+        if project is not None and not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,100}", project):
             raise ValueError("An explicit Compose project is required")
+        cluster = (re.fullmatch(r"arn:(aws(?:-cn|-us-gov)?):ecs:([a-z0-9-]+):(\d{12}):cluster/([A-Za-z0-9_-]{1,255})", ecs_cluster)
+                   if isinstance(ecs_cluster, str) else None)
+        if (ecs_cluster is not None and cluster is None) or (project is None and cluster is None):
+            raise ValueError("Select a Compose project or an exact ECS cluster ARN")
         if not services or any(not re.fullmatch(r"[a-z][a-z0-9-]{0,60}", s) for s in services):
             raise ValueError("An explicit service allowlist is required")
         self.project, self.services = project, frozenset(services)
+        self.cluster = cluster
         self.engine = engine or self._engine
         self.containers = {}
         self.lock = threading.Lock()
         self.cpu = None
+
+    def label_filters(self):
+        result = []
+        if self.project is not None:
+            result.append("com.docker.compose.project=" + self.project)
+        if self.cluster is not None:
+            result.append("com.amazonaws.ecs.cluster=" + self.cluster[4])
+        return result
+
+    def service(self, labels):
+        if self.project is not None and labels.get("com.docker.compose.project") == self.project:
+            service = labels.get("com.docker.compose.service")
+            if service in self.services:
+                return service
+        if self.cluster is not None and labels.get("com.amazonaws.ecs.cluster") == self.cluster[4]:
+            service = labels.get("com.amazonaws.ecs.container-name")
+            prefix = "arn:" + self.cluster[1] + ":ecs:" + self.cluster[2] + ":" + self.cluster[3] + ":task/"
+            task = labels.get("com.amazonaws.ecs.task-arn", "")
+            if (service in self.services
+                    and labels.get("com.amazonaws.ecs.task-definition-family") == "commerce-settle-" + service
+                    and re.fullmatch(re.escape(prefix) + "(?:" + re.escape(self.cluster[4]) + "/)?[a-f0-9]{32}", task)):
+                return service
+        return None
 
     def host(self):
         # These are Docker's Linux host/VM totals, never the macOS host's totals.
@@ -82,16 +110,23 @@ class DockerReadProxy:
             raise PermissionError("Only relative allowlisted paths are accepted")
         path, query = parsed.path, parse_qs(parsed.query, keep_blank_values=True)
         if path == "/containers/json" and not query:
-            filters = {"label": ["com.docker.compose.project=" + self.project]}
-            rows = self.engine("/containers/json?" + urlencode({"all": "true", "filters": json.dumps(filters)}))
+            rows = {}
+            for label in self.label_filters():
+                filters = {"label": [label]}
+                for row in self.engine("/containers/json?" + urlencode({"all": "true", "filters": json.dumps(filters)})):
+                    rows[row.get("Id", "")] = row
+            services = {}
+            for identity, row in rows.items():
+                service = self.service(row.get("Labels", {}))
+                if service is not None and re.fullmatch(r"[a-f0-9]{64}", identity):
+                    services.setdefault(service, []).append(row)
             selected = {}
-            for row in rows:
-                labels = row.get("Labels", {})
-                service = labels.get("com.docker.compose.service")
-                identity = row.get("Id", "")
-                if (labels.get("com.docker.compose.project") == self.project
-                        and service in self.services and re.fullmatch(r"[a-f0-9]{64}", identity)):
-                    selected[identity] = service
+            for service, candidates in services.items():
+                running = [row for row in candidates if row.get("State") == "running"]
+                if len(running) > 1:
+                    raise ValueError("Multiple running containers exceed the single-task observation contract")
+                row = max(running or candidates, key=lambda value: (int(value.get("Created", 0)), value["Id"]))
+                selected[row["Id"]] = service
             with self.lock:
                 self.containers = selected
             return [{"Id": identity, "service": service} for identity, service in selected.items()]
@@ -103,17 +138,22 @@ class DockerReadProxy:
             now = time.time()
             if not now - 90 <= since <= until <= now:
                 raise PermissionError("Only bounded, historical event windows are accepted")
-            filters = {"label": ["com.docker.compose.project=" + self.project],
-                       "type": ["container"], "event": ["oom", "die"]}
-            events = self.engine("/events?" + urlencode({"since": since, "until": until, "filters": json.dumps(filters)}))
+            events = []
+            for label in self.label_filters():
+                filters = {"label": [label], "type": ["container"], "event": ["oom", "die"]}
+                events.extend(self.engine("/events?" + urlencode({"since": since, "until": until, "filters": json.dumps(filters)})))
             result = []
+            seen = set()
             for event in events:
                 attributes = event.get("Actor", {}).get("Attributes", {})
-                if (attributes.get("com.docker.compose.project") == self.project
-                        and attributes.get("com.docker.compose.service") in self.services
-                        and event.get("Action") in ("oom", "die")):
+                service = self.service(attributes)
+                identity = event.get("Actor", {}).get("ID", "")
+                key = (identity, event.get("Action"), event.get("timeNano", 0))
+                if (service is not None and re.fullmatch(r"[a-f0-9]{64}", identity)
+                        and event.get("Action") in ("oom", "die") and key not in seen):
+                    seen.add(key)
                     result.append({"id": event.get("Actor", {}).get("ID"),
-                                   "service": attributes["com.docker.compose.service"],
+                                   "service": service,
                                    "action": event["Action"], "timeNano": event.get("timeNano", 0),
                                    "exitCode": attributes.get("exitCode", "0")})
             return result
@@ -237,7 +277,8 @@ def main():
     parser.add_argument("--proxy", action="store_true")
     args = parser.parse_args()
     if args.proxy:
-        proxy = DockerReadProxy(os.environ["OBSERVER_PROJECT"], os.environ["OBSERVER_SERVICES"].split(","))
+        proxy = DockerReadProxy(os.environ.get("OBSERVER_PROJECT") or None, os.environ["OBSERVER_SERVICES"].split(","),
+                                ecs_cluster=os.environ.get("OBSERVER_ECS_CLUSTER") or None)
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 try:

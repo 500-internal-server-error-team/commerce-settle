@@ -11,9 +11,62 @@ runtime = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runtime)
 IDENTITY = "a" * 64
 FOREIGN = "b" * 64
+CLUSTER = "arn:aws:ecs:ap-northeast-2:123456789012:cluster/owned"
+
+
+def ecs_labels(service="payment-worker", cluster="owned", account="123456789012"):
+    return {"com.amazonaws.ecs.cluster": cluster,
+            "com.amazonaws.ecs.container-name": service,
+            "com.amazonaws.ecs.task-definition-family": "commerce-settle-" + service,
+            "com.amazonaws.ecs.task-arn": f"arn:aws:ecs:ap-northeast-2:{account}:task/{cluster}/" + "1" * 32}
 
 
 class DockerBoundaryTest(unittest.TestCase):
+    def test_ecs_selection_checks_cluster_account_family_and_container_before_inspect(self):
+        labels = [ecs_labels(), ecs_labels(cluster="foreign"), ecs_labels(service="commerce"),
+                  ecs_labels(account="999999999999"),
+                  {**ecs_labels(), "com.amazonaws.ecs.task-definition-family": "foreign"},
+                  {**ecs_labels(), "com.amazonaws.ecs.task-arn": "missing"}]
+        backend = Mock(return_value=[{"Id": str(i + 1) * 64, "Labels": value}
+                                     for i, value in enumerate(labels)])
+        proxy = runtime.DockerReadProxy(None, ["payment-worker"], backend, ecs_cluster=CLUSTER)
+        self.assertEqual(proxy.get("/containers/json"), [{"Id": "1" * 64, "service": "payment-worker"}])
+        self.assertIn("com.amazonaws.ecs.cluster", backend.call_args.args[0])
+        with self.assertRaises(PermissionError):
+            proxy.get("/containers/" + "2" * 64 + "/json")
+        self.assertEqual(backend.call_count, 1)
+
+    def test_ecs_events_preserve_service_boundary_and_never_export_other_attributes(self):
+        def event(labels):
+            return {"Action": "die", "Actor": {"ID": IDENTITY, "Attributes": {
+                **labels, "exitCode": "137", "private": "never-export"}}, "timeNano": 995_000_000_000}
+        backend = Mock(return_value=[event(ecs_labels()), event(ecs_labels(cluster="foreign")),
+                                     event(ecs_labels(service="commerce"))])
+        proxy = runtime.DockerReadProxy(None, ["payment-worker"], backend, ecs_cluster=CLUSTER)
+        with patch.object(runtime.time, "time", return_value=1000):
+            result = proxy.get("/events?since=990&until=999")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["service"], "payment-worker")
+        self.assertEqual(result[0]["exitCode"], "137")
+        self.assertNotIn("private", json.dumps(result))
+
+    def test_replacement_prefers_running_task_and_rejects_ambiguous_replicas(self):
+        old = {"Id": FOREIGN, "Labels": ecs_labels(), "State": "exited", "Created": 1}
+        new = {"Id": IDENTITY, "Labels": ecs_labels(), "State": "running", "Created": 2}
+        backend = Mock(return_value=[old, new])
+        proxy = runtime.DockerReadProxy(None, ["payment-worker"], backend, ecs_cluster=CLUSTER)
+        self.assertEqual(proxy.get("/containers/json"), [{"Id": IDENTITY, "service": "payment-worker"}])
+        backend.return_value = [{**old, "State": "running"}, new]
+        with self.assertRaises(ValueError):
+            proxy.get("/containers/json")
+
+    def test_missing_or_invalid_scope_is_rejected(self):
+        for project, services, cluster in [(None, ["commerce"], None),
+                (None, ["commerce"], "owned"), (None, [], CLUSTER),
+                ("unsafe/other", ["commerce"], CLUSTER), (None, ["~internal~ecs~pause"], CLUSTER)]:
+            with self.subTest(project=project, services=services, cluster=cluster), self.assertRaises(ValueError):
+                runtime.DockerReadProxy(project, services, ecs_cluster=cluster)
+
     def proxy(self):
         def engine(path):
             if path.startswith("/containers/json?"):

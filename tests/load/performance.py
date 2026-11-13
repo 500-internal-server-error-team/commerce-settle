@@ -19,6 +19,10 @@ CONDITIONS = ("workload", "datasetSha256", "arrivalRate", "mix", "scenario", "ge
               "resources", "runtime", "warmupSeconds")
 
 
+class ObservationNotReady(ValueError):
+    """A new HTTP series has not accumulated enough scrape history yet."""
+
+
 def validate_metadata(metadata):
     if not isinstance(metadata.get("revision"), str) or not re.fullmatch(r"[a-f0-9]{40}", metadata["revision"]):
         raise ValueError("metadata.revision must be the full source SHA")
@@ -58,7 +62,23 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def query(base, expression, at):
+def bounded_body(response, limit, timeout):
+    deadline = time.monotonic() + timeout
+    chunks, size = [], 0
+    read = getattr(response, "read1", response.read)
+    while True:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Observation response exceeded its read budget")
+        chunk = read(min(65536, limit - size + 1))
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+        size += len(chunk)
+        if size > limit:
+            raise ValueError("Observation response exceeded the byte bound")
+
+
+def query(base, expression, at, *, timeout=15):
     parsed = urlsplit(base)
     if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ValueError("use an HTTP(S) Prometheus URL without embedded credentials")
@@ -70,8 +90,9 @@ def query(base, expression, at):
         if parsed.scheme!="https" and parsed.hostname not in ("127.0.0.1","localhost","::1"):
             raise ValueError("use HTTPS for authenticated remote Prometheus")
         request.add_header("Authorization", "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode())
-    with build_opener(NoRedirect()).open(request, timeout=15) as response:
-        payload = json.load(response)
+    with build_opener(NoRedirect()).open(request, timeout=timeout) as response:
+        raw = bounded_body(response, 8 * 1024 * 1024, timeout)
+    payload = json.loads(raw)
     if payload.get("status") != "success" or payload.get("data", {}).get("resultType") != "vector":
         raise ValueError("Prometheus did not return a successful instant vector")
     return payload["data"]["result"]
@@ -146,7 +167,9 @@ def capture(metadata, window, at, fetch):
     http = "http_server_requests_seconds_"
     duration = f"[{window}s]"
     count = one(fetch(f"sum(increase({http}count{{{labels}}}{duration}))"))
-    if count is None or count < 0:
+    if count is None:
+        raise ObservationNotReady("HTTP request histogram/count needs scrape history for selector")
+    if count < 0:
         raise ValueError("HTTP request histogram/count not observed for selector")
     http_values = {"samples": count}
     for quantile in (.95, .99):

@@ -222,3 +222,39 @@ groups:
         expr: max by (operation) (commerce_settle_business_cohort_snapshot_timestamp_seconds and on(job, instance, operation) business:cohort_source)
       - record: business:cohort_capture_complete
         expr: max by (operation) (commerce_settle_business_cohort_capture_complete and on(job, instance, operation) business:cohort_source)
+      - alert: BusinessObservationUnavailable
+        expr: |
+          absent(business:source{operation="payment.confirmed",window="900"})
+          or absent(business:source{operation="refund.completed",window="900"})
+          or absent(business:source{operation="order.settlement.applied",window="900"})
+          or absent(business:source{operation="payment.settlement.applied",window="900"})
+          or absent(business:source{operation="payment.payout.succeeded",window="900"})
+          or absent(business:source{operation="ready.payout.succeeded",window="900"})
+          or absent(business:source{operation="commerce.outbox.published",window="900"})
+          or absent(business:source{operation="commerce.inbox.applied",window="900"})
+          or absent(business:source{operation="payment.outbox.published",window="900"})
+          or absent(business:source{operation="payment.inbox.applied",window="900"})
+          or absent(business:source{operation="settlement.outbox.published",window="900"})
+          or absent(business:source{operation="settlement.inbox.applied",window="900"})
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.operation }} · 업무 지표 원천이 누락·실패했거나 45초보다 오래됐습니다."
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적
+      - alert: BusinessCohortObservationUnavailable
+        expr: |
+          absent(business:cohort_source{operation="payout.total"})
+          or absent(business:cohort_source{operation="payout.ready"})
+          or absent(business:cohort_source{operation="payout.unapplied"})
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.operation }} · 지급 모집단 집계 원천의 수집 상태를 확인하세요."
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적
+      - alert: BusinessCohortPopulationUnverified
+        expr: business:cohort_capture_complete{operation="payout.unapplied"} == 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: 지급 모집단의 Payment 원천 대조가 완료되지 않았습니다.
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-처리-시간과-비동기-추적

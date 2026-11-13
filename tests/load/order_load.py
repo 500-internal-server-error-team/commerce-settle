@@ -13,6 +13,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import performance
 import re
 import shutil
 import subprocess
@@ -22,6 +23,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 import uuid
+
+from evidence import Archive, EvidenceSession, DEFAULT_BUDGET, DEFAULT_TOTAL, DEFAULT_RESERVE, DEFAULT_TRACES
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -73,6 +76,8 @@ class Api:
             headers["Authorization"] = "Bearer " + token
         if key:
             headers["Idempotency-Key"] = key
+        if method == "POST" and path == "/api/orders" and getattr(self, "diagnostic_trace_id", None):
+            headers["traceparent"] = "00-" + self.diagnostic_trace_id + "-" + self.diagnostic_trace_id[:16] + "-01"
         request = Request(self.base + path, json.dumps(body).encode() if body is not None else None,
                           headers, method=method)
         try:
@@ -93,6 +98,8 @@ class Api:
                     trace_id = trace
             except (ValueError, AttributeError):
                 pass
+            finally:
+                error.close()
             raise ApiError(method, path, error.code, code, trace_id=trace_id) from None
         except (URLError, TimeoutError, OSError) as error:
             cause = error.reason if isinstance(error, URLError) else error
@@ -249,7 +256,7 @@ def cleanup_container(name, run_id):
     subprocess.run(["docker", "rm", "-f", name], check=True, capture_output=True, timeout=30)
 
 
-def inject(base, buyer, plan, directory, args, phase="measurement"):
+def inject(base, buyer, plan, directory, args, phase="measurement", diagnostics=None):
     target, network = docker_target(base)
     name = "cs-orders-" + plan["runId"] + "-" + phase
     environment = {**os.environ, "BASE_URL": target, "BUYER_TOKEN": buyer,
@@ -258,12 +265,15 @@ def inject(base, buyer, plan, directory, args, phase="measurement"):
                    "DURATION_SECONDS": str(args.warmup_seconds if phase == "warmup" else args.seconds),
                    "LOAD_PHASE": phase,
                    "PRE_ALLOCATED_VUS": str(args.pre_allocated_vus), "MAX_VUS": str(args.max_vus)}
+    environment["DIAGNOSTIC_EVERY"] = str(args.diagnostic_every if diagnostics else 0)
     command = ["docker", "run", "--rm", "--name", name,
                "--label", "commerce-settle.load-run=" + plan["runId"], *network,
+               "--memory", str(getattr(args, "generator_memory_mib", 1536)) + "m",
+               "--cpus", str(getattr(args, "generator_cpus", 2)),
                "-v", str(Path(__file__).parent) + ":/scripts:ro",
                "-v", str(directory) + ":/work"]
     for key in ("BASE_URL", "BUYER_TOKEN", "RUN_ID", "RATE", "ORDER_FILE", "DURATION_SECONDS",
-                "PRE_ALLOCATED_VUS", "MAX_VUS", "LOAD_PHASE"):
+                "PRE_ALLOCATED_VUS", "MAX_VUS", "LOAD_PHASE", "DIAGNOSTIC_EVERY"):
         command += ["-e", key]
     summary_name = "k6-summary.json" if phase == "measurement" else "k6-warmup-summary.json"
     command += [K6_IMAGE, "run", "--quiet", "--log-format=raw", "--log-output=stdout",
@@ -274,6 +284,8 @@ def inject(base, buyer, plan, directory, args, phase="measurement"):
             (directory / "requests.jsonl").chmod(0o600)
             process = subprocess.Popen(command, env=environment, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT, text=True)
+            if diagnostics:
+                diagnostics.bind(process)
             for line in process.stdout:
                 line = line.replace(buyer, "<redacted>")
                 if line.startswith(("ORDER_PHASE ", "ORDER_START ", "ORDER ")):
@@ -289,11 +301,15 @@ def inject(base, buyer, plan, directory, args, phase="measurement"):
                         pass
                     ledger.write(raw)
                     ledger.flush()
+                    if diagnostics:
+                        diagnostics.observe(json.loads(raw))
                 else:
                     print(line.rstrip(), flush=True)
             code = process.wait()
         return code
     finally:
+        if diagnostics:
+            diagnostics.unbind()
         if process is not None and process.poll() is None:
             process.terminate()
             try:
@@ -527,9 +543,33 @@ def parser():
     result.add_argument("--prepare-only", action="store_true")
     result.add_argument("--output-dir", type=Path)
     result.add_argument("--resume", type=Path, help="기존 원장을 읽어 새 recovery 하위 폴더에 관측. 추가 주문 없음")
+    result.add_argument("--run-id", help="새 진단 시험과 양쪽 호스트 수집기에 공통으로 지정할 UUID hex")
     result.add_argument("--performance-metadata", type=Path,
                         help="기존 performance.py metadata. 배포 조건은 덮어쓰지 않고 loadRun 참조만 추가")
+    result.add_argument("--diagnostics", action="store_true", help="주입 전 관측 coverage 확인과 실행 중 증거 수집")
+    result.add_argument("--prometheus")
+    result.add_argument("--zipkin")
+    result.add_argument("--diagnostic-runtime-target", action="append", default=[], metavar="HOST:PORT")
+    result.add_argument("--diagnostic-resource-file", action="append", default=[], type=Path)
+    result.add_argument("--artifact-max-bytes", type=int, default=256 * 1024 * 1024)
+    result.add_argument("--generator-memory-mib", type=int, default=1536)
+    result.add_argument("--generator-cpus", type=float, default=2)
+    result.add_argument("--diagnostic-every", type=int, default=1000, help="명시적으로 추적할 요청 간격; 조건에 기록")
+    result.add_argument("--diagnostic-max-bytes", type=int, default=DEFAULT_BUDGET)
+    result.add_argument("--diagnostic-total-bytes", type=int, default=DEFAULT_TOTAL)
+    result.add_argument("--diagnostic-reserve-bytes", type=int, default=DEFAULT_RESERVE)
     return result
+
+
+def diagnostic_conditions(metadata, args):
+    performance.validate_metadata(metadata)
+    conditions = metadata["conditions"]
+    if conditions["arrivalRate"] != args.rate or conditions["warmupSeconds"] != args.warmup_seconds:
+        raise ValueError("metadata의 arrivalRate·warmupSeconds가 실제 실행 인자와 다릅니다.")
+    expected = {"image": K6_IMAGE, "memoryMiB": args.generator_memory_mib, "cpus": args.generator_cpus,
+                "preAllocatedVus": args.pre_allocated_vus, "maxVus": args.max_vus}
+    if conditions["runtime"].get("loadGenerator") != expected:
+        raise ValueError("metadata.conditions.runtime.loadGenerator를 실제 image·메모리·CPU·VU와 맞추세요.")
 
 
 def main(argv=None):
@@ -546,10 +586,30 @@ def main(argv=None):
         resumed_plan = json.loads((original / "plan.json").read_text()) if original else None
         if original and (args.prepare_only or args.output_dir or args.base_url):
             raise ValueError("--resume은 --base-url/--prepare-only/--output-dir와 함께 쓰지 않습니다.")
+        if args.run_id and (original or not re.fullmatch(r"[a-f0-9]{32}", args.run_id)):
+            raise ValueError("새 시험에만 새 UUID hex run-id를 지정합니다.")
         target = base_url(resumed_plan["baseUrl"] if original else args.base_url or "")
         metadata = json.loads(args.performance_metadata.read_text()) if args.performance_metadata else None
         if metadata is not None and (not isinstance(metadata, dict) or "loadRun" in metadata):
             raise ValueError("performance metadata는 loadRun이 없는 기존 JSON 객체여야 합니다.")
+        if args.diagnostics and (not args.prometheus or not args.zipkin or len(set(args.diagnostic_runtime_target)) != 2
+                or len(args.diagnostic_resource_file) != 2 or (not original and not args.run_id)
+                or metadata is None or not 1 <= args.diagnostic_every <= 100000
+                or args.diagnostic_max_bytes < 128 * 1024
+                or args.diagnostic_total_bytes < args.diagnostic_max_bytes or args.diagnostic_reserve_bytes < 0
+                or args.artifact_max_bytes < args.diagnostic_max_bytes):
+            raise ValueError("진단에는 monitoring 주소·정확한 runtime instance·metadata와 유효한 저장 예산이 필요합니다.")
+        if args.diagnostics and not original:
+            diagnostic_conditions(metadata, args)
+            expected_traces = 1 + sum((args.rate * seconds + args.diagnostic_every - 1) // args.diagnostic_every
+                                      for seconds in (args.warmup_seconds, args.seconds))
+            if expected_traces > DEFAULT_TRACES:
+                raise ValueError("선택할 trace가 저장 상한을 넘습니다. diagnostic-every와 시험 길이를 먼저 맞추세요.")
+        if not 256 <= args.generator_memory_mib <= 8192 or not 0 < args.generator_cpus <= 16:
+            raise ValueError("발생기 CPU·메모리 예산을 확인하세요.")
+        if args.rate >= 200 and args.seconds == 900 and not args.prepare_only and not original:
+            if not args.diagnostics or args.warmup_seconds == 0:
+                raise ValueError("200 TPS·15분 본 시험은 예열과 --diagnostics 사전 검증이 필요합니다.")
     except (ValueError, OSError, KeyError, TypeError) as error:
         arguments.error(str(error))
     previous = {}
@@ -568,7 +628,7 @@ def main(argv=None):
             or not 1 <= args.pre_allocated_vus <= args.max_vus <= 10000
             or not 1 <= args.smoke_timeout <= 300 or not 0 <= args.drain_seconds <= 900):
         arguments.error("tps=1..1000, seconds=1..900, warmup=0..300, VU=1..10000, smoke=1..300초, drain=0..900초 범위입니다.")
-    run_id = resumed_plan["runId"] if original else uuid.uuid4().hex
+    run_id = resumed_plan["runId"] if original else args.run_id or uuid.uuid4().hex
     requested = (original / ("recovery-" + uuid.uuid4().hex) if original else
                  args.output_dir or ROOT / "tests/load/work" / ("orders-" + run_id)).absolute()
     if requested.is_symlink():
@@ -579,12 +639,16 @@ def main(argv=None):
     except OSError:
         arguments.error("새 결과 폴더를 만들 수 없습니다. 기존 결과 폴더를 덮어쓰지 않습니다.")
     api, owned, sessions = Api(target), [], {}
+    if args.diagnostics and not original:
+        api.diagnostic_trace_id = uuid.uuid4().hex
+    diagnostics = None
     plan, buyer, seller = resumed_plan or {}, None, None
     ledger_root = original or directory
     report = {"startedAt": now(), "baseUrl": target, "runId": run_id, "k6Image": K6_IMAGE,
               "rate": args.rate, "durationSeconds": args.seconds, "passed": False,
               "loadExecuted": False,
               "preAllocatedVUs": args.pre_allocated_vus, "maxVUs": args.max_vus}
+    report["generatorLimits"] = {"memoryMiB": args.generator_memory_mib, "cpus": args.generator_cpus}
     report.update(warmupSeconds=args.warmup_seconds, operation="recovery" if original else "load",
                   drainBudgetSeconds=args.drain_seconds,
                   phase="preparation", injectionPassed=False, drainComplete=False,
@@ -592,7 +656,7 @@ def main(argv=None):
                       "required": ["same 900s Payment DB confirmed throughput", "backlog trend and system errors",
                                    "deployed API latency", "inventory/reservation and financial reconciliation"]},
                   generatorSourceSha256={name: file_sha(Path(__file__).parent / name)
-                                         for name in ("order_load.py", "orders.js")},
+                                         for name in ("order_load.py", "orders.js", "evidence.py", "performance.py")},
                   generator={"python": platform.python_version(), "system": platform.system(),
                              "release": platform.release(), "machine": platform.machine()})
     if metadata is not None:
@@ -632,6 +696,9 @@ def main(argv=None):
             plan = prepare(api, buyer, seller, run_id, total)
             plan.update(plannedOrders=args.rate * args.seconds, warmupOrders=args.rate * args.warmup_seconds,
                         measurementSeconds=args.seconds, warmupSeconds=args.warmup_seconds)
+            if args.diagnostics:
+                plan["diagnosticSmokeTraceId"] = api.diagnostic_trace_id
+                plan["diagnosticEvery"] = args.diagnostic_every
             write_json(directory / "plan.json", plan)
             body = prepare_order(api, buyer, seller, plan)
             write_json(directory / "order.json", body)
@@ -642,6 +709,19 @@ def main(argv=None):
             plan["smokePaid"] = True
             write_json(directory / "plan.json", plan)
             print("사전 주문 PAID 확인. 결과 폴더: " + str(directory), flush=True)
+        if args.diagnostics:
+            archive = Archive(ledger_root, maximum=args.diagnostic_max_bytes, total=args.diagnostic_total_bytes,
+                              reserve=args.diagnostic_reserve_bytes, resume=bool(original))
+            try:
+                diagnostics = EvidenceSession(archive, args.prometheus, args.zipkin,
+                    runtime_targets=args.diagnostic_runtime_target, resource_files=args.diagnostic_resource_file,
+                    bundle_maximum=args.artifact_max_bytes, metadata=metadata)
+                diagnostics.require_smoke(plan["diagnosticSmokeTraceId"])
+                diagnostics.start()
+            except BaseException:
+                if diagnostics is None:
+                    archive.close()
+                raise
         if args.prepare_only and not original:
             report.update(prepared=True, loadExecuted=False, productId=plan["productId"])
             exit_code = 0
@@ -651,7 +731,8 @@ def main(argv=None):
                 report["phase"] = phase
                 duration = args.warmup_seconds if phase == "warmup" else args.seconds
                 buyer = session_for(api, "BUYER", owned, sessions, duration + 30)
-                phase_code = inject(target, buyer, plan, directory, args, phase)
+                phase_code = inject(target, buyer, plan, directory, args, phase,
+                                    **({"diagnostics": diagnostics} if diagnostics else {}))
                 report.setdefault("k6PhaseExitCodes", {})[phase] = phase_code
                 if phase == "measurement":
                     code = phase_code
@@ -740,6 +821,19 @@ def main(argv=None):
                 report.update(recoveryRequired=True, drainFailure=type(error).__name__, passed=False)
                 if isinstance(error, ApiError):
                     report["drainFailureEvidence"] = error.evidence()
+        if diagnostics:
+            try:
+                captured = diagnostics.finish(not diagnostics.failure)
+                report["diagnostics"] = {"captureComplete": captured, "every": args.diagnostic_every,
+                    "manifest": os.path.relpath(diagnostics.archive.path / "owner.json", directory),
+                    "failure": diagnostics.failure, "businessPerformance": "UNVERIFIED"}
+                if not captured:
+                    report["passed"] = False
+                    exit_code = 1
+            except Exception as error:
+                report["diagnostics"] = {"captureComplete": False, "failure": type(error).__name__}
+                report["passed"] = False
+                exit_code = 1
         if plan and seller and not (args.prepare_only and exit_code == 0):
             path = "/api/sellers/me/products/" + plan["productId"]
             try:

@@ -48,6 +48,17 @@ class Handler(BaseHTTPRequestHandler):
                     f'commerce_settle_financial_operation_records{{operation="refund.unknown"}} {active}',
                     f'commerce_settle_financial_operation_observed_timestamp_seconds{{operation="refund.unknown"}} {time.time()-1}',
                 ]
+                operations = ("payment.confirmed", "refund.completed", "order.settlement.applied",
+                    "payment.settlement.applied", "payment.payout.succeeded", "ready.payout.succeeded") + tuple(
+                    owner + "." + boundary for owner in ("commerce", "payment", "settlement")
+                    for boundary in ("outbox.published", "inbox.applied"))
+                for operation in operations:
+                    observed = time.time() - (100 if active and operation == "payment.confirmed" else 1)
+                    lines.append(f'commerce_settle_business_observed_timestamp_seconds{{operation="{operation}",window="900"}} {observed}')
+                for operation in ("payout.total", "payout.ready", "payout.unapplied"):
+                    observed = time.time() - (100 if active and operation == "payout.ready" else 1)
+                    lines.append(f'commerce_settle_business_cohort_observed_timestamp_seconds{{operation="{operation}"}} {observed}')
+                lines.append(f'commerce_settle_business_cohort_capture_complete{{operation="payout.unapplied"}} {0 if active else 1}')
                 for operation, value in (("payout.total", 1), ("payout.ready", 2), ("payout.unapplied", 3)):
                     for metric in ("records", "age_seconds"):
                         lines.append(f'business:cohort_{metric}{{operation="{operation}",reason="pending"}} {value}')
