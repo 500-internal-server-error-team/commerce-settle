@@ -7,6 +7,7 @@ isolated calendar fixture; the batch, Finance Mock transfer and collection run n
 
 import argparse
 import hashlib
+import base64
 import subprocess
 import json
 import math
@@ -16,7 +17,7 @@ import signal
 import time
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 import uuid
 
 from smoke import gateway_json
@@ -52,7 +53,7 @@ def wait_drained(compose, groups=("commerce.v1", "payment.v1"), seconds=60):
         until(consumed, f"{group} did not consume the replayed records", seconds)
 
 
-def observed_trace(zipkin, trace_id, required, services, *, retry_wait=False):
+def observed_trace(zipkin, trace_id, required, services, *, retry_wait=False, payout=None):
     last = {}
     def collected():
         try:
@@ -110,6 +111,12 @@ def observed_trace(zipkin, trace_id, required, services, *, retry_wait=False):
             key(span) for span in spans if key(span) in ancestry and not ancestor_matches(span, ancestry[key(span)])]
         if last["wrongAncestors"]:
             return None
+        if payout is not None:
+            try:
+                assert_payout_trace(spans, trace_id, payout)
+            except AssertionError as failure:
+                last["payoutParentError"] = str(failure)
+                return None
         return spans
     try:
         spans = until(collected, "missing sampled async trace boundaries: " + ",".join(sorted(required)), 60)
@@ -118,6 +125,37 @@ def observed_trace(zipkin, trace_id, required, services, *, retry_wait=False):
     print(json.dumps({"traceId": trace_id, "spanCount": len(spans),
                       "asyncBoundaries": sorted(required)}), flush=True)
     return spans
+
+def assert_payout_trace(spans, trace_id, saved):
+    fields = saved["traceparent"].split("-")
+    assert len(fields) == 4 and fields[0] == "00" and fields[1] == trace_id and fields[3] == "01", "saved payout traceparent differs"
+    by_id = {span["id"]: span for span in spans}
+    def service(span):
+        return span.get("localEndpoint", {}).get("serviceName")
+    def ancestors(span):
+        seen = {span["id"]}
+        while span.get("parentId") in by_id and span["parentId"] not in seen:
+            span = by_id[span["parentId"]]
+            seen.add(span["id"])
+            yield span
+    api = by_id.get(fields[2])
+    assert api is not None and service(api) == "settlement" and api.get("kind") == "SERVER", "saved payout parent is not collected batch API"
+    assert api.get("tags", {}).get("method") == "POST" and api["tags"].get("uri") == "/internal/settlement-batches", "payout parent is unrelated API"
+    work = [span for span in spans if service(span) == "settlement" and span.get("name") == "settlement.payout.process"]
+    assert work, "payout process missing"
+    for span in work:
+        assert span.get("parentId") == fields[2], "payout process does not restore saved parent"
+        assert span.get("tags", {}).get("job.id") == saved["jobId"] and span["tags"].get("payout.id") == saved["payoutId"], "payout process identity differs from saved job"
+    work_ids = {span["id"] for span in work}
+    servers = [span for span in spans if service(span) == "finance-mock" and span.get("kind") == "SERVER"
+               and span.get("tags", {}).get("uri") == "/mock/payouts" and span["tags"].get("method") == "POST"]
+    assert servers, "Finance Mock payout HTTP server missing"
+    for server in servers:
+        client = by_id.get(server.get("parentId"))
+        assert client is not None and client.get("kind") == "CLIENT" and service(client) == "settlement", "Finance Mock is not child of actual outgoing request"
+        gateways = [span for span in ancestors(client) if service(span) == "settlement" and span.get("name") == "settlement.payout.gateway"]
+        assert gateways and any(parent["id"] in work_ids for parent in ancestors(gateways[0])), "Finance Mock is not descendant of payout process/gateway"
+
 
 def observed_business_metrics(prometheus, sql):
     barrier = float(sql("payment", "select extract(epoch from clock_timestamp())"))
@@ -279,7 +317,7 @@ INSERT INTO finance_mock.mock_accounts SELECT gen_random_uuid(),provider_id,'mea
  purpose,opening_balance,balance,reserved_amount,created_at,updated_at,version FROM finance_mock.mock_accounts WHERE account_ref='fixture-payout-funding';
 """)
         try:
-            payout_measurement(compose, flow, sql, endpoint("settlement", 8080), operator, seller, product, prometheus)
+            payout_measurement(compose, flow, sql, endpoint("settlement", 8080), operator, seller, product, prometheus, zipkin)
         except BaseException:
             print(compose("logs", "--no-color", "--tail=60", "settlement", "commerce", "finance-mock"), flush=True)
             raise
@@ -810,7 +848,7 @@ def observed_delivery_metrics(prometheus, sql):
     print(json.dumps({"transportCompletions": "all six owner DB completion counts, duration samples and elapsed sums matched Prometheus"}), flush=True)
 
 
-def payout_measurement(compose, flow, sql, settlement, operator, seller, product, prometheus):
+def payout_measurement(compose, flow, sql, settlement, operator, seller, product, prometheus, zipkin):
     # Calendar passage is input data, not an accelerated clock or a claim about live purchase latency.
     sql("settlement", f"""
 WITH facts AS (SELECT gen_random_uuid() item,gen_random_uuid() payment,gen_random_uuid() event,
@@ -839,7 +877,8 @@ INSERT INTO settlement.inbox (id,consumer,event_id,event_type,event_version,occu
     settlement = "http://" + compose("port", "settlement", "8080").strip()
     batch_date = sql("settlement", "SELECT ((statement_timestamp() AT TIME ZONE 'Asia/Seoul')::date-1)::text")
     body = {"sellerId": seller, "batchDate": batch_date, "policyVersion": "delivery-daily-v1"}
-    headers = {"Authorization": "Bearer " + operator, "Content-Type": "application/json", "Idempotency-Key": "measurement-batch-"+str(uuid.uuid4())}
+    trace_id = uuid.uuid4().hex
+    headers = {"Authorization": "Bearer " + operator, "Content-Type": "application/json", "Idempotency-Key": "measurement-batch-"+str(uuid.uuid4()), "traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"}
     with urlopen(Request(settlement + "/internal/settlement-batches", data=json.dumps(body).encode(), headers=headers), timeout=20) as response:
         assert response.status == 202
     until(lambda: sql("settlement", f"SELECT count(*) FROM settlement.settlement_items WHERE seller_id='{seller}' AND status='PAID'") == "2", "historical ready items were not paid", 90)
@@ -851,9 +890,51 @@ INSERT INTO settlement.inbox (id,consumer,event_id,event_type,event_version,occu
     until(collected, "per-item payout durations did not reach Prometheus", 75)
     cohorts = prom_query(prometheus, 'business:cohort_records{operation="payout.total"}')
     assert {r["metric"]["reason"] for r in cohorts} == {"purchase_pending", "refund_pending", "batch_wait", "payout_pending", "payout_unknown", "payout_declined", "refunded"}
+    saved = sql("settlement", f"SELECT j.id || '|' || j.payout_id || '|' || coalesce(j.trace_parent,'') FROM settlement.payout_jobs j JOIN settlement.payouts p ON p.id=j.payout_id WHERE p.seller_id='{seller}'")
+    assert len(saved.splitlines()) == 1, "expected one stored payout job"
+    job_id, payout_id, parent = saved.split("|")
+    observed_trace(zipkin, trace_id, {"settlement.payout.process", "settlement.payout.gateway"}, {"settlement", "finance-mock"},
+                   payout={"jobId": job_id, "payoutId": payout_id, "traceparent": parent})
+    observed_grafana(compose)
     print(json.dumps({"payoutMeasurement": {"fixture": "two historical ready items with original PaymentConfirmed",
           "actualBatchTransfers": 1, "actualTransferredAmount": 1700, "durationSamplesPerInterval": 2,
           "unpaidCohortReasons": len(cohorts), "p99": "unavailable below 10000 samples"}}), flush=True)
+
+
+def observed_grafana(compose):
+    # An owned one-off publishes only a random loopback port, without changing the user's Grafana.
+    config = json.loads(compose("--profile", "observability", "config", "--format", "json"))
+    name = config["name"] + "-grafana-measurement"
+    password = config["services"]["grafana"]["environment"]["GF_SECURITY_ADMIN_PASSWORD"]
+    authorization = "Basic " + base64.b64encode(("admin:" + password).encode()).decode()
+    try:
+        compose("--profile", "observability", "run", "-d", "--no-deps", "--name", name, "--publish", "127.0.0.1::3000", "grafana", timeout=180)
+        port = subprocess.check_output(["docker", "port", name, "3000"], text=True, timeout=10).strip()
+        base = "http://" + port
+        def get(path):
+            with urlopen(Request(base + path, headers={"Authorization": authorization}), timeout=5) as response:
+                return json.load(response)
+        def ready():
+            try:
+                return get("/api/dashboards/uid/commerce-settle-business-performance")
+            except HTTPError as error:
+                if error.code not in (404, 502, 503):
+                    raise
+            except (URLError, OSError):
+                pass
+            return None
+        until(ready, "live business dashboard was not provisioned", 60)
+        query = '/api/datasources/proxy/uid/prometheus/api/v1/query?'
+        selector = '{window="900",operation="payment.payout.succeeded"}'
+        result = get(query + urlencode({"query": "business:duration_count" + selector}))
+        assert result["status"] == "success" and len(result["data"]["result"]) == 1, result
+        assert float(result["data"]["result"][0]["value"][1]) == 2, result
+        p99 = 'histogram_quantile(0.99, business:duration_bucket' + selector + ') and on(operation,window) (business:duration_count' + selector + ' >= 10000)'
+        result = get(query + urlencode({"query": p99}))
+        assert result["status"] == "success" and result["data"]["result"] == [], result
+        print(json.dumps({"grafana": "live committed payout samples=2 via provisioned Prometheus datasource; low-sample p99 unavailable"}), flush=True)
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], check=True, capture_output=True, timeout=30)
 
 
 def observed_runtime(compose, prometheus):
@@ -862,7 +943,7 @@ def observed_runtime(compose, prometheus):
     assert len(values) >= 8 and all(0 <= float(row["value"][1]) for row in values), values
     # Test the actual proxy HTTP boundary from its sole client, without exposing credentials or Env.
     code = """from urllib.request import Request,urlopen
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 base='http://docker-metrics-proxy:2375'
 for path,method,expected in [('/images/json','GET',403),('/containers/create','POST',501)]:
  try:urlopen(Request(base+path,method=method),timeout=5);raise AssertionError(path)

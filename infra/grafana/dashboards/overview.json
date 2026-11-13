@@ -27,7 +27,8 @@
       "targets": [
         {
           "expr": "up{job=\"commerce-settle\"}",
-          "legendFormat": "{{instance}}"
+          "legendFormat": "{{instance}}",
+          "refId": "A"
         }
       ]
     },
@@ -48,7 +49,8 @@
       "targets": [
         {
           "expr": "process_cpu_usage{job=\"commerce-settle\"}",
-          "legendFormat": "{{instance}}"
+          "legendFormat": "{{instance}}",
+          "refId": "A"
         }
       ]
     },
@@ -69,7 +71,8 @@
       "targets": [
         {
           "expr": "sum by (instance) (jvm_memory_used_bytes{area=\"heap\",job=\"commerce-settle\"})",
-          "legendFormat": "{{instance}}"
+          "legendFormat": "{{instance}}",
+          "refId": "A"
         }
       ]
     },
@@ -90,7 +93,8 @@
       "targets": [
         {
           "expr": "sum by (instance) (rate(http_server_requests_seconds_count{job=\"commerce-settle\"}[2m]))",
-          "legendFormat": "{{instance}}"
+          "legendFormat": "{{instance}}",
+          "refId": "A"
         }
       ]
     },
@@ -111,7 +115,8 @@
       "targets": [
         {
           "expr": "commerce_settle_container_memory_usage_ratio{basis=\"limit\"}",
-          "legendFormat": "{{service}} {{basis}} {{__name__}}"
+          "legendFormat": "{{service}} {{basis}} {{__name__}}",
+          "refId": "A"
         }
       ],
       "description": "명시한 Compose 프로젝트만 수집합니다. host_shared는 컨테이너 CPU quota가 아니며, 호스트 수치는 Docker의 Linux 호스트/VM입니다. 표본이 오래됐거나 이벤트 관측이 끊긴 구간은 정상 0으로 해석하지 않습니다."
@@ -133,7 +138,8 @@
       "targets": [
         {
           "expr": "commerce_settle_container_cpu_usage_ratio",
-          "legendFormat": "{{service}} {{basis}} {{__name__}}"
+          "legendFormat": "{{service}} {{basis}} {{__name__}}",
+          "refId": "A"
         }
       ],
       "description": "명시한 Compose 프로젝트만 수집합니다. host_shared는 컨테이너 CPU quota가 아니며, 호스트 수치는 Docker의 Linux 호스트/VM입니다. 표본이 오래됐거나 이벤트 관측이 끊긴 구간은 정상 0으로 해석하지 않습니다."
@@ -155,7 +161,8 @@
       "targets": [
         {
           "expr": "{__name__=~\"commerce_settle_container_last_(oom|abnormal_exit)_timestamp_seconds\"}",
-          "legendFormat": "{{service}} {{basis}} {{__name__}}"
+          "legendFormat": "{{service}} {{basis}} {{__name__}}",
+          "refId": "A"
         }
       ],
       "description": "명시한 Compose 프로젝트만 수집합니다. host_shared는 컨테이너 CPU quota가 아니며, 호스트 수치는 Docker의 Linux 호스트/VM입니다. 표본이 오래됐거나 이벤트 관측이 끊긴 구간은 정상 0으로 해석하지 않습니다."
@@ -177,7 +184,8 @@
       "targets": [
         {
           "expr": "commerce_settle_docker_host_cpu_usage_ratio or commerce_settle_docker_host_memory_available_ratio",
-          "legendFormat": "{{service}} {{basis}} {{__name__}}"
+          "legendFormat": "{{service}} {{basis}} {{__name__}}",
+          "refId": "A"
         }
       ],
       "description": "명시한 Compose 프로젝트만 수집합니다. host_shared는 컨테이너 CPU quota가 아니며, 호스트 수치는 Docker의 Linux 호스트/VM입니다. 표본이 오래됐거나 이벤트 관측이 끊긴 구간은 정상 0으로 해석하지 않습니다."
@@ -199,7 +207,8 @@
       "targets": [
         {
           "expr": "time()-commerce_settle_runtime_observed_timestamp_seconds",
-          "legendFormat": "{{service}} {{basis}} {{__name__}}"
+          "legendFormat": "{{service}} {{basis}} {{__name__}}",
+          "refId": "A"
         }
       ],
       "description": "명시한 Compose 프로젝트만 수집합니다. host_shared는 컨테이너 CPU quota가 아니며, 호스트 수치는 Docker의 Linux 호스트/VM입니다. 표본이 오래됐거나 이벤트 관측이 끊긴 구간은 정상 0으로 해석하지 않습니다."

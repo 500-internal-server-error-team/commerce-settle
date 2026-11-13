@@ -797,7 +797,7 @@ JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업은 비활성화합니
 
 컨테이너 관측은 `docker-metrics-proxy`의 프로젝트·서비스 allowlist와 GET 경계를 사용합니다. 수집기는 전체 메모리 사용량을 실제 컨테이너 한도로 나누며, CPU는 quota가 있으면 `basis=quota`, 없으면 Docker 호스트 공유 용량 기준 `basis=host_shared`로 구분합니다. quota 경보에는 공유 기준을 넣지 않습니다. OOM·비정상 종료는 현재 상태와 최근 5분 이벤트를 함께 보며, 60초 넘게 중단되어 이벤트 조회 구간이 빠지면 별도 경보를 냅니다. Engine 이벤트 보관/호출 실패로 모든 과거 종료를 복구할 수는 없습니다. 관측 시각이 오래되면 값 대신 수집 장애 경보를 확인합니다. 자원 경보는 금융 접수 gate의 새로운 입력으로 사용하지 않습니다.
 
-`python3 -B scripts/test_observability.py`는 production 규칙의 경계·지속 시간·수집 누락을 promtool로 검사하고 실제 Prometheus·Grafana·Alertmanager에서 통제한 표본의 발생·억제·복구 전달을 확인합니다. 외부 Slack 전송은 하지 않습니다. `python3 -B scripts/smoke_financial_flow.py`는 실제 업무 수집·Zipkin 연결과 여섯 전송 구간의 소유 DB 건수, 과거 준비 항목 두 건의 실제 지급·분포를 대조하고, 전용 시험 컨테이너의 커널 OOM/137 종료가 production 경보에 반영되는지 확인합니다. 시험 리소스는 종료 시 제거합니다.
+`python3 -B scripts/test_observability.py`는 production 규칙의 경계·지속 시간·수집 누락을 promtool로 검사하고 실제 Prometheus·Grafana·Alertmanager에서 통제한 표본의 발생·억제·복구 전달을 확인합니다. 외부 Slack 전송은 하지 않습니다. `python3 -B scripts/smoke_financial_flow.py`는 실제 업무 수집·Zipkin 연결과 여섯 전송 구간의 소유 DB 건수, 과거 준비 항목 두 건의 실제 지급·분포·저장 부모의 Zipkin 연결·Grafana 데이터소스 조회를 대조하고, 전용 시험 컨테이너의 커널 OOM/137 종료가 production 경보에 반영되는지 확인합니다. 시험 리소스는 종료 시 제거합니다.
 
 #### 병목 개선 전후 비교
 

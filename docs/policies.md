@@ -455,7 +455,7 @@ Commerce의 각 인스턴스가 기존 내부 Prometheus에서 필요한 관측�
 
 Payment 격리는 소유 DB에서 상태별 건수·도래 후 최장 나이를 계산해 `/actuator/prometheus`로 노출합니다. 최근 5분 신규 원문과 소진 작업을 경보하며 발행 완료를 금융 업무 성공으로 간주하지 않습니다. 금융 작업의 수동 확인은 논리 대기열별로 세고, 결제 미확정은 현재 UNKNOWN 전이 시각, 환불·지급 미확정은 반복 조회에도 유지하는 `unknown_since`, 미완료 환불은 `accepted_at`, 확정 배치 미지급은 `cutoff_at`부터 나이를 셉니다. 다음 회차에 아직 확정하지 않은 항목은 미지급 배치에 포함하지 않습니다. 금융 경보는 가장 최신 원본 시각의 복제 관측만 사용하고 동시각이면 최대값을 선택합니다. 데이터 파일시스템 70% 이상이 5분 지속되면 WARNING, 80% 이상이면 CRITICAL이며 금융 lag 50,000건 이상은 WARNING입니다. 계정/주문 ID를 메트릭 label로 사용하지 않습니다. 무작업이면 나이·건수는 0이며 정상 대기·완료 건을 적체에서 제외합니다. Kafka lag는 메시지 수, 대기 나이는 초 단위입니다.
 
-Alertmanager는 환경·서비스·알람 이름으로 묶고 최초 30초 대기·그룹 갱신 5분·반복 1시간을 기본으로 합니다. 같은 장애의 CRITICAL이 WARNING을 억제하고 복구도 안내합니다. Slack에는 등급·발생/지속 시각·영향·대시보드/조치 문서 링크를 보내고 개인정보·알림 본문·비밀값은 보내지 않습니다. 부하 시험 채널은 운영 채널과 분리합니다. [Alertmanager의 묶음·중복 억제](https://prometheus.io/docs/alerting/latest/alertmanager/)를 사용합니다.
+Alertmanager는 환경·서비스·알람 이름으로 묶고 최초 30초 대기·그룹 갱신 5분·반복 1시간을 기본으로 합니다. 같은 장애의 CRITICAL이 WARNING을 억제하고 복구도 안내합니다. 메모리 CRITICAL은 환경·수집 대상·컨테이너 `service`·제한 기준이 같은 WARNING만 억제하므로 다른 서비스의 경보를 가리지 않습니다. Slack에는 등급·발생/지속 시각·영향·대시보드/조치 문서 링크를 보내고 개인정보·알림 본문·비밀값은 보내지 않습니다. 부하 시험 채널은 운영 채널과 분리합니다. [Alertmanager의 묶음·중복 억제](https://prometheus.io/docs/alerting/latest/alertmanager/)를 사용합니다.
 
 Docker Desktop의 Linux VM·컨테이너 지표로 Mac 전체 상태를 판단하지 않습니다. 같은 호스트의 관측 도구도 호스트 중단 때 함께 멈춥니다. 현재 수집 범위는 [관측 구성](architecture.md#관측-구성)을 따릅니다.
 
