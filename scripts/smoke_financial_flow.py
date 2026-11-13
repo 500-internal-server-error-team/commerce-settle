@@ -35,6 +35,19 @@ def timed(stage, action, *args, **kwargs):
         print(json.dumps({"stage": stage, "elapsedSeconds": round(time.monotonic() - started, 1)}), flush=True)
 
 
+def wait_drained(compose, groups=("commerce.v1", "payment.v1"), seconds=60):
+    # Fix the log end once after the replays, then poll only each group's committed position.
+    ends = bounds(compose, partitions(compose), "latest")
+    for group in groups:
+        target = {key: end for key, end in ends.items() if key[0] in SUBSCRIPTIONS[group]}
+
+        def consumed():
+            offsets = group_offsets(compose, group)
+            return all(offsets.get(key, 0) >= end for key, end in target.items())
+
+        until(consumed, f"{group} did not consume the replayed records", seconds)
+
+
 def verify():
     with stack("cs-financial-flow-", memory_storage=True, commerce_outbox=False) as compose:
         def flow(*args, **kwargs):
@@ -293,14 +306,6 @@ and aggregate_id='{aggregate}' and payload->'payload'->>'paymentCycleId'='{cycle
             compose("exec","-T","kafka","/opt/kafka/bin/kafka-console-producer.sh","--bootstrap-server","kafka:9092",
                     "--topic",topic,"--property","parse.key=true","--property","key.separator=\t",input_text=key+"\t"+body+"\n")
 
-        def wait_drained(groups=("commerce.v1","payment.v1"), seconds=60):
-            # Fix the log end once after the replays, then poll only each group's committed position.
-            ends=bounds(compose,partitions(compose),"latest")
-            for group in groups:
-                target={key:end for key,end in ends.items() if key[0] in SUBSCRIPTIONS[group]}
-                until(lambda: all(group_offsets(compose,group).get(key,0)>=end for key,end in target.items()),
-                      f"{group} did not consume the replayed records",seconds)
-
         def paid_order(mileage=MILEAGE, method="CREDIT_CARD", account="test-card", *, recover_admission=True, retry_after_decline=False):
             order, trace_id = place_order(mileage, method, account, recover_admission=recover_admission)
             if retry_after_decline:
@@ -336,7 +341,7 @@ and aggregate_id='{aggregate}' and payload->'payload'->>'paymentCycleId'='{cycle
                 before=(history,mileage_history(payment),order_status(order["id"]))
                 replay("payment",outbox_event("payment","PaymentDeclined",payment,first_cycle))
                 replay("commerce",outbox_event("commerce","OrderPaymentRequested",order["id"],first_cycle))
-                timed("replay drain",wait_drained)
+                timed("replay drain", wait_drained, compose)
                 assert (attempts(payment),mileage_history(payment),order_status(order["id"])) == before
                 assert sql("payment",f"select status || '/' || current_cycle_id from payment.payments where id='{payment}'") == f"CONFIRMED/{cycle}"
                 print(json.dumps({"paymentRetryCase":{"retry_completed":True,"settlement_items":settlement_items,"approved_current_attempts":approved,"old_attempt_status":history.split(',')[0].split(':')[1],"new_attempt_no":int(history.split(',')[1].split(':')[0]),"mileage":mileage,"origin_preserved":accepted == captured == persisted == received == order_created}}),flush=True)
@@ -466,7 +471,7 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
             replay("payment",outbox_event("payment","PaymentCancelled",payment,cycle))
             replay("commerce",outbox_event("commerce","OrderPaymentRequested",order_id,cycle))
             replay("commerce",outbox_event("commerce","PaymentCancellationRequested",order_id,cycle))
-            timed("replay drain",wait_drained)
+            timed("replay drain", wait_drained, compose)
             assert (attempts(payment),mileage_history(payment),order_status(order_id),reservation(order_id),inventory()) == before
             assert mock_calls("POST") == posts + (0 if block_approval else 1)
             print(json.dumps({"paymentRetryCancellationCase":{"approval_blocked":block_approval,"attempts":expected_attempts,

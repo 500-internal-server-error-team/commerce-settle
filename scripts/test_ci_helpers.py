@@ -9,9 +9,10 @@ import subprocess
 import textwrap
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import smoke
+import smoke_financial_flow
 import smoke_retention
 import smoke_restart
 from test_observability import integration_rules
@@ -79,6 +80,59 @@ class CiHelpersTest(unittest.TestCase):
     def test_accelerates_other_group_intervals_without_changing_expressions(self):
         production = "groups:\n  - name: other\n    interval: 30s\n    rules:\n      - record: sample\n        expr: rate(sample_total[15s])\n"
         self.assertEqual(integration_rules(production), production.replace("interval: 30s", "interval: 1s"))
+
+
+class FinancialReplayWaitTest(unittest.TestCase):
+    def targets(self, count=3):
+        return {(f"commerce-settle.{owner}.v1", partition): 5
+                for owner in ("commerce", "payment", "settlement") for partition in range(count)}
+
+    def test_queries_each_group_once_per_poll_independent_of_partition_count(self):
+        for count in (1, 3, 12):
+            ends = self.targets(count)
+            compose = object()
+            with self.subTest(partitions=count), \
+                    patch.object(smoke_financial_flow, "partitions", return_value=set(ends)) as partitions, \
+                    patch.object(smoke_financial_flow, "bounds", return_value=ends) as bounds, \
+                    patch.object(smoke_financial_flow, "group_offsets", return_value=ends) as offsets:
+                smoke_financial_flow.wait_drained(compose)
+
+                self.assertEqual(offsets.call_args_list, [call(compose, "commerce.v1"),
+                                                         call(compose, "payment.v1")])
+                partitions.assert_called_once_with(compose)
+                bounds.assert_called_once_with(compose, set(ends), "latest")
+
+    def test_waits_for_missing_records_and_accepts_newer_offsets_and_empty_partitions(self):
+        topic = "commerce-settle.payment.v1"
+        ends = {(topic, 0): 5, (topic, 1): 0, (topic, 2): 5}
+        with patch.object(smoke_financial_flow, "partitions", return_value=set(ends)), \
+                patch.object(smoke_financial_flow, "bounds", return_value=ends) as bounds, \
+                patch.object(smoke_financial_flow, "group_offsets", side_effect=[
+                    {(topic, 0): 5}, {(topic, 0): 6, (topic, 2): 7},
+                ]) as offsets, patch("test_admission.time.sleep"):
+            smoke_financial_flow.wait_drained(object(), groups=("commerce.v1",))
+
+            self.assertEqual(offsets.call_count, 2)
+            bounds.assert_called_once()
+
+    def test_times_out_when_a_nonempty_partition_has_no_committed_offset(self):
+        ends = self.targets()
+        with patch.object(smoke_financial_flow, "partitions", return_value=set(ends)), \
+                patch.object(smoke_financial_flow, "bounds", return_value=ends), \
+                patch.object(smoke_financial_flow, "group_offsets", return_value={}) as offsets, \
+                patch("test_admission.time.monotonic", side_effect=[0, 0, 2]), \
+                patch("test_admission.time.sleep"), \
+                self.assertRaisesRegex(AssertionError, "commerce.v1 did not consume"):
+            smoke_financial_flow.wait_drained(object(), groups=("commerce.v1",), seconds=1)
+        offsets.assert_called_once()
+
+    def test_propagates_offset_query_failure(self):
+        ends = self.targets()
+        with patch.object(smoke_financial_flow, "partitions", return_value=set(ends)), \
+                patch.object(smoke_financial_flow, "bounds", return_value=ends), \
+                patch.object(smoke_financial_flow, "group_offsets", side_effect=RuntimeError("Kafka unavailable")), \
+                self.assertRaisesRegex(RuntimeError, "Kafka unavailable"):
+            smoke_financial_flow.wait_drained(object())
 
 
 class RestartHelpersTest(unittest.TestCase):
