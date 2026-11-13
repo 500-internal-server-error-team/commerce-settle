@@ -704,6 +704,7 @@
 | `external_status` | `varchar(24)` | — |
 | `external_ref` | `uuid?` | — |
 | `mileage_restored_at` | `timestamptz?` | — |
+| `unknown_since` | `timestamptz?` | 최초 환불 UNKNOWN 전이 시각. 반복 조회·재시도로 갱신하지 않으며 UNKNOWN이면 필수 |
 | `created_at` | `timestamptz` | — |
 | `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |

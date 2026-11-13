@@ -31,7 +31,7 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
               PREFIX + "financial_operation_observed_timestamp_seconds");
   private static final List<String> QUEUES =
       List.of("payment.outbox", "payment.inbox", "payment.payment_jobs");
-  private static final List<String> OPERATIONS = List.of("payment.unknown");
+  private static final List<String> OPERATIONS = List.of("payment.unknown", "refund.unknown");
   // 미완료 상태를 나열해 상태 인덱스를 탄다. 완료 상태를 <>로 빼면 처리 완료 이력까지 매번 전부 훑는다.
   private static final String SQL =
       """
@@ -62,6 +62,10 @@ public final class FinancialQueueMetrics implements MultiCollector, AutoCloseabl
       SELECT 'payment.unknown', 'operation', count(*),
        coalesce(extract(epoch FROM (statement_timestamp() - min(updated_at))),0)::double precision,
        0, extract(epoch FROM statement_timestamp())::double precision FROM payment.payments WHERE status = 'UNKNOWN'
+      UNION ALL
+      SELECT 'refund.unknown', 'operation', count(*),
+       coalesce(extract(epoch FROM (statement_timestamp() - min(unknown_since))),0)::double precision,
+       0, extract(epoch FROM statement_timestamp())::double precision FROM payment.refunds WHERE status = 'UNKNOWN'
       """;
   private final JdbcTemplate jdbc;
   private final PrometheusRegistry registry;

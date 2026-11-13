@@ -95,6 +95,17 @@ class ComposeConfigurationTest(unittest.TestCase):
             )
         return json.loads(result.stdout)["services"]
 
+    def test_runtime_socket_is_only_reachable_through_private_get_proxy(self):
+        services = self.resolve(None)
+        proxy, collector = services["docker-metrics-proxy"], services["container-metrics"]
+        self.assertEqual(set(proxy["networks"]), {"runtime-observation"})
+        self.assertFalse(proxy.get("ports"))
+        self.assertTrue(proxy["read_only"])
+        self.assertTrue(collector["read_only"])
+        self.assertEqual(collector["user"], "65534:65534")
+        self.assertFalse(any(v.get("source") == "/var/run/docker.sock" for v in collector["volumes"]))
+        self.assertEqual(proxy["environment"]["OBSERVER_PROJECT"], "commerce-settle")
+
     def test_payment_outbox_is_enabled_only_by_explicit_opt_in(self):
         for setting, expected in [(None, "false"), ("false", "false"), ("true", "true")]:
             with self.subTest(setting=setting):

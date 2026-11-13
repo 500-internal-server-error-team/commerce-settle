@@ -21,6 +21,42 @@ import org.junit.jupiter.api.Test;
 
 class BusinessMetricsTest {
   @Test
+  void deliverySourcesOnlyAcceptOwnerSchemas() {
+    assertThat(BusinessMetrics.deliverySources("commerce"))
+        .containsOnlyKeys("commerce.outbox.published", "commerce.inbox.applied");
+    org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> BusinessMetrics.deliverySources("public; DROP TABLE"))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void failedCohortCollectionKeepsTimestampAndScrapesDoNotQuery() throws Exception {
+    var source = mock(DataSource.class);
+    var connection = mock(Connection.class);
+    var statement = mock(PreparedStatement.class);
+    var rows = mock(ResultSet.class);
+    when(source.getConnection()).thenReturn(connection);
+    when(connection.prepareStatement(anyString())).thenReturn(statement);
+    when(statement.executeQuery()).thenReturn(rows);
+    when(rows.next()).thenReturn(true, false);
+    when(rows.getString("reason")).thenReturn("purchase_pending");
+    when(rows.getDouble("observed")).thenReturn(1234d);
+    when(rows.getDouble("records")).thenReturn(3d);
+    try (var metrics =
+        new BusinessMetrics(source, null, Map.of(), Map.of("payout.total", "SELECT 1"))) {
+      metrics.collect();
+      verifyNoInteractions(source);
+      metrics.refresh();
+      assertThat(value(metrics, "cohort_records")).isEqualTo(3);
+      when(statement.executeQuery()).thenThrow(new SQLException("timeout"));
+      metrics.refresh();
+      assertThat(value(metrics, "cohort_observed_timestamp_seconds")).isEqualTo(1234);
+      metrics.collect();
+      verify(source, times(2)).getConnection();
+    }
+  }
+
+  @Test
   void failedOrPartialRefreshKeepsLastCompleteSnapshotAndScrapeNeverQueriesDb() throws Exception {
     var dataSource = mock(DataSource.class);
     var connection = mock(Connection.class);

@@ -40,7 +40,7 @@ groups:
           summary: 금융 대기열의 자동 처리 도래 지연을 확인하세요.
           runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
       - alert: FinancialUnknown
-        expr: financial:operation_age{operation=~"payment.unknown|settlement.unknown"} > 300
+        expr: financial:operation_age{operation=~"payment.unknown|refund.unknown|settlement.unknown"} > 300
         labels:
           severity: warning
         annotations:
@@ -54,7 +54,7 @@ groups:
           summary: 금융 대기열의 자동 처리 도래 지연을 확인하세요.
           runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
       - alert: FinancialUnknown
-        expr: financial:operation_age{operation=~"payment.unknown|settlement.unknown"} > 900
+        expr: financial:operation_age{operation=~"payment.unknown|refund.unknown|settlement.unknown"} > 900
         labels:
           severity: critical
         annotations:
@@ -118,7 +118,7 @@ groups:
           summary: 데이터 저장소 압박으로 신규 주문 접수를 중단합니다.
           runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#금융-관측과-접수-복구
       - alert: FinancialObservationUnavailable
-        expr: (count(financial:queue_value) != 8) or absent(financial:queue_value) or (count(financial:due_queue_value) != 8) or absent(financial:due_queue_value) or (count(financial:group_value) != 3) or absent(financial:group_value) or (count(financial:store_value) != 2) or absent(financial:store_value) or (count(financial:operation_age) != 4) or absent(financial:operation_age)
+        expr: (count(financial:queue_value) != 8) or absent(financial:queue_value) or (count(financial:due_queue_value) != 8) or absent(financial:due_queue_value) or (count(financial:group_value) != 3) or absent(financial:group_value) or (count(financial:store_value) != 2) or absent(financial:store_value) or (count(financial:operation_age) != 5) or absent(financial:operation_age)
         for: 1m
         labels:
           severity: critical
@@ -198,3 +198,18 @@ groups:
         expr: max by (operation, window) (commerce_settle_business_duration_missing and on (job, instance, operation, window) business:source)
       - record: business:duration_bucket
         expr: max by (operation, window, le) (commerce_settle_business_duration_bucket_records and on (job, instance, operation, window) business:source)
+
+      - record: business:cohort_source
+        expr: topk by (operation) (1, (commerce_settle_business_cohort_observed_timestamp_seconds > 0) and (commerce_settle_business_cohort_observed_timestamp_seconds <= time()) and (time() - commerce_settle_business_cohort_observed_timestamp_seconds <= 45))
+      - record: business:cohort_records
+        expr: max by (operation, reason) (commerce_settle_business_cohort_records and on(job, instance, operation) business:cohort_source)
+      - record: business:cohort_age_seconds
+        expr: max by (operation, reason) (commerce_settle_business_cohort_oldest_age_seconds and on(job, instance, operation) business:cohort_source)
+      - record: business:cohort_missing_origin
+        expr: max by (operation, reason) (commerce_settle_business_cohort_missing_origin_records and on(job, instance, operation) business:cohort_source)
+      - record: business:cohort_cutoff
+        expr: max by (operation) (commerce_settle_business_cohort_cutoff_timestamp_seconds and on(job, instance, operation) business:cohort_source)
+      - record: business:cohort_snapshot
+        expr: max by (operation) (commerce_settle_business_cohort_snapshot_timestamp_seconds and on(job, instance, operation) business:cohort_source)
+      - record: business:cohort_capture_complete
+        expr: max by (operation) (commerce_settle_business_cohort_capture_complete and on(job, instance, operation) business:cohort_source)

@@ -1,12 +1,15 @@
 """Real Compose: order -> payment -> settlement -> refund SAGA -> COMPLETED, a Settlement outage, and shipped returns.
 
 Owns a fresh Compose project and removes only its resources. Approval/refund use Finance Mock HTTP;
-Commerce, Payment and Settlement use real PostgreSQL/Kafka. Payouts/notifications are separate.
+Commerce, Payment and Settlement use real PostgreSQL/Kafka. Historical payout readiness is an explicit
+isolated calendar fixture; the batch, Finance Mock transfer and collection run normally. Notifications are separate.
 """
 
 import argparse
 import hashlib
+import subprocess
 import json
+import math
 from pathlib import Path
 import secrets
 import signal
@@ -161,7 +164,26 @@ def observed_business_metrics(prometheus, sql):
 def verify(group="all"):
     with stack("cs-financial-flow-", memory_storage=True, commerce_outbox=False) as compose:
         def flow(*args, **kwargs):
-            return compose("-f", str(FLOW), *args, **kwargs)
+            # Keep the same credentials, funding source and loopback ports on every recreation.
+            overlay = {"services": {"finance-mock": {"ports": ["127.0.0.1::8080", "127.0.0.1::9091"]},
+                "settlement": {"ports": ["127.0.0.1::8080"], "environment": {
+                    "LOGGING_STRUCTURED_FORMAT_CONSOLE": "logstash",
+                    "PAYOUT_FUNDING_ACCOUNT_REF": "measurement-payout-funding", "PAYOUT_SCENARIO_VERSION": "fixture-normal-v1",
+                    "PAYOUT_LOOKUP_SCENARIO_VERSION": "fixture-normal-v1",
+                    "SPRING_APPLICATION_JSON": json.dumps({"app": {"internal-auth": {"senders": {"[operator:measurement]": {"current": operator}}}}})}}}}
+            extra = json.loads(kwargs.pop("input_text", "{}"))
+            for service, settings in extra.get("services", {}).items():
+                current = overlay["services"].setdefault(service, {})
+                for key, value in settings.items():
+                    if isinstance(value, dict):
+                        current.setdefault(key, {}).update(value)
+                    else:
+                        current[key] = value
+            # Callers already request stdin as their final override; supply it once.
+            arguments = list(args)
+            if arguments[:2] == ["-f", "-"]:
+                arguments = arguments[2:]
+            return compose("-f", str(FLOW), "-f", "-", *arguments, input_text=json.dumps(overlay), **kwargs)
 
         def endpoint(service, port):
             return "http://" + compose("port", service, str(port)).strip()
@@ -186,9 +208,10 @@ def verify(group="all"):
         # Follow the first-run procedure: base stack, explicit offsets, then the financial overlay.
         assert json.loads(compose("config", "--format", "json"))["services"]["commerce"]["environment"]["APP_OUTBOX_ENABLED"] == "false"
         prepare_offsets(compose)
-        # Publish the mock only on a random loopback port in this owned test project.
+        operator = secrets.token_urlsafe(32)
+        # Publish owned test endpoints only on random loopback ports.
         flow("-f", "-", "up", "-d", "--wait", "--wait-timeout", "300", *APPS, "finance-mock",
-             input_text=json.dumps({"services": {"finance-mock": {"ports": ["127.0.0.1::8080", "127.0.0.1::9091"]}}}), timeout=600)
+             timeout=600)
         finance = endpoint("finance-mock", 8080)
         finance_metrics = endpoint("finance-mock", 9091)
         credentials = json.loads(compose("config", "--format", "json"))["services"]["payment-worker"]["environment"]
@@ -251,6 +274,17 @@ VALUES ('{uuid.uuid4()}','{product}',10,0,0,0,now(),now(),0);
 INSERT INTO payment.mileage_wallets (id,buyer_id,balance,reserved_amount,created_at,updated_at,version)
 VALUES ('{uuid.uuid4()}','{buyer}',{10_000},0,now(),now(),0);
 """)
+
+        sql("finance_mock", """
+INSERT INTO finance_mock.mock_accounts SELECT gen_random_uuid(),provider_id,'measurement-payout-funding',
+ purpose,opening_balance,balance,reserved_amount,created_at,updated_at,version FROM finance_mock.mock_accounts WHERE account_ref='fixture-payout-funding';
+""")
+        try:
+            payout_measurement(compose, flow, sql, endpoint("settlement", 8080), operator, seller, product, prometheus)
+        except BaseException:
+            print(compose("logs", "--no-color", "--tail=60", "settlement", "commerce", "finance-mock"), flush=True)
+            raise
+        until(gate_open, "order admission did not recover after payout worker activation", 300)
 
         epoch = json.loads(compose("config", "--format", "json"))["services"]["gateway"]["environment"]["AUTH_SESSION_EPOCH"]
 
@@ -701,13 +735,16 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
                 until(lambda: sql(database, f"select count(*) from {database}.outbox where status<>'PUBLISHED'") == "0",
                       database + " outbox was not drained", 60)
             assert sql("finance_mock", "select balance from finance_mock.mock_accounts where account_ref='fixture-payout-funding'") == "1000000"
-            assert sql("finance_mock", "select coalesce(sum(amount),0) from finance_mock.mock_cash_entries") == "0"
+            # The two ready fixtures paid 1,700 once; existing PG receipt/refund cases net to zero.
+            assert sql("finance_mock", "select coalesce(sum(amount),0) from finance_mock.mock_cash_entries") == "-1700"
             # The rejected refund keeps its debit/sale; the disposed return removes one unit.
             expected_mileage = 10_000 if group == "core" else 10_000 - MILEAGE
             expected_inventory = {"all": "8/0/1", "core": "9/0/0", "refund-failures": "9/0/1"}[group]
             assert sql("payment", f"select balance || '/' || reserved_amount from payment.mileage_wallets where buyer_id='{buyer}'") == f"{expected_mileage}/0"
             assert inventory() == expected_inventory, inventory()
             counts = observed_business_metrics(prometheus, sql)
+            observed_delivery_metrics(prometheus, sql)
+            observed_runtime(compose, prometheus)
             with urlopen(prometheus + "/api/v1/query?"+urlencode({"query":'business:duration_count{window="900",operation="order.settlement.applied"}'}),timeout=5) as response:
                 samples=json.load(response)["data"]["result"]
             assert samples and float(samples[0]["value"][1])>0, samples
@@ -723,7 +760,7 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
                         for target in panel["targets"]:
                             expression = (target["expr"].replace("${window}", str(window))
                                           .replace("$window", str(window)).replace("$comparison_offset", "1h")
-                                          .replace("$application", application))
+                                          .replace("$application", application).replace("$latency_operation", "order.settlement.applied"))
                             with urlopen(prometheus + "/api/v1/query?" + urlencode({"query": expression}), timeout=5) as response:
                                 result = json.load(response)
                             assert result["status"] == "success" and result["data"]["resultType"] == "vector", (panel["id"], result)
@@ -738,6 +775,122 @@ and r.scenario_version=a.scenario_version and a.pg_received_amount in (0,a.amoun
         except BaseException:
             print(compose("logs", "--no-color", "--tail=120", *APPS, "finance-mock"), flush=True)
             raise
+
+
+def prom_query(base, expression):
+    with urlopen(base + "/api/v1/query?" + urlencode({"query": expression}), timeout=5) as response:
+        result = json.load(response)
+    assert result["status"] == "success", result
+    return result["data"]["result"]
+
+
+def observed_delivery_metrics(prometheus, sql):
+    barrier = float(sql("payment", "select extract(epoch from clock_timestamp())"))
+    def collected():
+        rows = prom_query(prometheus, '{__name__=~"business:source|business:completions|business:duration_count|business:duration_sum_seconds",window="900"}')
+        metrics = {}
+        for row in rows:
+            metrics.setdefault(row["metric"]["operation"], {})[row["metric"]["__name__"]] = float(row["value"][1])
+        for schema in ("commerce", "payment", "settlement"):
+            for kind, end, start, condition in (("outbox.published", "published_at", "created_at", "status='PUBLISHED'"),
+                    ("inbox.applied", "updated_at", "occurred_at", f"status='APPLIED' AND consumer='{schema}.v1'")):
+                op = schema + "." + kind
+                actual = metrics.get(op, {})
+                observed = actual.get("business:source", 0)
+                if observed < barrier:
+                    return None
+                table = kind.split(".")[0]
+                expected = sql(schema, f"SELECT count(*) || '|' || count(*) FILTER (WHERE {start} <= {end}) || '|' || coalesce(sum(extract(epoch FROM {end}-{start})) FILTER (WHERE {start}<={end}),0) FROM {schema}.{table} WHERE {condition} AND {end} >= to_timestamp({observed})-interval '900 seconds' AND {end}<to_timestamp({observed})")
+                completed, samples, elapsed = map(float, expected.split("|"))
+                if (completed == 0 or actual.get("business:completions") != completed
+                        or actual.get("business:duration_count") != samples
+                        or not math.isclose(actual.get("business:duration_sum_seconds", -1), elapsed, rel_tol=1e-7, abs_tol=1e-6)):
+                    return None
+        return True
+    until(collected, "committed transport completions were not collected", 75)
+    print(json.dumps({"transportCompletions": "all six owner DB completion counts, duration samples and elapsed sums matched Prometheus"}), flush=True)
+
+
+def payout_measurement(compose, flow, sql, settlement, operator, seller, product, prometheus):
+    # Calendar passage is input data, not an accelerated clock or a claim about live purchase latency.
+    sql("settlement", f"""
+WITH facts AS (SELECT gen_random_uuid() item,gen_random_uuid() payment,gen_random_uuid() event,
+  statement_timestamp()-interval '10 days' origin_at FROM generate_series(1,2)),
+items AS (INSERT INTO settlement.settlement_items
+  (id,payment_id,order_id,product_id,seller_id,total_amount,platform_coupon_amount,settlement_base_amount,
+   external_amount,mileage_amount,fee_amount,net_amount,status,order_version,purchase_confirmed_at,
+   eligible_received_at,ready_at,created_at,updated_at,version)
+ SELECT item,payment,gen_random_uuid(),'{product}','{seller}',1000,0,1000,1000,0,150,850,'PAYABLE',0,
+   origin_at+interval '8 days',origin_at+interval '8 days',origin_at+interval '8 days',origin_at,origin_at,0 FROM facts RETURNING id),
+legs AS (INSERT INTO settlement.settlement_entries
+ (id,item_id,payment_id,side,leg,amount,business_ref,source_event_id,source_occurred_at,policy_version,created_at)
+ SELECT gen_random_uuid(),item,payment,leg.side,leg.kind,leg.amount,payment,event,origin_at,'v1',origin_at
+ FROM facts CROSS JOIN (VALUES ('SOURCE','EXTERNAL',1000),('SOURCE','MILEAGE',0),
+   ('SOURCE','PLATFORM_COUPON',0),('ALLOCATION','SELLER',850),('ALLOCATION','FEE',150)) leg(side,kind,amount)),
+bodies AS (SELECT *,jsonb_build_object('eventId',event,'eventType','PaymentConfirmed','eventVersion',1,
+ 'occurredAt',origin_at,'aggregateId',payment,'aggregateVersion',0,'payload',jsonb_build_object('confirmedAt',origin_at)) body FROM facts)
+INSERT INTO settlement.inbox (id,consumer,event_id,event_type,event_version,occurred_at,payload,raw_body,
+ body_hash,source_topic,source_partition,source_offset,aggregate_id,aggregate_version,status,result_ref,
+ order_accepted_at,created_at,updated_at)
+ SELECT gen_random_uuid(),'settlement.v1',event,'PaymentConfirmed',1,origin_at,body,convert_to(body::text,'UTF8'),
+ encode(sha256(convert_to(body::text,'UTF8')),'hex'),'commerce-settle.payment.v1',0,0,payment,0,'APPLIED',item,origin_at,origin_at,origin_at FROM bodies;
+""")
+    flow("-f", "-", "up", "-d", "--no-deps", "--wait", "settlement",
+         input_text=json.dumps({"services": {"settlement": {"environment": {"SETTLEMENT_PAYOUT_WORKER_ENABLED": "true"}}}}), timeout=180)
+    settlement = "http://" + compose("port", "settlement", "8080").strip()
+    batch_date = sql("settlement", "SELECT ((statement_timestamp() AT TIME ZONE 'Asia/Seoul')::date-1)::text")
+    body = {"sellerId": seller, "batchDate": batch_date, "policyVersion": "delivery-daily-v1"}
+    headers = {"Authorization": "Bearer " + operator, "Content-Type": "application/json", "Idempotency-Key": "measurement-batch-"+str(uuid.uuid4())}
+    with urlopen(Request(settlement + "/internal/settlement-batches", data=json.dumps(body).encode(), headers=headers), timeout=20) as response:
+        assert response.status == 202
+    until(lambda: sql("settlement", f"SELECT count(*) FROM settlement.settlement_items WHERE seller_id='{seller}' AND status='PAID'") == "2", "historical ready items were not paid", 90)
+    assert sql("settlement", f"SELECT count(*) || '/' || sum(amount) FROM settlement.payouts WHERE seller_id='{seller}' AND status='SUCCEEDED'") == "1/1700"
+    assert sql("finance_mock", "SELECT balance FROM finance_mock.mock_accounts WHERE account_ref='measurement-payout-funding'") == "998300"
+    def collected():
+        rows = prom_query(prometheus, 'business:duration_count{window="900",operation=~"payment.payout.succeeded|ready.payout.succeeded"}')
+        return len(rows) == 2 and all(float(r["value"][1]) == 2 for r in rows)
+    until(collected, "per-item payout durations did not reach Prometheus", 75)
+    cohorts = prom_query(prometheus, 'business:cohort_records{operation="payout.total"}')
+    assert {r["metric"]["reason"] for r in cohorts} == {"purchase_pending", "refund_pending", "batch_wait", "payout_pending", "payout_unknown", "payout_declined", "refunded"}
+    print(json.dumps({"payoutMeasurement": {"fixture": "two historical ready items with original PaymentConfirmed",
+          "actualBatchTransfers": 1, "actualTransferredAmount": 1700, "durationSamplesPerInterval": 2,
+          "unpaidCohortReasons": len(cohorts), "p99": "unavailable below 10000 samples"}}), flush=True)
+
+
+def observed_runtime(compose, prometheus):
+    until(lambda: prom_query(prometheus, 'runtime:current'), "real Docker metrics were not scraped", 75)
+    values = prom_query(prometheus, 'commerce_settle_container_memory_usage_ratio{basis="limit"}')
+    assert len(values) >= 8 and all(0 <= float(row["value"][1]) for row in values), values
+    # Test the actual proxy HTTP boundary from its sole client, without exposing credentials or Env.
+    code = """from urllib.request import Request,urlopen
+from urllib.error import HTTPError
+base='http://docker-metrics-proxy:2375'
+for path,method,expected in [('/images/json','GET',403),('/containers/create','POST',501)]:
+ try:urlopen(Request(base+path,method=method),timeout=5);raise AssertionError(path)
+ except HTTPError as e:assert e.code==expected,(path,e.code)
+print('GET whitelist and mutation denial passed')
+"""
+    assert "denial passed" in compose("exec", "-T", "container-metrics", "python", "-c", code)
+    project = json.loads(compose("config", "--format", "json"))["name"]
+    name = project + "-owned-oom-probe"
+    probe_started = time.time()
+    try:
+        subprocess.run(["docker", "run", "-d", "--name", name, "--memory", "32m", "--memory-swap", "32m", "--cpus", "0.5",
+            "--network", "none", "--label", "com.docker.compose.project="+project,
+            "--label", "com.docker.compose.service=finance-mock", "python:3.13.7-alpine",
+            "python", "-c", "import time;time.sleep(60);x=bytearray(128*1024*1024);time.sleep(5)"], check=True, capture_output=True, timeout=30)
+        until(lambda: prom_query(prometheus, 'commerce_settle_container_cpu_usage_ratio{service="finance-mock",basis="quota"}'), "real CPU quota was not observed before probe exit", 50)
+        subprocess.run(["docker", "wait", name], check=True, capture_output=True, timeout=75)
+        state = json.loads(subprocess.check_output(["docker", "inspect", "--format", "{{json .State}}", name], text=True, timeout=10))
+        assert state["OOMKilled"] and state["ExitCode"] == 137, state
+        until(lambda: {r["metric"]["alertname"] for r in prom_query(prometheus, 'ALERTS{alertstate="firing",alertname=~"ContainerOom|ContainerAbnormalExit"}')} >= {"ContainerOom", "ContainerAbnormalExit"}, "real OOM/exit events did not fire production alerts", 75)
+        for event in ("oom", "abnormal_exit"):
+            until(lambda: any(float(row["value"][1]) >= probe_started for row in prom_query(
+                prometheus, 'commerce_settle_container_last_' + event + '_timestamp_seconds{service="finance-mock"}')),
+                "real scoped " + event + " event timestamp was not collected", 45)
+        print(json.dumps({"runtime": "real quota/memory and project-filtered proxy", "kernelOom": True, "exitCode": 137, "productionAlerts": ["ContainerOom", "ContainerAbnormalExit"]}), flush=True)
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], check=True, capture_output=True, timeout=30)
 
 
 def scenarios(paid_order, cancel, refund_state, completed, inventory, reservation, compose, gate_open):

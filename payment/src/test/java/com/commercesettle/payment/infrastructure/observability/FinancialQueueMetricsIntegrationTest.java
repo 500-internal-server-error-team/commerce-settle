@@ -19,6 +19,55 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 @Testcontainers
 class FinancialQueueMetricsIntegrationTest {
+  @Test
+  void refundUnknownUsesFirstUncertaintyRatherThanRepeatedUpdateTime() {
+    var source =
+        new DriverManagerDataSource(
+            POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+    var jdbc = new JdbcTemplate(source);
+    UUID id = UUID.randomUUID();
+    jdbc.update(
+        """
+        INSERT INTO payment.refunds (id,payment_id,order_refund_request_id,external_amount,mileage_amount,
+          status,business_key,external_status,unknown_since,created_at,updated_at,version)
+        VALUES (?,gen_random_uuid(),gen_random_uuid(),1000,0,'UNKNOWN',gen_random_uuid(),'UNKNOWN',
+          statement_timestamp()-interval '901 seconds',statement_timestamp()-interval '1000 seconds',statement_timestamp(),0)
+        """,
+        id);
+    try (var metrics = new FinancialQueueMetrics(source, null)) {
+      metrics.refresh();
+      assertThat(
+              value(
+                  metrics.collect(),
+                  "financial_operation_age_seconds",
+                  "operation",
+                  "refund.unknown"))
+          .isGreaterThanOrEqualTo(901);
+      jdbc.update(
+          "UPDATE payment.refunds SET updated_at=statement_timestamp(),version=version+1 WHERE id=?",
+          id);
+      metrics.refresh();
+      assertThat(
+              value(
+                  metrics.collect(),
+                  "financial_operation_age_seconds",
+                  "operation",
+                  "refund.unknown"))
+          .isGreaterThanOrEqualTo(901);
+      jdbc.update("UPDATE payment.refunds SET status='EXTERNAL_PENDING' WHERE id=?", id);
+      metrics.refresh();
+      assertThat(
+              value(
+                  metrics.collect(),
+                  "financial_operation_age_seconds",
+                  "operation",
+                  "refund.unknown"))
+          .isZero();
+    } finally {
+      jdbc.update("DELETE FROM payment.refunds WHERE id=?", id);
+    }
+  }
+
   private static final int HISTORY = 20_000;
 
   @Container
