@@ -142,6 +142,9 @@ class RenderTest(unittest.TestCase):
             if name == "payment-api":
                 self.assertEqual(secrets["SPRING_APPLICATION_JSON"],
                                  PREFIX + "payment-api/SPRING_APPLICATION_JSON")
+            if name == "commerce":
+                self.assertEqual(environment["APP_ORDER_WORKFLOW_ENABLED"], "false")
+                self.assertEqual(environment["APP_DEMO_AUTO_SHIPMENT_ENABLED"], "false")
         self.assertEqual(len(ports), len(set(ports)))
 
     def test_refuses_wrong_account_region_public_or_same_hosts_and_mutable_image(self):
@@ -167,6 +170,32 @@ class RenderTest(unittest.TestCase):
 
 
 class DeployTest(unittest.TestCase):
+    def test_demo_shipment_switch_changes_only_commerce_and_preserves_other_settings(self):
+        aws = FakeAws()
+        for enabled in (True, False, None):
+            with self.subTest(enabled=enabled):
+                _, tasks = deployment.prepare(aws, "commerce-cluster", IMAGES, REGION, enabled)
+                for name, definition in tasks.items():
+                    container = definition["containerDefinitions"][0]
+                    environment = {row["name"]: row["value"] for row in container["environment"]}
+                    self.assertEqual(environment["OPERATOR_SETTING"], "preserve-me")
+                    if name == "commerce":
+                        self.assertEqual(environment["APP_DEMO_AUTO_SHIPMENT_ENABLED"],
+                                         "true" if enabled else "false")
+                        self.assertEqual(environment["APP_ORDER_WORKFLOW_ENABLED"],
+                                         "true" if enabled else "false")
+                    else:
+                        self.assertNotIn("APP_DEMO_AUTO_SHIPMENT_ENABLED", environment)
+
+    def test_changed_demo_shipment_intent_rejects_baseline_before_writes(self):
+        aws = FakeAws()
+        baseline = deployment.rollback_baseline(aws.services, "commerce-cluster", IMAGES, REGION, True)
+        with self.assertRaisesRegex(RuntimeError, "baseline differs"):
+            deployment.deploy(aws, "commerce-cluster", IMAGES, REGION, lambda: None,
+                              lambda _: None, baseline, False)
+        self.assertFalse(any(call[0] in ("register-task-definition", "update-service")
+                             for call in aws.calls))
+
     def baseline(self, aws):
         return deployment.rollback_baseline(aws.services, "commerce-cluster", IMAGES, REGION)
 

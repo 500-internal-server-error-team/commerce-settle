@@ -126,7 +126,8 @@ class ComposeConfigurationTest(unittest.TestCase):
         services = self.resolve(None, "compose.financial-flow.yml")
         expected = {
             "commerce": ["APP_OUTBOX_ENABLED", "APP_KAFKA_PAYMENT_ACCEPTED_ENABLED",
-                         "APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED", "APP_ORDER_RESULT_PROCESSOR_ENABLED"],
+                         "APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED", "APP_ORDER_RESULT_PROCESSOR_ENABLED",
+                         "APP_ORDER_WORKFLOW_ENABLED"],
             "payment-worker": ["APP_OUTBOX_ENABLED", "APP_KAFKA_ORDER_PAYMENT_REQUESTED_ENABLED",
                                "APP_PAYMENT_REQUEST_PROCESSOR_ENABLED", "APP_PAYMENT_APPROVAL_ENABLED",
                                "APP_REFUND_ENABLED", "APP_KAFKA_SETTLEMENT_REPLIES_ENABLED"],

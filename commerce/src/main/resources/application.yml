@@ -146,6 +146,8 @@ app:
       enabled: ${APP_KAFKA_PAYMENT_ACCEPTED_ENABLED:false}
   order-workflow:
     enabled: ${APP_ORDER_WORKFLOW_ENABLED:false}
+    # 판매자 없는 실험실에서만 켠다. 배송·환불·구매확정 기한은 유지한다.
+    auto-shipment-enabled: ${APP_DEMO_AUTO_SHIPMENT_ENABLED:false}
     interval-ms: 60000
   order-result-processor:
     enabled: ${APP_ORDER_RESULT_PROCESSOR_ENABLED:false}
