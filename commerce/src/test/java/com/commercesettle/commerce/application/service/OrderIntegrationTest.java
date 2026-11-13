@@ -4,6 +4,7 @@ import static com.commercesettle.commerce.support.ConcurrentTransactions.holdTra
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.commercesettle.commerce.application.port.AddressCipher;
+import com.commercesettle.commerce.application.port.OrderEventOutbox;
 import com.commercesettle.commerce.domain.model.ProductStatus;
 import com.commercesettle.commerce.domain.model.ShippingAddress;
 import com.commercesettle.commerce.domain.repository.OrderRepository;
@@ -49,6 +50,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -65,6 +67,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
       "app.coupons.expiry-scheduler-enabled=false",
       "app.coupons.grade-scheduler-enabled=false",
       "app.sale-events.scheduler-enabled=false",
+      "app.orders.max-concurrent=4",
       "management.tracing.sampling.probability=1.0",
       "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
       "app.auth.rate-limit.identifier-hmac-key=regular-order-api-test-hmac-key-32bytes",
@@ -98,6 +101,7 @@ class OrderIntegrationTest {
   @Autowired AddressCipher cipher;
   @Autowired PlatformTransactionManager transactions;
   @Autowired JdbcExecutionRecorder sql;
+  @MockitoSpyBean OrderEventOutbox orderOutbox;
 
   @TestConfiguration(proxyBeanMethods = false)
   static class SqlRecording {
@@ -303,6 +307,58 @@ class OrderIntegrationTest {
   private SchemaRegistry schemas;
 
   @Test
+  @DisplayName("일반 주문 쓰기 슬롯이 차면 새 요청만 즉시 거절하고 기존 결과와 본문 충돌은 유지한다")
+  void boundsRegularWritesWithoutBlockingReplay() throws Exception {
+    var prior = fixture(3);
+    String accepted = key();
+    var first = post(prior.buyer(), accepted, body(prior));
+    assertThat(first.getStatusCode().value()).isEqualTo(201);
+    var occupied = new CountDownLatch(4);
+    var release = new CountDownLatch(1);
+    OrderEventOutbox observedOutbox =
+        org.springframework.test.util.AopTestUtils.getUltimateTargetObject(orderOutbox);
+    org.mockito.Mockito.doAnswer(
+            call -> {
+              occupied.countDown();
+              if (!release.await(15, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("order test release timed out");
+              }
+              return call.callRealMethod();
+            })
+        .when(observedOutbox)
+        .appendPaymentRequested(
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(Instant.class));
+    var holders = java.util.stream.IntStream.range(0, 4).mapToObj(i -> fixture(2)).toList();
+    try (var pool = Executors.newFixedThreadPool(5)) {
+      var requests =
+          holders.stream().map(f -> pool.submit(() -> post(f.buyer(), key(), body(f)))).toList();
+      try {
+        assertThat(occupied.await(10, TimeUnit.SECONDS)).isTrue();
+        var rejected =
+            pool.submit(() -> post(prior.buyer(), key(), body(prior))).get(2, TimeUnit.SECONDS);
+        problem(rejected, 503, "COMMON_CAPACITY_EXCEEDED");
+        assertThat(rejected.getHeaders().getFirst("Retry-After")).isEqualTo("1");
+        var replay =
+            pool.submit(() -> post(prior.buyer(), accepted, body(prior))).get(2, TimeUnit.SECONDS);
+        assertThat(replay.getBody()).isEqualTo(first.getBody());
+        var conflict =
+            pool.submit(() -> post(prior.buyer(), accepted, body(prior).put("quantity", 2)))
+                .get(2, TimeUnit.SECONDS);
+        problem(conflict, 409, "COMMON_IDEMPOTENCY_CONFLICT");
+        assertThat(count("orders", "buyer_id", prior.buyer())).isEqualTo(1);
+        assertInventory(prior.product(), 2, 1);
+      } finally {
+        release.countDown();
+      }
+      for (var request : requests) {
+        assertThat(request.get(10, TimeUnit.SECONDS).getStatusCode().value()).isEqualTo(201);
+      }
+    }
+    assertThat(post(prior.buyer(), key(), body(prior)).getStatusCode().value()).isEqualTo(201);
+    assertInventory(prior.product(), 1, 2);
+  }
+
+  @Test
   @DisplayName("접수 중단 중에도 기존 멱등 결과와 본문 충돌을 우선하고 거절 키는 재사용한다")
   void preservesIdempotencyWhileAdmissionIsClosed() {
     var f = fixture(2);
@@ -321,7 +377,6 @@ class OrderIntegrationTest {
     assertThat(replay.getBody().path("id").asText()).isEqualTo(order.toString());
     problem(
         post(f.buyer(), accepted, body(f).put("quantity", 2)), 409, "COMMON_IDEMPOTENCY_CONFLICT");
-    org.mockito.Mockito.verifyNoInteractions(admission);
     String rejected = key();
     var unavailable = post(f.buyer(), rejected, body(f));
     problem(unavailable, 503, "COMMON_CAPACITY_EXCEEDED");
@@ -333,6 +388,43 @@ class OrderIntegrationTest {
     org.mockito.Mockito.doNothing().when(admission).requireAdmission();
     assertThat(post(f.buyer(), rejected, body(f)).getStatusCode().value()).isEqualTo(201);
     assertInventory(f.product(), 0, 2);
+  }
+
+  @Test
+  @DisplayName("일반 주문 트랜잭션이 반복해서 롤백돼도 쓰기 슬롯은 반환된다")
+  void releasesRegularSlotsAfterRollback() {
+    var f = fixture(2);
+    for (int i = 0; i < 6; i++) {
+      assertThat(
+              post(f.buyer(), key(), body(f).put("expectedProductVersion", 999))
+                  .getStatusCode()
+                  .value())
+          .isEqualTo(409);
+    }
+    assertThat(count("orders", "buyer_id", f.buyer())).isZero();
+    assertInventory(f.product(), 2, 0);
+    assertThat(post(f.buyer(), key(), body(f)).getStatusCode().value()).isEqualTo(201);
+    assertInventory(f.product(), 1, 1);
+  }
+
+  @Test
+  @DisplayName("접수 중단의 신규 주문 거절은 DB 읽기만 하고 구매자·재고 잠금과 쓰기를 만들지 않는다")
+  void closedAdmissionOnlyReadsExistingRequests() {
+    var f = fixture(2);
+    org.mockito.Mockito.doThrow(
+            new com.commercesettle.commerce.application.exception.OrderCapacityExceededException())
+        .when(admission)
+        .requireAdmission();
+    var rejected = sql.measure(() -> post(f.buyer(), key(), body(f)));
+    problem(rejected.result(), 503, "COMMON_CAPACITY_EXCEEDED");
+    assertThat(rejected.result().getHeaders().getFirst("Retry-After")).isEqualTo("30");
+    assertThat(rejected.executions()).hasSize(2);
+    assertThat(rejected.timeoutSettings()).isZero();
+    assertThat(rejected.executions())
+        .allSatisfy(
+            execution -> assertThat(execution.sql()).startsWith("select ").doesNotContain(" for "));
+    assertThat(count("orders", "buyer_id", f.buyer())).isZero();
+    assertInventory(f.product(), 2, 0);
   }
 
   @Test
