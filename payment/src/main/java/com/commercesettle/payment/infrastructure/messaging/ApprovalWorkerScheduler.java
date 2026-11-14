@@ -34,9 +34,9 @@ class ApprovalWorkerScheduler {
       @Value("${app.payment-approval.concurrency:6}") int concurrency,
       @Value("${app.payment-approval.retry-concurrency:1}") int retryConcurrency) {
     if (concurrency < 1
-        || concurrency > 1024
+        || concurrency > 4096
         || retryConcurrency < 1
-        || retryConcurrency > 64
+        || retryConcurrency > 256
         || (concurrency > 1 && retryConcurrency >= concurrency))
       throw new IllegalArgumentException("Invalid retry concurrency");
     // 동시성 1인 기존 설정은 한 공용 슬롯으로 유지한다.

@@ -105,9 +105,34 @@ class ApprovalWorkerSchedulerTest {
     var worker = mock(ApprovalWorker.class);
     assertThatThrownBy(() -> new ApprovalWorkerScheduler(worker, 1, 0, 1))
         .isInstanceOf(IllegalArgumentException.class);
-    assertThatThrownBy(() -> new ApprovalWorkerScheduler(worker, 1, 1025, 1))
+    assertThatThrownBy(() -> new ApprovalWorkerScheduler(worker, 1, 4097, 1))
         .isInstanceOf(IllegalArgumentException.class);
     assertThatThrownBy(() -> new ApprovalWorkerScheduler(worker, 1, 1, 0))
         .isInstanceOf(IllegalArgumentException.class);
+    assertThatThrownBy(() -> new ApprovalWorkerScheduler(worker, 1, 4096, 257))
+        .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  @DisplayName("1000 TPS 지연 예산의 승인·재시도 설정도 유휴 때는 소수만 조회한다")
+  void acceptsReleaseCapacityWithoutStartingThousandsOfEmptyPolls() throws Exception {
+    var worker = mock(ApprovalWorker.class);
+    var entered = new CountDownLatch(8);
+    var calls = new AtomicInteger();
+    when(worker.runOnce(org.mockito.ArgumentMatchers.any(LeaseLane.class)))
+        .thenAnswer(
+            i -> {
+              calls.incrementAndGet();
+              entered.countDown();
+              return false;
+            });
+    var scheduler = new ApprovalWorkerScheduler(worker, 20, 4096, 256);
+    try {
+      scheduler.poll();
+      assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+    } finally {
+      scheduler.stop();
+    }
+    assertThat(calls.get()).isEqualTo(8);
   }
 }

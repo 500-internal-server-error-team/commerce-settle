@@ -14,6 +14,91 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class WorkerSlotsTest {
   @Test
+  @DisplayName("4096슬롯도 유휴 복구 때는 네 번만 조회한다")
+  void boundsIdleRecoveryProbes() throws Exception {
+    var probed = new CountDownLatch(4);
+    var excess = new CountDownLatch(1);
+    var calls = new AtomicInteger();
+    try (var slots =
+        new WorkerSlots(
+            "large-idle",
+            4096,
+            1,
+            () -> {
+              if (calls.incrementAndGet() > 4) excess.countDown();
+              probed.countDown();
+              return false;
+            },
+            e -> {
+              throw new AssertionError(e);
+            })) {
+      slots.recover();
+      assertThat(probed.await(5, TimeUnit.SECONDS)).isTrue();
+      assertThat(excess.await(200, TimeUnit.MILLISECONDS)).isFalse();
+    }
+    assertThat(calls.get()).isEqualTo(4);
+  }
+
+  @Test
+  @DisplayName("누락 신호를 복구한 뒤 실제 작업이 있으면 나머지 슬롯으로 확장한다")
+  void expandsRecoveryOnlyWhenWorkExists() throws Exception {
+    var busy = new CountDownLatch(32);
+    var release = new CountDownLatch(1);
+    var calls = new AtomicInteger();
+    try (var slots =
+        new WorkerSlots(
+            "fanout",
+            32,
+            1,
+            () -> {
+              if (calls.incrementAndGet() < 32) return true;
+              busy.countDown();
+              waitFor(release);
+              return false;
+            },
+            e -> {
+              throw new AssertionError(e);
+            })) {
+      try {
+        slots.recover();
+        assertThat(busy.await(5, TimeUnit.SECONDS)).isTrue();
+      } finally {
+        release.countDown();
+      }
+    }
+  }
+
+  @Test
+  @DisplayName("2048개의 대기 호출은 가상 스레드에서 동시에 실행한다")
+  void supportsTwoThousandConcurrentWaitingCalls() throws Exception {
+    var entered = new CountDownLatch(2048);
+    var release = new CountDownLatch(1);
+    var platformThreads = new AtomicInteger();
+    try (var slots =
+        new WorkerSlots(
+            "large-active",
+            4096,
+            1,
+            () -> {
+              if (!Thread.currentThread().isVirtual()) platformThreads.incrementAndGet();
+              entered.countDown();
+              waitFor(release);
+              return false;
+            },
+            e -> {
+              throw new AssertionError(e);
+            })) {
+      try {
+        for (int i = 0; i < 2048; i++) slots.wakeUp();
+        assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(platformThreads.get()).isZero();
+      } finally {
+        release.countDown();
+      }
+    }
+  }
+
+  @Test
   @DisplayName("느린 슬롯의 묶음이 끝나지 않아도 다른 슬롯은 다음 작업을 처리한다")
   void continuesWhileAnotherSlotIsBlocked() throws Exception {
     var release = new CountDownLatch(1);
