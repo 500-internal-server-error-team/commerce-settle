@@ -12,6 +12,7 @@ import java.util.UUID;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcOperations;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public class JdbcDemoSettlementStore implements DemoSettlementStore {
@@ -24,7 +25,9 @@ public class JdbcDemoSettlementStore implements DemoSettlementStore {
   }
 
   @Override
+  @Transactional
   public void requireEnvironment(boolean enabled) {
+    TransactionLimits.apply(jdbc.getJdbcOperations());
     if (enabled)
       jdbc.update(
           "INSERT INTO settlement.demo_environment(singleton) VALUES(true) ON CONFLICT DO NOTHING",
@@ -63,7 +66,9 @@ public class JdbcDemoSettlementStore implements DemoSettlementStore {
   }
 
   @Override
+  @Transactional
   public Run create(Run run) {
+    TransactionLimits.apply(jdbc.getJdbcOperations());
     try {
       jdbc.update(
           "INSERT INTO settlement.demo_runs(id,seller_id,cutoff_at,item_ids,refunded_count,delivery_seconds,refund_seconds,batch_status) VALUES(:id,:seller,:cutoff,:items::jsonb,:refunded,:delivery,:refund,'READY') ON CONFLICT(id) DO NOTHING",
@@ -99,7 +104,9 @@ public class JdbcDemoSettlementStore implements DemoSettlementStore {
   }
 
   @Override
+  @Transactional
   public void status(UUID id, String status) {
+    TransactionLimits.apply(jdbc.getJdbcOperations());
     jdbc.update(
         "UPDATE settlement.demo_runs SET batch_status=:status WHERE id=:id AND (batch_status<>'COMPLETED' OR :status='COMPLETED') AND (:status<>'STARTED' OR batch_status IN ('READY','STARTED'))",
         new MapSqlParameterSource("id", id).addValue("status", status));
