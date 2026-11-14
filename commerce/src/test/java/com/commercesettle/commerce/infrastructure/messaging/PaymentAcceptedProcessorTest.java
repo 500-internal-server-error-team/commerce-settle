@@ -1,23 +1,34 @@
 package com.commercesettle.commerce.infrastructure.messaging;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.commercesettle.commerce.application.service.PaymentAcceptedService;
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 class PaymentAcceptedProcessorTest {
   @Test
-  @DisplayName("묶음을 가득 채우면 다음 주기를 기다리지 않고 남은 대기 건을 이어서 처리한다")
-  void continuesAfterFullBatchUntilQueueIsEmpty() {
+  @DisplayName("담당 Inbox의 저장 신호로 깨어나 묶음 이후 작업도 이어 처리한다")
+  void drainsOwnInboxAfterWakeup() throws Exception {
     var service = mock(PaymentAcceptedService.class);
-    when(service.processNext()).thenReturn(true, true, true, true, true, false);
-
-    new PaymentAcceptedProcessor(service, 2).run();
-
-    verify(service, times(6)).processNext();
+    var calls = new AtomicInteger();
+    when(service.processNext()).thenAnswer(i -> calls.incrementAndGet() <= 5);
+    var processor = new PaymentAcceptedProcessor(service, 2, 1);
+    try {
+      processor.onWorkAvailable(new PaymentWorkAvailable(!true));
+      verifyNoInteractions(service);
+      processor.onWorkAvailable(new PaymentWorkAvailable(true));
+      await()
+          .atMost(Duration.ofSeconds(5))
+          .untilAsserted(() -> assertThat(calls.get()).isEqualTo(6));
+    } finally {
+      processor.stop();
+    }
   }
 }

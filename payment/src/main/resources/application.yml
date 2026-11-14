@@ -156,7 +156,7 @@ app:
     # 실패는 최대 10회까지 1~60초 간격으로 재시도한 뒤 REVIEW_REQUIRED로 남긴다.
     enabled: false
     interval-ms: 1000
-    # 동시에 처리하는 슬롯 수와 슬롯별 한 주기 상한. 상한에 닿으면 기다리지 않고 이어서 처리한다.
+    # 슬롯마다 독립적으로 연속 처리한다. interval은 누락 신호·재시도 복구 조회 간격이다.
     # 처리 트랜잭션마다 DB 연결을 쓰므로 승인 슬롯·Outbox 발행과 합쳐 DB 연결 풀을 넘지 않게 둔다.
     concurrency: ${PAYMENT_REQUEST_CONCURRENCY:3}
     batch-size: 100
@@ -172,9 +172,10 @@ app:
     # finance-mock에 보내는 service:payment 자격. PG 실행 Worker와 대조 읽기 API에 주입한다.
     mock-credential: ${FINANCE_MOCK_PAYMENT_CREDENTIAL:}
     poll-interval-ms: 1000
-    # 동시에 실행하는 슬롯 수. 슬롯마다 한 폴링에 최대 max-jobs-per-poll건을 처리하고, 상한에 닿으면 기다리지 않고 다시 폴링한다.
-    # 외부 호출 동안 DB 연결을 쥐지 않지만 호출 전후 트랜잭션이 연결을 쓰므로 DB 연결 풀보다 작게 둔다.
+    # 전체 승인 슬롯 중 retry-concurrency개를 재시도/만료 임대에 남긴다. 동시성 1은 공용 슬롯이다.
+    # PG 호출 중에는 DB 연결을 반환한다. PG 슬롯과 JDBC 풀 크기를 각각 산정하고 전체 인스턴스의 합을 비교한다.
     concurrency: ${PAYMENT_APPROVAL_CONCURRENCY:6}
+    retry-concurrency: ${PAYMENT_APPROVAL_RETRY_CONCURRENCY:1}
     max-jobs-per-poll: 20
     # 호출 제한 시간은 임대보다 짧아야 한다.
     lease-duration: 30s

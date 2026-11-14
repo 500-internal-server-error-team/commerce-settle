@@ -981,6 +981,13 @@ Zipkin에서 `daily-settlement-job`→`settle-sellers`→`settlement.batch.selle
 
 ### Kafka 전달 기반
 
+Payment 요청·승인 및 Commerce 접수·결과 처리기는 전용 실행 풀에서 독립적으로 작업을 가져옵니다. 슬롯은 한 건을 선점해 끝낸 뒤 다음 건을 가져오며 미리 임대한 작업을 메모리 큐에 쌓지 않습니다. 커밋 후 깨움은 같은 JVM의 힌트이므로 수신과 처리기를 같은 Worker에서 켭니다. 다른 인스턴스·신호 누락·도래 시각이 있는 재시도는 기본 1초 복구 조회가 회수하며, 처리기는 공유 예약 스레드를 업무 처리 동안 점유하지 않습니다. 종료 시 새 선점을 멈추고 풀마다 최대 10초 기다린 뒤 중단을 요청합니다. 미완료 금융 작업은 기존 임대 만료·원거래 조회로 복구합니다.
+
+`PAYMENT_APPROVAL_CONCURRENCY`(1~1024)는 전체 승인 슬롯 상한이며, 그 안에서 `PAYMENT_APPROVAL_RETRY_CONCURRENCY`(기본 1, 1~64·전체 상한 미만)를 재시도·만료 임대에 남깁니다. 전체 동시성 1은 기존처럼 신규·재시도를 한 슬롯에서 처리합니다. 전체 상한과 인스턴스 수를 곱한 값을 PG별 허용량·HTTP 자원과 비교하고 신규 승인 목표에는 예약 슬롯을 제외한 예산을 사용합니다. `목표 외부 승인 TPS × 평균 PG 응답시간(초) ÷ 목표 이용률`은 필요한 진행 중 호출 수의 산정 출발점이며, 조회·재시도와 DB 병목을 별도로 반영해야 합니다. JDBC 풀은 짧은 선점·준비·결과 반영과 다른 업무의 동시 사용으로 산정합니다. PG 호출 동안 커넥션을 반환하므로 PG 슬롯 수를 JDBC 풀 이하로 고정하지 않습니다. 설정 상한은 자원 사용이나 목표 TPS를 보장하지 않습니다.
+
+Commerce는 `COMMERCE_PAYMENT_ACCEPTED_CONCURRENCY`와 `COMMERCE_ORDER_RESULT_CONCURRENCY`(각 1~64, 기본 2)로 접수·결과 반영을 조정합니다. 두 처리기의 합과 주문 API·Outbox가 같은 JDBC 풀을 사용하므로 연결 대기와 Inbox 준비 후 지연을 함께 확인합니다. 같은 주문의 잠금·멱등성·선행 결과 대기와 이벤트별 트랜잭션은 유지합니다.
+
+
 Listener·Outbox를 활성화했을 때의 기본 동시성·연결 풀은 다음과 같습니다. JDBC 값은 JVM별 상한이며, 인스턴스를 늘리면 합산해 DB·외부 대역 한도와 비교합니다.
 
 | 앱 | Listener 동시성 | Outbox 미완료 발행 상한 | JDBC 풀 |
@@ -990,11 +997,11 @@ Listener·Outbox를 활성화했을 때의 기본 동시성·연결 풀은 다�
 | Settlement | 1 | 8 | 10 |
 | Finance Mock | — | — | 5 |
 
-Payment의 결제 요청 처리기는 3슬롯·슬롯별 100건, 승인 Worker는 6슬롯·조회당 최대 20건입니다. Settlement 지급은 8슬롯 중 2개를 미확정 조회·중단 복구에 전용으로 남깁니다. 실제 값은 각 앱의 `application.yml`과 명시한 환경 변수로 정하며 변경한 값·시험 조건을 함께 기록합니다. 이 상한은 처리량 달성의 근거가 아닙니다.
+Payment의 결제 요청 처리기는 3슬롯·묶음 100건, 승인 Worker는 전체 6슬롯 중 1개를 재시도·만료 임대에 남기고 묶음 20건으로 처리합니다. Commerce 접수·결과 Inbox는 각각 전용 2슬롯·묶음 100건입니다. 묶음 경계에서 다른 슬롯을 기다리지 않고 같은 슬롯이 계속 처리합니다. Settlement 지급은 8슬롯 중 2개를 미확정 조회·중단 복구에 전용으로 남깁니다. 실제 값은 각 앱의 `application.yml`과 명시한 환경 변수로 정하며 변경한 값·시험 조건을 함께 기록합니다. 이 상한은 처리량 달성의 근거가 아닙니다.
 
 Commerce·Payment·Settlement는 자기 원본 토픽 `commerce-settle.<서비스>.v1`을 생성합니다. 소비자별 DLT는 `commerce-settle.<소비자>.v1.dlt`이며 소비자는 `commerce`, `commerce-notifications`, `payment`, `settlement`입니다. 모두 파티션 3개·복제 1개이고 원본은 24시간, DLT는 7일 보존합니다. Payment·Settlement의 명시적 원문 격리·DLT 발행 경로는 아래에 설명하며 다른 소비자는 토픽만 준비한 상태입니다. 기존 토픽 설정이 다르면 smoke가 실패하므로 실제 값을 대조해야 합니다.
 
-Payment 요청 처리기는 `PAYMENT_ROLE=worker`와 `app.payment-request-processor.enabled=true`로 켭니다. 기본 동시성 3·슬롯별 최대 100건이며 승인·Outbox와 공유하는 JDBC 풀을 함께 조정합니다. 원문 인계·대기·결과 반영은 [Inbox 계약](data-model.md#inbox)을 따릅니다. 설정 원문은 [Payment 구성](../payment/src/main/resources/application.yml)을 확인합니다.
+Payment 요청 처리기는 `PAYMENT_ROLE=worker`와 `app.payment-request-processor.enabled=true`로 켭니다. 기본 동시성 3·묶음 100건이며 승인·Outbox와 공유하는 JDBC 풀을 함께 조정합니다. 신규 Inbox 커밋이 로컬 슬롯 하나를 깨우고, 기동·기본 1초 복구 조회가 모든 슬롯을 깨웁니다. 오류 슬롯은 복구 조회 전까지 추가 저장 신호로 재실행하지 않습니다. 원문 인계·대기·결과 반영은 [Inbox 계약](data-model.md#inbox)을 따릅니다. 설정 원문은 [Payment 구성](../payment/src/main/resources/application.yml)을 확인합니다.
 
 `app.outbox.enabled`와 `app.kafka.order-payment-requested.enabled`는 기본 `false`입니다. 빈 개발 DB에 서비스별 초기 SQL을 적용하고 아래 신규 그룹 초기화를 마친 뒤 각각 활성화합니다. 수신 구현 Bean이 없으면 활성화한 Listener는 시작에 실패합니다. 테스트 대역을 운영 구현으로 등록하지 않습니다. 기존 개발 컨테이너에 초기 SQL을 재실행하거나 볼륨을 임의로 초기화하지 않습니다.
 

@@ -2,9 +2,10 @@ package com.commercesettle.commerce.infrastructure.config;
 
 import com.commercesettle.commerce.application.service.OrderResultService;
 import com.commercesettle.commerce.application.service.OrderWorkflowService;
-import com.commercesettle.commerce.infrastructure.messaging.PaymentAcceptedProcessor;
+import com.commercesettle.commerce.infrastructure.messaging.OrderResultProcessor;
 import com.commercesettle.observability.RepeatedWarning;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,8 +21,11 @@ public class OrderWorkflowConfiguration {
 
   @Bean
   @ConditionalOnProperty(name = "app.order-result-processor.enabled", havingValue = "true")
-  OrderResults orderResults(OrderResultService results) {
-    return new OrderResults(results);
+  OrderResultProcessor orderResults(
+      OrderResultService results,
+      @Value("${app.order-result-processor.batch-size:100}") int batchSize,
+      @Value("${app.order-result-processor.concurrency:2}") int concurrency) {
+    return new OrderResultProcessor(results, batchSize, concurrency);
   }
 
   static class OrderClock {
@@ -49,27 +53,6 @@ public class OrderWorkflowConfiguration {
           }
         }
         after = due.getLast();
-      }
-    }
-  }
-
-  static class OrderResults {
-    private final OrderResultService results;
-    private final RepeatedWarning paused = new RepeatedWarning();
-
-    OrderResults(OrderResultService results) {
-      this.results = results;
-    }
-
-    @Scheduled(
-        initialDelayString = "${app.order-result-processor.interval-ms:1000}",
-        fixedDelayString = "${app.order-result-processor.interval-ms:1000}")
-    public void run() {
-      try {
-        PaymentAcceptedProcessor.drain(results::processNext, 100);
-      } catch (RuntimeException e) {
-        paused.at(LoggerFactory.getLogger(OrderResults.class)).log(
-            "Order result processing paused: errorCode=INBOX_UNAVAILABLE");
       }
     }
   }

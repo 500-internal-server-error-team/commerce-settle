@@ -12,6 +12,7 @@ import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.S
 import com.commercesettle.payment.application.port.PaymentGateway;
 import com.commercesettle.payment.application.port.PaymentGateway.ApprovalRequest;
 import com.commercesettle.payment.application.port.PaymentGateway.Result;
+import com.commercesettle.payment.domain.model.PaymentJobOperation;
 import com.commercesettle.payment.domain.repository.MileageReservationRepository;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository;
 import com.commercesettle.payment.support.PaymentObservationsTestConfiguration;
@@ -94,6 +95,120 @@ class ApprovalWorkerIntegrationTest {
 
   private JdbcTemplate jdbc() {
     return new JdbcTemplate(dataSource);
+  }
+
+  @Autowired private WorkSignals signals;
+
+  @Test
+  @DisplayName("신규 승인과 재시도는 도래 시각과 만료 임대를 지켜 분리 선점한다")
+  void separatesNewRetryAndExpiredLeaseLanes() {
+    request(1_000, 0, "CREDIT_CARD");
+    assertThat(
+            jobs.leaseNext(
+                PaymentJobOperation.APPROVE,
+                "retry",
+                Duration.ofSeconds(30),
+                PaymentJobRepository.LeaseLane.RETRY))
+        .isEmpty();
+    var first =
+        jobs.leaseNext(
+                PaymentJobOperation.APPROVE,
+                "new",
+                Duration.ofSeconds(30),
+                PaymentJobRepository.LeaseLane.NEW)
+            .orElseThrow();
+    assertThat(
+            jobs.leaseNext(
+                PaymentJobOperation.APPROVE,
+                "retry",
+                Duration.ofSeconds(30),
+                PaymentJobRepository.LeaseLane.RETRY))
+        .isEmpty();
+    expireLease();
+    assertThat(
+            jobs.leaseNext(
+                PaymentJobOperation.APPROVE,
+                "new",
+                Duration.ofSeconds(30),
+                PaymentJobRepository.LeaseLane.NEW))
+        .isEmpty();
+    assertThat(
+            jobs.leaseNext(
+                    PaymentJobOperation.APPROVE,
+                    "retry",
+                    Duration.ofSeconds(30),
+                    PaymentJobRepository.LeaseLane.RETRY)
+                .orElseThrow()
+                .jobId())
+        .isEqualTo(first.jobId());
+    jdbc()
+        .update(
+            "UPDATE payment.payment_jobs SET status='RETRY', lease_until=NULL, lease_token=NULL, lease_owner=NULL, next_run_at=clock_timestamp()+interval '1 hour'");
+    assertThat(
+            jobs.leaseNext(
+                PaymentJobOperation.APPROVE,
+                "retry",
+                Duration.ofSeconds(30),
+                PaymentJobRepository.LeaseLane.RETRY))
+        .isEmpty();
+    makeJobDue();
+    assertThat(
+            jobs.leaseNext(
+                PaymentJobOperation.APPROVE,
+                "retry",
+                Duration.ofSeconds(30),
+                PaymentJobRepository.LeaseLane.RETRY))
+        .isPresent();
+  }
+
+  @Test
+  @DisplayName("승인 Job의 로컬 깨움은 원업무가 커밋한 뒤에만 전달한다")
+  void publishesApprovalHintOnlyAfterCommit() {
+    int before = signals.approvals.get();
+    new TransactionTemplate(manager)
+        .executeWithoutResult(
+            status -> {
+              request(1_000, 0, "CREDIT_CARD");
+              assertThat(signals.approvals.get()).isEqualTo(before);
+              status.setRollbackOnly();
+            });
+    assertThat(signals.approvals.get()).isEqualTo(before);
+    assertThat(jobs.count()).isZero();
+    request(1_000, 0, "CREDIT_CARD");
+    assertThat(signals.approvals.get()).isEqualTo(before + 1);
+  }
+
+  @Test
+  @DisplayName("신규 승인 슬롯도 PG 호출 중에는 DB 트랜잭션과 연결을 보유하지 않는다")
+  void releasesDatabaseBeforeGatewayInNewLane() {
+    request(1_000, 0, "CREDIT_CARD");
+    gateway.approve =
+        approval -> {
+          assertThat(
+                  org.springframework.transaction.support.TransactionSynchronizationManager
+                      .isActualTransactionActive())
+              .isFalse();
+          assertThat(
+                  org.springframework.transaction.support.TransactionSynchronizationManager
+                      .hasResource(dataSource))
+              .isFalse();
+          return new Result.Succeeded(UUID.randomUUID(), NOW);
+        };
+    assertThat(worker.runOnce(PaymentJobRepository.LeaseLane.NEW)).isTrue();
+    assertThat(gateway.approvals).hasSize(1);
+  }
+
+  static class WorkSignals {
+    final AtomicInteger approvals = new AtomicInteger();
+
+    @org.springframework.transaction.event.TransactionalEventListener(
+        phase = org.springframework.transaction.event.TransactionPhase.AFTER_COMMIT)
+    public void available(
+        com.commercesettle.payment.infrastructure.messaging.PaymentWorkAvailable event) {
+      if (event.kind()
+          == com.commercesettle.payment.infrastructure.messaging.PaymentWorkAvailable.Kind.APPROVAL)
+        approvals.incrementAndGet();
+    }
   }
 
   private Connection lockHolder;
@@ -1019,6 +1134,11 @@ class ApprovalWorkerIntegrationTest {
     ApprovalResultRecorder.class
   })
   static class Config {
+    @Bean
+    WorkSignals workSignals() {
+      return new WorkSignals();
+    }
+
     @Bean
     NamedParameterJdbcTemplate namedParameterJdbcTemplate(DataSource dataSource) {
       return new NamedParameterJdbcTemplate(dataSource);

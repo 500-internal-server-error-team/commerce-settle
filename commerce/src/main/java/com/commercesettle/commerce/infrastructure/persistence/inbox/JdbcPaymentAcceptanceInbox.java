@@ -5,6 +5,7 @@ import com.commercesettle.commerce.application.event.PaymentAcceptedPayload;
 import com.commercesettle.commerce.application.port.PaymentAcceptanceInbox;
 import com.commercesettle.commerce.application.port.PaymentAcceptanceInbox.Source;
 import com.commercesettle.commerce.application.port.PaymentAcceptanceInbox.Waiting;
+import com.commercesettle.commerce.infrastructure.messaging.PaymentWorkAvailable;
 import com.commercesettle.commerce.infrastructure.persistence.TransactionLimits;
 import com.commercesettle.observability.AsyncObservation;
 import com.commercesettle.observability.AsyncObservation.Timing;
@@ -25,6 +26,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -43,6 +45,12 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
   private final ObjectMapper mapper;
   private final String consumer;
   private AsyncObservation observations = AsyncObservation.NOOP;
+  private ApplicationEventPublisher events = event -> {};
+
+  @Autowired
+  void workEvents(ApplicationEventPublisher publisher) {
+    events = publisher;
+  }
 
   public JdbcPaymentAcceptanceInbox(
       NamedParameterJdbcTemplate jdbc,
@@ -124,6 +132,7 @@ public class JdbcPaymentAcceptanceInbox implements PaymentAcceptanceInbox {
         """,
             params);
     if (inserted == 1) {
+      events.publishEvent(new PaymentWorkAvailable(event.eventType().equals("PaymentAccepted")));
       return;
     }
     var original =

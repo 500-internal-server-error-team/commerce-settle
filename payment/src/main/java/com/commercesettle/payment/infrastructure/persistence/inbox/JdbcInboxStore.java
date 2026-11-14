@@ -16,6 +16,7 @@ import com.commercesettle.payment.application.port.InboxClaim;
 import com.commercesettle.payment.application.port.InboxStore;
 import com.commercesettle.payment.application.port.OrderPaymentRequestAcceptor.Source;
 import com.commercesettle.payment.application.port.WaitingInboxEvent;
+import com.commercesettle.payment.infrastructure.messaging.PaymentWorkAvailable;
 import com.commercesettle.payment.infrastructure.persistence.TransactionLimits;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JavaType;
@@ -38,6 +39,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -56,6 +58,12 @@ public class JdbcInboxStore implements InboxStore {
   private final ObjectMapper mapper;
   private final String consumer;
   private AsyncObservation observations = AsyncObservation.NOOP;
+  private ApplicationEventPublisher events = event -> {};
+
+  @Autowired
+  void workEvents(ApplicationEventPublisher publisher) {
+    events = publisher;
+  }
 
   public JdbcInboxStore(
       NamedParameterJdbcTemplate jdbc,
@@ -118,6 +126,7 @@ public class JdbcInboxStore implements InboxStore {
         """,
             params);
     if (inserted == 1) {
+      events.publishEvent(new PaymentWorkAvailable(PaymentWorkAvailable.Kind.REQUEST));
       return;
     }
     var original =

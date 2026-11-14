@@ -159,10 +159,13 @@ app:
   order-result-processor:
     enabled: ${APP_ORDER_RESULT_PROCESSOR_ENABLED:false}
     interval-ms: 1000
+    batch-size: 100
+    concurrency: ${COMMERCE_ORDER_RESULT_CONCURRENCY:2}
   payment-accepted-processor:
     enabled: ${APP_PAYMENT_ACCEPTED_PROCESSOR_ENABLED:false}
     interval-ms: 1000
     batch-size: 100
+    concurrency: ${COMMERCE_PAYMENT_ACCEPTED_CONCURRENCY:2}
   dev-fixtures:
     enabled: ${APP_DEV_FIXTURES_ENABLED:false}
     password: ${DEV_FIXTURE_PASSWORD:}
