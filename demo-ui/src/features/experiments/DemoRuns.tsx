@@ -48,7 +48,8 @@ export function DemoRuns({ services }: { services: string[] }) {
       catch (e) { if ((e as { status?: number }).status === 404) return null; throw e; }
     }, refetchInterval: 2000 });
   const action = useMutation({ mutationFn: async (step: 'create' | 'freeze' | 'shipments' | 'processing' | 'settlement') => {
-    const key = keys.current[step] ??= crypto.randomUUID();
+    const scope = step === 'create' ? step : `${runId}:${step}`;
+    const key = keys.current[scope] ??= crypto.randomUUID();
     if (step === 'create') {
       const snapshot = pendingCreate ?? { ...options }; setPendingCreate(snapshot);
       const created = await request<Run>('post_internal_demo_runs', undefined, snapshot, key);
@@ -65,7 +66,7 @@ export function DemoRuns({ services }: { services: string[] }) {
         after=page.nextCursor;totals.processed+=page.processedCount;totals.waiting+=page.waitingCount;setProgress({...totals});
       } while(after);
     }
-    delete keys.current[step];
+    delete keys.current[scope];
     await Promise.all([client.invalidateQueries({ queryKey: ['demo-run', runId] }), client.invalidateQueries({ queryKey: ['demo-settlement', runId] })]);
   } });
   const locked = !!runId || !!pendingCreate;

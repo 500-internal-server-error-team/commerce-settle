@@ -65,6 +65,7 @@ class DemoSettlementIntegrationTest {
   @Autowired DailySettlementLauncher launcher;
   @Autowired SettlementItemRepository items;
   @Autowired JdbcTemplate jdbc;
+  @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
   @Autowired com.commercesettle.settlement.application.service.SettlementEventService events;
   @Autowired com.commercesettle.settlement.application.service.RefundEventService refunds;
   @Autowired DailySettlementLock lock;
@@ -288,6 +289,89 @@ class DemoSettlementIntegrationTest {
         .isInstanceOf(DemoRunException.class);
     assertThat(store.find(id)).isEmpty();
     assertThat(status(item)).isEqualTo("PAYABLE");
+  }
+
+  @Test
+  @DisplayName("회차 상태 행 잠금은 상한 안에 실패하고 해제 뒤 같은 회차를 다시 갱신한다")
+  void boundsRunStatusLockAndRecoversAfterRelease() throws Exception {
+    UUID id = new UUID(0, 1001);
+    store.create(
+        new DemoSettlementStore.Run(
+            id, new UUID(0, 2001), NOW, Set.of(new UUID(0, 3001)), 0, 5, 10, "READY"));
+    try (var blocker = jdbc.getDataSource().getConnection()) {
+      blocker.setAutoCommit(false);
+      try (var statement =
+          blocker.prepareStatement("SELECT id FROM settlement.demo_runs WHERE id=? FOR UPDATE")) {
+        statement.setObject(1, id);
+        try (var rows = statement.executeQuery()) {
+          assertThat(rows.next()).isTrue();
+        }
+      }
+      assertBoundedWrite(blocker, () -> store.status(id, "FAILED"));
+    }
+    assertThat(store.find(id).orElseThrow().batchStatus()).isEqualTo("READY");
+    store.status(id, "FAILED");
+    assertThat(store.find(id).orElseThrow().batchStatus()).isEqualTo("FAILED");
+  }
+
+  @Test
+  @DisplayName("같은 회차의 미커밋 생성과 경합해도 잠금 상한 안에 실패하고 다시 생성한다")
+  void boundsRunCreationConflictAndRecoversAfterRelease() throws Exception {
+    UUID id = new UUID(0, 1003), seller = new UUID(0, 2003), item = new UUID(0, 3003);
+    var run = new DemoSettlementStore.Run(id, seller, NOW, Set.of(item), 0, 5, 10, "READY");
+    try (var blocker = jdbc.getDataSource().getConnection()) {
+      blocker.setAutoCommit(false);
+      try (var statement =
+          blocker.prepareStatement(
+              "INSERT INTO settlement.demo_runs(id,seller_id,cutoff_at,item_ids,refunded_count,delivery_seconds,refund_seconds,batch_status) VALUES(?,?,?,?::jsonb,0,5,10,'READY')")) {
+        statement.setObject(1, id);
+        statement.setObject(2, seller);
+        statement.setObject(3, NOW.atOffset(ZoneOffset.UTC));
+        statement.setString(4, "[\"" + item + "\"]");
+        statement.executeUpdate();
+      }
+      assertBoundedWrite(blocker, () -> store.create(run));
+    }
+    assertThat(store.find(id)).isEmpty();
+    assertThat(store.create(run).batchStatus()).isEqualTo("READY");
+  }
+
+  private void assertBoundedWrite(java.sql.Connection blocker, Runnable write) throws Exception {
+    try (var workers = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+      var update = workers.submit(write);
+      try {
+        assertThatThrownBy(() -> update.get(2, java.util.concurrent.TimeUnit.SECONDS))
+            .isInstanceOf(java.util.concurrent.ExecutionException.class)
+            .hasCauseInstanceOf(org.springframework.dao.DataAccessException.class);
+      } finally {
+        blocker.rollback();
+        try {
+          update.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.ExecutionException expected) {
+          /* lock timeout */
+        }
+      }
+    }
+  }
+
+  @Test
+  @DisplayName("호출자가 정한 더 짧은 잠금 상한과 기존 트랜잭션 롤백을 유지한다")
+  void preservesShorterStatusBudgetAndCallerRollback() {
+    UUID id = new UUID(0, 1002);
+    store.create(
+        new DemoSettlementStore.Run(
+            id, new UUID(0, 2002), NOW, Set.of(new UUID(0, 3002)), 0, 2, 3, "READY"));
+    var transaction =
+        new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+    transaction.executeWithoutResult(
+        status -> {
+          jdbc.execute("SET LOCAL lock_timeout='250ms'");
+          store.status(id, "FAILED");
+          assertThat(jdbc.queryForObject("SHOW lock_timeout", String.class)).isEqualTo("250ms");
+          assertThat(store.find(id).orElseThrow().batchStatus()).isEqualTo("FAILED");
+          status.setRollbackOnly();
+        });
+    assertThat(store.find(id).orElseThrow().batchStatus()).isEqualTo("READY");
   }
 
   @org.springframework.boot.test.context.TestConfiguration
