@@ -118,6 +118,7 @@ class OrderWorkflowIntegrationTest {
 
   @TempDir Path demoDirectory;
   @Autowired RefundClosureStore closureStore;
+  @Autowired com.commercesettle.commerce.application.port.DemoRunStore demoEnvironment;
 
   @BeforeEach
   void reset() {
@@ -135,6 +136,70 @@ class OrderWorkflowIntegrationTest {
     closure.delegate = null;
     jdbc.execute(
         "CREATE TABLE IF NOT EXISTS commerce.test_benefit_calls (order_id uuid, operation varchar(20))");
+  }
+
+  @Test
+  @DisplayName("시연 기동 표식의 미커밋 생성 충돌은 상한 안에 실패하고 해제 뒤 다시 생성한다")
+  void boundsDemoEnvironmentInsertAndRecoversAfterRelease() throws Exception {
+    jdbc.update("DELETE FROM commerce.demo_environment");
+    try (var holder = jdbc.getDataSource().getConnection();
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+      holder.setAutoCommit(false);
+      try (var statement =
+          holder.prepareStatement("INSERT INTO commerce.demo_environment VALUES(true)")) {
+        statement.executeUpdate();
+      }
+      var work = executor.submit(() -> demoEnvironment.requireEnvironment(true));
+      try {
+        var failure =
+            org.assertj.core.api.Assertions.catchThrowable(
+                () -> work.get(3, java.util.concurrent.TimeUnit.SECONDS));
+        assertThat(failure)
+            .isInstanceOf(java.util.concurrent.ExecutionException.class)
+            .hasCauseInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThat(
+                ((org.springframework.dao.DataAccessException) failure.getCause())
+                    .getMostSpecificCause())
+            .isInstanceOfSatisfying(
+                java.sql.SQLException.class,
+                error -> assertThat(error.getSQLState()).isEqualTo("55P03"));
+      } finally {
+        holder.rollback();
+        try {
+          work.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.ExecutionException expected) {
+          /* lock timeout */
+        }
+      }
+    }
+    assertThat(number("SELECT count(*) FROM commerce.demo_environment")).isZero();
+    demoEnvironment.requireEnvironment(true);
+    assertThat(number("SELECT count(*) FROM commerce.demo_environment")).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("기동 표식은 호출자의 짧은 상한·롤백과 일반 모드 전환 차단을 유지한다")
+  void preservesDemoEnvironmentCallerBudgetAndModeGuard() {
+    jdbc.update("DELETE FROM commerce.demo_environment");
+    new org.springframework.transaction.support.TransactionTemplate(manager)
+        .executeWithoutResult(
+            status -> {
+              jdbc.execute("SET LOCAL lock_timeout='100ms'");
+              jdbc.execute("SET LOCAL statement_timeout='500ms'");
+              demoEnvironment.requireEnvironment(true);
+              assertThat(jdbc.queryForObject("SHOW lock_timeout", String.class)).isEqualTo("100ms");
+              assertThat(jdbc.queryForObject("SHOW statement_timeout", String.class))
+                  .isEqualTo("500ms");
+              assertThat(number("SELECT count(*) FROM commerce.demo_environment")).isEqualTo(1);
+              status.setRollbackOnly();
+            });
+    assertThat(number("SELECT count(*) FROM commerce.demo_environment")).isZero();
+    demoEnvironment.requireEnvironment(false);
+    demoEnvironment.requireEnvironment(true);
+    demoEnvironment.requireEnvironment(true);
+    assertThat(number("SELECT count(*) FROM commerce.demo_environment")).isEqualTo(1);
+    assertThatThrownBy(() -> demoEnvironment.requireEnvironment(false))
+        .hasMessageContaining("A demo database cannot start");
   }
 
   @Test

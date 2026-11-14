@@ -11,6 +11,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcOperations;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public class JdbcDemoRunStore implements DemoRunStore {
@@ -23,7 +24,9 @@ public class JdbcDemoRunStore implements DemoRunStore {
   }
 
   @Override
+  @Transactional
   public void requireEnvironment(boolean enabled) {
+    TransactionLimits.apply(jdbc);
     if (enabled)
       jdbc.update(
           "INSERT INTO commerce.demo_environment(singleton) VALUES(true) ON CONFLICT DO NOTHING");
