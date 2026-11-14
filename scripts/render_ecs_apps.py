@@ -6,7 +6,7 @@ import json
 import re
 import subprocess
 
-from render_ecs_data import compose_services
+from render_ecs_data import apply_capacity, compose_services
 
 
 MODULES = ("gateway", "commerce", "payment", "settlement", "finance-mock")
@@ -116,6 +116,7 @@ def render(service, services, image, region, role, parameter_prefix, app_ip, dat
             "awslogs-region": region, "awslogs-stream-prefix": "ecs",
         }},
     }
+    apply_capacity(container, service)
     return {
         "family": "commerce-settle-" + service, "networkMode": "bridge",
         "requiresCompatibilities": ["EC2"], "executionRoleArn": role,

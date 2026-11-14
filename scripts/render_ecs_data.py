@@ -12,6 +12,63 @@ ROOT = Path(__file__).resolve().parents[1]
 PORTS = {"postgres": 5432, "redis": 6379, "kafka": 9092}
 
 
+def capacity_profile():
+    """Versioned experiment settings shared by initial rendering and tag deployment."""
+    profile = json.loads((ROOT / "infra/ecs/performance.json").read_text())
+    if set(profile) != {"targetConfirmedTps", "delayHeadroom", "services"}:
+        raise ValueError("invalid capacity profile")
+    if set(profile["services"]) != {"postgres", "commerce", "payment-api", "payment-worker",
+                                    "settlement", "finance-mock"}:
+        raise ValueError("invalid capacity service scope")
+    for service, settings in profile["services"].items():
+        if set(settings) - {"memory", "environment", "postgresSettings"}:
+            raise ValueError("unsupported capacity setting")
+        if "memory" in settings and (type(settings["memory"]) is not int or settings["memory"] < 1):
+            raise ValueError("invalid capacity memory")
+        for name, value in settings.get("environment", {}).items():
+            if (not re.fullmatch(r"[A-Z][A-Z0-9_]*", name) or not isinstance(value, str)
+                    or any(word in name for word in ("PASSWORD", "CREDENTIAL", "TOKEN", "SECRET"))):
+                raise ValueError("capacity environment must contain only non-secret settings")
+        if "postgresSettings" in settings and (
+                service != "postgres" or set(settings["postgresSettings"]) != {"max_connections"}
+                or not re.fullmatch(r"[1-9][0-9]*", settings["postgresSettings"]["max_connections"])):
+            raise ValueError("unsupported PostgreSQL capacity setting")
+    return profile
+
+
+def apply_capacity(container, service, profile=None):
+    settings = (profile if profile is not None else capacity_profile())["services"].get(service, {})
+    overrides = settings.get("environment", {})
+    if overrides.keys() & {item["name"] for item in container.get("secrets", [])}:
+        raise ValueError("capacity setting conflicts with a secret reference")
+    environment = {item["name"]: item["value"] for item in container.get("environment", [])}
+    environment.update(overrides)
+    container["environment"] = [{"name": key, "value": value} for key, value in sorted(environment.items())]
+    if "memory" in settings:
+        container["memory"] = settings["memory"]
+    if "postgresSettings" in settings:
+        command = container.get("command", ["postgres"])
+        if not command or command[0] != "postgres":
+            raise ValueError("PostgreSQL capacity requires the existing postgres command")
+        kept, index = [], 0
+        while index < len(command):
+            argument = command[index]
+            if (argument == "-c" and index + 1 < len(command)
+                    and command[index + 1].startswith("max_connections=")):
+                index += 2
+                continue
+            if argument == "--max_connections" and index + 1 < len(command):
+                index += 2
+                continue
+            if argument.startswith(("--max_connections=", "-cmax_connections=")):
+                index += 1
+                continue
+            kept.append(argument)
+            index += 1
+        container["command"] = kept + ["-c", "max_connections=" + settings["postgresSettings"]["max_connections"]]
+    return container
+
+
 def compose_services():
     result = subprocess.run(
         ["docker", "compose", "--env-file", "/dev/null", "-f", str(ROOT / "compose.yml"),
@@ -76,6 +133,7 @@ def render(service, services, region, role, parameter_prefix, private_ip):
     }
     if "command" in source:
         container["command"] = [part.replace("$$", "$") for part in source["command"]]
+    apply_capacity(container, service)
     volumes = []
 
     def mount(name, host, target, read_only=False):

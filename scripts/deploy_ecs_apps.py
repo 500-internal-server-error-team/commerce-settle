@@ -14,9 +14,10 @@ import urllib.parse
 import urllib.request
 
 from render_ecs_apps import MODULES, SERVICES, image_identity, module_for
+from render_ecs_data import apply_capacity, capacity_profile
 
 
-ORDER = ("finance-mock", "commerce", "payment-api", "payment-worker", "settlement", "gateway")
+ORDER = ("postgres", "finance-mock", "commerce", "payment-api", "payment-worker", "settlement", "gateway")
 TASK_METADATA = (
     "taskDefinitionArn", "revision", "status", "requiresAttributes", "compatibilities",
     "registeredAt", "registeredBy", "deregisteredAt",
@@ -140,13 +141,14 @@ def wait_for(aws, cluster, name, task):
             time.sleep(min(15, remaining))
 
 
-def prepare(aws, cluster, images, region, demo_auto_shipment=None):
+def prepare(aws, cluster, images, region, demo_auto_shipment=None, profile=None):
+    profile = capacity_profile() if profile is None else profile
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,255}", cluster):
         raise ValueError("an explicit ECS cluster name is required")
     account = image_identity(images["gateway"])[0]
     if aws("sts", "get-caller-identity").get("Account") != account:
         raise RuntimeError("caller and release image accounts differ")
-    services = describe(aws, cluster, SERVICES)
+    services = describe(aws, cluster, ORDER)
     tasks = {}
     for name, service in services.items():
         old = service["taskDefinition"]
@@ -157,9 +159,10 @@ def prepare(aws, cluster, images, region, demo_auto_shipment=None):
                 or service.get("schedulingStrategy") != "REPLICA"
                 or config.get("minimumHealthyPercent") != 0
                 or config.get("maximumPercent") != 100
-                or not config.get("deploymentCircuitBreaker", {}).get("enable")
-                or not config.get("deploymentCircuitBreaker", {}).get("rollback")):
-            raise RuntimeError("app services require the documented EC2 deployment settings")
+                or name != "postgres" and (
+                    not config.get("deploymentCircuitBreaker", {}).get("enable")
+                    or not config.get("deploymentCircuitBreaker", {}).get("rollback"))):
+            raise RuntimeError("services require the documented EC2 deployment settings")
         response = aws("ecs", "describe-task-definition", "--task-definition", old,
                        "--include", "TAGS")
         task = response["taskDefinition"]
@@ -175,7 +178,18 @@ def prepare(aws, cluster, images, region, demo_auto_shipment=None):
         if (len(containers) != 1 or not containers[0].get("healthCheck")
                 or not containers[0].get("essential", True)):
             raise RuntimeError("app container name or health check is missing")
-        containers[0]["image"] = images[module_for(name)]
+        before = copy.deepcopy(containers[0])
+        previous_memory = task.get("memory")
+        if name != "postgres":
+            containers[0]["image"] = images[module_for(name)]
+        apply_capacity(containers[0], name, profile)
+        if "memory" in task:
+            task["memory"] = str(max(int(task["memory"]), sum(c.get("memory", 0) for c in task["containerDefinitions"])))
+        if name == "postgres":
+            # Environment ordering is immaterial; a matching capacity budget must not restart the DB.
+            before["environment"] = sorted(before.get("environment", []), key=lambda row: row["name"])
+            if before == containers[0] and previous_memory == task.get("memory"):
+                continue
         if demo_auto_shipment is not None and name == "commerce":
             environment = {item["name"]: item["value"]
                            for item in containers[0].get("environment", [])}
@@ -214,33 +228,43 @@ def verify_https(origin):
                 raise RuntimeError("public Gateway OpenAPI response is missing")
 
 
-def rollback_baseline(services, cluster, images, region, demo_auto_shipment=None):
+def rollback_baseline(services, cluster, images, region, demo_auto_shipment=None, profile=None):
+    profile = capacity_profile() if profile is None else profile
     return {
         "status": "prepared", "cluster": cluster, "region": region,
         "previous": {name: value["taskDefinition"] for name, value in services.items()},
         "images": images,
         "demo_auto_shipment": demo_auto_shipment,
+        "capacity_profile_sha256": hashlib.sha256(json.dumps(
+            profile, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
     }
 
 
 def deploy(aws, cluster, images, region, verify, save, baseline, demo_auto_shipment=None):
-    services, tasks = prepare(aws, cluster, images, region, demo_auto_shipment)
-    expected = rollback_baseline(services, cluster, images, region, demo_auto_shipment)
+    profile = capacity_profile()
+    services, tasks = prepare(aws, cluster, images, region, demo_auto_shipment, profile)
+    expected = rollback_baseline(services, cluster, images, region, demo_auto_shipment, profile)
     if any(baseline.get(key) != value for key, value in expected.items()):
         raise RuntimeError("saved rollback baseline differs from the current release or services")
     record = {
         **expected,
-        "registered": {}, "attempted": [], "rolled_back": [], "rollback_errors": [],
+        "registered": {name: expected["previous"][name] for name in ORDER if name not in tasks},
+        "unchanged": [name for name in ORDER if name not in tasks],
+        "attempted": [], "rolled_back": [], "rollback_errors": [],
     }
     save(record)
     try:
         for name in ORDER:
+            if name not in tasks:
+                continue
             response = aws("ecs", "register-task-definition", payload=tasks[name])
             record["registered"][name] = response["taskDefinition"]["taskDefinitionArn"]
             save(record)
         for name in ORDER:
             # This detects visible changes; ECS UpdateService has no revision CAS.
             require_stable(describe(aws, cluster, [name])[name], record["previous"][name])
+            if name not in tasks:
+                continue
             record["attempted"].append(name)
             record["status"] = "deploying"
             save(record)
@@ -396,7 +420,7 @@ def cleanup_images(aws, cluster, images, registered, save):
 
 def finish_cleanup(aws, record, save):
     # Successful deployment is irreversible here: a cleanup error must never invoke rollback.
-    if record.get("status") != "success" or set(record.get("registered", {})) != set(SERVICES):
+    if record.get("status") != "success" or set(record.get("registered", {})) != set(ORDER):
         raise ValueError("cleanup requires a successful complete deployment record")
 
     def save_cleanup(cleanup):
@@ -458,10 +482,11 @@ def main():
             return 0
         require_no_lifecycle(aws, images)
         if args.prepare_only:
+            profile = capacity_profile()
             services, _ = prepare(Aws(args.region), args.cluster, images, args.region,
-                                  demo_auto_shipment)
+                                  demo_auto_shipment, profile)
             save(rollback_baseline(services, args.cluster, images, args.region,
-                                   demo_auto_shipment))
+                                   demo_auto_shipment, profile))
             print("Rollback baseline prepared; no AWS changes made.")
             return 0
         record = deploy(aws, args.cluster, images, args.region,
@@ -472,7 +497,7 @@ def main():
         reason = str(error) if isinstance(error, (ValueError, RuntimeError)) else type(error).__name__
         print("Deployment or image cleanup failed: " + reason + "; check status and cleanup in the record.")
         return 1
-    print("All six app services and public HTTPS verified.")
+    print("PostgreSQL capacity, six app services and public HTTPS verified.")
     return 0
 
 
