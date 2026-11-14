@@ -37,11 +37,15 @@ public final class OrderLifecycleEvents {
   public record MileageAccrualConfirmed(
       UUID paymentId, UUID orderId, long accrualAmount, OffsetDateTime confirmedAt) {}
 
+  @com.fasterxml.jackson.annotation.JsonInclude(
+      com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
   public record PurchaseConfirmed(
       UUID paymentId,
       UUID orderId,
       long orderVersion,
       OffsetDateTime confirmedAt,
       OffsetDateTime deliveredAt,
-      OffsetDateTime refundDeadlineAt) {}
+      OffsetDateTime refundDeadlineAt,
+      UUID demoRunId,
+      Integer demoRefundSeconds) {}
 }

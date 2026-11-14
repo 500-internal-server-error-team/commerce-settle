@@ -88,6 +88,29 @@ class SettlementEventListenerTest {
     verifyNoInteractions(acknowledgment);
   }
 
+  @Test
+  @DisplayName("기존 여섯 필드 구매확정은 선택 시연 필드가 없어도 읽되 기존 필수값 누락은 거절한다")
+  void readsLegacyPurchaseWithoutWeakeningRequiredFields() throws Exception {
+    var original = purchaseRecord();
+    var body = (com.fasterxml.jackson.databind.node.ObjectNode) MAPPER.readTree(original.value());
+    var payload = (com.fasterxml.jackson.databind.node.ObjectNode) body.path("payload");
+    payload.remove(java.util.List.of("demoRunId", "demoRefundSeconds"));
+    listener.receive(
+        new ConsumerRecord<>(
+            original.topic(), 0, 3, original.key(), MAPPER.writeValueAsBytes(body)),
+        acknowledgment);
+    verify(service).receivePurchaseConfirmed(any(), any());
+    verifyNoInteractions(quarantine);
+    org.mockito.Mockito.clearInvocations(service, acknowledgment);
+    payload.remove("confirmedAt");
+    listener.receive(
+        new ConsumerRecord<>(
+            original.topic(), 0, 4, original.key(), MAPPER.writeValueAsBytes(body)),
+        acknowledgment);
+    verifyNoInteractions(service);
+    verify(quarantine).capture(any());
+  }
+
   private static ConsumerRecord<String, byte[]> purchaseRecord() throws Exception {
     UUID paymentId = UUID.randomUUID();
     UUID orderId = UUID.randomUUID();

@@ -41,6 +41,9 @@ public class SettlementEventService {
   private static final int MAX_WAITING_ATTEMPTS = 10;
   private static final Duration MIN_FAILURE_DELAY = Duration.ofSeconds(1);
 
+  @Value("${app.demo.enabled:false}")
+  private boolean demoEnabled;
+
   private AsyncObservation observations = AsyncObservation.NOOP;
   private final InboxStore inbox;
   private final SettlementItemRepository items;
@@ -242,7 +245,7 @@ public class SettlementEventService {
   private void applyPurchase(UUID inboxId, EventEnvelope<PurchaseConfirmedPayload> event) {
     Instant now = clock.instant();
     PurchaseConfirmedPayload purchase = event.payload();
-    if (!purchase.timesMatchContract()) {
+    if (!purchase.timesMatchContract(demoEnabled)) {
       review(inboxId, event, "PURCHASE_TIME_CONTRACT_MISMATCH", now);
       return;
     }

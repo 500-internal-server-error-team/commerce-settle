@@ -220,6 +220,13 @@ public class SettlementEventListener {
         requireTime(payload.path(field));
       }
       requireRange(payload.path("orderVersion"), 0, Long.MAX_VALUE);
+      if (payload.hasNonNull("demoRunId")) requireUuid(payload.path("demoRunId"));
+      if (payload.hasNonNull("demoRefundSeconds"))
+        requireRange(payload.path("demoRefundSeconds"), 1, 3600);
+      // 선택 필드만 누락을 허용한다. 원본 bytes와 기존 필수값의 엄격한 검사는 유지한다.
+      var optional = (com.fasterxml.jackson.databind.node.ObjectNode) payload;
+      if (!optional.has("demoRunId")) optional.putNull("demoRunId");
+      if (!optional.has("demoRefundSeconds")) optional.putNull("demoRefundSeconds");
       EventEnvelope<PurchaseConfirmedPayload> event = purchaseReader.readValue(json);
       requireKey(record, event.payload().paymentId().toString());
       return event;
