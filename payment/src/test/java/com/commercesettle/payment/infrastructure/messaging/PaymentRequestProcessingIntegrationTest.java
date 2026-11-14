@@ -2,6 +2,7 @@ package com.commercesettle.payment.infrastructure.messaging;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 import com.commercesettle.payment.application.event.EventEnvelope;
 import com.commercesettle.payment.application.event.OrderPaymentRequestedPayload;
@@ -212,31 +213,40 @@ class PaymentRequestProcessingIntegrationTest {
 
   @Test
   @DisplayName("실패한 요청이 앞에 있어도 같은 주기에 뒤의 요청을 처리한다")
-  void processesLaterRequestAfterFailedOne() {
+  void processesLaterRequestAfterFailedOne() throws Exception {
     saveWaiting();
     insertConflictingApprovalJob();
     UUID laterOrderId = UUID.randomUUID();
     saveWaiting(event(UUID.randomUUID(), laterOrderId, UUID.randomUUID(), 10_000, 0));
 
-    new PaymentRequestProcessor(service, 10).run();
-
+    var processor = new PaymentRequestProcessor(service, 10);
     JdbcTemplate jdbc = new JdbcTemplate(dataSource);
-    assertThat(
-            jdbc.queryForObject(
-                "SELECT count(*) FROM payment.payments WHERE order_id = ?",
-                Long.class,
-                laterOrderId))
-        .isEqualTo(1);
-    assertThat(
-            jdbc.queryForList(
-                "SELECT status || ':' || attempts FROM payment.inbox ORDER BY status",
-                String.class))
-        .containsExactly("APPLIED:1", "WAITING:1");
+    try {
+      processor.run();
+      await()
+          .atMost(Duration.ofSeconds(10))
+          .untilAsserted(
+              () -> {
+                assertThat(
+                        jdbc.queryForObject(
+                            "SELECT count(*) FROM payment.payments WHERE order_id = ?",
+                            Long.class,
+                            laterOrderId))
+                    .isEqualTo(1);
+                assertThat(
+                        jdbc.queryForList(
+                            "SELECT status || ':' || attempts FROM payment.inbox ORDER BY status",
+                            String.class))
+                    .containsExactly("APPLIED:1", "WAITING:1");
+              });
+    } finally {
+      processor.stop();
+    }
   }
 
   @Test
   @DisplayName("확인 대상 전환도 처리 건수에 포함하고, 배치가 차면 이어서 남은 요청까지 처리한다")
-  void countsReviewTransitionsTowardBatchSize() {
+  void countsReviewTransitionsTowardBatchSize() throws Exception {
     List<UUID> exhausted = new ArrayList<>();
     for (int i = 0; i < 3; i++) {
       UUID eventId = UUID.randomUUID();
@@ -255,21 +265,29 @@ class PaymentRequestProcessingIntegrationTest {
     }
     PaymentRequestProcessor processor = new PaymentRequestProcessor(service, 2);
 
-    // 첫 배치 2건은 모두 확인 대상 전환이다. 배치가 찼으므로 다음 배치에서 남은 확인 대상과 정상 요청을 처리한다.
-    processor.run();
-
-    assertThat(
-            jdbc.queryForObject(
-                "SELECT count(*) FROM payment.inbox WHERE status = 'REVIEW_REQUIRED'"
-                    + " AND last_error_code = 'PAYMENT_REQUEST_ATTEMPTS_EXHAUSTED'",
-                Long.class))
-        .isEqualTo(3);
-    assertThat(
-            jdbc.queryForObject(
-                "SELECT count(*) FROM payment.payments WHERE order_id = ?",
-                Long.class,
-                normalOrderId))
-        .isEqualTo(1);
+    // 첫 배치가 모두 확인 대상 전환이어도 정상 요청까지 이어 처리해야 한다.
+    try {
+      processor.run();
+      await()
+          .atMost(Duration.ofSeconds(10))
+          .untilAsserted(
+              () -> {
+                assertThat(
+                        jdbc.queryForObject(
+                            "SELECT count(*) FROM payment.inbox WHERE status = 'REVIEW_REQUIRED'"
+                                + " AND last_error_code = 'PAYMENT_REQUEST_ATTEMPTS_EXHAUSTED'",
+                            Long.class))
+                    .isEqualTo(3);
+                assertThat(
+                        jdbc.queryForObject(
+                            "SELECT count(*) FROM payment.payments WHERE order_id = ?",
+                            Long.class,
+                            normalOrderId))
+                    .isEqualTo(1);
+              });
+    } finally {
+      processor.stop();
+    }
   }
 
   @Test
