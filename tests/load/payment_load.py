@@ -596,7 +596,9 @@ def clock_summary(samples):
             "samples": len(ranges)}
 
 
-WORKER_SETTINGS = ("PAYMENT_REQUEST_CONCURRENCY", "PAYMENT_APPROVAL_CONCURRENCY", "PAYMENT_DB_POOL_SIZE")
+WORKER_SETTINGS = ("PAYMENT_REQUEST_CONCURRENCY", "PAYMENT_APPROVAL_CONCURRENCY",
+                   "PAYMENT_APPROVAL_RETRY_CONCURRENCY", "PAYMENT_DB_POOL_SIZE",
+                   "PAYMENT_SCENARIO_VERSION")
 
 
 def worker_settings():
@@ -683,7 +685,7 @@ def cmd_ramp(args):
                 env = compose_env()
                 for name, value in (before or {}).items():
                     if value is not None:
-                        env["LOAD_" + name] = value
+                        env["LOAD_PG_SCENARIO" if name == "PAYMENT_SCENARIO_VERSION" else "LOAD_" + name] = value
                 env["LOAD_PAYMENT_LISTENER_ENABLED"] = "true"
                 if args.scenario:
                     env["LOAD_PG_SCENARIO"] = args.scenario

@@ -40,7 +40,7 @@ python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN
 
 기본값은 **한 구매자·한 상품에 200건/초·60초(12,000건)**인 짧은 경로 시험입니다. 먼저 낮은 부하로 확인하려면 `--tps 2 --seconds 3`을 붙입니다. 기존 로컬 `order.json`이나 `.env`는 읽거나 덮어쓰지 않습니다.
 
-`--tps`로 초당 주문 요청 수를 **1~1000**에서 선택합니다. 기존 `--rate`도 같은 옵션입니다. `--seconds`는 1~900초·기본 60초, `--warmup-seconds`는 0~300초·기본 0초입니다.
+`--tps`로 초당 주문 요청 수를 **1~2000**에서 선택합니다. 기존 `--rate`도 같은 옵션입니다. `--seconds`는 1~900초·기본 60초, `--warmup-seconds`는 0~300초·기본 0초입니다.
 
 ```bash
 python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN --tps 200
@@ -57,7 +57,13 @@ python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN \
 
 180,000건은 이 명령의 **측정분 요청 예정 수**입니다. 지속 성능 통과에는 같은 실제 900초 구간의 Payment DB 확정 처리량·적체 추세·오류·배포 API 지연과 배출 뒤 재고/예약/금액 대조가 필요합니다. 예열·사전 주문·다른 실행의 완료량과 측정 종료 뒤 완료분을 소급해 넣지 않습니다. 짧은 회귀·탐색은 유지하며 CI에서 실제 15분 부하를 실행하지 않습니다.
 
-기본 사전 VU는 `max(400, TPS×2)`, 최대 VU는 `max(1200, TPS×6)`이며 `--pre-allocated-vus`·`--max-vus`로 1~10000 안에서 조정합니다. 실제 선택값은 요약에 남습니다. 필요한 동시성은 주입률과 실제 요청 점유시간에 따라 달라지므로 Mac의 CPU·메모리·네트워크·실제 주입률·`dropped_iterations`도 확인합니다. 기본 VU가 목표 달성을 보장하지 않습니다.
+기획 PG 조건은 `fixture-pg-planned-v1`입니다. PG_A 80~150ms·거절 0.5%, PG_B 300~700ms·3%, PG_C 800~1,500ms·8%, EASY_PAY 100~300ms·1%를 승인·환불에 적용하고 기본 응답 유실·조회 실패는 0입니다. 기존 `fixture-pg-normal-v1`의 0지연·0거절은 기본 기능 비교용으로 유지합니다. 실행 시 실제 선택한 버전을 확인합니다.
+
+태그의 [시험 용량 설정](../../infra/ecs/performance.json)은 1,000 **결제 확정**/초의 지연 예산과 별도 재시도 여유를 둡니다. 자세한 슬롯·DB·메모리와 적용/복구는 [태그 배포](../../docs/development.md#태그-배포-설정과-실패-복구)를 따릅니다. 이 설정은 실측 통과가 아닙니다. PG_A 기본 경로부터 시작해 PG별 단독·혼합을 구분합니다. PG_C에서 1,000요청/초를 넣으면 거절만으로 평균 920확정/초이므로 확정 목표 1,000을 검증할 때는 충분한 입력이 필요합니다. 예를 들어 1,100요청/초는 PG_C 거절만 반영하면 평균 1,012확정/초이며 실제 완료량은 반드시 DB에서 측정합니다.
+
+기획 거절을 포함하는 주문 실행에는 `--allow-pg-declines`를 명시합니다. 사전 주문의 `DECLINED`를 허용하고 예열/측정은 `PAID`·`DECLINED` 종결을 분리하며, 성공 결제가 한 건도 없거나 다른 종결·미확정이 있으면 실패합니다. 정상 0거절 비교의 기본 판정은 전부 `PAID`입니다. 허용 거절을 확정 TPS에 더하지 않으며 `confirmedOrders`·`declinedOrders`를 별도로 남깁니다. API 경로 통과와 실제 PG 거절 일치·재고 복구·금융 대조·동일 측정창의 확정 TPS 통과는 구분합니다. 단일 상품 재고 행의 예약·확정/해제 경합도 승인 슬롯 확대만으로 해소되지 않습니다.
+
+기본 사전 VU는 `max(400, TPS×2)`, 최대 VU는 `min(10000, max(1200, TPS×6))`이며 `--pre-allocated-vus`·`--max-vus`로 1~10000 안에서 조정합니다. 실제 선택값은 요약에 남습니다. 필요한 동시성은 주입률과 실제 요청 점유시간에 따라 달라지므로 Mac의 CPU·메모리·네트워크·실제 주입률·`dropped_iterations`도 확인합니다. 기본 VU가 목표 달성을 보장하지 않습니다.
 
 실행기는 생성한 주문 본문을 컨테이너의 `ORDER_FILE=/work/order.json`으로 전달합니다. `orders.js`를 직접 실행할 때도 `ORDER_FILE`에 준비된 주문 JSON을 지정할 수 있으며, 로그인 본문·잘못된 JSON은 요청 전에 거절합니다. 직접 k6 실행은 Python 실행기의 사전 PAID 확인·원장 저장·배출 대조·상품/세션 정리를 수행하지 않으므로, 전후 비교에는 위 Python 명령을 사용합니다.
 
@@ -159,6 +165,7 @@ python3 tests/load/payment_load.py reconcile          # 원장 ↔ Payment ↔ f
 - `scenario`는 PG 시나리오를 바꿔 Worker를 다시 만들고 초당 100건을 60초 넣은 뒤 대조합니다. `restart`는 시작 25초 뒤 `payment-worker`를 SIGKILL하고 다시 띄웁니다.
 - 결제 요청 처리 슬롯·승인 슬롯·DB 연결 풀은 `LOAD_PAYMENT_REQUEST_CONCURRENCY`(기본 3)·`LOAD_PAYMENT_APPROVAL_CONCURRENCY`(기본 6)·`LOAD_PAYMENT_DB_POOL_SIZE`(기본 20)로 바꿉니다. `enable`·`scenario`가 payment-worker를 다시 만들 때도 같은 값을 지정해야 합니다. `ramp --kill-after`의 재기동은 죽이기 전 Worker의 실제 값을 그대로 넘기므로 다시 지정하지 않아도 되며, 그 값을 `summary.json`의 `fault.workerSettingsBeforeKill`에 남깁니다. `ramp`는 실행 중인 Worker의 실제 값을 `summary.json`의 `workerSettings`에 남기고, Worker를 읽을 수 없으면 `null`로 남깁니다. `scenario`도 내부에서 `ramp`로 주입하므로 같은 값을 남깁니다.
 - `prepare`는 시험 스택의 finance-mock DB에 `load-pg-*` 시나리오를 직접 넣습니다.
+- 기획 fixture를 쓰려면 `enable --scenario fixture-pg-planned-v1`을 선택합니다. 승인·재시도 슬롯은 `LOAD_PAYMENT_APPROVAL_CONCURRENCY=4096`·`LOAD_PAYMENT_APPROVAL_RETRY_CONCURRENCY=256`으로 지정할 수 있지만 로컬 호스트의 DB·앱 예산도 함께 확인합니다. ECS용 전체 예산을 Docker 8GiB에 그대로 올려 1,000 TPS를 보장하지 않습니다. 실제 Worker의 시나리오·재시도 설정도 기록하고 중단 재기동 때 유지합니다.
 - 새 마일리지·간편결제 시험 지갑의 초기 잔액은 100억 원이며, `prepare`를 다시 실행해도 기존 잔액은 보존합니다. `reconcile`은 함께 생성한 간편결제 지갑의 저장된 초기 잔액을 기준으로 두 지갑을 대조합니다.
 - `replay`는 시험 스택의 `payment-api`에만 운영자 자격(`operator:load`)을 설정합니다. 자격은 `tests/load/work/operator.credential`에 무작위로 만듭니다.
 - 주입 원장·표본·요약·대조 결과는 Git에서 제외한 `tests/load/work/<실행 이름>/`에 남습니다. `LOAD_WORK_DIR`를 지정하면 그 경로를 사용합니다.

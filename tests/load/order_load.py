@@ -217,11 +217,16 @@ def smoke(api, buyer, body, run_id, timeout, plan=None, checkpoint=None):
             print("신규 주문 gate가 닫혀 있습니다. 30초 뒤 같은 사전 주문을 확인합니다.", flush=True)
             time.sleep(30)
     deadline = time.monotonic() + timeout
-    while order["status"] != "PAID":
+    accepted = {"PAID", "DECLINED"} if plan and plan.get("allowPgDeclines") else {"PAID"}
+    while order["status"] not in accepted:
         if order["status"] != "PAYMENT_PENDING" or time.monotonic() >= deadline:
             raise RuntimeError("사전 주문이 PAID로 반영되지 않았습니다. 주문 ID=" + order["id"])
         time.sleep(1)
         order = api.call("GET", "/api/orders/" + order["id"], token=buyer)
+    if plan is not None:
+        plan["smokeStatus"] = order["status"]
+        if checkpoint:
+            checkpoint()
     return order["id"]
 
 
@@ -509,18 +514,25 @@ def injection_passed(plan, ledger, k6, code, phase="measurement"):
             and metric(k6, "dropped_iterations", "count") == 0)
 
 
+def terminal_verdict(plan, states, count):
+    allowed = {"PAID", "DECLINED"} if plan.get("allowPgDeclines") else {"PAID"}
+    return (states.get("PAID", 0) > 0 and sum(states.get(state, 0) for state in allowed) == count)
+
+
 def verdict(plan, ledger, k6, code, observed):
     return (injection_passed(plan, ledger, k6, code) and observed["drainComplete"]
             and not observed["missingAcceptedOrderIds"]
             and not observed["ordersWithout201Receipt"]
-            and observed["measurementStates"].get("PAID", 0) == plan["plannedOrders"])
+            and terminal_verdict(plan, observed["measurementStates"], plan["plannedOrders"]))
 
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     result.add_argument("--base-url")
     result.add_argument("--tps", "--rate", dest="rate", metavar="TPS", type=int, default=200,
-                        help="초당 주문 요청 수: 1..1000 (기본 200). 결제 완료 TPS와 구분")
+                        help="초당 주문 요청 수: 1..2000 (기본 200). 결제 완료 TPS와 구분")
+    result.add_argument("--allow-pg-declines", action="store_true",
+                        help="기획 PG 거절을 PAID와 별도 종결로 허용. 실제 PG 결과·재고 복구·확정 TPS는 별도 대조")
     result.add_argument("--seconds", type=int, default=60)
     result.add_argument("--warmup-seconds", type=int, default=0)
     result.add_argument("--pre-allocated-vus", type=int,
@@ -544,7 +556,7 @@ def main(argv=None):
     if args.pre_allocated_vus is None:
         args.pre_allocated_vus = max(400, args.rate * 2)
     if args.max_vus is None:
-        args.max_vus = max(1200, args.rate * 6)
+        args.max_vus = min(10000, max(1200, args.rate * 6))
     try:
         original = args.resume.resolve() if args.resume else None
         if original and args.resume.is_symlink():
@@ -574,10 +586,10 @@ def main(argv=None):
                     previous = value
         except (ValueError, OSError):
             pass  # A killed run may have no summary; its planned phases remain unverified.
-    if (not 1 <= args.rate <= 1000 or not 1 <= args.seconds <= 900 or not 0 <= args.warmup_seconds <= 300
+    if (not 1 <= args.rate <= 2000 or not 1 <= args.seconds <= 900 or not 0 <= args.warmup_seconds <= 300
             or not 1 <= args.pre_allocated_vus <= args.max_vus <= 10000
             or not 1 <= args.smoke_timeout <= 300 or not 0 <= args.drain_seconds <= 900):
-        arguments.error("tps=1..1000, seconds=1..900, warmup=0..300, VU=1..10000, smoke=1..300초, drain=0..900초 범위입니다.")
+        arguments.error("tps=1..2000, seconds=1..900, warmup=0..300, VU=1..10000, smoke=1..300초, drain=0..900초 범위입니다.")
     run_id = resumed_plan["runId"] if original else uuid.uuid4().hex
     requested = (original / ("recovery-" + uuid.uuid4().hex) if original else
                  args.output_dir or ROOT / "tests/load/work" / ("orders-" + run_id)).absolute()
@@ -642,7 +654,8 @@ def main(argv=None):
             total = args.rate * (args.seconds + args.warmup_seconds)
             plan = prepare(api, buyer, seller, run_id, total)
             plan.update(plannedOrders=args.rate * args.seconds, warmupOrders=args.rate * args.warmup_seconds,
-                        measurementSeconds=args.seconds, warmupSeconds=args.warmup_seconds)
+                        measurementSeconds=args.seconds, warmupSeconds=args.warmup_seconds,
+                        allowPgDeclines=args.allow_pg_declines)
             write_json(directory / "plan.json", plan)
             body = prepare_order(api, buyer, seller, plan)
             write_json(directory / "order.json", body)
@@ -650,9 +663,9 @@ def main(argv=None):
             write_json(directory / "plan.json", plan)
             plan["smokeOrderId"] = smoke(api, buyer, body, run_id, args.smoke_timeout, plan,
                                         lambda: write_json(directory / "plan.json", plan))
-            plan["smokePaid"] = True
+            plan["smokePaid"] = plan.get("smokeStatus") == "PAID"
             write_json(directory / "plan.json", plan)
-            print("사전 주문 PAID 확인. 결과 폴더: " + str(directory), flush=True)
+            print("사전 주문 종결 확인. 결과 폴더: " + str(directory), flush=True)
         if args.prepare_only and not original:
             report.update(prepared=True, loadExecuted=False, productId=plan["productId"])
             exit_code = 0
@@ -680,8 +693,8 @@ def main(argv=None):
                                  lambda value: write_json(directory / "warmup-states.json", value))
                     if (not report["warmupInjectionPassed"] or warm["recoveryRequired"]
                             or not warm["drainComplete"]
-                            or warm["states"].get("PAID", 0) != plan["warmupOrders"]):
-                        raise RuntimeError("예열 거래가 전부 PAID로 배출되지 않아 본 측정을 시작하지 않습니다.")
+                            or not terminal_verdict(plan, warm["states"], plan["warmupOrders"])):
+                        raise RuntimeError("예열 거래의 결제 성공·허용 거절 배출이 끝나지 않아 본 측정을 시작하지 않습니다.")
     except (ApiError, RuntimeError, ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
         report["failurePhase"] = report["phase"]
         report["failure"] = str(error) if isinstance(error, (ApiError, RuntimeError)) else type(error).__name__
@@ -741,7 +754,9 @@ def main(argv=None):
                 passed = (not original and "failure" not in report
                           and verdict(plan, ledger, summary, code, observed))
                 report.update(passed=passed, recoveryComplete=not observed["recoveryRequired"],
-                              meaning="API 주입/PAID 관측만 판정. 900초 업무 성능·금융 정합성은 UNVERIFIED.")
+                              confirmedOrders=observed["measurementStates"].get("PAID", 0),
+                              declinedOrders=observed["measurementStates"].get("DECLINED", 0),
+                              meaning="API 주입/허용 종결만 판정. 거절은 결제 확정량에 넣지 않으며 지속 TPS·금융 정합성은 UNVERIFIED.")
                 if "failure" not in report:
                     exit_code = 0 if (not observed["recoveryRequired"] if original else passed) else 1
             except KeyboardInterrupt:
