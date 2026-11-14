@@ -61,22 +61,16 @@ class DemoRunServiceTest {
   @DisplayName("회차 한도 초과는 주문을 연결하기 전에 거절한다")
   void rejectsCapacityBeforeCapturingOrder() {
     UUID id = UUID.randomUUID(), seller = UUID.randomUUID(), product = UUID.randomUUID();
-    var order = mock(com.commercesettle.commerce.domain.model.Order.class);
-    when(order.getSellerId()).thenReturn(seller);
-    when(order.getProductId()).thenReturn(product);
     when(store.find(id, true))
         .thenReturn(
             Optional.of(
                 new DemoRunStore.Run(
                     id, seller, product, null, 5, 10, Instant.now(), null, List.of())));
     when(store.atCapacity(id)).thenReturn(true);
-    assertThatThrownBy(() -> service(true, true, false).apply(order, id))
+    assertThatThrownBy(() -> service(true, true, false).lockForNewOrder(id))
         .isInstanceOf(DemoRunException.class)
         .extracting("code")
         .isEqualTo("DEMO_LIMIT_EXCEEDED");
-    org.mockito.Mockito.verify(order, org.mockito.Mockito.never())
-        .configureDemo(
-            any(), org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt());
   }
 
   @Test

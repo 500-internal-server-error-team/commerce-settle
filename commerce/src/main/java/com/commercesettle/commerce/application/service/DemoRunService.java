@@ -107,17 +107,22 @@ public class DemoRunService {
         this::view);
   }
 
-  public void apply(Order order, UUID runId) {
-    if (runId == null) return;
+  public Run lockForNewOrder(UUID runId) {
+    if (runId == null) return null;
     requireEnabled();
     Run run = require(runId, true);
     if (run.frozenAt() != null) throw rejected("DEMO_RUN_FROZEN", "고정된 회차에는 새 주문을 넣을 수 없습니다.");
+    if (store.atCapacity(runId)) throw rejected("DEMO_LIMIT_EXCEEDED", "회차당 주문은 10000건까지 지원합니다.");
+    return run;
+  }
+
+  public void apply(Order order, Run run) {
+    if (run == null) return;
     if (!run.productId().equals(order.getProductId())
         || !run.sellerId().equals(order.getSellerId())
         || !Objects.equals(run.eventId(), order.getEventId()))
       throw rejected("DEMO_SCOPE_CONFLICT", "회차의 상품·판매자·이벤트를 확인하세요.");
-    if (store.atCapacity(runId)) throw rejected("DEMO_LIMIT_EXCEEDED", "회차당 주문은 10000건까지 지원합니다.");
-    order.configureDemo(runId, run.deliverySeconds(), run.refundSeconds());
+    order.configureDemo(run.id(), run.deliverySeconds(), run.refundSeconds());
   }
 
   @Transactional(readOnly = true)
