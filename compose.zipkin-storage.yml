@@ -1,0 +1,151 @@
+{
+  "services": {
+    "zipkin": {
+      "image": "openzipkin/zipkin:3.6.1@sha256:d17e856dcbba7ffeefbbfc252f89ab78a4ab6faed47e646d46daad78f91b5ee2",
+      "mem_limit": "384m",
+      "restart": "unless-stopped",
+      "ports": [
+        "${ZIPKIN_BIND_IP:-127.0.0.1}:${ZIPKIN_PORT:-9411}:9411"
+      ],
+      "environment": {
+        "STORAGE_TYPE": "elasticsearch",
+        "ES_HOSTS": "http://zipkin-store:9200",
+        "ES_USERNAME": "elastic",
+        "ES_PASSWORD": "${ZIPKIN_STORAGE_PASSWORD:?Run python3 scripts/init_env.py}",
+        "ES_INDEX": "commerce-settle-zipkin",
+        "ES_DATE_SEPARATOR": ".",
+        "QUERY_LOOKBACK": "172800000",
+        "JAVA_OPTS": "-Xms64m -Xmx192m"
+      },
+      "depends_on": {
+        "zipkin-storage-init": {
+          "condition": "service_completed_successfully"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "docker-healthcheck"
+        ],
+        "interval": "10s",
+        "timeout": "3s",
+        "retries": 12,
+        "start_period": "120s"
+      },
+      "networks": [
+        "backend",
+        "zipkin-storage"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "2"
+        }
+      }
+    },
+    "zipkin-store": {
+      "image": "docker.elastic.co/elasticsearch/elasticsearch:8.19.25@sha256:5bfdf4313b9bc05c0d46fe219d6e67710eb0c7654ed6c275167bdf9beefc56f0",
+      "mem_limit": "1g",
+      "cpus": 2,
+      "pids_limit": 256,
+      "restart": "unless-stopped",
+      "environment": {
+        "discovery.type": "single-node",
+        "node.store.allow_mmap": "false",
+        "xpack.security.enabled": "true",
+        "xpack.security.autoconfiguration.enabled": "false",
+        "xpack.security.http.ssl.enabled": "false",
+        "xpack.security.transport.ssl.enabled": "false",
+        "xpack.ml.enabled": "false",
+        "ingest.geoip.downloader.enabled": "false",
+        "indices.lifecycle.poll_interval": "1m",
+        "cluster.routing.allocation.disk.watermark.low": "2gb",
+        "cluster.routing.allocation.disk.watermark.high": "1536mb",
+        "cluster.routing.allocation.disk.watermark.flood_stage": "1gb",
+        "ES_JAVA_OPTS": "-Xms256m -Xmx256m",
+        "ELASTIC_PASSWORD": "${ZIPKIN_STORAGE_PASSWORD:?Run python3 scripts/init_env.py}"
+      },
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${ZIPKIN_STORAGE_DIR:?Select the dedicated trace data directory}",
+          "target": "/usr/share/elasticsearch/data"
+        }
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "curl -fsS --user \"elastic:$$ELASTIC_PASSWORD\" \"http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=2s\" >/dev/null"
+        ],
+        "interval": "5s",
+        "timeout": "3s",
+        "retries": 24,
+        "start_period": "90s"
+      },
+      "networks": [
+        "zipkin-storage"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "2"
+        }
+      }
+    },
+    "zipkin-storage-init": {
+      "image": "docker.elastic.co/elasticsearch/elasticsearch:8.19.25@sha256:5bfdf4313b9bc05c0d46fe219d6e67710eb0c7654ed6c275167bdf9beefc56f0",
+      "mem_limit": "64m",
+      "cpus": 0.25,
+      "restart": "no",
+      "entrypoint": [
+        "sh",
+        "-ec"
+      ],
+      "command": [
+        "curl -fsS --retry 60 --retry-delay 2 --retry-connrefused --max-time 5 --user \"$${ES_USERNAME}:$${ES_PASSWORD}\" -H 'Content-Type: application/json' -X PUT \"$${ES_HOSTS}/_ilm/policy/commerce-settle-zipkin-retention\" --data-binary @/etc/zipkin/retention-policy.json\ncurl -fsS --retry 5 --retry-delay 1 --max-time 5 --user \"$${ES_USERNAME}:$${ES_PASSWORD}\" -H 'Content-Type: application/json' -X PUT \"$${ES_HOSTS}/_template/commerce-settle-zipkin-retention\" --data-binary @/etc/zipkin/retention-template.json"
+      ],
+      "environment": {
+        "ES_HOSTS": "http://zipkin-store:9200",
+        "ES_USERNAME": "elastic",
+        "ES_PASSWORD": "${ZIPKIN_STORAGE_PASSWORD:?Run python3 scripts/init_env.py}"
+      },
+      "depends_on": {
+        "zipkin-store": {
+          "condition": "service_healthy"
+        }
+      },
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "./infra/zipkin/retention-policy.json",
+          "target": "/etc/zipkin/retention-policy.json",
+          "read_only": true
+        },
+        {
+          "type": "bind",
+          "source": "./infra/zipkin/retention-template.json",
+          "target": "/etc/zipkin/retention-template.json",
+          "read_only": true
+        }
+      ],
+      "networks": [
+        "zipkin-storage"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "10m",
+          "max-file": "2"
+        }
+      }
+    }
+  },
+  "networks": {
+    "backend": {},
+    "zipkin-storage": {
+      "internal": true
+    }
+  }
+}

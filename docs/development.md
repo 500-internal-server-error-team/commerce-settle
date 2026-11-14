@@ -803,24 +803,46 @@ JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업은 비활성화합니
 
 태그 배포는 앱 이미지 여섯 서비스를 교체하며 DB·Task 환경·Caddy·관측 도구의 설정은 보존합니다. 따라서 새 이미지의 CI 성공만으로 현재 DDL·업무 처리기·관측 설정이 적용됐다고 판단하지 않습니다. 스키마가 다르면 [실험 환경 초기화](migrations.md#최초-배포와-기존-데이터-변경)를 먼저 계획하고 이전 증거를 보존합니다. 같은 거래의 장애 복구는 초기화하지 않습니다.
 
-[관측 설정 생성기](../scripts/render_ecs_observability.py)는 기존 Compose 이미지·production 규칙·Alertmanager 경로를 재사용합니다. 실제 ECS 클러스터 ARN, 서로 다른 두 호스트의 사설 IPv4, 기존 data 관측 Compose project를 지정합니다. 앱 지표는 실제 bridge 관리 포트 9091~9096으로 수집하고, `instance`는 기존 서비스 이름을 유지해 대상 중단 경보가 동작하게 합니다. 실제 주소는 `target_address`에 따로 남습니다. 런타임은 양쪽 호스트의 9109를 각각 수집합니다.
+[관측 설정 생성기](../scripts/render_ecs_observability.py)는 기존 Compose 이미지·production 규칙·Alertmanager 경로를 재사용합니다. 실제 ECS 클러스터 ARN과 서로 다른 두 호스트의 사설 IPv4를 지정합니다. 기존 앱·데이터·관측 서비스는 ECS Task이며, 생성되는 두 런타임 수집기만 호스트별 전용 Compose project에서 실행합니다. 앱 지표는 실제 bridge 관리 포트 9091~9096으로 수집하고, `instance`는 기존 서비스 이름을 유지해 대상 중단 경보가 동작하게 합니다. 실제 주소는 `target_address`에 따로 남습니다. 런타임은 양쪽 호스트의 9109를 각각 수집합니다.
 
 ```bash
-OBSERVATION_ARGS=(--cluster-arn "$ECS_CLUSTER_ARN" --app-private-ip "$APP_PRIVATE_IP" --data-private-ip "$DATA_PRIVATE_IP" --data-compose-project "$DATA_OBSERVATION_PROJECT")
+OBSERVATION_ARGS=(--cluster-arn "$ECS_CLUSTER_ARN" --app-private-ip "$APP_PRIVATE_IP" --data-private-ip "$DATA_PRIVATE_IP")
 python3 -B scripts/render_ecs_observability.py app "${OBSERVATION_ARGS[@]}" > runtime-app.json
 python3 -B scripts/render_ecs_observability.py data "${OBSERVATION_ARGS[@]}" > runtime-data.json
 python3 -B scripts/render_ecs_observability.py prometheus "${OBSERVATION_ARGS[@]}" > prometheus-ecs.yml
 ```
 
-동일 revision의 `infra/observability/runtime_metrics.py`를 두 EC2의 `/srv/commerce-settle/observability/runtime_metrics.py`에 읽을 수 있는 소스 파일로 설치합니다. app에서는 `docker compose -p commerce-runtime-app -f runtime-app.json up -d`, data에서는 기존 project를 유지해 `docker compose -p "$DATA_OBSERVATION_PROJECT" -f runtime-data.json up -d`로 수집기 두 개만 갱신합니다. 기존 서비스를 제거하는 `--remove-orphans`는 사용하지 않습니다. 생성한 Prometheus 설정은 현재 Task/컨테이너가 사용하는 실제 설정 mount에 반영하고 기존 재기동 절차로 적용합니다. 생성 결과와 같은 production 규칙 네 파일이 모두 mount돼야 합니다.
+동일 revision의 `infra/observability/runtime_metrics.py`를 두 EC2의 `/srv/commerce-settle/observability/runtime_metrics.py`에 읽을 수 있는 소스 파일로 설치합니다. app에서는 `docker compose -p commerce-runtime-app -f runtime-app.json up -d`, data에서는 `docker compose -p commerce-runtime-data -f runtime-data.json up -d`로 수집기 두 개만 갱신합니다. 기존 서비스를 제거하는 `--remove-orphans`는 사용하지 않습니다. 생성한 Prometheus 설정은 현재 Task/컨테이너가 사용하는 실제 설정 mount에 반영하고 기존 재기동 절차로 적용합니다. 생성 결과와 같은 production 규칙 네 파일이 모두 mount돼야 합니다.
 
-프록시는 Docker socket을 가진 내부 네트워크에만 있고 host 포트를 열지 않습니다. 수집기는 사설 주소에만 9109를 bind합니다. data에서 app으로 9109, app 관리 포트 9091~9096에 도달해야 하므로 현재 보안 그룹을 먼저 조회하고 필요한 사설 통신만 허용합니다. 9109·Docker API·관리 포트를 인터넷에 공개하지 않습니다. data 저장소 수집은 기존 실제 볼륨 mount를 유지합니다. data 관측 project·서비스 목록이 실제 배치와 다르면 누락을 허용하지 말고 적용 전에 배치를 맞춥니다.
+프록시는 Docker socket을 가진 내부 네트워크에만 있고 host 포트를 열지 않습니다. 수집기는 사설 주소에만 9109를 bind합니다. data에서 app으로 9109, app 관리 포트 9091~9096에 도달해야 하므로 현재 보안 그룹을 먼저 조회하고 필요한 사설 통신만 허용합니다. 9109·Docker API·관리 포트를 인터넷에 공개하지 않습니다. data 저장소 수집은 기존 실제 볼륨 mount를 유지합니다. 각 런타임 project와 ECS 클러스터의 allowlist를 함께 조회하며, 기존 서비스가 Compose에 있다고 가정하지 않습니다. 영속 Zipkin을 선택하면 data 생성에 `--persistent-zipkin`을 주어 저장소 sidecar도 관측합니다.
 
-각 프록시·수집기는 64MiB·CPU 0.25개로 제한합니다. app의 앱 hard limit 합계 4.5GiB·Caddy 512MiB와 합치면 5.125GiB입니다. 8GiB 호스트의 나머지 2.875GiB에는 OS·ECS·캐시 등도 들어갑니다. 이는 템플릿 산술이며 실제 EC2 여유나 200 TPS의 보장이 아닙니다. data의 PostgreSQL 512MiB·Kafka 1GiB·Redis 256MiB·Zipkin 384MiB와 관측 수집기뿐 아니라, Prometheus·Grafana·Alertmanager의 실제 한도·보존량도 예산에 포함합니다. 기본 Compose에서 이 세 도구의 메모리 상한은 지정하지 않습니다.
+각 프록시·수집기는 64MiB·CPU 0.25개로 제한합니다. app의 앱 hard limit 합계 4.5GiB·Caddy 512MiB와 합치면 5.125GiB입니다. 8GiB 호스트의 나머지 2.875GiB에는 OS·ECS·캐시 등도 들어갑니다. 이는 템플릿 산술이며 실제 EC2 여유나 200 TPS의 보장이 아닙니다. 2026-11-14 실제 ECS data는 m7g.xlarge(16GiB), hard limit 합계 4,160MiB였습니다. 런타임 두 개와 선택 저장소 1,024MiB를 더하면 5,312MiB입니다. 당시 가용 메모리는 약 12.6GiB, 데이터 경로가 있는 100GB root EBS의 여유는 약 87.8GiB였습니다. ECS의 container CPU 값은 공유 가중치이며 Compose의 CPU quota와 다릅니다. 이 관측은 부하 중 최고 사용량이나 미래 배치의 보장이 아니므로 적용 직전 재확인합니다.
 
 본 시험 전 실제 image digest·Task revision·환경 선택값·DDL/fixture SHA와 두 호스트의 가용 메모리·디스크·시간 동기, 업무 처리기·Kafka 소비 위치·Redis 인증을 대조합니다. 공개 HTTPS·관측 인증과 원시 관리 포트 차단, 모든 지표의 원본 시각, 실제 사전 주문의 비동기 trace, 통제한 경보 발생·복구와 선택한 수신처도 확인합니다. 기본 수신처는 Alertmanager 화면이며 Slack은 기존 별도 연결을 적용했을 때만 해당합니다.
 
-기존 로컬 200 TPS 비교는 목표 주입 실패·스왑·실제 입력 차이가 있어 최적 풀이나 배포 성능의 근거로 사용할 수 없습니다. Commerce 예약 작업 경합 등 [남은 처리 병목](https://github.com/500-internal-server-error-team/commerce-settle/issues/376)도 관측 보완과 별도로 검증합니다. 위 준비가 빠지거나 critical 경보·용량 부족·미확정 이전 거래가 남으면 본 시험을 시작하지 않습니다. 예열·주입·중단·배출·대조와 증거 보존은 [주문 부하 절차](../tests/load/README.md#15분-시험의-관측-준비)를 따릅니다. 실제 환경의 이 확인과 15분 결과가 없으면 준비 완료·200 TPS 달성을 선언하지 않습니다.
+기존 로컬 200 TPS 비교는 목표 주입 실패·스왑·실제 입력 차이가 있어 최적 풀이나 배포 성능의 근거로 사용할 수 없습니다. Commerce 예약 작업 경합 등 [남은 처리 병목](https://github.com/500-internal-server-error-team/commerce-settle/issues/376)도 관측 보완과 별도로 검증합니다. 위 준비가 빠지거나 critical 경보·용량 부족·미확정 이전 거래가 남으면 본 시험을 시작하지 않습니다. 예열·주입·중단·배출·대조와 증거 보존은 [주문 부하 절차](../tests/load/README.md#실험-준비와-분석)를 따릅니다. 실제 환경의 이 확인과 15분 결과가 없으면 준비 완료·200 TPS 달성을 선언하지 않습니다.
+
+#### Zipkin 영속 저장(선택)
+
+기본은 `mem`·10,000 span이며 변경하지 않습니다. 주문 처리에는 영속 저장이 필수는 아니지만, 재시작·메모리 한도 이후에도 실험의 표본 추적을 조사하려면 필요합니다. 별도 trace 재수집·보관 도구 대신 Zipkin의 Elasticsearch 저장소와 기본 ILM 삭제를 사용합니다. 비샘플 요청·export 전 강제 종료의 span은 복구하지 못합니다.
+
+[선택 구성](../compose.zipkin-storage.yml)은 Zipkin 384MiB와 Elasticsearch 8.19.25 1,024MiB(힙 256MiB)를 사용합니다. 저장소는 외부 포트를 열지 않으며 비밀번호를 요구합니다. Elasticsearch의 `node.store.allow_mmap=false`로 호스트 sysctl 변경을 요구하지 않습니다. [ILM 정책](../infra/zipkin/retention-policy.json)과 [템플릿](../infra/zipkin/retention-template.json)은 64MiB의 일회성 초기화 컨테이너가 Zipkin 시작 전에 적용하고 종료하며, `commerce-settle-zipkin-*` 일별 인덱스만 UTC 날짜 기준 2일에 삭제합니다. 새 span은 대략 24~48시간과 ILM 처리 지연 동안 남으며, 조회 창은 48시간, ILM 확인 주기는 1분입니다. 정확히 수신 후 48시간 보관하는 TTL이 아닙니다. 늦게 도착한 과거 span도 원래 날짜를 따르므로 호스트 시계를 확인합니다.
+
+보관 기간은 바이트 상한이 아닙니다. 저장소 파일시스템의 여유가 low 2GiB·high 1.5GiB·flood 1GiB 아래로 내려가면 기본 디스크 보호가 쓰기를 막으며, 여유 회복 후 자동 해제합니다. 전용 저장 경로를 선택해 mount·소유자 UID 1000·가용량과 PostgreSQL/Kafka의 공유 여부를 확인합니다. 초기화 때는 추가 64MiB를 예산에 포함합니다. 현재 root EBS를 그대로 쓰면 trace만의 용량 quota가 없으므로 1,024MiB 메모리 제한을 디스크 상한으로 해석하지 않습니다. 예상량은 실제 표본의 저장 bytes/span × sampled span/s × 최대 48시간에 여유를 더해 산정하고, 기존 디스크 경보·원래 데이터의 공간을 확보하지 못하면 활성화하지 않습니다. ILM은 오래된 인덱스를 삭제해 공간을 반환하며 미만료 인덱스를 용량 때문에 임의 삭제하지 않습니다.
+
+로컬은 기존 `scripts/init_env.py`로 `ZIPKIN_STORAGE_PASSWORD`를 준비하고 전용 `ZIPKIN_STORAGE_DIR`을 설정한 뒤 동일 project에서 `docker compose -f compose.yml -f compose.zipkin-storage.yml up -d zipkin`으로 선택합니다. 기존 mem 프로세스의 과거 span은 이관되지 않습니다. `down -v`를 공용 데이터에 사용하지 않습니다.
+
+ECS는 다음으로 **기존 Zipkin family**의 Task 정의를 생성합니다. 비밀번호는 기존 SSM prefix의 `ZIPKIN_STORAGE_PASSWORD` SecureString을 참조하며, execution role의 해당 파라미터·KMS 권한을 먼저 확인합니다. store 9200은 Task 내부 bridge link만 사용하고 기존 Zipkin의 9411·Caddy 경로를 유지합니다.
+
+```bash
+python3 -B scripts/render_ecs_observability.py zipkin --cluster-arn "$ECS_CLUSTER_ARN" --execution-role "$ECS_EXECUTION_ROLE_ARN" --parameter-prefix "$SSM_PARAMETER_PREFIX" > zipkin-task.json
+```
+
+검증한 revision의 두 정책 파일은 `/srv/commerce-settle/observability/zipkin/`, 데이터는 `/srv/commerce-settle/zipkin-store/data`에 연결합니다. 먼저 파일·마운트·권한·현재 Task ARN·로그·가용 자원을 확인하고, 기존 [ECS 재배포 절차](#ecs-ec2-데이터-서비스)로 등록·교체합니다. 9411과 같은 데이터 경로를 공유하므로 desired count 1과 구 Task 선중지 전환을 유지합니다. 태그의 앱 배포가 이 설정을 자동 적용하지는 않습니다. 이번 소스 검증은 공용 ECS를 변경하지 않습니다.
+
+Prometheus는 Zipkin 자체 `/prometheus`를 수집합니다. `ZipkinUnavailable`은 대상 실패·누락, `ZipkinSpansDropped`는 저장 실패로 버린 span 증가를 기존 Alertmanager 경로로 전달합니다. Slack 연결 여부는 기존 수신처 설정을 따릅니다. 통신·용량 장애 때 이미 버린 span은 저장소가 복구돼도 돌아오지 않으므로 그 구간을 분석 성공으로 판정하지 않습니다. Elasticsearch ILM 오류는 저장소 로그와 `GET /commerce-settle-zipkin-*/_ilm/explain`으로 확인합니다.
+
+`python3 -B scripts/test_zipkin_storage.py`는 앱 없이 격리한 저장 구성에서 실제 trace 재조회·재시작 보존, 오래된 날짜 인덱스의 기본 2일 정책 삭제, 신규 trace·다른 인덱스 보존, 디스크 watermark의 쓰기 차단·Zipkin dropped 지표·여유 복구를 검사하고 자신의 볼륨까지 제거합니다. 만료는 과거 날짜 인덱스, 용량은 임계값 주입으로 재현하며 공용 디스크를 채우거나 실제 이틀을 기다리는 시험은 아닙니다. 30초·38,400 span의 합성 저장 부하도 앱의 200 TPS·15분 통과나 실제 업무당 span 수를 입증하지 않습니다.
 
 #### 병목 개선 전후 비교
 

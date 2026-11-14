@@ -29,3 +29,7 @@ scrape_configs:
   - job_name: container-runtime
     static_configs:
       - targets: [container-metrics:9109]
+  - job_name: zipkin
+    metrics_path: /prometheus
+    static_configs:
+      - targets: [zipkin:9411]

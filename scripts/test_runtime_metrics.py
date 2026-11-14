@@ -22,6 +22,12 @@ def ecs_labels(service="payment-worker", cluster="owned", account="123456789012"
 
 
 class DockerBoundaryTest(unittest.TestCase):
+    def test_zipkin_store_sidecar_requires_exact_zipkin_family(self):
+        proxy = runtime.DockerReadProxy(None, ["zipkin-store"], ecs_cluster=CLUSTER)
+        labels = {**ecs_labels("zipkin-store"), "com.amazonaws.ecs.task-definition-family": "commerce-settle-zipkin"}
+        self.assertEqual(proxy.service(labels), "zipkin-store")
+        self.assertIsNone(proxy.service(ecs_labels("zipkin-store")))
+        self.assertIsNone(proxy.service({**labels, "com.amazonaws.ecs.cluster": "foreign"}))
     def test_compose_service_and_its_live_oom_probe_are_both_observed(self):
         labels = {"com.docker.compose.project": "owned", "com.docker.compose.service": "finance-mock"}
         rows = [{"Id": identity, "Labels": labels, "State": "running", "Created": created}

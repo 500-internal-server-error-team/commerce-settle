@@ -67,42 +67,23 @@ class ApiFixture:
 
 
 class PreparationTest(unittest.TestCase):
-    def test_diagnostic_trace_budget_rejects_before_network_or_output_creation(self):
-        from test_performance import metadata
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            conditions = metadata()
-            conditions["conditions"].update(arrivalRate=200, warmupSeconds=60)
-            conditions["conditions"]["runtime"]["loadGenerator"] = {"image": load.K6_IMAGE,
-                "memoryMiB": 1536, "cpus": 2, "preAllocatedVus": 400, "maxVus": 1200}
-            path = root / "conditions.json"; path.write_text(json.dumps(conditions))
-            with patch.object(load, "Api") as api, contextlib.redirect_stderr(io.StringIO()) as error, self.assertRaises(SystemExit):
-                load.main(["--base-url", "https://load.test", "--tps", "200", "--seconds", "900",
-                    "--warmup-seconds", "60", "--diagnostics", "--run-id", "a" * 32,
-                    "--performance-metadata", str(path), "--prometheus", "https://prom.test", "--zipkin", "https://zip.test",
-                    "--diagnostic-runtime-target", "app:9109", "--diagnostic-runtime-target", "data:9109",
-                    "--diagnostic-resource-file", str(root / "app.jsonl"), "--diagnostic-resource-file", str(root / "data.jsonl"),
-                    "--diagnostic-every", "1", "--output-dir", str(root / "run")])
-            api.assert_not_called()
-            self.assertFalse((root / "run").exists())
-            self.assertIn("trace", error.getvalue())
+    def test_200_tps_reaches_preparation_without_custom_trace_archive(self):
+        class AtApi(BaseException):
+            pass
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(load, "Api", side_effect=AtApi) as api, self.assertRaises(AtApi):
+            load.main(["--base-url", "https://fixture.invalid", "--tps", "200", "--seconds", "900",
+                       "--warmup-seconds", "60", "--output-dir", str(Path(directory) / "run")])
+        api.assert_called_once()
 
-    def test_diagnostic_conditions_reject_known_workload_or_generator_contradictions(self):
-        from test_performance import metadata
-        from copy import deepcopy
-        args = load.parser().parse_args(["--tps", "200", "--warmup-seconds", "60", "--pre-allocated-vus", "400", "--max-vus", "1200"])
-        item = metadata(); item["conditions"].update(arrivalRate=200, warmupSeconds=60)
-        item["conditions"]["runtime"]["loadGenerator"] = {"image": load.K6_IMAGE,
-            "memoryMiB": 1536, "cpus": 2, "preAllocatedVus": 400, "maxVus": 1200}
-        load.diagnostic_conditions(item, args)
-        for section, field, value in (("conditions", "arrivalRate", 100), ("conditions", "warmupSeconds", 0),
-                                      ("generator", "memoryMiB", 8192), ("generator", "cpus", 8),
-                                      ("generator", "maxVus", 10000)):
-            broken = deepcopy(item)
-            target = broken["conditions"] if section == "conditions" else broken["conditions"]["runtime"]["loadGenerator"]
-            target[field] = value
-            with self.subTest(field=field), self.assertRaises(ValueError):
-                load.diagnostic_conditions(broken, args)
+    def test_200_tps_without_warmup_rejects_before_api_or_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "run"
+            with patch.object(load, "Api") as api, contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                load.main(["--base-url", "https://fixture.invalid", "--tps", "200", "--seconds", "900",
+                           "--output-dir", str(output)])
+            api.assert_not_called()
+            self.assertFalse(output.exists())
 
     def test_uses_owner_api_current_versions_and_sufficient_new_inventory(self):
         api = ApiFixture("https://load.test")
@@ -304,6 +285,8 @@ class ResultTest(unittest.TestCase):
         command = start.call_args.args[0]
         environment = start.call_args.kwargs["env"]
         self.assertEqual(command[-1], "/scripts/orders.js")
+        self.assertEqual(command[command.index("--memory") + 1], "1536m")
+        self.assertEqual(command[command.index("--cpus") + 1], "2")
         self.assertTrue((HERE / "orders.js").is_file())
         self.assertIn(["-e", "ORDER_FILE"], [command[n:n + 2] for n in range(len(command) - 1)])
         self.assertEqual(environment["ORDER_FILE"], "/work/order.json")
@@ -810,32 +793,31 @@ const source = fs.readFileSync(process.argv[1], 'utf8')
   .replace('export const options =', 'const options =')
   .replace('export default function ()', 'function run()');
 const results = [];
-for (const [phase, diagnostics] of [['warmup', false], ['measurement', false], ['measurement', true]]) {
-  const logs = [], keys = [], parents = [];
+for (const phase of ['warmup', 'measurement']) {
+  const logs = [], keys = [];
   const context = {
-    logs, keys, parents, diagnostics,
-    __ENV: {BASE_URL:'https://fixture.test',BUYER_TOKEN:'fixture-secret',RUN_ID:diagnostics?'1'.repeat(32):'run',
-      RATE:'200',DURATION_SECONDS:'900',LOAD_PHASE:phase,DIAGNOSTIC_EVERY:diagnostics?'1000':'0'},
+    logs, keys,
+    __ENV: {BASE_URL:'https://fixture.test',BUYER_TOKEN:'fixture-secret',RUN_ID:'run',
+      RATE:'200',DURATION_SECONDS:'900',LOAD_PHASE:phase},
     open: () => process.argv[2],
     exec: {scenario:{iterationInTest:0,startTime:1794528000000}},
     check: () => false,
     console:{log: value => logs.push(value)},
     http:{post:(url,body,params) => {
       keys.push(params.headers['Idempotency-Key']);
-      parents.push(params.headers.traceparent || null);
       return {status:0,error_code:1050,error:'fixture-secret https://fixture.test/secret',
-              timings:{duration:5000,blocked:1,connecting:2,tls_handshaking:3,waiting:4,receiving:5},json:()=>({})};
+              timings:{duration:5000},json:()=>({})};
     }},
   };
   results.push(JSON.parse(vm.runInNewContext(source +
-    ';run();if(diagnostics){exec.scenario.iterationInTest=1;run();}exec.scenario.iterationInTest=180000;run();JSON.stringify({options,logs,keys,parents});', context)));
+    ';run();exec.scenario.iterationInTest=180000;run();JSON.stringify({options,logs,keys});', context)));
 }
 process.stdout.write(JSON.stringify(results));
 """
         result = subprocess.run(["node", "-e", script, str(HERE / "orders.js"), json.dumps(body)],
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
-        warmup, measured, diagnostic = json.loads(result.stdout)
+        warmup, measured = json.loads(result.stdout)
         self.assertEqual(warmup["keys"], ["run-warmup-0"])
         self.assertEqual(measured["keys"], ["run-load-0"])
         self.assertEqual(measured["options"]["scenarios"]["orders"]["duration"], "900s")
@@ -845,11 +827,6 @@ process.stdout.write(JSON.stringify(results));
         self.assertEqual(row["clientErrorCode"], 1050)
         self.assertNotIn("fixture-secret", row["clientError"])
         self.assertNotIn("https://", row["clientError"])
-        self.assertEqual([row[name] for name in ("blockedMs", "connectingMs", "tlsMs", "waitingMs", "receivingMs")], [1, 2, 3, 4, 5])
-        self.assertEqual(diagnostic["parents"], ["00-" + "1" * 16 + "0000000200000000-0000000000000001-01", None])
-        selected = [json.loads(line.split(" ", 1)[1]) for line in diagnostic["logs"] if line.startswith(("ORDER_START ", "ORDER "))]
-        self.assertEqual([row["traceSampled"] for row in selected], [True, True, False, False])
-        self.assertEqual(selected[0]["traceId"], selected[1]["traceId"])
 
     def test_900_second_measurement_separates_warmup_without_business_throughput_aggregation(self):
         import subprocess

@@ -97,7 +97,7 @@ services:
     networks: [backend]
 
   postgres:
-    command: [postgres, -c, timezone=Asia/Seoul, -c, log_timezone=Asia/Seoul, -c, compute_query_id=on]
+    command: [postgres, -c, timezone=Asia/Seoul, -c, log_timezone=Asia/Seoul]
     build:
       context: .
       dockerfile: infra/postgres/Dockerfile

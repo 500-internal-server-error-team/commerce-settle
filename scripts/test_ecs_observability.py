@@ -30,7 +30,7 @@ class EcsObservationTest(unittest.TestCase):
                 self.assertEqual(collector["ports"][0]["host_ip"], address)
                 self.assertEqual(proxy["environment"]["OBSERVER_ECS_CLUSTER"], CLUSTER)
                 self.assertEqual(collector["environment"]["OBSERVER_REQUIRED_SERVICES"], proxy["environment"]["OBSERVER_SERVICES"])
-                self.assertEqual("OBSERVER_PROJECT" in proxy["environment"], role == "data")
+                self.assertEqual(proxy["environment"]["OBSERVER_PROJECT"], VALUES[3])
                 for item in actual.values():
                     self.assertIn(item["mem_limit"], ("64m", 64 * 1024 * 1024))
                     self.assertTrue(item["read_only"])
@@ -38,10 +38,9 @@ class EcsObservationTest(unittest.TestCase):
     def test_prometheus_preserves_rules_and_routes_and_maps_all_six_actual_ports(self):
         value = renderer.prometheus(*VALUES)
         source = (renderer.ROOT / "infra/prometheus/prometheus.yml").read_text()
-        self.assertEqual(value.split("scrape_configs:")[0], source.split("scrape_configs:")[0])
-        self.assertIn("targets: [data-storage-metrics:9108]", value)
+        self.assertEqual(value.split("scrape_configs:")[0], source.split("scrape_configs:")[0].replace("alertmanager:9093", VALUES[2] + ":9093"))
         blocks = re.findall(r"(?m)^    static_configs: (\[.*\])$", value)
-        app, hosts = map(json.loads, blocks)
+        app, storage, hosts, zipkin = map(json.loads, blocks)
         self.assertEqual({row["labels"]["service"] for row in app}, set(renderer.SERVICES))
         for row in app:
             service = row["labels"]["service"]
@@ -49,6 +48,33 @@ class EcsObservationTest(unittest.TestCase):
             self.assertEqual(row["labels"]["instance"], service + ":9091")
             self.assertEqual(row["labels"]["target_address"], row["targets"][0])
         self.assertEqual(hosts, [{"targets": [VALUES[1] + ":9109", VALUES[2] + ":9109"]}])
+        self.assertEqual(storage, [{"targets": [VALUES[2] + ":9108"]}])
+        self.assertEqual(zipkin, [{"targets": [VALUES[2] + ":9411"]}])
+
+    def test_persistent_zipkin_reuses_native_config_and_private_ecs_sidecar(self):
+        role = "arn:aws:iam::123456789012:role/ecsTaskExecutionRole"
+        prefix = "arn:aws:ssm:ap-northeast-2:123456789012:parameter/commerce-settle/"
+        task = renderer.zipkin_task(CLUSTER, role, prefix)
+        self.assertEqual(task["family"], "commerce-settle-zipkin")
+        self.assertEqual(task["networkMode"], "bridge")
+        self.assertNotIn("memory", task)
+        zipkin, store, initializer = task["containerDefinitions"]
+        self.assertEqual((zipkin["memory"], store["memory"]), (384, 1024))
+        self.assertNotIn("portMappings", store)
+        self.assertEqual(zipkin["links"], ["zipkin-store:zipkin-store"])
+        self.assertEqual(zipkin["dependsOn"], [{"containerName": "zipkin-storage-init", "condition": "SUCCESS"}])
+        self.assertFalse(initializer["essential"])
+        self.assertEqual(initializer["dependsOn"], [{"containerName": "zipkin-store", "condition": "HEALTHY"}])
+        for container in (zipkin, store, initializer):
+            self.assertEqual(container["secrets"][0]["valueFrom"], prefix + "ZIPKIN_STORAGE_PASSWORD")
+            self.assertNotIn("$${", json.dumps(container))
+            self.assertFalse(any("PASSWORD" in row["name"] for row in container["environment"]))
+        required = renderer.runtime("data", *VALUES, self.source, persistent=True)["services"]["docker-metrics-proxy"]["environment"]["OBSERVER_SERVICES"]
+        self.assertIn("zipkin-store", required.split(","))
+        for wrong_role, wrong_prefix in ((role.replace("123456789012", "999999999999"), prefix),
+                                          (role, prefix.replace("ap-northeast-2", "us-east-1"))):
+            with self.assertRaises(ValueError):
+                renderer.zipkin_task(CLUSTER, wrong_role, wrong_prefix)
 
     def test_rejects_public_addresses_shared_host_and_ambiguous_cluster_or_project(self):
         for index, invalid in ((0, "commerce-cluster"), (1, "8.8.8.8"), (2, VALUES[1]), (3, "../other")):

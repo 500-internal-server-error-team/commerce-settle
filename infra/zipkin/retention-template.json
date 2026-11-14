@@ -1,0 +1,12 @@
+{
+  "index_patterns": [
+    "commerce-settle-zipkin-*"
+  ],
+  "order": 100,
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "index.lifecycle.name": "commerce-settle-zipkin-retention",
+    "index.lifecycle.parse_origination_date": true
+  }
+}
