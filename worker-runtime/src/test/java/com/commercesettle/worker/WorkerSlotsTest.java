@@ -9,6 +9,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class WorkerSlotsTest {
   @Test
@@ -43,6 +45,154 @@ class WorkerSlotsTest {
         assertThat(continued.await(5, TimeUnit.SECONDS)).isTrue();
       } finally {
         release.countDown();
+      }
+    }
+  }
+
+  @Test
+  @DisplayName("느린 슬롯이 남아 있어도 새 신호는 빈 조회를 마친 다른 슬롯으로 넘긴다")
+  void assignsNewWorkToAvailableCapacity() throws Exception {
+    var first = new CountDownLatch(1);
+    var empty = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var seen = new CountDownLatch(1);
+    var ready = new java.util.concurrent.atomic.AtomicBoolean();
+    var calls = new AtomicInteger();
+    try (var slots =
+        new WorkerSlots(
+            "idle-priority",
+            2,
+            1,
+            () -> {
+              if (calls.incrementAndGet() == 1) {
+                first.countDown();
+                try {
+                  assertThat(release.await(30, TimeUnit.SECONDS)).isTrue();
+                } catch (InterruptedException e) {
+                  Thread.currentThread().interrupt();
+                  throw new IllegalStateException(e);
+                }
+                return false;
+              }
+              if (ready.getAndSet(false)) {
+                seen.countDown();
+                return true;
+              }
+              empty.countDown();
+              return false;
+            },
+            e -> {
+              throw new AssertionError(e);
+            })) {
+      try {
+        slots.wakeUp();
+        assertThat(first.await(5, TimeUnit.SECONDS)).isTrue();
+        slots.wakeUp();
+        assertThat(empty.await(5, TimeUnit.SECONDS)).isTrue();
+        ready.set(true);
+        slots.wakeUp();
+
+        assertThat(seen.await(5, TimeUnit.SECONDS)).isTrue();
+      } finally {
+        release.countDown();
+      }
+    }
+  }
+
+  @Test
+  @DisplayName("오류로 멈춘 슬롯 대신 정상 유휴 슬롯이 새 작업을 처리한다")
+  void doesNotBindNewSignalsToPausedCapacity() throws Exception {
+    var failed = new CountDownLatch(1);
+    var empty = new CountDownLatch(1);
+    var seen = new CountDownLatch(1);
+    var ready = new java.util.concurrent.atomic.AtomicBoolean();
+    var calls = new AtomicInteger();
+    try (var slots =
+        new WorkerSlots(
+            "paused-capacity",
+            2,
+            1,
+            () -> {
+              if (calls.incrementAndGet() == 1) throw new IllegalStateException("fixture");
+              if (ready.getAndSet(false)) {
+                seen.countDown();
+                return true;
+              }
+              empty.countDown();
+              return false;
+            },
+            e -> failed.countDown())) {
+      slots.wakeUp();
+      assertThat(failed.await(5, TimeUnit.SECONDS)).isTrue();
+      slots.wakeUp();
+      assertThat(empty.await(5, TimeUnit.SECONDS)).isTrue();
+      ready.set(true);
+      slots.wakeUp();
+
+      assertThat(seen.await(5, TimeUnit.SECONDS)).isTrue();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  @DisplayName("다른 슬롯이 다음 작업을 시작해도 이전 빈 조회 뒤의 대기 신호를 유지한다")
+  void handsPendingWorkPastAnOlderEmptyRead(boolean continueFirst) throws Exception {
+    var initial = new CountDownLatch(2);
+    var advance = new CountDownLatch(1);
+    var returnEmpty = new CountDownLatch(1);
+    var claimed = new CountDownLatch(1);
+    var releaseClaimed = new CountDownLatch(1);
+    var seen = new CountDownLatch(1);
+    var calls = new AtomicInteger();
+    var ready = new AtomicInteger();
+    try (var slots =
+        new WorkerSlots(
+            "stale-empty",
+            2,
+            1,
+            () -> {
+              int call = calls.incrementAndGet();
+              try {
+                if (call <= 2) {
+                  initial.countDown();
+                  assertThat((call == 1 ? advance : returnEmpty).await(30, TimeUnit.SECONDS))
+                      .isTrue();
+                  return call == 1 && continueFirst;
+                }
+                int row = ready.getAndUpdate(value -> Math.max(0, value - 1));
+                if (row == 2) {
+                  claimed.countDown();
+                  assertThat(releaseClaimed.await(30, TimeUnit.SECONDS)).isTrue();
+                  return true;
+                }
+                if (row == 1) {
+                  seen.countDown();
+                  return true;
+                }
+                return false;
+              } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(exception);
+              }
+            },
+            exception -> {
+              throw new AssertionError(exception);
+            })) {
+      try {
+        slots.recover();
+        assertThat(initial.await(5, TimeUnit.SECONDS)).isTrue();
+        ready.set(2);
+        slots.wakeUp();
+        slots.wakeUp();
+        advance.countDown();
+        assertThat(claimed.await(5, TimeUnit.SECONDS)).isTrue();
+        returnEmpty.countDown();
+
+        assertThat(seen.await(5, TimeUnit.SECONDS)).isTrue();
+      } finally {
+        advance.countDown();
+        returnEmpty.countDown();
+        releaseClaimed.countDown();
       }
     }
   }
