@@ -29,6 +29,7 @@ public class SettlementBatch extends AuditableEntity {
   private LocalDate batchDate;
   private Instant cutoffAt;
   private String policyVersion;
+  private UUID demoRunId;
 
   @Enumerated(EnumType.STRING)
   private SettlementBatchStatus status;
@@ -46,11 +47,24 @@ public class SettlementBatch extends AuditableEntity {
       String policyVersion,
       long netAmount,
       Instant now) {
+    this(id, sellerId, batchDate, policyVersion, netAmount, null, cutoffOf(batchDate), now);
+  }
+
+  private SettlementBatch(
+      UUID id,
+      UUID sellerId,
+      LocalDate batchDate,
+      String policyVersion,
+      long netAmount,
+      UUID demoRunId,
+      Instant cutoffAt,
+      Instant now) {
     super(now);
     this.id = id;
     this.sellerId = Objects.requireNonNull(sellerId, "sellerId");
     this.batchDate = Objects.requireNonNull(batchDate, "batchDate");
-    this.cutoffAt = cutoffOf(batchDate);
+    this.cutoffAt = cutoffAt;
+    this.demoRunId = demoRunId;
     this.policyVersion = Objects.requireNonNull(policyVersion, "policyVersion");
     this.status = SettlementBatchStatus.RESERVED;
     this.netAmount = netAmount;
@@ -72,6 +86,25 @@ public class SettlementBatch extends AuditableEntity {
   /** batchDate의 마감 시각(10:00 Asia/Seoul). 이 시각에 준비된 항목은 다음 날 대상이다. */
   public static Instant cutoffOf(LocalDate batchDate) {
     return batchDate.atTime(CUTOFF_TIME).atZone(BUSINESS_ZONE).toInstant();
+  }
+
+  public static SettlementBatch reserveDemo(
+      UUID runId, UUID sellerId, Instant cutoffAt, long netAmount, Instant now) {
+    if (netAmount <= 0 || cutoffAt.isAfter(now))
+      throw new IllegalArgumentException("Demo cutoff or amount is invalid");
+    return new SettlementBatch(
+        UUID.randomUUID(),
+        sellerId,
+        cutoffAt.atZone(BUSINESS_ZONE).toLocalDate(),
+        "demo-periods-v1",
+        netAmount,
+        Objects.requireNonNull(runId),
+        cutoffAt,
+        now);
+  }
+
+  public UUID getDemoRunId() {
+    return demoRunId;
   }
 
   /** 지급을 처음 실행할 때 처리 중으로 바꾼다. */

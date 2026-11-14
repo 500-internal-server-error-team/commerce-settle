@@ -48,6 +48,7 @@ public class OrderWorkflowService {
   private final OrderAdmissionService admission;
   private final NotificationService notifications;
   private final boolean autoShipmentEnabled;
+  private final com.commercesettle.commerce.application.port.DemoRunStore demoRuns;
 
   public OrderWorkflowService(
       OrderRepository orders,
@@ -62,6 +63,7 @@ public class OrderWorkflowService {
       Clock clock,
       OrderAdmissionService admission,
       NotificationService notifications,
+      com.commercesettle.commerce.application.port.DemoRunStore demoRuns,
       @Value("${app.order-workflow.auto-shipment-enabled:false}") boolean autoShipmentEnabled) {
     this.orders = orders;
     this.accounts = accounts;
@@ -76,6 +78,7 @@ public class OrderWorkflowService {
     this.admission = admission;
     this.notifications = notifications;
     this.autoShipmentEnabled = autoShipmentEnabled;
+    this.demoRuns = demoRuns;
   }
 
   @Transactional(readOnly = true)
@@ -202,6 +205,10 @@ public class OrderWorkflowService {
           o.requireVersion(expected);
           var before = o.getStatus();
           o.requirePaymentRetry(clock.instant());
+          if (o.getDemoRunId() != null
+              && demoRuns.find(o.getDemoRunId(), true).orElseThrow().frozenAt() != null)
+            throw new com.commercesettle.commerce.application.exception.DemoRunException(
+                "DEMO_RUN_FROZEN", "고정된 회차의 결제는 재시도할 수 없습니다.");
           admission.requireAdmission();
           o.retryPayment(UUID.randomUUID(), clock.instant());
           if (o.getEventId() == null)
@@ -241,6 +248,7 @@ public class OrderWorkflowService {
         ignored -> {
           var o = ownedLocked(ActorKind.SELLER, seller, id);
           o.requireVersion(expected);
+          requireFrozenDemo(o);
           startShipment(o, clock.instant(), "SELLER", seller.toString());
           return OrderView.from(o);
         },
@@ -311,6 +319,53 @@ public class OrderWorkflowService {
             new OrderLifecycleEvents.MileageAccrualConfirmed(
                 o.getPaymentId(), id, o.getAccrualAmount(), time(now)));
     }
+  }
+
+  @Transactional
+  public void demoStep(String operator, String key, UUID runId, UUID orderId, boolean shipment) {
+    keys.executePermanent(
+        new IdempotentRequests.Request(
+            "OPERATOR",
+            operator,
+            shipment ? "DEMO_SHIP" : "DEMO_PROCESS",
+            key,
+            List.of(runId, orderId)),
+        orderId,
+        200,
+        ignored -> {
+          var o = orders.findLockedById(orderId).orElseThrow(OrderWorkflowService::notFound);
+          if (!runId.equals(o.getDemoRunId()))
+            throw new com.commercesettle.commerce.application.exception.DemoRunException(
+                "DEMO_SCOPE_CONFLICT", "회차 밖 주문입니다.");
+          requireFrozenDemo(o);
+          if (shipment
+              && o.getStatus() == Order.Status.PAID
+              && o.getFulfillmentStatus() == Order.FulfillmentStatus.UNSHIPPED) {
+            requireAccount(ActorKind.SELLER, o.getSellerId());
+            startShipment(o, clock.instant(), "OPERATOR", operator);
+          } else if (!shipment) {
+            if (o.getStatus() == Order.Status.PAID
+                && o.getFulfillmentStatus() == Order.FulfillmentStatus.SHIPPED
+                && clock.instant().isBefore(o.getDeliveryDueAt()))
+              throw new com.commercesettle.commerce.application.exception.DemoRunException(
+                  "DEMO_NOT_READY", "배송 예정 시각을 기다려 주세요.");
+            if (o.getStatus() == Order.Status.PAID
+                && o.getFulfillmentStatus() == Order.FulfillmentStatus.DELIVERED
+                && !clock.instant().isAfter(o.getRefundDeadlineAt()))
+              throw new com.commercesettle.commerce.application.exception.DemoRunException(
+                  "DEMO_NOT_READY", "환불 마감 시각을 기다려 주세요.");
+            advance(orderId);
+          }
+          return orderId;
+        },
+        id -> id);
+  }
+
+  private void requireFrozenDemo(Order order) {
+    if (order.getDemoRunId() != null
+        && demoRuns.find(order.getDemoRunId(), true).orElseThrow().frozenAt() == null)
+      throw new com.commercesettle.commerce.application.exception.DemoRunException(
+          "DEMO_NOT_READY", "먼저 시연 회차의 대상을 고정하세요.");
   }
 
   private void startShipment(Order order, Instant now, String actor, String actorRef) {

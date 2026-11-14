@@ -35,6 +35,9 @@ public class SettlementBatchOperationService {
   private final Clock clock;
   private final TransactionTemplate transactions;
 
+  @org.springframework.beans.factory.annotation.Value("${app.demo.enabled:false}")
+  private boolean demoEnabled;
+
   public SettlementBatchOperationService(
       SettlementBatchRepository batches,
       SellerSettlementService sellers,
@@ -61,6 +64,9 @@ public class SettlementBatchOperationService {
    */
   public SettlementBatch create(
       String operator, String key, UUID sellerId, LocalDate batchDate, String policyVersion) {
+    if (demoEnabled)
+      throw new com.commercesettle.settlement.application.exception.DemoRunException(
+          "DEMO_SCOPE_CONFLICT", "시연 모드에서는 회차별 정산 실행을 사용하세요.");
     // 거절할 요청은 커머스를 조회하지 않는다. 완료된 재요청은 배치가 이미 있어 조회 단계가 커머스를 부르지 않는다.
     Prepared prepared =
         acceptable(batchDate, policyVersion) ? sellers.prepare(sellerId, batchDate) : null;

@@ -91,6 +91,8 @@ class DailySettlementJobConfiguration {
         .faultTolerant()
         .skip(Exception.class)
         .noSkip(FixtureBatchConflictException.class)
+        .noSkip(
+            com.commercesettle.settlement.application.exception.DemoBatchExecutionException.class)
         .noSkip(ProductSettlementContextUnavailableException.class)
         .skip(PessimisticLockingFailureException.class)
         .noSkip(TransientDataAccessException.class)
@@ -109,16 +111,22 @@ class DailySettlementJobConfiguration {
   JdbcPagingItemReader<UUID> payableSellerReader(
       DataSource dataSource,
       @Value("#{jobParameters['batchDate']}") LocalDate batchDate,
-      @Value("#{jobParameters['fixtureItemIds']}") String fixtureItemIds) {
+      @Value("#{jobParameters['fixtureItemIds']}") String fixtureItemIds,
+      @Value("#{jobParameters['demoRunId']}") String demoRunId,
+      com.commercesettle.settlement.application.port.DemoSettlementStore demoRuns) {
     PostgresPagingQueryProvider query = new PostgresPagingQueryProvider();
     query.setSelectClause("seller_id");
     query.setFromClause("settlement.settlement_items");
-    Set<UUID> selected = selectedItems(fixtureItemIds);
+    var demo = demoRunId == null ? null : demoRuns.find(UUID.fromString(demoRunId)).orElseThrow();
+    Set<UUID> selected = demo == null ? selectedItems(fixtureItemIds) : demo.itemIds();
     query.setWhereClause(
         "status = 'PAYABLE' AND payout_id IS NULL AND ready_at < :cutoffAt"
             + (selected == null ? "" : " AND id IN (:fixtureItemIds)"));
     Map<String, Object> parameters = new HashMap<>();
-    parameters.put("cutoffAt", SettlementBatch.cutoffOf(batchDate).atOffset(ZoneOffset.UTC));
+    parameters.put(
+        "cutoffAt",
+        (demo == null ? SettlementBatch.cutoffOf(batchDate) : demo.cutoffAt())
+            .atOffset(ZoneOffset.UTC));
     if (selected != null) parameters.put("fixtureItemIds", selected);
     query.setGroupClause("seller_id");
     query.setSortKeys(Map.of("seller_id", Order.ASCENDING));
@@ -140,7 +148,10 @@ class DailySettlementJobConfiguration {
       SellerSettlementService sellers,
       @Value("#{jobParameters['batchDate']}") LocalDate batchDate,
       @Value("#{jobParameters['fixtureItemIds']}") String fixtureItemIds,
-      ObjectProvider<AsyncObservation> observations) {
+      ObjectProvider<AsyncObservation> observations,
+      @Value("#{jobParameters['demoRunId']}") String demoRunId,
+      com.commercesettle.settlement.application.port.DemoSettlementStore demoRuns) {
+    var demo = demoRunId == null ? null : demoRuns.find(UUID.fromString(demoRunId)).orElseThrow();
     Set<UUID> selected = selectedItems(fixtureItemIds);
     AsyncObservation observation = observations.getIfAvailable(() -> AsyncObservation.NOOP);
     return chunk ->
@@ -152,7 +163,14 @@ class DailySettlementJobConfiguration {
                   Map.of("seller.id", sellerId.toString()),
                   null,
                   () -> {
-                    if (selected == null) sellers.settle(sellerId, batchDate);
+                    if (demo != null) {
+                      try {
+                        sellers.settleDemo(sellerId, demo);
+                      } catch (RuntimeException e) {
+                        throw new com.commercesettle.settlement.application.exception
+                            .DemoBatchExecutionException(e);
+                      }
+                    } else if (selected == null) sellers.settle(sellerId, batchDate);
                     else sellers.settleFixture(sellerId, batchDate, selected);
                   });
             });

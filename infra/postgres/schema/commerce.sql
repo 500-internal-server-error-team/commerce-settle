@@ -30,6 +30,12 @@ CREATE TABLE commerce.orders (
         'CANCEL_PENDING','CANCELLED','REFUND_PENDING','REFUNDED','PURCHASE_CONFIRMED')),
     fulfillment_status varchar(24) NOT NULL
         CHECK (fulfillment_status IN ('UNSHIPPED','SHIPPED','DELIVERED','RETURN_RECEIVED')),
+    demo_run_id uuid,
+    demo_delivery_seconds integer,
+    demo_refund_seconds integer,
+    CONSTRAINT ck_orders_demo_policy CHECK (
+      (demo_run_id IS NULL AND demo_delivery_seconds IS NULL AND demo_refund_seconds IS NULL) OR
+      (demo_run_id IS NOT NULL AND demo_delivery_seconds IS NOT NULL AND demo_refund_seconds IS NOT NULL AND demo_delivery_seconds BETWEEN 1 AND 3600 AND demo_refund_seconds BETWEEN 1 AND 3600)),
     simulation_seed bigint NOT NULL,
     delivery_business_days integer NOT NULL CHECK (delivery_business_days IN (2,3)),
     delivery_calendar_version varchar(32) NOT NULL,
@@ -75,10 +81,13 @@ CREATE TABLE commerce.orders (
             AND external_method IN ('CREDIT_CARD','DEBIT_CARD','EASY_PAY')
             AND method_account_ref IS NOT NULL AND length(trim(method_account_ref)) > 0)),
     CHECK ((shipped_at IS NULL) = (delivery_due_at IS NULL)),
+    CONSTRAINT ck_orders_demo_delivery_due CHECK (demo_run_id IS NULL OR shipped_at IS NULL
+        OR delivery_due_at = shipped_at + demo_delivery_seconds * interval '1 second'),
     CHECK (delivered_at IS NULL OR (delivery_due_at IS NOT NULL AND delivered_at = delivery_due_at)),
     CHECK ((delivered_at IS NULL AND refund_deadline_at IS NULL)
         OR (delivered_at IS NOT NULL AND refund_deadline_at IS NOT NULL
-            AND refund_deadline_at = delivered_at + interval '168 hours')),
+            AND refund_deadline_at = delivered_at + CASE WHEN demo_run_id IS NULL
+                THEN interval '168 hours' ELSE demo_refund_seconds * interval '1 second' END)),
     CHECK ((closed_at IS NOT NULL) = (status IN ('CANCELLED','REFUNDED','PURCHASE_CONFIRMED'))),
     CHECK (payment_wait_until > created_at)
 );
@@ -956,3 +965,18 @@ CREATE SEQUENCE commerce.BATCH_JOB_SEQ MAXVALUE 9223372036854775807 NO CYCLE;
 -- Bounded completion-window observations avoid scanning terminal history on every refresh.
 CREATE INDEX ix_outbox_observation_published ON commerce.outbox (published_at, id) WHERE status='PUBLISHED';
 CREATE INDEX ix_inbox_observation_applied ON commerce.inbox (consumer, updated_at, id) WHERE status='APPLIED';
+
+CREATE TABLE commerce.demo_environment (singleton boolean PRIMARY KEY CHECK(singleton));
+CREATE TABLE commerce.demo_runs (
+    id uuid PRIMARY KEY,
+    seller_id uuid NOT NULL,
+    product_id uuid NOT NULL,
+    event_id uuid,
+    delivery_seconds integer NOT NULL CHECK(delivery_seconds BETWEEN 1 AND 3600),
+    refund_seconds integer NOT NULL CHECK(refund_seconds BETWEEN 1 AND 3600),
+    policy_version varchar(32) NOT NULL DEFAULT 'demo-periods-v1',
+    order_ids jsonb NOT NULL DEFAULT '[]' CHECK(jsonb_typeof(order_ids)='array'),
+    created_at timestamptz NOT NULL,
+    frozen_at timestamptz
+);
+CREATE INDEX ix_orders_demo_run ON commerce.orders(demo_run_id,id) WHERE demo_run_id IS NOT NULL;

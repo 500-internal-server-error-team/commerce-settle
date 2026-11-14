@@ -57,6 +57,7 @@ public class OrderService {
   private final TransactionTemplate transactions;
   private final TransactionTemplate replayReads;
   private final MileageAccrualSettings accrual;
+  private final DemoRunService demoRuns;
 
   public OrderService(
       OrderRepository orders,
@@ -73,6 +74,7 @@ public class OrderService {
       EventOrderConcurrencyLimiter eventSlots,
       PlatformTransactionManager manager,
       MileageAccrualSettings accrual,
+      DemoRunService demoRuns,
       @Value("${app.orders.simulation-seed:67}") long seed) {
     this.orders = orders;
     this.accounts = accounts;
@@ -91,6 +93,7 @@ public class OrderService {
     this.replayReads = new TransactionTemplate(manager);
     this.replayReads.setReadOnly(true);
     this.accrual = accrual;
+    this.demoRuns = demoRuns;
   }
 
   /**
@@ -162,7 +165,8 @@ public class OrderService {
             command.expectedEventVersion(),
             command.expectedTotalAmount(),
             command.externalMethod(),
-            command.methodAccountRef()));
+            command.methodAccountRef(),
+            command.demoRunId()));
   }
 
   private OrderView createNew(UUID buyerId, UUID orderId, RegularOrderCommand command) {
@@ -277,6 +281,7 @@ public class OrderService {
             now);
     // 정책 사본과 예정액은 주문 생성 때 고정한다. 이후 정책을 바꿔도 이 주문의 약속은 바뀌지 않는다.
     accrual.current().ifPresent(order::fixMileageAccrual);
+    demoRuns.apply(order, command.demoRunId());
     UUID snapshotId = UUID.randomUUID();
     OrderAddress snapshot =
         OrderAddress.snapshot(

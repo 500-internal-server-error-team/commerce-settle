@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { parseResponse } from '../../shared/api/client';
 import { ArrowIcon } from '../../shared/ui/Select';
+import { DemoRuns } from './DemoRuns';
 
 export interface DemoInfo {
   gateway: string; operatorServices: string[]; timeTravel: boolean;
@@ -36,9 +37,7 @@ export function Experiments({ info }: { info?: DemoInfo }) {
     <section><h3>모니터링</h3><div className="monitor-links">{info?.links.map(link =>
       <a key={link.title} href={link.url} target="_blank" rel="noreferrer">{link.title}<ArrowIcon /></a>)}</div>
       <p className="caption">서버에 설정된 주소로 연결합니다. 모니터링 도구를 먼저 켜고 실제 요청 시각의 지표를 확인하세요.</p></section>
-    <section><h3>업무 시간</h3><p>배송 예정·환불 마감·정산 준비 시각은 실제 응답에서 확인합니다.</p>
-      <button disabled title="여러 서비스와 DB 실행 시각을 분리하는 백엔드 기능이 필요합니다.">다음 업무 시각으로 이동</button>
-      <p className="caption">아직 지원하지 않습니다. 브라우저 시각 변경이나 DB 수정으로 대신하지 않습니다.</p></section>
+    <DemoRuns services={info?.operatorServices ?? []} />
     <section><h3>결제 부하 실행</h3><p className="caption">Kafka 메시지 수신 → 결제 서비스 → 모의 금융 서버의 처리량을 확인합니다. 주문 접수·선착순 이벤트·전체 정산의 처리량은 포함하지 않습니다.</p>
       <p className="project-label">대상 <code>{info?.loadProject || '미설정'}</code></p>
       <form aria-label="결제 부하 실행" onSubmit={e => { e.preventDefault(); start.mutate(); }}>

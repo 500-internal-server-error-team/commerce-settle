@@ -17,6 +17,28 @@ class OrderWorkflowTest {
   private static final Instant NOW = Instant.parse("2026-10-30T10:00:00Z");
 
   @Test
+  @DisplayName("시연 기한은 주문별 스냅샷이며 배송 정각·환불 마감 경계를 보존한다")
+  void preservesDemoSnapshotsAndRealDeadlineBoundaries() {
+    var first = order(List.of());
+    first.configureDemo(UUID.randomUUID(), 5, 10);
+    paid(first);
+    first.ship(NOW);
+    var second = order(List.of());
+    second.configureDemo(UUID.randomUUID(), 2, 3);
+    paid(second);
+    second.ship(NOW);
+    assertThat(first.getDeliveryDueAt()).isEqualTo(NOW.plusSeconds(5));
+    assertThat(second.getDeliveryDueAt()).isEqualTo(NOW.plusSeconds(2));
+    assertThat(first.deliverIfDue(NOW.plusSeconds(5).minusNanos(1))).isFalse();
+    assertThat(first.deliverIfDue(NOW.plusSeconds(5))).isTrue();
+    assertThat(first.getRefundDeadlineAt()).isEqualTo(NOW.plusSeconds(15));
+    assertThat(first.confirmPurchaseIfDue(NOW.plusSeconds(15))).isFalse();
+    assertThat(first.confirmPurchaseIfDue(NOW.plusSeconds(15).plusNanos(1000))).isTrue();
+    assertThatThrownBy(() -> first.configureDemo(UUID.randomUUID(), 2, 3))
+        .isInstanceOf(RuntimeException.class);
+  }
+
+  @Test
   @DisplayName("발송 당일·주말·보관한 공휴일을 제외하고 도착과 환불 마감을 고정한다")
   void preservesDeliveryCalendarAndStrictConfirmationBoundary() {
     var o = order(List.of(LocalDate.of(2026, 11, 2)));

@@ -1,0 +1,14 @@
+# 새 전용 시연 환경에만 적용한다. 기존 DB를 시연/일반 모드 사이에서 전환하지 않는다.
+# 운영자 자격·루프백 접속은 compose.demo-ui.yml과 기존 demo-control 설정을 사용한다.
+services:
+  commerce:
+    mem_limit: 1g
+    environment:
+      APP_DEMO_ENABLED: 'true'
+      APP_DEMO_ISOLATED: 'true'
+      APP_DEMO_AUTO_SHIPMENT_ENABLED: 'false'
+  settlement:
+    environment:
+      APP_DEMO_ENABLED: 'true'
+      APP_DEMO_ISOLATED: 'true'
+      SETTLEMENT_DAILY_BATCH_ENABLED: 'false'

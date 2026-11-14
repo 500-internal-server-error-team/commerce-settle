@@ -10276,6 +10276,615 @@
         },
         "description": "PAYMENT는 자기 승인·환불의 키를 최대 100개씩 대역에 묶어 조회하고, PROVIDER는 대역 원거래에서 고아 거래를 검사한다. 같은 cutoffAt·snapshotAt·방향·size와 cursor를 유지한다. 현재 잔액 검사는 checkedAt의 별도 currentChecks이며 과거 잔액으로 표현하지 않는다. 원천 장애는 503이고 금융 결과를 변경하지 않는다."
       }
+    },
+    "/internal/demo-runs": {
+      "post": {
+        "operationId": "post_internal_demo_runs",
+        "summary": "시연 회차 생성",
+        "tags": [
+          "commerce"
+        ],
+        "x-owner-service": "commerce",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "description": "기본 비활성. 전용 시연 환경에서 실제 시각과 기존 업무 검사를 유지한다. 미도래·미반영·진행 중 환불은 409 DEMO_NOT_READY, 비활성은 503 DEMO_DISABLED. 같은 회차·요청의 재실행은 중복 금융 작업을 만들지 않는다.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "처리 결과",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DemoRunOptions"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/demo-runs/{runId}": {
+      "get": {
+        "operationId": "get_internal_demo_run",
+        "summary": "시연 회차와 준비 상태 조회",
+        "tags": [
+          "commerce"
+        ],
+        "x-owner-service": "commerce",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "description": "기본 비활성. 전용 시연 환경에서 실제 시각과 기존 업무 검사를 유지한다. 미도래·미반영·진행 중 환불은 409 DEMO_NOT_READY, 비활성은 503 DEMO_DISABLED. 같은 회차·요청의 재실행은 중복 금융 작업을 만들지 않는다.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DemoRunId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "처리 결과",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/internal/demo-runs/{runId}/settlement-context": {
+      "get": {
+        "operationId": "get_internal_demo_run_settlement_context",
+        "summary": "정산 서비스용 시연 회차 조회",
+        "tags": [
+          "commerce"
+        ],
+        "x-owner-service": "commerce",
+        "x-actor": "SERVICE:settlement",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "description": "기본 비활성. 전용 시연 환경에서 실제 시각과 기존 업무 검사를 유지한다. 미도래·미반영·진행 중 환불은 409 DEMO_NOT_READY, 비활성은 503 DEMO_DISABLED. 같은 회차·요청의 재실행은 중복 금융 작업을 만들지 않는다.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DemoRunId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "처리 결과",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/internal/demo-runs/capabilities": {
+      "get": {
+        "operationId": "get_internal_demo_capabilities",
+        "summary": "시연 모드 활성 상태",
+        "tags": [
+          "commerce"
+        ],
+        "x-owner-service": "commerce",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "description": "기본 비활성. 전용 시연 환경에서 실제 시각과 기존 업무 검사를 유지한다. 미도래·미반영·진행 중 환불은 409 DEMO_NOT_READY, 비활성은 503 DEMO_DISABLED. 같은 회차·요청의 재실행은 중복 금융 작업을 만들지 않는다.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "처리 결과",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoCapabilities"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/internal/demo-runs/{runId}/freeze": {
+      "post": {
+        "operationId": "post_internal_demo_run_freeze",
+        "summary": "시연 회차 대상 고정",
+        "tags": [
+          "commerce"
+        ],
+        "x-owner-service": "commerce",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "description": "기본 비활성. 전용 시연 환경에서 실제 시각과 기존 업무 검사를 유지한다. 미도래·미반영·진행 중 환불은 409 DEMO_NOT_READY, 비활성은 503 DEMO_DISABLED. 같은 회차·요청의 재실행은 중복 금융 작업을 만들지 않는다.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DemoRunId"
+          },
+          {
+            "$ref": "#/components/parameters/DemoStageKey"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "처리 결과",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/internal/demo-runs/{runId}/shipments": {
+      "post": {
+        "operationId": "post_internal_demo_run_shipments",
+        "summary": "시연 회차 발송 시작",
+        "tags": [
+          "commerce"
+        ],
+        "x-owner-service": "commerce",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "description": "기본 비활성. 전용 시연 환경에서 실제 시각과 기존 업무 검사를 유지한다. 미도래·미반영·진행 중 환불은 409 DEMO_NOT_READY, 비활성은 503 DEMO_DISABLED. 같은 회차·요청의 재실행은 중복 금융 작업을 만들지 않는다.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DemoRunId"
+          },
+          {
+            "$ref": "#/components/parameters/DemoStageKey"
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "직전 응답 nextCursor. 회차당 50건씩 처리",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "처리 결과",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoStage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/internal/demo-runs/{runId}/processing": {
+      "post": {
+        "operationId": "post_internal_demo_run_processing",
+        "summary": "도래한 시연 기한 처리",
+        "tags": [
+          "commerce"
+        ],
+        "x-owner-service": "commerce",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "description": "기본 비활성. 전용 시연 환경에서 실제 시각과 기존 업무 검사를 유지한다. 미도래·미반영·진행 중 환불은 409 DEMO_NOT_READY, 비활성은 503 DEMO_DISABLED. 같은 회차·요청의 재실행은 중복 금융 작업을 만들지 않는다.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DemoRunId"
+          },
+          {
+            "$ref": "#/components/parameters/DemoStageKey"
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "직전 응답 nextCursor. 회차당 50건씩 처리",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "처리 결과",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoStage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/internal/demo-settlement-runs": {
+      "post": {
+        "operationId": "post_internal_demo_settlement_runs",
+        "summary": "시연 회차 정산 실행·재시작",
+        "tags": [
+          "settlement"
+        ],
+        "x-owner-service": "settlement",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "description": "기본 비활성. 전용 시연 환경에서 실제 시각과 기존 업무 검사를 유지한다. 미도래·미반영·진행 중 환불은 409 DEMO_NOT_READY, 비활성은 503 DEMO_DISABLED. 같은 회차·요청의 재실행은 중복 금융 작업을 만들지 않는다.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "비동기 접수; 지급 완료 아님",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoSettlementRun"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "회차 조회 경로",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DemoSettlementStart"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/demo-settlement-runs/{runId}": {
+      "get": {
+        "operationId": "get_internal_demo_settlement_run",
+        "summary": "시연 정산 회차·지급 결과",
+        "tags": [
+          "settlement"
+        ],
+        "x-owner-service": "settlement",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "description": "기본 비활성. 전용 시연 환경에서 실제 시각과 기존 업무 검사를 유지한다. 미도래·미반영·진행 중 환불은 409 DEMO_NOT_READY, 비활성은 503 DEMO_DISABLED. 같은 회차·요청의 재실행은 중복 금융 작업을 만들지 않는다.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DemoRunId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "처리 결과",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoSettlementRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/internal/demo-settlement-runs/capabilities": {
+      "get": {
+        "operationId": "get_internal_demo_settlement_capabilities",
+        "summary": "정산 시연 모드 활성 상태",
+        "tags": [
+          "settlement"
+        ],
+        "x-owner-service": "settlement",
+        "x-actor": "OPERATOR",
+        "x-implemented": true,
+        "security": [
+          {
+            "serviceCredential": []
+          }
+        ],
+        "description": "기본 비활성. 전용 시연 환경에서 실제 시각과 기존 업무 검사를 유지한다. 미도래·미반영·진행 중 환불은 409 DEMO_NOT_READY, 비활성은 503 DEMO_DISABLED. 같은 회차·요청의 재실행은 중복 금융 작업을 만들지 않는다.",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "처리 결과",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoCapabilities"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -12903,6 +13512,14 @@
                 "type": "null"
               }
             ]
+          },
+          "demoRunId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "시연 전용 회차. 생략하면 일반 배송·환불 정책"
           }
         },
         "required": [
@@ -20627,6 +21244,275 @@
           "nextCursor",
           "direction"
         ]
+      },
+      "DemoRunOptions": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "sellerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "productId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "deliverySeconds": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 1,
+            "maximum": 3600
+          },
+          "refundSeconds": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 1,
+            "maximum": 3600
+          }
+        },
+        "required": [
+          "sellerId",
+          "productId",
+          "deliverySeconds",
+          "refundSeconds"
+        ]
+      },
+      "DemoRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sellerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "productId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "eventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "deliverySeconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "refundSeconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "frozenAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "orderIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 10000
+          },
+          "payableOrderIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 10000
+          },
+          "refundedOrderIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 10000
+          },
+          "pendingCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "excludedCount": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "required": [
+          "id",
+          "sellerId",
+          "productId",
+          "eventId",
+          "deliverySeconds",
+          "refundSeconds",
+          "createdAt",
+          "frozenAt",
+          "orderIds",
+          "payableOrderIds",
+          "refundedOrderIds",
+          "pendingCount",
+          "excludedCount"
+        ]
+      },
+      "DemoCapabilities": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
+      "DemoSettlementStart": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "runId"
+        ]
+      },
+      "DemoSettlementBatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "netAmount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          },
+          "payoutId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "payoutStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "netAmount",
+          "status",
+          "payoutId",
+          "payoutStatus"
+        ]
+      },
+      "DemoSettlementRun": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deliverySeconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "refundSeconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "cutoffAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "batchStatus": {
+            "type": "string"
+          },
+          "itemCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "refundedCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "batches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DemoSettlementBatch"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "deliverySeconds",
+          "refundSeconds",
+          "cutoffAt",
+          "batchStatus",
+          "itemCount",
+          "refundedCount",
+          "batches"
+        ]
+      },
+      "DemoStage": {
+        "type": "object",
+        "required": [
+          "nextCursor",
+          "processedCount",
+          "waitingCount"
+        ],
+        "properties": {
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "processedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 50
+          },
+          "waitingCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 50
+          }
+        },
+        "additionalProperties": false
       }
     },
     "responses": {
@@ -20815,6 +21701,26 @@
         "required": true,
         "schema": {
           "format": "uuid",
+          "type": "string"
+        }
+      },
+      "DemoRunId": {
+        "name": "runId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "DemoStageKey": {
+        "description": "종류+계정ID+작업범위; 동일본문재요청은원리소스, 다른본문409.",
+        "in": "header",
+        "name": "Idempotency-Key",
+        "required": true,
+        "schema": {
+          "maxLength": 80,
+          "minLength": 8,
           "type": "string"
         }
       }

@@ -283,6 +283,8 @@
 | `method_account_ref` | `varchar(100)?` | 시험용 |
 | `status` | `varchar(32)` | — |
 | `fulfillment_status` | `varchar(24)` | UNSHIPPED/SHIPPED/DELIVERED/RETURN_RECEIVED |
+| `demo_run_id` | `uuid?` | 선택한 불변 시연 회차 |
+| `demo_delivery_seconds` / `demo_refund_seconds` | `integer?` | 회차에서 복사한 1~3600초. 세 필드는 함께 null 또는 설정 |
 | `simulation_seed` | `bigint` | 주문별 배송 소요일을 정한 시험 seed |
 | `delivery_business_days` | `integer` | 생성 때 고정한 2 또는 3 |
 | `delivery_calendar_version` | `varchar(32)` | 불변 시험 달력 버전 |
@@ -306,7 +308,7 @@
 
 **제약:** G=unit_price*quantity, D=S+P, B=G-S, T=B-P=E+M; 1<=T<=10000000, S/P>=0이고 최대 하나만 양수, 0<=D<G, 0<=M<=T, E>=0. buyer_coupon_id가 있으면 M=0. 적립 사본은 모두 null이고 accrual_amount=0이거나, 모두 있고(1<=rate_bp<=10000, cap>0) accrual_amount=쿠폰 주문이면 0, 아니면 min(cap, floor(E*rate_bp/10000)). 쿠폰의 결제수단·소유권·예산 예약을 함께 검사. 일반 quantity 1..10; event_id가 있으면1. Payment 연결 ID는 알려진 경우 UNIQUE. 상태 전이는 아래 표.
 
-배송 소요일·seed·달력 사본은 생성 후 불변입니다. 발송/도착 예정 시각은 함께 설정하고 발송 재요청으로 바꾸지 않습니다. 배송완료 시 delivered_at=delivery_due_at, refund_deadline_at=delivered_at+168시간을 함께 저장합니다. 배송 전 deadline은 NULL이며 진행 중 취소·반품·환불은 자동 구매확정을 막습니다. 늦은 배송 작업과 환불 접수도 같은 주문 잠금으로 기한을 검사합니다.
+배송 소요일·seed·달력 사본은 생성 후 불변입니다. 발송/도착 예정 시각은 함께 설정하고 발송 재요청으로 바꾸지 않습니다. 일반 주문은 배송완료 시 delivered_at=delivery_due_at, refund_deadline_at=delivered_at+168시간을 함께 저장합니다. 시연 주문은 저장한 초 단위 기간을 사용합니다. 배송 전 deadline은 NULL이며 진행 중 취소·반품·환불은 자동 구매확정을 막습니다. 늦은 배송 작업과 환불 접수도 같은 주문 잠금으로 기한을 검사합니다.
 
 **인덱스:** (buyer_id,created_at,id); (seller_id,created_at,id); (fulfillment_status,delivery_due_at,id); (status,refund_deadline_at,id); (status,payment_wait_until,id); UNIQUE(payment_id) WHERE payment_id IS NOT NULL; 월간 우수고객 집계용 (purchase_confirmed_at) INCLUDE(buyer_id,external_amount) WHERE status=PURCHASE_CONFIRMED.
 
@@ -796,7 +798,7 @@ provider·method·account_ref·funding_account_ref·amount·scenario_version은 
 | `updated_at` | `timestamptz` | — |
 | `version` | `bigint` | NOT NULL; 낙관적 버전 |
 
-**제약:** UNIQUE(seller_id,batch_date,policy_version); cutoff_at은 해당 batch_date의 10:00 Asia/Seoul. net_amount>=0, status=CREATED/RESERVED/PROCESSING/COMPLETED/REVIEW_REQUIRED.
+**제약:** 일반 배치(demo_run_id IS NULL)는 UNIQUE(seller_id,batch_date,policy_version)이며 cutoff_at은 해당 batch_date의 10:00 Asia/Seoul. 시연 배치는 nullable `demo_run_id`로 구분하고 UNIQUE(seller_id,demo_run_id), policy_version=demo-periods-v1, 실제 현재 시각 마감을 사용합니다. net_amount>=0, status=CREATED/RESERVED/PROCESSING/COMPLETED/REVIEW_REQUIRED.
 
 **인덱스:** (status,created_at,id); (seller_id,created_at,id).
 
@@ -1491,3 +1493,11 @@ DDL의 enum·부분 유니크·CHECK·인덱스를 실제 PostgreSQL에서 검�
 Commerce Outbox·Payment Inbox/Outbox·Settlement Inbox의 nullable `order_accepted_at timestamptz`는 원문/해시와 분리한 관측 메타데이터입니다. 최초 주문 `created_at`을 OrderService·OrderWorkflowService에서 Commerce Outbox에 저장하고, Payment Inbox/Outbox와 Settlement Inbox로 Kafka 헤더를 통해 전달합니다. 같은 cycle의 Payment Inbox 관측 시각을 복사하며 새 retry 이벤트의 `occurredAt`으로 원래 시각을 대체하지 않습니다. 최초 Inbox 값은 중복 수신으로 덮어쓰지 않습니다. 없는 값·잘못되거나 중복된 헤더는 업무 결과를 바꾸지 않고 지연 coverage 누락으로 표시합니다. 기존 금융 행을 갱신하거나 이벤트 본문/버전·멱등 키를 변경하지 않습니다.
 
 완료 기간 집계는 Payment `confirmed_at`, 완결 환불 SAGA `order_restored_at`, 정산항목 `created_at`의 범위 인덱스를 사용합니다. 최초 원장 `source_event_id`와 같은 APPLIED Inbox만 정산 지연에 연결해 다른 eventId의 중복 확정을 다시 세지 않습니다. 승인 완료 이력은 이후 취소돼도 유지하며, 환불은 환불/SAGA 모두 COMPLETED인 건만 완료 TPS로 셉니다.
+
+### 시연 회차
+
+각 서비스가 자기 DB의 `demo_environment(singleton)` 표식을 소유합니다. 최초 시연 활성화에 저장하고 이후 일반 모드 기동을 거절합니다.
+
+- `commerce.demo_runs`: id(PK), seller_id, product_id, event_id(nullable), delivery_seconds·refund_seconds(각 1~3600), policy_version(demo-periods-v1), order_ids(jsonb), created_at·frozen_at(nullable). 기간·범위는 생성 후 불변이며 고정 시 전체 주문 ID를 저장합니다. 주문의 demo_run_id 부분 인덱스로 조회합니다.
+- `settlement.demo_runs`: id(PK, Commerce 회차 ID), seller_id, cutoff_at, item_ids(jsonb), refunded_count, delivery_seconds·refund_seconds, batch_status, created_at. 준비된 항목 ID·마감·옵션은 생성 후 불변입니다. 정산 상태는 READY/STARTED/COMPLETED/FAILED/STOPPED 등 실제 BatchStatus를 반영하며 완료는 되돌리지 않습니다.
+- 회차 생성·고정과 정산 회차 생성은 기존 멱등 기록·감사 로그와 같은 트랜잭션에 남깁니다. Commerce 감사는 DEMO_RUN_CREATED/DEMO_RUN_FROZEN, Settlement 감사는 DEMO_RUN_CREATED입니다. 단계별 주문 감사·Outbox·지급 예약은 기존 경로를 사용합니다.

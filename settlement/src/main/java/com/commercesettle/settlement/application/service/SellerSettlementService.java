@@ -126,22 +126,54 @@ public class SellerSettlementService {
       Set<UUID> itemIds,
       SettlementBatch existing,
       Set<UUID> productIds,
-      PayoutRecipient recipient) {}
+      PayoutRecipient recipient,
+      com.commercesettle.settlement.application.port.DemoSettlementStore.Run demoRun) {}
+
+  public Optional<SettlementBatch> settleDemo(
+      UUID sellerId, com.commercesettle.settlement.application.port.DemoSettlementStore.Run run) {
+    if (!run.sellerId().equals(sellerId))
+      throw new IllegalArgumentException("Demo seller mismatch");
+    var existing = reads.execute(status -> batches.findDemo(sellerId, run.id()));
+    var productIds =
+        reads.execute(
+            status -> items.findDemoPayableProductIds(sellerId, run.cutoffAt(), run.itemIds()));
+    if (existing.isPresent()) {
+      if (!productIds.isEmpty())
+        throw new com.commercesettle.settlement.application.exception.DemoRunException(
+            "DEMO_SCOPE_CONFLICT", "기존 배치와 미처리 대상이 일치하지 않습니다.");
+      return existing;
+    }
+    if (productIds.isEmpty())
+      throw new com.commercesettle.settlement.application.exception.DemoRunException(
+          "DEMO_NOT_READY", "시연 대상이 더 이상 지급 가능하지 않습니다.");
+    var recipient =
+        PayoutRecipient.resolve(sellerId, productIds, contexts.read(sellerId, productIds));
+    return settlePrepared(
+            new Prepared(
+                sellerId,
+                run.cutoffAt().atZone(java.time.ZoneId.of("Asia/Seoul")).toLocalDate(),
+                run.itemIds(),
+                null,
+                productIds,
+                recipient,
+                run))
+        .map(Settled::batch);
+  }
 
   private Prepared prepare(UUID sellerId, LocalDate batchDate, Set<UUID> itemIds) {
     Optional<SettlementBatch> existing =
         reads.execute(status -> existingBatch(sellerId, batchDate, itemIds));
     if (existing.isPresent()) {
-      return new Prepared(sellerId, batchDate, itemIds, existing.get(), Set.of(), null);
+      return new Prepared(sellerId, batchDate, itemIds, existing.get(), Set.of(), null, null);
     }
     Instant cutoffAt = SettlementBatch.cutoffOf(batchDate);
     Set<UUID> productIds = reads.execute(status -> items.findPayableProductIds(sellerId, cutoffAt));
     if (productIds.isEmpty()) {
-      return new Prepared(sellerId, batchDate, itemIds, null, Set.of(), null);
+      return new Prepared(sellerId, batchDate, itemIds, null, Set.of(), null, null);
     }
     PayoutRecipient recipient =
         PayoutRecipient.resolve(sellerId, productIds, contexts.read(sellerId, productIds));
-    return new Prepared(sellerId, batchDate, itemIds, null, productIds, recipient);
+    return new Prepared(sellerId, batchDate, itemIds, null, productIds, recipient, null);
   }
 
   private Optional<SettlementBatch> existingBatch(
@@ -171,14 +203,26 @@ public class SellerSettlementService {
     Set<UUID> itemIds = prepared.itemIds();
     Set<UUID> productIds = prepared.productIds();
     // 조회하는 동안 다른 실행이 같은 배치를 만들었으면 그 배치를 돌려준다.
-    Optional<SettlementBatch> existing = existingBatch(sellerId, batchDate, itemIds);
+    Optional<SettlementBatch> existing =
+        prepared.demoRun() == null
+            ? existingBatch(sellerId, batchDate, itemIds)
+            : batches.findDemo(sellerId, prepared.demoRun().id());
     if (existing.isPresent()) {
       return Optional.of(new Settled(existing.get(), false));
     }
-    Instant cutoffAt = SettlementBatch.cutoffOf(batchDate);
+    Instant cutoffAt =
+        prepared.demoRun() == null
+            ? SettlementBatch.cutoffOf(batchDate)
+            : prepared.demoRun().cutoffAt();
     Instant now = clock.instant();
     UUID payoutId = UUID.randomUUID();
-    List<ReservedItem> reserved = items.reserveForPayout(sellerId, cutoffAt, payoutId, now);
+    List<ReservedItem> reserved =
+        prepared.demoRun() == null
+            ? items.reserveForPayout(sellerId, cutoffAt, payoutId, now)
+            : items.reserveDemoForPayout(sellerId, cutoffAt, payoutId, now, itemIds);
+    if (prepared.demoRun() != null && reserved.size() != itemIds.size())
+      throw new com.commercesettle.settlement.application.exception.DemoRunException(
+          "DEMO_NOT_READY", "시연 대상의 상태가 변경됐습니다.");
     if (reserved.isEmpty()) {
       return Optional.empty();
     }
@@ -193,7 +237,11 @@ public class SellerSettlementService {
 
     SettlementBatch batch =
         batches.save(
-            SettlementBatch.reserve(sellerId, batchDate, settings.policyVersion(), netAmount, now));
+            prepared.demoRun() == null
+                ? SettlementBatch.reserve(
+                    sellerId, batchDate, settings.policyVersion(), netAmount, now)
+                : SettlementBatch.reserveDemo(
+                    prepared.demoRun().id(), sellerId, cutoffAt, netAmount, now));
     Payout payout =
         payouts.save(
             Payout.create(

@@ -26,7 +26,8 @@ import org.springframework.stereotype.Component;
  * 돌려준다. 잠금을 잡았는데 실행 중으로 남은 실행이 있으면 강제 종료 잔류로 보고, 정체됐을 때만 정리한 뒤 한 번 다시 실행한다. 실행자 ID는 비식별 파라미터로 남긴다.
  */
 @Component
-public class DailySettlementLauncher {
+public class DailySettlementLauncher
+    implements com.commercesettle.settlement.application.port.DemoBatchLauncher {
   private static final Logger LOGGER = LoggerFactory.getLogger(DailySettlementLauncher.class);
 
   static final String EXECUTOR_ID = "executorId";
@@ -36,6 +37,7 @@ public class DailySettlementLauncher {
   private final DailySettlementLock lock;
   private final DailySettlementRecovery recovery;
   private final Clock clock;
+  private final boolean demoEnabled;
   private final String executorId = "settlement-" + UUID.randomUUID();
 
   DailySettlementLauncher(
@@ -43,12 +45,15 @@ public class DailySettlementLauncher {
       Job dailySettlementJob,
       DailySettlementLock lock,
       DailySettlementRecovery recovery,
-      Clock clock) {
+      Clock clock,
+      @org.springframework.beans.factory.annotation.Value("${app.demo.enabled:false}")
+          boolean demoEnabled) {
     this.jobLauncher = jobLauncher;
     this.dailySettlementJob = dailySettlementJob;
     this.lock = lock;
     this.recovery = recovery;
     this.clock = clock;
+    this.demoEnabled = demoEnabled;
   }
 
   public BatchStatus run(LocalDate batchDate) {
@@ -61,6 +66,7 @@ public class DailySettlementLauncher {
   }
 
   private BatchStatus run(LocalDate batchDate, Set<UUID> itemIds) {
+    if (demoEnabled) throw new IllegalStateException("Normal daily batch is disabled in demo mode");
     if (SettlementBatch.cutoffOf(batchDate).isAfter(clock.instant())) {
       throw new IllegalArgumentException("cutoff of batchDate has not passed yet");
     }
@@ -71,6 +77,51 @@ public class DailySettlementLauncher {
     }
     try (DailySettlementLock.Held ignored = held.get()) {
       return launch(batchDate, itemIds, true);
+    }
+  }
+
+  @Override
+  public String runDemo(
+      com.commercesettle.settlement.application.port.DemoSettlementStore.Run run) {
+    if (!demoEnabled) throw new IllegalStateException("Demo mode is disabled");
+    if (run.cutoffAt().isAfter(clock.instant()))
+      throw new IllegalArgumentException("Future demo cutoff");
+    var held = lock.tryAcquire(run.id());
+    if (held.isEmpty()) return BatchStatus.STARTED.name();
+    try (var ignored = held.get()) {
+      return launchDemo(run, true).name();
+    }
+  }
+
+  private BatchStatus launchDemo(
+      com.commercesettle.settlement.application.port.DemoSettlementStore.Run run, boolean recover) {
+    var parameters =
+        new JobParametersBuilder()
+            .addLocalDate(
+                DailySettlementJobConfiguration.BATCH_DATE,
+                run.cutoffAt().atZone(java.time.ZoneId.of("Asia/Seoul")).toLocalDate())
+            .addString("demoRunId", run.id().toString())
+            .addString("demoCutoffAt", run.cutoffAt().toString())
+            .addString(EXECUTOR_ID, executorId, false)
+            .toJobParameters();
+    try {
+      var result = jobLauncher.run(dailySettlementJob, parameters).getStatus();
+      LOGGER
+          .atInfo()
+          .addKeyValue("event", "settlement.demo-batch")
+          .addKeyValue("runId", run.id())
+          .addKeyValue("cutoffAt", run.cutoffAt())
+          .addKeyValue("result", result)
+          .log("Demo settlement finished");
+      return result;
+    } catch (JobInstanceAlreadyCompleteException e) {
+      return BatchStatus.COMPLETED;
+    } catch (JobExecutionAlreadyRunningException e) {
+      return recover && recovery.recoverDemoIfStale(run.id())
+          ? launchDemo(run, false)
+          : BatchStatus.STARTED;
+    } catch (JobRestartException | JobParametersInvalidException e) {
+      throw new IllegalStateException("Demo batch cannot start", e);
     }
   }
 

@@ -88,6 +88,6 @@ Java 21 · Spring Boot · Spring Cloud Gateway · PostgreSQL · Kafka · Redis �
 
 ## 참고
 
-[시연용 기한 단축·즉시 정산 실행안(제안·구현 전)](docs/decisions/0017-demo-periods-and-settlement.md)
+[회차별 시연 기한·즉시 정산](docs/decisions/0017-demo-periods-and-settlement.md)
 
 [Kafka 전달 보장](https://kafka.apache.org/42/design/design/) · [Outbox 이벤트 ID·집계 키](https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html) · [결제 멱등성](https://docs.tosspayments.com/blog/what-is-idempotency)

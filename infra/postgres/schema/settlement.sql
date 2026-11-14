@@ -60,6 +60,7 @@ CREATE TABLE settlement.settlement_batches (
     id             uuid        PRIMARY KEY,
     seller_id      uuid        NOT NULL,
     batch_date     date        NOT NULL,
+    demo_run_id    uuid,
     cutoff_at      timestamptz NOT NULL,
     policy_version varchar(32) NOT NULL,
     status         varchar(24) NOT NULL,
@@ -69,16 +70,17 @@ CREATE TABLE settlement.settlement_batches (
     updated_at     timestamptz NOT NULL,
     version        bigint      NOT NULL,
 
-    CONSTRAINT uk_settlement_batches_seller_date_policy
-        UNIQUE (seller_id, batch_date, policy_version),
     CONSTRAINT ck_settlement_batches_cutoff
-        CHECK (cutoff_at = (batch_date + time '10:00') AT TIME ZONE 'Asia/Seoul'),
+        CHECK ((demo_run_id IS NULL AND cutoff_at = (batch_date + time '10:00') AT TIME ZONE 'Asia/Seoul') OR (demo_run_id IS NOT NULL AND policy_version='demo-periods-v1')),
     CONSTRAINT ck_settlement_batches_net_amount CHECK (net_amount >= 0),
     CONSTRAINT ck_settlement_batches_status
         CHECK (status IN ('CREATED', 'RESERVED', 'PROCESSING', 'COMPLETED', 'REVIEW_REQUIRED')),
     CONSTRAINT ck_settlement_batches_version CHECK (version >= 0),
     CONSTRAINT ck_settlement_batches_closed CHECK ((closed_at IS NOT NULL) = (status = 'COMPLETED'))
 );
+
+CREATE UNIQUE INDEX uk_settlement_batches_seller_date_policy ON settlement.settlement_batches(seller_id,batch_date,policy_version) WHERE demo_run_id IS NULL;
+CREATE UNIQUE INDEX uk_settlement_batches_demo_run ON settlement.settlement_batches(seller_id,demo_run_id) WHERE demo_run_id IS NOT NULL;
 
 CREATE INDEX ix_settlement_batches_status_created
     ON settlement.settlement_batches (status, created_at, id);
@@ -606,3 +608,15 @@ CREATE INDEX ix_outbox_observation_published ON settlement.outbox (published_at,
 CREATE INDEX ix_inbox_observation_applied ON settlement.inbox (consumer, updated_at, id) WHERE status='APPLIED';
 CREATE INDEX ix_payouts_observation_succeeded ON settlement.payouts (succeeded_at, id) WHERE succeeded_at IS NOT NULL;
 CREATE INDEX ix_settlement_items_cohort ON settlement.settlement_items (status, ready_at, id) WHERE status <> 'PAID';
+
+CREATE TABLE settlement.demo_environment(singleton boolean PRIMARY KEY CHECK(singleton));
+CREATE TABLE settlement.demo_runs (
+ id uuid PRIMARY KEY,
+ seller_id uuid NOT NULL,
+ cutoff_at timestamptz NOT NULL,
+ item_ids jsonb NOT NULL CHECK(jsonb_typeof(item_ids)='array'),
+ refunded_count integer NOT NULL CHECK(refunded_count>=0),
+ delivery_seconds integer NOT NULL CHECK(delivery_seconds BETWEEN 1 AND 3600),
+ refund_seconds integer NOT NULL CHECK(refund_seconds BETWEEN 1 AND 3600),
+ batch_status varchar(16) NOT NULL DEFAULT 'READY'
+);
