@@ -13,6 +13,7 @@ import java.util.function.Consumer;
 
 /** DB에 저장된 작업을 슬롯마다 독립적으로 처리한다. 메모리에는 작업 대신 합쳐진 깨움 신호만 둔다. */
 public final class WorkerSlots implements AutoCloseable {
+  private static final int RECOVERY_PROBES = 4;
   private final BooleanSupplier next;
   private final Consumer<RuntimeException> failure;
   private final int batchSize;
@@ -30,7 +31,7 @@ public final class WorkerSlots implements AutoCloseable {
       int batchSize,
       BooleanSupplier next,
       Consumer<RuntimeException> failure) {
-    if (concurrency < 1 || concurrency > 1024 || batchSize < 1) {
+    if (concurrency < 1 || concurrency > 4096 || batchSize < 1) {
       throw new IllegalArgumentException("Invalid worker limits");
     }
     this.next = Objects.requireNonNull(next);
@@ -62,25 +63,35 @@ public final class WorkerSlots implements AutoCloseable {
     report(rejected);
   }
 
-  /** 기동·주기 조회는 오류 슬롯을 재개하고 모든 가용 슬롯으로 누락 신호·도래한 재시도를 회수한다. */
+  /** 유휴 복구 조회는 소수로 제한한다. 실제 작업을 발견하면 가용 슬롯으로 처리를 확장한다. */
   public void recover() {
     List<RuntimeException> rejected = new ArrayList<>();
     synchronized (this) {
       if (stopping) return;
-      pending = slots.length;
+      int probes = Math.min(RECOVERY_PROBES, slots.length);
+      pending = Math.max(pending, probes);
       for (Slot slot : slots) {
         if (slot.paused) {
           slot.paused = false;
           if (!slot.running) idle.addLast(slot);
         }
       }
-      while (!idle.isEmpty()) {
+      while (!idle.isEmpty() && probes-- > 0) {
         pending--;
         RuntimeException error = start(idle.removeFirst());
         if (error != null) rejected.add(error);
       }
     }
     rejected.forEach(this::report);
+  }
+
+  private void expand() {
+    RuntimeException rejected = null;
+    synchronized (this) {
+      // 이미 실행 중인 슬롯은 계속 처리하므로, 가용 슬롯이 없으면 새 조회 수요를 만들지 않는다.
+      if (!stopping && !idle.isEmpty()) rejected = start(idle.removeFirst());
+    }
+    report(rejected);
   }
 
   private RuntimeException dispatchPending() {
@@ -158,6 +169,7 @@ public final class WorkerSlots implements AutoCloseable {
         // 실행 중 슬롯의 조회는 다른 가용 슬롯에 넘길 신호를 소비하지 않는다.
         for (int i = 0; i < batchSize; i++) {
           if (stopping || !next.getAsBoolean()) return;
+          expand();
         }
       }
     }
