@@ -25,7 +25,7 @@ spring:
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
     hikari:
-      maximum-pool-size: 10
+      maximum-pool-size: ${COMMERCE_DB_POOL_SIZE:10}
       minimum-idle: 1
       # 풀 획득 대기. DB 잠금·SQL 제한이나 HTTP 전체 deadline과는 별도이며 기존 기본값을 유지한다.
       connection-timeout: 30000
@@ -69,7 +69,7 @@ spring:
     listener:
       observation-enabled: true
       ack-mode: manual_immediate
-      concurrency: 1
+      concurrency: ${COMMERCE_KAFKA_LISTENER_CONCURRENCY:1}
       missing-topics-fatal: true
   # 오류 응답의 검증 사유를 다른 응답 문구와 같은 한국어로 고정한다.
   web:

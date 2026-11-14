@@ -247,7 +247,13 @@ CI 역할에 ECS 권한을 추가하지 않는 환경은 `ECS_DEPLOY_ENABLED=fal
 
 OIDC 신뢰는 해당 저장소의 `refs/tags/v*`와 `sts.amazonaws.com` audience에 한정합니다. 배포 역할은 기존 ECR 권한 외에 앱 서비스의 `ecs:DescribeServices`·`ecs:UpdateService`, 앱 실행 정의의 `ecs:DescribeTaskDefinition`·`ecs:ListTagsForResource`·`ecs:RegisterTaskDefinition`·등록 시 `ecs:TagResource`, 해당 실행·Task 역할에 대한 `iam:PassRole`이 필요합니다. 등록 API의 리소스 제약 한계를 확인하고 서비스·실행 정의 family·전달 역할을 이 앱 범위로 제한합니다. 서비스 최초 생성 권한은 CI 역할에 추가하지 않습니다.
 
-배포 도구는 같은 태그·커밋의 이미지 다섯 개, AWS 계정·리전, 앱 서비스 여섯 개의 정상 상태를 먼저 확인합니다. 이전 Task Definition도 `ACTIVE`여야 합니다. 기존 Task가 실행 중이어도 `INACTIVE` 실행 정의로는 되돌릴 수 없습니다. 모든 새 revision을 등록한 뒤 Finance Mock → Commerce → Payment API → Worker → Settlement → Gateway 순서로 교체합니다. 각 서비스의 `services-stable`과 요청한 revision의 완료를 함께 확인하며 자동 롤백된 상태를 성공으로 오인하지 않습니다. 마지막으로 TLS 검증을 켠 공개 HTTPS에서 Commerce·Payment·Settlement의 OpenAPI 응답을 확인합니다. 이는 연결 검사이며 실제 금융 업무 검증을 대신하지 않습니다.
+배포 도구는 같은 태그·커밋의 이미지 다섯 개, AWS 계정·리전, PostgreSQL과 앱 서비스 여섯 개의 정상 상태를 먼저 확인합니다. 이전 Task Definition도 `ACTIVE`여야 합니다. 기존 Task가 실행 중이어도 `INACTIVE` 실행 정의로는 되돌릴 수 없습니다. 모든 새 revision을 등록한 뒤 PostgreSQL → Finance Mock → Commerce → Payment API → Worker → Settlement → Gateway 순서로 교체합니다. 각 서비스의 `services-stable`과 요청한 revision의 완료를 함께 확인하며 자동 롤백된 상태를 성공으로 오인하지 않습니다. 마지막으로 TLS 검증을 켠 공개 HTTPS에서 Commerce·Payment·Settlement의 OpenAPI 응답을 확인합니다. 이는 연결 검사이며 실제 금융 업무 검증을 대신하지 않습니다.
+
+태그에 포함된 [시험 용량 설정](../infra/ecs/performance.json)을 최초 Task 생성과 이후 배포가 함께 사용합니다. 명시한 환경 변수·메모리와 PostgreSQL `max_connections`를 적용하고 다른 환경·SSM 참조·볼륨·DB 이미지·명령 옵션은 보존합니다. PostgreSQL 설정이 이미 같으면 기존 Task ARN을 유지하고 등록·교체를 생략합니다. 설정 digest도 rollback baseline에 묶으므로 준비 뒤 설정이 달라지면 AWS 변경 전에 중단합니다. CI 역할에는 기존 권한 외에 `commerce-settle-postgres` 서비스·Task family와 기존 데이터 실행 역할의 전달 권한이 필요합니다. 기존 PostgreSQL 서비스가 없거나 배포 정책이 다르면 변경 전에 실패합니다. 콘솔 수동 수정은 필요하지 않으며, 기존 CLI 배포를 사용합니다.
+
+이 설정은 결제 확정 1,000 TPS 시험의 출발 예산입니다. 승인 4,096슬롯 중 신규 3,840·재시도 256으로 나눕니다. PG_C 최대 주입 지연 1.5초·거절률 8%에서 1,000확정/초에 필요한 동시 호출 약 1,631개보다 2배 이상이지만 DB·네트워크·결과 반영 시간은 별도입니다. 유휴 복구는 lane별 최대 네 번만 조회하고 실제 일이 있을 때 확장합니다. PG 대기 중에는 DB 연결을 반환합니다. Finance Mock HTTP는 가상 스레드를 사용합니다.
+
+앱 DB 풀은 Commerce 32·Payment API 8·Worker 64·Settlement 32·Finance Mock 32, 합계 168개로 PostgreSQL 256개 중 최소 32개를 운영용으로 남깁니다. PostgreSQL은 4GiB, 앱은 Commerce 2GiB·Worker/Finance Mock 각 1GiB·나머지 각 512MiB입니다. 앱 여섯 개와 Caddy는 합계 6GiB이고 런타임 관측·OS·ECS 공간이 별도로 필요합니다. 앱 8GiB·데이터 16GiB 호스트에서 CPU·WAL/EBS·잠금·메모리·발생기 drop을 실제로 확인해야 하며, 설정 산술이나 CI 통과를 1,000 TPS 달성으로 보고하지 않습니다. PostgreSQL 전환은 기존 연결을 끊으므로 시험 시작 전에 완료하고 미확정 업무를 원키로 복구합니다. DDL·Kafka offset·업무 활성화·관측 적용 절차는 여전히 각각 확인합니다.
 
 첫 AWS 변경 전에 `ecs-rollback-<태그>-<시도>` artifact로 직전 Task ARN과 릴리스 정보를 7일 보관합니다. 업로드가 성공해야 배포를 시작하며 저장한 파일의 SHA·릴리스와 현재 서비스 revision을 다시 대조합니다. 변경 뒤의 `ecs-deployment-<태그>-<시도>` artifact는 새 ARN·시도·복구 결과를 추가합니다. 두 기록 모두 자격이나 Task 환경 원문을 담지 않습니다.
 
@@ -801,7 +807,7 @@ JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업은 비활성화합니
 
 #### ECS 실험의 관측 연결
 
-태그 배포는 앱 이미지 여섯 서비스를 교체하며 DB·Task 환경·Caddy·관측 도구의 설정은 보존합니다. 따라서 새 이미지의 CI 성공만으로 현재 DDL·업무 처리기·관측 설정이 적용됐다고 판단하지 않습니다. 스키마가 다르면 [실험 환경 초기화](migrations.md#최초-배포와-기존-데이터-변경)를 먼저 계획하고 이전 증거를 보존합니다. 같은 거래의 장애 복구는 초기화하지 않습니다.
+태그 배포는 앱 이미지 여섯 서비스와 명시한 시험 용량 설정·PostgreSQL 연결/메모리 예산을 적용합니다. DDL·Task의 나머지 환경·Caddy·관측 설정은 보존합니다. 따라서 새 이미지의 CI 성공만으로 현재 DDL·업무 처리기·관측 설정이 적용됐다고 판단하지 않습니다. 스키마가 다르면 [실험 환경 초기화](migrations.md#최초-배포와-기존-데이터-변경)를 먼저 계획하고 이전 증거를 보존합니다. 같은 거래의 장애 복구는 초기화하지 않습니다.
 
 [관측 설정 생성기](../scripts/render_ecs_observability.py)는 기존 Compose 이미지·production 규칙·Alertmanager 경로를 재사용합니다. 실제 ECS 클러스터 ARN과 서로 다른 두 호스트의 사설 IPv4를 지정합니다. 기존 앱·데이터·관측 서비스는 ECS Task이며, 생성되는 두 런타임 수집기만 호스트별 전용 Compose project에서 실행합니다. 앱 지표는 실제 bridge 관리 포트 9091~9096으로 수집하고, `instance`는 기존 서비스 이름을 유지해 대상 중단 경보가 동작하게 합니다. 실제 주소는 `target_address`에 따로 남습니다. 런타임은 양쪽 호스트의 9109를 각각 수집합니다.
 
@@ -891,6 +897,7 @@ Payment 승인 Worker는 `PAYMENT_ROLE=worker`에서 `app.payment-approval.enabl
 | 금융 버전 | 승인 | 환불 | 조회 |
 | --- | --- | --- | --- |
 | `fixture-pg-normal-v1` | 성공 | 성공 | 정상 |
+| `fixture-pg-planned-v1` | 기획 PG별 지연·확정 거절 | 같은 기획 조건 | 정상 |
 | `fixture-pg-reject-v1` | 확정 거절 | 성공 | 정상 |
 | `fixture-pg-response-loss-v1` | 성공 후 504 | 성공 | 정상 |
 | `fixture-pg-refund-reject-v1` | 성공 | 확정 거절 | 정상 |

@@ -1,0 +1,47 @@
+{
+  "targetConfirmedTps": 1000,
+  "delayHeadroom": 2,
+  "services": {
+    "postgres": {
+      "memory": 4096,
+      "postgresSettings": {"max_connections": "256"}
+    },
+    "commerce": {
+      "memory": 2048,
+      "environment": {
+        "COMMERCE_DB_POOL_SIZE": "32",
+        "COMMERCE_KAFKA_LISTENER_CONCURRENCY": "3",
+        "COMMERCE_ORDER_RESULT_CONCURRENCY": "8",
+        "COMMERCE_PAYMENT_ACCEPTED_CONCURRENCY": "8"
+      }
+    },
+    "payment-api": {
+      "environment": {"PAYMENT_DB_POOL_SIZE": "8"}
+    },
+    "payment-worker": {
+      "memory": 1024,
+      "environment": {
+        "PAYMENT_APPROVAL_CONCURRENCY": "4096",
+        "PAYMENT_APPROVAL_RETRY_CONCURRENCY": "256",
+        "PAYMENT_REQUEST_CONCURRENCY": "32",
+        "PAYMENT_DB_POOL_SIZE": "64",
+        "PAYMENT_APPROVAL_GATEWAY": "http",
+        "PAYMENT_SCENARIO_VERSION": "fixture-pg-planned-v1"
+      }
+    },
+    "settlement": {
+      "environment": {
+        "SETTLEMENT_DB_POOL_SIZE": "32",
+        "SETTLEMENT_KAFKA_LISTENER_CONCURRENCY": "3"
+      }
+    },
+    "finance-mock": {
+      "memory": 1024,
+      "environment": {
+        "FINANCE_MOCK_DB_POOL_SIZE": "32",
+        "APP_DEV_FIXTURES_ENABLED": "true",
+        "SPRING_THREADS_VIRTUAL_ENABLED": "true"
+      }
+    }
+  }
+}

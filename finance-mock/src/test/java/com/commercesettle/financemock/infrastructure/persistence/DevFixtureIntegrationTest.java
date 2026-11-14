@@ -47,6 +47,40 @@ class DevFixtureIntegrationTest {
   @Autowired ObjectMapper mapper;
 
   @Test
+  void createsPlannedPgInputsWithoutOverwritingExistingProfiles() {
+    var expected =
+        Map.of(
+            "PG_A", java.util.List.of("80", "150", "0.005"),
+            "PG_B", java.util.List.of("300", "700", "0.03"),
+            "PG_C", java.util.List.of("800", "1500", "0.08"),
+            "EASY_PAY", java.util.List.of("100", "300", "0.01"));
+    for (var entry : expected.entrySet()) {
+      var row =
+          jdbc.queryForMap(
+              "SELECT * FROM finance_mock.mock_scenarios WHERE provider_id=? AND scenario_version='fixture-pg-planned-v1'",
+              entry.getKey());
+      assertThat(row.get("min_delay_ms")).isEqualTo(Integer.valueOf(entry.getValue().get(0)));
+      assertThat(row.get("max_delay_ms")).isEqualTo(Integer.valueOf(entry.getValue().get(1)));
+      assertThat((java.math.BigDecimal) row.get("rejection_rate"))
+          .isEqualByComparingTo(entry.getValue().get(2));
+      assertThat(row.get("refund_min_delay_ms")).isEqualTo(row.get("min_delay_ms"));
+      assertThat(row.get("refund_max_delay_ms")).isEqualTo(row.get("max_delay_ms"));
+      assertThat(row.get("refund_rejection_rate")).isEqualTo(row.get("rejection_rate"));
+      assertThat((java.math.BigDecimal) row.get("response_loss_rate")).isZero();
+      assertThat((java.math.BigDecimal) row.get("lookup_failure_rate")).isZero();
+    }
+    var before = jdbc.queryForList("SELECT * FROM finance_mock.mock_scenarios ORDER BY id");
+    loader.load();
+    assertThat(jdbc.queryForList("SELECT * FROM finance_mock.mock_scenarios ORDER BY id"))
+        .isEqualTo(before);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT max_delay_ms FROM finance_mock.mock_scenarios WHERE provider_id='PG_A' AND scenario_version='fixture-pg-normal-v1'",
+                Integer.class))
+        .isZero();
+  }
+
+  @Test
   void createsActualPayoutRecordsAndPreservesBalanceAcrossResume() throws Exception {
     HttpHeaders headers = new HttpHeaders();
     headers.setBearerAuth(SETTLEMENT);

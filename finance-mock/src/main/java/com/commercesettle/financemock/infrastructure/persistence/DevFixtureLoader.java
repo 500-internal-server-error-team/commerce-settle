@@ -87,7 +87,8 @@ public class DevFixtureLoader {
       "fixture-pg-response-loss-v1",
       "fixture-pg-refund-reject-v1",
       "fixture-pg-refund-loss-v1",
-      "fixture-pg-lookup-fail-v1"
+      "fixture-pg-lookup-fail-v1",
+      "fixture-pg-planned-v1"
     };
     for (PaymentProvider provider : PaymentProvider.values()) {
       for (int i = 0; i < versions.length; i++) {
@@ -98,15 +99,35 @@ public class DevFixtureLoader {
               case PG_C -> 7;
               default -> 5;
             };
+        boolean planned = i == 6;
+        var delay =
+            planned
+                ? switch (provider) {
+                  case PG_A -> new MockScenario.Delay(80, 150);
+                  case PG_B -> new MockScenario.Delay(300, 700);
+                  case PG_C -> new MockScenario.Delay(800, 1500);
+                  case EASY_PAY -> new MockScenario.Delay(100, 300);
+                }
+                : new MockScenario.Delay(0, 0);
+        var rejection =
+            planned
+                ? new BigDecimal(
+                    switch (provider) {
+                      case PG_A -> "0.005";
+                      case PG_B -> "0.03";
+                      case PG_C -> "0.08";
+                      case EASY_PAY -> "0.01";
+                    })
+                : BigDecimal.ZERO;
         scenarios.save(
             MockScenario.payment(
                 provider,
                 versions[i],
-                new MockScenario.Delay(0, 0),
-                i == 1 ? BigDecimal.ONE : BigDecimal.ZERO,
+                delay,
+                i == 1 ? BigDecimal.ONE : rejection,
                 i == 2 ? BigDecimal.ONE : BigDecimal.ZERO,
-                new MockScenario.Delay(0, 0),
-                i == 3 ? BigDecimal.ONE : BigDecimal.ZERO,
+                delay,
+                i == 3 ? BigDecimal.ONE : rejection,
                 i == 4 ? BigDecimal.ONE : BigDecimal.ZERO,
                 new MockScenario.Delay(0, 0),
                 i == 5 ? BigDecimal.ONE : BigDecimal.ZERO,

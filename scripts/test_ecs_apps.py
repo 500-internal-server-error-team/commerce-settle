@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import deploy_ecs_apps as deployment
 import render_ecs_apps as renderer
-from render_ecs_data import compose_services
+from render_ecs_data import apply_capacity, capacity_profile, compose_services, render as render_data
 
 
 REGION = "ap-northeast-2"
@@ -35,6 +35,8 @@ def write_images(root):
 
 
 def task(name):
+    if name == "postgres":
+        return render_data(name, compose_services_cached(), REGION, ROLE, PREFIX, "10.0.2.10")
     return renderer.render(name, compose_services_cached(), IMAGES[renderer.module_for(name)],
                            REGION, ROLE, PREFIX, "10.0.1.10", "10.0.2.10")
 
@@ -54,7 +56,7 @@ class FakeAws:
         self.services, self.tasks, self.calls = {}, {}, []
         self.fail = fail
         self.failed = False
-        for name in renderer.SERVICES:
+        for name in deployment.ORDER:
             arn = f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{deployment.service_name(name)}:1"
             self.tasks[arn] = task(name)
             self.tasks[arn]["containerDefinitions"][0]["environment"].append(
@@ -71,6 +73,10 @@ class FakeAws:
                 },
             }
             self.stable(name, arn)
+        self.services["postgres"]["deploymentConfiguration"].pop("deploymentCircuitBreaker")
+        database = self.tasks[self.services["postgres"]["taskDefinition"]]["containerDefinitions"][0]
+        database["memory"] = 512
+        database["command"] = ["postgres", "-c", "timezone=Asia/Seoul", "-c", "max_connections=100"]
 
     def stable(self, name, arn):
         self.services[name].update(taskDefinition=arn, deployments=[
@@ -102,7 +108,9 @@ class FakeAws:
             name = arguments[arguments.index("--service") + 1].removeprefix("commerce-settle-")
             arn = arguments[arguments.index("--task-definition") + 1]
             self.stable(name, arn)
-            if self.fail == "ambiguous-update" and name == "payment-worker" and not self.failed:
+            if (self.fail in ("ambiguous-update", "ambiguous-postgres")
+                    and name == ("postgres" if self.fail == "ambiguous-postgres" else "payment-worker")
+                    and not self.failed):
                 self.failed = True
                 raise RuntimeError("request failed after AWS applied it")
             return {}
@@ -211,7 +219,8 @@ class RenderTest(unittest.TestCase):
             secrets = {item["name"]: item["valueFrom"] for item in container["secrets"]}
             self.assertEqual(definition["networkMode"], "bridge")
             self.assertEqual(definition["runtimePlatform"]["cpuArchitecture"], "ARM64")
-            self.assertEqual(container["memory"], 2048 if name == "commerce" else 512)
+            self.assertEqual(container["memory"], capacity_profile()["services"].get(name, {}).get(
+                "memory", 2048 if name == "commerce" else 512))
             self.assertNotIn("memory", definition)
             self.assertEqual(container["healthCheck"]["command"],
                              ["CMD", "curl", "--fail", "--silent",
@@ -231,6 +240,9 @@ class RenderTest(unittest.TestCase):
             if name == "commerce":
                 self.assertEqual(environment["APP_ORDER_WORKFLOW_ENABLED"], "false")
                 self.assertEqual(environment["APP_DEMO_AUTO_SHIPMENT_ENABLED"], "false")
+            if name == "finance-mock":
+                self.assertEqual(environment["APP_DEV_FIXTURES_ENABLED"], "true")
+                self.assertEqual(environment["SPRING_THREADS_VIRTUAL_ENABLED"], "true")
         self.assertEqual(len(ports), len(set(ports)))
 
     def test_refuses_wrong_account_region_public_or_same_hosts_and_mutable_image(self):
@@ -256,6 +268,69 @@ class RenderTest(unittest.TestCase):
 
 
 class DeployTest(unittest.TestCase):
+    def test_already_applied_database_capacity_is_not_restarted_on_app_release(self):
+        aws = FakeAws()
+        previous = aws.services["postgres"]["taskDefinition"]
+        apply_capacity(aws.tasks[previous]["containerDefinitions"][0], "postgres")
+        result = self.run_deploy(aws)
+        self.assertEqual(result["unchanged"], ["postgres"])
+        self.assertEqual(result["registered"]["postgres"], previous)
+        self.assertEqual(aws.services["postgres"]["taskDefinition"], previous)
+        self.assertNotIn("postgres", result["attempted"])
+        self.assertFalse(any(operation == "register-task-definition" and payload["family"] == "commerce-settle-postgres"
+                             for operation, _, payload in aws.calls))
+
+    def test_capacity_replaces_stale_settings_preserving_postgres_data_and_other_options(self):
+        aws = FakeAws()
+        previous = aws.tasks[aws.services["postgres"]["taskDefinition"]]
+        database = previous["containerDefinitions"][0]
+        database["memory"] = 512
+        database["command"] = ["postgres", "-c", "timezone=Asia/Seoul", "-c", "max_connections=100"]
+        worker = aws.tasks[aws.services["payment-worker"]["taskDefinition"]]["containerDefinitions"][0]
+        worker["environment"] = [row for row in worker["environment"] if row["name"] != "PAYMENT_APPROVAL_CONCURRENCY"]
+        worker["environment"].append({"name": "PAYMENT_APPROVAL_CONCURRENCY", "value": "6"})
+        _, tasks = deployment.prepare(aws, "commerce-cluster", IMAGES, REGION)
+        updated = tasks["postgres"]["containerDefinitions"][0]
+        self.assertEqual(updated["memory"], 4096)
+        self.assertEqual(updated["command"], ["postgres", "-c", "timezone=Asia/Seoul", "-c", "max_connections=256"])
+        for key in ("image", "mountPoints", "secrets"):
+            self.assertEqual(updated[key], database[key])
+        self.assertEqual(database["memory"], 512)
+        env = {row["name"]: row["value"] for row in tasks["payment-worker"]["containerDefinitions"][0]["environment"]}
+        self.assertEqual(env["PAYMENT_APPROVAL_CONCURRENCY"], "4096")
+        self.assertEqual(env["OPERATOR_SETTING"], "preserve-me")
+        once = copy.deepcopy(updated)
+        apply_capacity(updated, "postgres")
+        self.assertEqual(updated, once)
+
+    def test_capacity_profile_is_bound_to_rollback_baseline_before_writes(self):
+        aws = FakeAws()
+        baseline = self.baseline(aws)
+        changed = copy.deepcopy(capacity_profile())
+        changed["services"]["payment-worker"]["environment"]["PAYMENT_APPROVAL_CONCURRENCY"] = "2048"
+        with patch.object(deployment, "capacity_profile", return_value=changed), self.assertRaisesRegex(RuntimeError, "baseline differs"):
+            deployment.deploy(aws, "commerce-cluster", IMAGES, REGION, lambda: None, lambda _: None, baseline)
+        self.assertFalse(any(call[0] in ("register-task-definition", "update-service") for call in aws.calls))
+
+    def test_capacity_has_twofold_maximum_pg_delay_budget_without_overbooking_db_connections(self):
+        profile = capacity_profile()
+        services = profile["services"]
+        worker = services["payment-worker"]["environment"]
+        fresh = int(worker["PAYMENT_APPROVAL_CONCURRENCY"]) - int(worker["PAYMENT_APPROVAL_RETRY_CONCURRENCY"])
+        for delay, success in ((0.150, 0.995), (0.700, 0.97), (1.500, 0.92)):
+            self.assertGreaterEqual(fresh, 1000 / success * delay * 2)
+        pools = sum(int(value) for settings in services.values() for key, value in settings.get("environment", {}).items() if key.endswith("DB_POOL_SIZE"))
+        self.assertLessEqual(pools + 32, int(services["postgres"]["postgresSettings"]["max_connections"]))
+        self.assertLessEqual(sum(settings.get("memory", 512) for name, settings in services.items() if name != "postgres") + 512 + 512 + 128, 7168)
+
+    def test_capacity_never_replaces_a_secret_reference(self):
+        aws = FakeAws()
+        container = aws.tasks[aws.services["payment-worker"]["taskDefinition"]]["containerDefinitions"][0]
+        container["secrets"].append({"name": "PAYMENT_DB_POOL_SIZE", "valueFrom": PREFIX + "existing"})
+        with self.assertRaisesRegex(ValueError, "conflicts with a secret"):
+            self.run_deploy(aws)
+        self.assertFalse(any(call[0] in ("register-task-definition", "update-service") for call in aws.calls))
+
     def test_demo_shipment_switch_changes_only_commerce_and_preserves_other_settings(self):
         aws = FakeAws()
         for enabled in (True, False, None):
@@ -302,7 +377,8 @@ class DeployTest(unittest.TestCase):
             container = definition["containerDefinitions"][0]
             self.assertIn({"name": "OPERATOR_SETTING", "value": "preserve-me"},
                           container["environment"])
-            self.assertEqual(container["image"], IMAGES[renderer.module_for(name)])
+            self.assertEqual(container["image"], "postgres:18.3" if name == "postgres"
+                             else IMAGES[renderer.module_for(name)])
             self.assertEqual(definition["tags"], [{"key": "owner", "value": "apps"}])
 
     def test_rejects_unhealthy_previous_service_before_any_write(self):
@@ -332,6 +408,14 @@ class DeployTest(unittest.TestCase):
         self.assertTrue(all(service["taskDefinition"].endswith(":1")
                             for service in aws.services.values()))
 
+    def test_postgres_apply_failure_restores_its_original_definition(self):
+        aws = FakeAws("ambiguous-postgres")
+        with self.assertRaises(RuntimeError):
+            self.run_deploy(aws)
+        self.assertEqual(self.records[-1]["attempted"], ["postgres"])
+        self.assertEqual(self.records[-1]["rolled_back"], ["postgres"])
+        self.assertTrue(all(service["taskDefinition"].endswith(":1") for service in aws.services.values()))
+
     def test_waiter_success_after_circuit_breaker_rollback_is_not_deploy_success(self):
         with self.assertRaises(RuntimeError):
             self.run_deploy(FakeAws("circuit-breaker"))
@@ -356,7 +440,7 @@ class DeployTest(unittest.TestCase):
         with self.assertRaises(OSError):
             deployment.deploy(aws, "commerce-cluster", IMAGES, REGION, lambda: None, save,
                               self.baseline(aws))
-        self.assertEqual(records[-1]["rolled_back"], ["commerce", "finance-mock"])
+        self.assertEqual(records[-1]["rolled_back"], ["finance-mock", "postgres"])
         self.assertTrue(all(service["taskDefinition"].endswith(":1")
                             for service in aws.services.values()))
 
@@ -364,8 +448,8 @@ class DeployTest(unittest.TestCase):
         aws = FakeAws("foreign-revision")
         with self.assertRaises(RuntimeError):
             self.run_deploy(aws)
-        self.assertEqual(self.records[-1]["rollback_errors"], ["finance-mock"])
-        self.assertTrue(aws.services["finance-mock"]["taskDefinition"].endswith(":99"))
+        self.assertEqual(self.records[-1]["rollback_errors"], ["postgres"])
+        self.assertTrue(aws.services["postgres"]["taskDefinition"].endswith(":99"))
 
     def test_changed_service_after_baseline_stops_before_registration(self):
         aws = FakeAws()
