@@ -28,14 +28,14 @@ const rate = Number(__ENV.RATE || 200);
 const seconds = Number(__ENV.DURATION_SECONDS || 60);
 const phase = __ENV.LOAD_PHASE || 'measurement';
 const preallocated = Number(__ENV.PRE_ALLOCATED_VUS || Math.max(400, rate * 2));
-const maximum = Number(__ENV.MAX_VUS || Math.max(1200, rate * 6));
+const maximum = Number(__ENV.MAX_VUS || Math.min(10000, Math.max(1200, rate * 6)));
 if (!/^https?:\/\//.test(baseUrl) || !__ENV.BUYER_TOKEN || !__ENV.RUN_ID
-    || !Number.isInteger(rate) || rate < 1 || rate > 1000
+    || !Number.isInteger(rate) || rate < 1 || rate > 2000
     || !Number.isInteger(seconds) || seconds < 1 || seconds > 900
     || !['warmup', 'measurement'].includes(phase)
     || !Number.isInteger(preallocated) || preallocated < 1
     || !Number.isInteger(maximum) || maximum < preallocated || maximum > 10000) {
-  throw new Error('BASE_URL·BUYER_TOKEN·RUN_ID·LOAD_PHASE와 rate=1..1000, seconds=1..900, VU=1..10000을 확인하세요.');
+  throw new Error('BASE_URL·BUYER_TOKEN·RUN_ID·LOAD_PHASE와 rate=1..2000, seconds=1..900, VU=1..10000을 확인하세요.');
 }
 
 export const options = {

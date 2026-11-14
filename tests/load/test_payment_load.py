@@ -295,7 +295,8 @@ class ReplayNormalTest(unittest.TestCase):
 
 
 class RestartRegressionTest(unittest.TestCase):
-    def ramp(self, fail_on=None, skip_restart=False, stages="100:60", worker_env="", calls=None):
+    def ramp(self, fail_on=None, skip_restart=False, stages="100:60", worker_env="", calls=None,
+             scenario="normal"):
         class InlineThread:
             def __init__(self, target, daemon=False):
                 self.target = target
@@ -327,7 +328,7 @@ class RestartRegressionTest(unittest.TestCase):
         sample["at"] = "2026-11-03T00:00:00Z"
         work = MagicMock()
         args = argparse.Namespace(stages=stages, run="restart", mix="card", offset=0,
-                                  interval=1, drain=1, kill_after=25, scenario="normal")
+                                  interval=1, drain=1, kill_after=25, scenario=scenario)
         with patch("threading.Thread", InlineThread), patch("threading.Event") as event, patch("builtins.open", mock_open()), \
                 patch.object(load, "time") as clock, patch.object(load, "WORK", work), \
                 patch.object(load, "produce", side_effect=completed_injection), patch.object(load, "latency", return_value={}), patch.object(load, "remember_run"), \
@@ -542,6 +543,8 @@ class WorkerSettingsTest(unittest.TestCase):
         compose.assert_called_once_with("exec", "-T", "payment-worker", "env", check=False)
         self.assertEqual(settings, {"PAYMENT_REQUEST_CONCURRENCY": "6",
                                     "PAYMENT_APPROVAL_CONCURRENCY": None,
+                                    "PAYMENT_APPROVAL_RETRY_CONCURRENCY": None,
+                                    "PAYMENT_SCENARIO_VERSION": None,
                                     "PAYMENT_DB_POOL_SIZE": "20"})
 
     def test_ramp_summary_contains_worker_settings(self):
@@ -553,14 +556,16 @@ class WorkerSettingsTest(unittest.TestCase):
     def test_restart_keeps_custom_settings_of_the_running_worker(self):
         # enable 때만 9·6·30을 지정하고 ramp 셸에는 변수가 없는 상황(compose_env는 {}).
         worker_env = ("DB_PASSWORD=secret\nPAYMENT_REQUEST_CONCURRENCY=9\n"
-                      "PAYMENT_APPROVAL_CONCURRENCY=6\nPAYMENT_DB_POOL_SIZE=30\n")
+                      "PAYMENT_APPROVAL_CONCURRENCY=6\nPAYMENT_APPROVAL_RETRY_CONCURRENCY=2\nPAYMENT_DB_POOL_SIZE=30\nPAYMENT_SCENARIO_VERSION=fixture-pg-planned-v1\n")
         calls = []
-        summary = RestartRegressionTest().ramp(worker_env=worker_env, calls=calls)
+        summary = RestartRegressionTest().ramp(worker_env=worker_env, calls=calls, scenario=None)
         names = [args[0] for args, _ in calls]
         self.assertLess(names.index("exec"), names.index("kill"))
         up_env = next(kwargs["env"] for args, kwargs in calls if args[0] == "up")
         self.assertEqual(up_env["LOAD_PAYMENT_REQUEST_CONCURRENCY"], "9")
         self.assertEqual(up_env["LOAD_PAYMENT_APPROVAL_CONCURRENCY"], "6")
+        self.assertEqual(up_env["LOAD_PAYMENT_APPROVAL_RETRY_CONCURRENCY"], "2")
+        self.assertEqual(up_env["LOAD_PG_SCENARIO"], "fixture-pg-planned-v1")
         self.assertEqual(up_env["LOAD_PAYMENT_DB_POOL_SIZE"], "30")
         self.assertNotIn("LOAD_DB_PASSWORD", up_env)
         self.assertEqual(summary["fault"]["workerSettingsBeforeKill"], summary["workerSettings"])

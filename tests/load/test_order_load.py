@@ -197,6 +197,15 @@ class ResultTest(unittest.TestCase):
         self.observed["measurementStates"] = self.observed["states"]
         self.assertFalse(load.verdict(self.plan, self.ledger(), self.summary, 0, self.observed))
 
+    def test_planned_declines_are_separate_from_confirmations_and_unknown_work(self):
+        self.observed["measurementStates"] = {"PAID": 1, "DECLINED": 1}
+        self.assertFalse(load.verdict(self.plan, self.ledger(), self.summary, 0, self.observed))
+        self.plan["allowPgDeclines"] = True
+        self.assertTrue(load.verdict(self.plan, self.ledger(), self.summary, 0, self.observed))
+        for states in ({"DECLINED": 2}, {"PAID": 1, "UNKNOWN": 1}, {"PAID": 1, "CANCELLED": 1}):
+            self.observed["measurementStates"] = states
+            self.assertFalse(load.verdict(self.plan, self.ledger(), self.summary, 0, self.observed))
+
     def test_wrong_duration_or_starts_outside_window_fail_injection(self):
         ledger = self.ledger()
         ledger["windows"]["measurement"]["end"] += 1
@@ -314,8 +323,28 @@ class ResultTest(unittest.TestCase):
         self.assertEqual((plan["plannedOrders"], plan["stockPrepared"]), (3000, 3301))
         self.assertFalse(report["loadExecuted"])
 
+    def test_two_thousand_input_tps_keeps_vus_bounded_for_confirmed_tps_tests(self):
+        fixture = ApiFixture("https://load.test")
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=True), \
+                patch.object(load, "Api", return_value=fixture), contextlib.redirect_stdout(io.StringIO()):
+            target = Path(tmp) / "result"
+            self.assertEqual(load.main(["--base-url", fixture.base, "--tps", "2000", "--seconds", "3",
+                                        "--prepare-only", "--output-dir", str(target)]), 0)
+            report = json.loads((target / "summary.json").read_text())
+        self.assertEqual((report["preAllocatedVUs"], report["maxVUs"]), (4000, 10000))
+        self.assertEqual(report["performanceVerification"]["status"], "UNVERIFIED")
+
+    def test_planned_declined_smoke_keeps_its_actual_status(self):
+        fixture = ApiFixture("https://load.test")
+        fixture.paid = False
+        plan = {"allowPgDeclines": True}
+        prepared = load.prepare(fixture, "buyer", "seller", "run", 1)
+        body = load.prepare_order(fixture, "buyer", "seller", prepared)
+        self.assertEqual(load.smoke(fixture, "buyer", body, "run", 1, plan), "smoke")
+        self.assertEqual(plan["smokeStatus"], "DECLINED")
+
     def test_tps_outside_bounds_is_rejected_before_docker_or_api(self):
-        for tps in (0, 1001):
+        for tps in (0, 2001):
             with self.subTest(tps=tps), patch.object(load.subprocess, "run") as run, \
                     patch.object(load, "Api") as api, contextlib.redirect_stderr(io.StringIO()), \
                     self.assertRaises(SystemExit):
