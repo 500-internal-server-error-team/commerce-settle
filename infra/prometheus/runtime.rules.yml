@@ -2,6 +2,19 @@ groups:
   - name: runtime-health
     interval: 15s
     rules:
+      - alert: ZipkinUnavailable
+        expr: absent(up{job="zipkin"}) or up{job="zipkin"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "Zipkin 수집 대상과 저장소 상태를 확인하세요."
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#zipkin-영속-저장선택
+      - alert: ZipkinSpansDropped
+        expr: sum(increase(zipkin_collector_spans_dropped_total{job="zipkin"}[5m])) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "Zipkin이 span 저장에 실패했습니다. 저장소 용량·로그와 유실 구간을 확인하세요."
+          runbook_url: https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#zipkin-영속-저장선택
       - alert: AppMetricsTargetDown
         expr: up{job="commerce-settle",instance=~"gateway:9091|commerce:9091|finance-mock:9091"} == 0
         for: 1m

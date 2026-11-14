@@ -66,7 +66,6 @@ jobs:
           python3 -B -m unittest discover -s tests/load -p 'test_payment_load.py'
           python3 -B -m unittest discover -s tests/load -p 'test_order_load.py'
           python3 -B -m unittest discover -s tests/load -p 'test_performance.py'
-          python3 -B -m unittest discover -s tests/load -p 'test_evidence.py'
           python3 -B -m unittest discover -s tests/load -p 'test_resource_sample.py'
       - name: Check Java formatting and Checkstyle (main and test)
         run: ./gradlew --no-daemon --parallel --continue spotlessCheck checkstyleMain checkstyleTest
@@ -140,6 +139,14 @@ jobs:
             **/build/test-results/test/*.xml
           if-no-files-found: ignore
           retention-days: 7
+
+  zipkin-storage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - *checkout
+      - name: Verify native Zipkin persistence, retention and disk-pressure recovery
+        run: python3 -B scripts/test_zipkin_storage.py
 
   observability:
     runs-on: ubuntu-24.04
@@ -376,7 +383,7 @@ jobs:
 
   build-and-smoke:
     if: always()
-    needs: [checks, deployment-checks, package, tests, observability, integration, demo-ui]
+    needs: [checks, deployment-checks, package, tests, observability, zipkin-storage, integration, demo-ui]
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:

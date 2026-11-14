@@ -16,7 +16,7 @@
 
 | 수단 | 현재 확인하는 범위 | 별도로 확인할 증거 |
 | --- | --- | --- |
-| [호스트 자원 수집](resource_sample.py) | Docker CPU·메모리, `vmstat`·`iostat`; 진단 모드에서는 PostgreSQL PID·query ID·잠금과 보유 PID | query ID만으로 SQL 원문·개별 요청과의 연결을 확정하지 않음. 접수 차단 사유는 별도 로그와 대조 |
+| [호스트 자원 수집](resource_sample.py) | Docker CPU·메모리, `vmstat`·`iostat` 표본 | SQL·잠금 보유자·접수 차단 사유는 수집하지 않음 |
 | [금융 지표·추적](../../docs/development.md#금융-처리-시간과-비동기-추적) | 처리 단계·SQL 시간·연결 풀·대기열과 샘플 trace | 집계 지표와 샘플 trace만으로 모든 요청의 원인을 설명할 수 없음. 필요한 trace·로그를 보관 한도 전에 확보 |
 | [일반 주문 쿼리 비교](#일반-주문-쿼리-비교) | JDBC 실행 수·SQL 시간·연결 획득·잠금 대기 표본 | 네트워크 왕복·전체 서비스 성능과 구분. 변경 경로의 신규·재요청·충돌과 분산·집중 입력을 함께 검토 |
 | [업무 완료 지표 수집](#업무-완료전구간-지연의-전후-비교) | 이미 실행한 부하의 완료량·지연과 실제 DB 측정창 | 부하 주입·실행 조건 검증·금융 대조를 대신하지 않음 |
@@ -52,39 +52,10 @@ python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN --tps 1000
 
 ```bash
 python3 -B tests/load/order_load.py --base-url https://SERVICE_DOMAIN \
-  --tps 200 --warmup-seconds 60 --seconds 900 --performance-metadata conditions.json \
-  --diagnostics --run-id "$RUN_ID" --prometheus https://prometheus.SERVICE_DOMAIN \
-  --zipkin https://zipkin.SERVICE_DOMAIN \
-  --diagnostic-runtime-target "$APP_PRIVATE_IP:9109" --diagnostic-runtime-target "$DATA_PRIVATE_IP:9109" \
-  --diagnostic-resource-file "$RESOURCE_DIR/app.jsonl" --diagnostic-resource-file "$RESOURCE_DIR/data.jsonl"
+  --tps 200 --warmup-seconds 60 --seconds 900 --performance-metadata conditions.json
 ```
 
 180,000건은 이 명령의 **측정분 요청 예정 수**입니다. 지속 성능 통과에는 같은 실제 900초 구간의 Payment DB 확정 처리량·적체 추세·오류·배포 API 지연과 배출 뒤 재고/예약/금액 대조가 필요합니다. 예열·사전 주문·다른 실행의 완료량과 측정 종료 뒤 완료분을 소급해 넣지 않습니다. 짧은 회귀·탐색은 유지하며 CI에서 실제 15분 부하를 실행하지 않습니다.
-
-### 15분 시험의 관측 준비
-
-먼저 [ECS 관측 연결](../../docs/development.md#ecs-실험의-관측-연결)을 적용합니다. 아래 값은 실제 호스트·대상 컨테이너와 현재 소스 경로로 지정합니다. `RUN_ID`는 새 UUID hex 32자리이고, `RESOURCE_DIR`은 이번 실행만의 로컬 디렉터리입니다. `umask 077`로 파일 접근을 제한합니다. 이미 사용한 실행 ID·다른 실행의 파일은 재사용하지 않습니다.
-
-두 호스트에서 Linux `vmstat`·`iostat`과 Docker 조회 권한을 준비하고, 같은 소스의 수집기를 실행합니다. 아래 두 명령을 별도 터미널에서 먼저 실행해 SSH stdout을 로컬 파일로 받습니다. 비밀값은 인자에 넣지 않습니다.
-
-```bash
-ssh "$APP_SSH" "python3 -B /srv/commerce-settle/tests/load/resource_sample.py --out-dir /srv/commerce-settle/experiments/$RUN_ID/app --run-id $RUN_ID --host-role app --stdout --seconds 1800" > "$RESOURCE_DIR/app.jsonl"
-ssh "$DATA_SSH" "python3 -B /srv/commerce-settle/tests/load/resource_sample.py --out-dir /srv/commerce-settle/experiments/$RUN_ID/data --run-id $RUN_ID --host-role data --postgres-container $POSTGRES_CONTAINER --stdout --seconds 1800" > "$RESOURCE_DIR/data.jsonl"
-```
-
-PostgreSQL은 `compute_query_id=on`으로 실행해야 합니다. Compose와 ECS 데이터 생성기는 이 명령을 반영하지만, 기존 데이터 Task는 별도로 갱신해야 합니다. 수집 SQL은 읽기 전용·2초 상한이며 활동 200건·잠금 400건까지만 읽습니다. SQL 원문·바인딩 값은 저장하지 않습니다. 이 상한에 걸리는 환경은 전체 잠금 이력을 확인한 것으로 보지 않습니다.
-
-그 뒤 위의 주문 실행 명령을 사용합니다. `conditions.arrivalRate`·`warmupSeconds`는 실제 인자와 같아야 하며, 기본 200 TPS 설정의 `conditions.runtime.loadGenerator`는 `{"image":"grafana/k6:2.3.0","memoryMiB":1536,"cpus":2,"preAllocatedVus":400,"maxVus":1200}`입니다. 값을 바꾸면 metadata도 같은 값으로 준비합니다. 실행기가 아는 조건의 모순은 주입 전에 거절하며, 실제 배포 조건의 외부 대조를 대신하지 않습니다.
-
-기존 Grafana 계정의 인증은 `PERFORMANCE_AUTH_USER`·`PERFORMANCE_AUTH_PASSWORD` 환경 변수로 전달합니다. 실행기는 같은 run ID·서로 다른 두 호스트·수집기 SHA·신선도와 업무 원천, 대기열·lag·저장소, 런타임·DB 풀·JDBC 관측을 확인합니다. 새 HTTP counter는 두 번 이상 수집되어야 하므로 최초 이력을 최대 45초 기다리며, 준비되지 않으면 주입을 거절합니다. 실제 사전 주문의 Commerce Outbox→Payment Inbox/승인/Outbox→Settlement Inbox 추적이 확보돼야 주입을 시작합니다.
-
-기존 critical 경보, 컨테이너 메모리 95% 초과, 호스트 가용 메모리 5% 미만이면 시작을 거절합니다. 데이터 저장소는 시작 시 30% 이상 여유, 실행 중에는 기존 80% 중단 경계를 적용합니다. 관측·쓰기·용량 검사가 실패하면 이번 실행의 k6만 중단하고 기존 원장으로 배출·복구합니다. 이 시험 제어는 서비스의 금융 접수 gate 정책을 변경하지 않습니다.
-
-기본 k6 한도는 CPU 2개·메모리 1536MiB입니다. 시작값이며 200 TPS의 충분조건이 아닙니다. 진단은 기본 1,000요청마다 한 trace를 선택하며, 사전 주문과 예열·측정 192,000건에서는 최대 약 193개입니다. 기본 상한은 trace 256개, 압축 진단 16MiB/실행·전체 진단 256MiB, 호스트 파일 각 16MiB, 실행 파일과 양쪽 호스트 파일 합계 256MiB, 로컬 여유 512MiB입니다. 원장 크기·추적 span 수·관측 주기에 따라 부족할 수 있으므로 사전 표본으로 산정하고 상한을 계획에 고정합니다. 상한 도달은 성공이 아니며 기존 실패 자료를 자동 삭제하지 않습니다.
-
-`diagnostics/`는 선택한 trace와 자원·기존 `performance.capture`의 실제 DB 측정창·표본 검증 결과를 보관합니다. `captureComplete`는 이 수집의 완전성이고 200 TPS·금융 정합성 통과는 아닙니다. API/DB 측정창이 다르면 그대로 기록하고, [검증 기준](../../docs/design.md#검증-지표와-완료-기준)에 맞는 구간의 결제 확정 TPS·지연·적체·오류와 [소유자 대조](../../scripts/reconcile.py), 재고·예약 대조를 끝내야 합니다. 지급까지 측정할 때는 기존 payout 원천 대조와 달력 조건도 준비합니다.
-
-분석·배출·원키 복구가 끝난 실행의 진단만 명시적으로 검토·정리합니다. `evidence.py review --run <원래 실행 폴더>`가 반환한 manifest SHA를 `evidence.py cleanup --run <같은 폴더> --manifest-sha256 <SHA>`에 전달합니다. 실패한 수집·미해결 거래는 거절하며, 다른 실행·계획·주입 원장·호스트 원자료는 삭제하지 않습니다. 금융 대조와 분석이 끝나기 전에는 이 정리를 실행하지 않습니다. SSH 수집 종료와 해당 실행의 원격 프로세스·저장 파일도 확인합니다.
 
 기본 사전 VU는 `max(400, TPS×2)`, 최대 VU는 `max(1200, TPS×6)`이며 `--pre-allocated-vus`·`--max-vus`로 1~10000 안에서 조정합니다. 실제 선택값은 요약에 남습니다. 필요한 동시성은 주입률과 실제 요청 점유시간에 따라 달라지므로 Mac의 CPU·메모리·네트워크·실제 주입률·`dropped_iterations`도 확인합니다. 기본 VU가 목표 달성을 보장하지 않습니다.
 
@@ -132,7 +103,7 @@ python3 -B tests/load/order_load.py --resume tests/load/work/orders-RUN_ID --dra
 
 성능 수집에는 생성된 metadata와 기존 `tests/load/performance.py`를 사용합니다. `loadRun.measurementWindow`는 발생기 UTC이므로 수집 결과의 실제 `dbWindowStart/End`·시계 불확실성·모집단과 일치하는지 확인합니다. 수집 명령의 `--at`만 맞췄다고 실제 DB 측정창도 같다고 가정하지 않습니다. 준비 실패(`loadExecuted=false`)는 부하 실행 실패와 구분합니다.
 
-HTTP 처리량·지연은 k6가 측정하고, 업무 완료 TPS·적체·전구간 지연은 기존 Prometheus·Payment DB 수집과 Grafana에서 확인합니다. Python 실행기는 요청 누락·중복·주문 상태를 대조하며 결제 시각별 건수나 업무 TPS를 따로 계산하지 않습니다. Zipkin과 Kafka UI에서 같은 구간의 단계·SQL·PG 호출·대기열·lag를 확인합니다. 단계 실행 횟수·HTTP 201·배출 뒤 PAID를 15분 완료 TPS로 해석하지 않습니다. PG 거절·미확정은 따로 집계하고 [정산 대조](../../docs/development.md#정산-대조-실행과-재개), 최종 재고/예약·금액과 시험 원장을 대조한 뒤 전체 성능을 판정합니다.
+HTTP 처리량·지연은 k6가 측정하고, 업무 완료 TPS·적체·전구간 지연은 기존 Prometheus·Payment DB 수집과 Grafana에서 확인합니다. Python 실행기는 요청 누락·중복·주문 상태를 대조하며 결제 시각별 건수나 업무 TPS를 따로 계산하지 않습니다. Zipkin과 Kafka UI에서 같은 구간의 단계·SQL·PG 호출·대기열·lag를 확인합니다. 재시작 이후에도 표본 추적을 조사할 실험은 [선택 영속 저장](../../docs/development.md#zipkin-영속-저장선택)의 보관 기간·디스크 예산과 실제 적용 상태를 먼저 확인합니다. 별도 trace 재수집 도구는 요구하지 않습니다. 단계 실행 횟수·HTTP 201·배출 뒤 PAID를 15분 완료 TPS로 해석하지 않습니다. PG 거절·미확정은 따로 집계하고 [정산 대조](../../docs/development.md#정산-대조-실행과-재개), 최종 재고/예약·금액과 시험 원장을 대조한 뒤 전체 성능을 판정합니다.
 
 일반 실행이 끝나면 자체 k6 컨테이너·발급 세션을 정리하고 새 시험 상품을 판매 중지합니다. 주문·재고 이력·시험 결과는 삭제하지 않습니다. 중단·정리 실패는 요약에 남으며 다음 시험 전에 미확정 거래를 확인합니다. 로컬 도구가 EC2를 종료하지는 않습니다. 공유 환경의 적체 배출·대조와 팀 사용 여부를 확인한 뒤 담당자가 EC2를 중지합니다.
 

@@ -487,6 +487,84 @@
           ]
         }
       ]
+    },
+    {
+      "interval": "15s",
+      "input_series": [
+        {
+          "series": "zipkin_collector_spans_dropped_total{job=\"zipkin\"}",
+          "values": "0+1x24"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "5m",
+          "alertname": "ZipkinSpansDropped",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "Zipkin이 span 저장에 실패했습니다. 저장소 용량·로그와 유실 구간을 확인하세요.",
+                "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#zipkin-영속-저장선택"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "interval": "15s",
+      "input_series": [
+        {
+          "series": "up{job=\"zipkin\"}",
+          "values": "0x24"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "2m",
+          "alertname": "ZipkinUnavailable",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "severity": "critical",
+                "job": "zipkin"
+              },
+              "exp_annotations": {
+                "summary": "Zipkin 수집 대상과 저장소 상태를 확인하세요.",
+                "runbook_url": "https://github.com/500-internal-server-error-team/commerce-settle/blob/develop/docs/development.md#zipkin-영속-저장선택"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "interval": "15s",
+      "input_series": [
+        {
+          "series": "zipkin_collector_spans_dropped_total{job=\"zipkin\"}",
+          "values": "0+1x20 20x40"
+        },
+        {
+          "series": "up{job=\"zipkin\"}",
+          "values": "1x60"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "12m",
+          "alertname": "ZipkinSpansDropped",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "12m",
+          "alertname": "ZipkinUnavailable",
+          "exp_alerts": []
+        }
+      ]
     }
   ]
 }

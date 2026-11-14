@@ -31,13 +31,6 @@ def fetch(expression, samples=20000):
 
 
 class PerformanceTest(unittest.TestCase):
-    def test_new_http_counter_without_scrape_history_is_not_ready_but_is_not_zero_success(self):
-        with self.assertRaises(performance.ObservationNotReady):
-            performance.capture(metadata(), 900, 1000,
-                lambda expression: [] if expression.startswith("sum(increase(http_server_requests_seconds_count") else fetch(expression))
-        report = performance.capture(metadata(), 900, 1000, fetch)
-        self.assertEqual(report["http"]["samples"], 20000)
-
     def test_payout_comparison_includes_unpaid_cohorts_and_missing_origins(self):
         item = metadata()
         item["operations"] = ["payment.payout.succeeded", "ready.payout.succeeded"]

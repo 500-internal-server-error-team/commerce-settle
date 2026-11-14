@@ -29,15 +29,12 @@ const seconds = Number(__ENV.DURATION_SECONDS || 60);
 const phase = __ENV.LOAD_PHASE || 'measurement';
 const preallocated = Number(__ENV.PRE_ALLOCATED_VUS || Math.max(400, rate * 2));
 const maximum = Number(__ENV.MAX_VUS || Math.max(1200, rate * 6));
-const diagnosticEvery = Number(__ENV.DIAGNOSTIC_EVERY || 0);
 if (!/^https?:\/\//.test(baseUrl) || !__ENV.BUYER_TOKEN || !__ENV.RUN_ID
     || !Number.isInteger(rate) || rate < 1 || rate > 1000
     || !Number.isInteger(seconds) || seconds < 1 || seconds > 900
     || !['warmup', 'measurement'].includes(phase)
     || !Number.isInteger(preallocated) || preallocated < 1
-    || !Number.isInteger(maximum) || maximum < preallocated || maximum > 10000
-    || !Number.isInteger(diagnosticEvery) || diagnosticEvery < 0 || diagnosticEvery > 100000
-    || (diagnosticEvery > 0 && !/^[a-f0-9]{32}$/.test(__ENV.RUN_ID))) {
+    || !Number.isInteger(maximum) || maximum < preallocated || maximum > 10000) {
   throw new Error('BASE_URL·BUYER_TOKEN·RUN_ID·LOAD_PHASE와 rate=1..1000, seconds=1..900, VU=1..10000을 확인하세요.');
 }
 
@@ -72,22 +69,13 @@ export default function () {
     }));
   }
   const startedAt = new Date().toISOString();
-  const traceSampled = diagnosticEvery > 0 && iteration % diagnosticEvery === 0;
-  const injectedTraceId = traceSampled
-    ? __ENV.RUN_ID.slice(0, 16) + (phase === 'measurement' ? '00000002' : '00000001')
-      + iteration.toString(16).padStart(8, '0') : null;
-  const headers = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${__ENV.BUYER_TOKEN}`,
-    'Idempotency-Key': `${__ENV.RUN_ID}-${phase === 'measurement' ? 'load' : 'warmup'}-${iteration}`,
-  };
-  if (traceSampled) {
-    headers.traceparent = `00-${injectedTraceId}-${(iteration + 1).toString(16).padStart(16, '0')}-01`;
-  }
-  console.log('ORDER_START ' + JSON.stringify({ phase, iteration, startedAt,
-    traceSampled, traceId: injectedTraceId }));
+  console.log('ORDER_START ' + JSON.stringify({ phase, iteration, startedAt }));
   const response = http.post(`${baseUrl}/api/orders`, body, {
-    headers,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${__ENV.BUYER_TOKEN}`,
+      'Idempotency-Key': `${__ENV.RUN_ID}-${phase === 'measurement' ? 'load' : 'warmup'}-${iteration}`,
+    },
     tags: { name: 'POST /api/orders' },
     timeout: '5s',
     redirects: 0,
@@ -97,24 +85,19 @@ export default function () {
   try { value = response.json() || {}; } catch (_) { /* 유실·비JSON도 결과에 남긴다. */ }
   const id = typeof value.id === 'string' && /^[0-9a-f-]{36}$/i.test(value.id) ? value.id : null;
   const code = typeof value.code === 'string' && /^[A-Z0-9_]+$/.test(value.code) ? value.code : null;
-  const traceId = injectedTraceId || (typeof value.traceId === 'string' && /^[0-9a-f]{16,32}$/i.test(value.traceId)
-    ? value.traceId : null);
+  const traceId = typeof value.traceId === 'string' && /^[0-9a-f]{16,32}$/i.test(value.traceId)
+    ? value.traceId : null;
   check(response, {
     '주문 접수 201과 주문 ID': (r) => r.status === 201 && id !== null,
   });
   console.log('ORDER ' + JSON.stringify({
     phase, iteration, startedAt, completedAt: new Date().toISOString(),
-    status: response.status, orderId: id, code, traceId, traceSampled,
+    status: response.status, orderId: id, code, traceId,
     clientErrorCode: response.error_code || null,
     clientError: response.error
       ? String(response.error).split(__ENV.BUYER_TOKEN).join('<redacted>')
         .replace(/https?:\/\/\S+/g, '<url>').replace(/[\r\n]/g, ' ').slice(0, 200)
       : null,
     durationMs: response.timings.duration,
-    blockedMs: response.timings.blocked,
-    connectingMs: response.timings.connecting,
-    tlsMs: response.timings.tls_handshaking,
-    waitingMs: response.timings.waiting,
-    receivingMs: response.timings.receiving,
   }));
 }

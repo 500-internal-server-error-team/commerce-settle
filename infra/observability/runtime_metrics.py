@@ -67,8 +67,9 @@ class DockerReadProxy:
             service = labels.get("com.amazonaws.ecs.container-name")
             prefix = "arn:" + self.cluster[1] + ":ecs:" + self.cluster[2] + ":" + self.cluster[3] + ":task/"
             task = labels.get("com.amazonaws.ecs.task-arn", "")
+            family = "commerce-settle-" + ("zipkin" if service == "zipkin-store" else str(service))
             if (service in self.services
-                    and labels.get("com.amazonaws.ecs.task-definition-family") == "commerce-settle-" + service
+                    and labels.get("com.amazonaws.ecs.task-definition-family") == family
                     and re.fullmatch(re.escape(prefix) + "(?:" + re.escape(self.cluster[4]) + "/)?[a-f0-9]{32}", task)):
                 return service
         return None
