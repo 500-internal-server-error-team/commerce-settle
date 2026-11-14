@@ -17529,6 +17529,23 @@
           "refundDeadlineAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "demoRunId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "전용 시연 회차. 일반 이벤트는 생략"
+          },
+          "demoRefundSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 3600,
+            "description": "주문에 고정한 시연 환불 기간. demoRunId와 함께 지정"
           }
         },
         "required": [

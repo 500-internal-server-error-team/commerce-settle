@@ -311,7 +311,9 @@ public class OrderWorkflowService {
               o.getVersion(),
               time(now),
               time(o.getDeliveredAt()),
-              time(o.getRefundDeadlineAt())));
+              time(o.getRefundDeadlineAt()),
+              o.getDemoRunId(),
+              o.getDemoRefundSeconds()));
       if (o.getAccrualAmount() > 0)
         emitOncePerPayment(
             o,

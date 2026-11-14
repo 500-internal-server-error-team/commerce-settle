@@ -65,12 +65,67 @@ class DemoSettlementIntegrationTest {
   @Autowired DailySettlementLauncher launcher;
   @Autowired SettlementItemRepository items;
   @Autowired JdbcTemplate jdbc;
+  @Autowired com.commercesettle.settlement.application.service.SettlementEventService events;
+  @Autowired com.commercesettle.settlement.application.service.RefundEventService refunds;
   @Autowired DailySettlementLock lock;
   @Autowired org.springframework.batch.core.repository.JobRepository jobs;
   @Autowired DailySettlementJobIntegrationTest.FakeContextReader contexts;
   @MockitoBean DemoRunSource source;
   @Autowired org.springframework.test.web.servlet.MockMvc http;
   @Autowired com.fasterxml.jackson.databind.ObjectMapper mapper;
+
+  @Test
+  @DisplayName("실제 시연 구매확정 bytes를 디코딩해 짧은 기한 원장에 한 번만 반영한다")
+  void acceptsDemoPurchaseThroughListenerAndDatabase() throws Exception {
+    var item =
+        items.save(
+            SettlementItem.create(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                new SettlementAmounts(1000, 0, 1000, 1000, 0, 150, 850),
+                0,
+                NOW.minusSeconds(60)));
+    var payload =
+        new com.commercesettle.settlement.application.event.PurchaseConfirmedPayload(
+            item.getPaymentId(),
+            item.getOrderId(),
+            4,
+            NOW.atOffset(ZoneOffset.UTC),
+            NOW.minusSeconds(11).atOffset(ZoneOffset.UTC),
+            NOW.minusSeconds(1).atOffset(ZoneOffset.UTC),
+            UUID.randomUUID(),
+            10);
+    var event =
+        new com.commercesettle.settlement.application.event.EventEnvelope<>(
+            UUID.randomUUID(),
+            "PurchaseConfirmed",
+            1,
+            NOW.atOffset(ZoneOffset.UTC),
+            item.getOrderId(),
+            4,
+            payload);
+    var body = mapper.writeValueAsBytes(event);
+    com.commercesettle.settlement.support.EventContract.assertValid(body);
+    var listener =
+        new com.commercesettle.settlement.infrastructure.messaging.SettlementEventListener(
+            mapper, events, refunds, null, "settlement.v1");
+    var record =
+        new org.apache.kafka.clients.consumer.ConsumerRecord<>(
+            "commerce-settle.commerce.v1", 0, 0, item.getPaymentId().toString(), body);
+    var acknowledged = new java.util.concurrent.atomic.AtomicBoolean();
+    listener.receive(record, () -> acknowledged.set(true));
+    listener.receive(record, () -> acknowledged.set(true));
+    assertThat(acknowledged).isTrue();
+    assertThat(status(item)).isEqualTo("PAYABLE");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM settlement.inbox WHERE event_id=? AND status='APPLIED'",
+                Integer.class,
+                event.eventId()))
+        .isEqualTo(1);
+  }
 
   @Test
   @DisplayName("시연 내부 응답 DTO의 런타임 필드·필수값·nullable·목록 참조가 정식 명세와 일치한다")

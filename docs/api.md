@@ -250,3 +250,5 @@ Commerce는 DB 트랜잭션 밖에서 Payment의 원환불과 `RESTORE` 원장, 
 - 단계 처리는 선택 query `after`와 응답 `nextCursor`로 50건씩 진행하며 처리·대기 건수를 반환합니다. 미도래 주문은 전이하지 않습니다. create 키는 8~128자, 단계 키는 8~80자입니다.
 - Settlement: `POST /internal/demo-settlement-runs`(202+Location, body runId), `GET /internal/demo-settlement-runs/{runId}`, `GET /internal/demo-settlement-runs/capabilities`.
 - 위 작업은 OPERATOR이며 변경 요청에 Idempotency-Key가 필요합니다. Commerce의 `GET /internal/demo-runs/{runId}/settlement-context`만 SERVICE:settlement에 허용합니다. 구매자 주문 생성은 선택 입력 demoRunId로 자신이 만든 주문을 회차에 연결하며 기간을 직접 지정하지 않습니다.
+
+구매확정 이벤트의 선택 필드 `demoRunId`·`demoRefundSeconds`와 소비자의 기한 검사는 [회차별 시연 예외](policies.md#회차별-시연-예외)를 따릅니다.

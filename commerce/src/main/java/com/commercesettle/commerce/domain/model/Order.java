@@ -561,6 +561,10 @@ public class Order extends AuditableEntity {
     demoRefundSeconds = refundSeconds;
   }
 
+  public Integer getDemoRefundSeconds() {
+    return demoRefundSeconds;
+  }
+
   public UUID getDemoRunId() {
     return demoRunId;
   }
