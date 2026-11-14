@@ -70,6 +70,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {
       "management.server.port=0",
+      "app.demo.enabled=true",
+      "app.demo.isolated=true",
       "management.tracing.enabled=false",
       "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
       "app.auth.rate-limit.identifier-hmac-key=order-workflow-test-hmac-key-32bytes",
@@ -133,6 +135,74 @@ class OrderWorkflowIntegrationTest {
     closure.delegate = null;
     jdbc.execute(
         "CREATE TABLE IF NOT EXISTS commerce.test_benefit_calls (order_id uuid, operation varchar(20))");
+  }
+
+  @Test
+  @DisplayName("시연 회차도 DB 기한 제약을 지키고 마감 정각은 기다린 뒤 구매확정·Outbox를 한 번 저장한다")
+  void persistsDemoDeadlinesThroughRealApiAndDatabase() throws Exception {
+    var f = fixture();
+    var options =
+        mapper
+            .createObjectNode()
+            .put("sellerId", f.seller().toString())
+            .put("productId", f.product().toString())
+            .putNull("eventId")
+            .put("deliverySeconds", 5)
+            .put("refundSeconds", 10);
+    var run = internal("/internal/demo-runs", OPERATOR, options, 201);
+    var runId = uuid(run, "id");
+    var order =
+        call(
+            "BUYER",
+            f.buyer(),
+            "/api/orders",
+            orderBody(f).put("demoRunId", runId.toString()),
+            201);
+    var id = uuid(order, "id");
+    internal("/internal/demo-runs/" + runId + "/freeze", OPERATOR, mapper.createObjectNode(), 409);
+    receive("PaymentConfirmed", confirmed(order, context(id)), true);
+    internal("/internal/demo-runs/" + runId + "/freeze", OPERATOR, mapper.createObjectNode(), 200);
+    call("BUYER", f.buyer(), "/api/orders", orderBody(f).put("demoRunId", runId.toString()), 409);
+    internal(
+        "/internal/demo-runs/" + runId + "/shipments", OPERATOR, mapper.createObjectNode(), 200);
+    clock.now.set(NOW.plusSeconds(5));
+    internal(
+        "/internal/demo-runs/" + runId + "/processing", OPERATOR, mapper.createObjectNode(), 200);
+    assertThat(buyer(f, id).path("status").asText()).isEqualTo("PAID");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT extract(epoch FROM refund_deadline_at-delivered_at)::int FROM commerce.orders WHERE id=?",
+                Integer.class,
+                id))
+        .isEqualTo(10);
+    clock.now.set(NOW.plusSeconds(15));
+    var waiting =
+        internal(
+            "/internal/demo-runs/" + runId + "/processing",
+            OPERATOR,
+            mapper.createObjectNode(),
+            200);
+    assertThat(waiting.path("waitingCount").asInt()).isEqualTo(1);
+    clock.now.set(NOW.plusSeconds(15).plusNanos(1000));
+    String key = UUID.randomUUID().toString();
+    internal(
+        "/internal/demo-runs/" + runId + "/processing",
+        OPERATOR,
+        mapper.createObjectNode(),
+        200,
+        key);
+    internal(
+        "/internal/demo-runs/" + runId + "/processing",
+        OPERATOR,
+        mapper.createObjectNode(),
+        200,
+        key);
+    assertThat(buyer(f, id).path("status").asText()).isEqualTo("PURCHASE_CONFIRMED");
+    assertThat(
+            number(
+                "SELECT count(*) FROM commerce.outbox WHERE aggregate_id=? AND event_type='PurchaseConfirmed'",
+                id))
+        .isEqualTo(1);
   }
 
   @org.junit.jupiter.params.ParameterizedTest

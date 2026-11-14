@@ -14,6 +14,19 @@ import org.springframework.web.client.RestClient;
 @Configuration
 public class CommerceClientConfiguration {
   @Bean
+  com.commercesettle.settlement.application.port.DemoRunSource demoRunSource(
+      RestClient.Builder builder,
+      @Value("${settlement.commerce.base-url}") String baseUrl,
+      @Value("${settlement.commerce.outbound-credential}") String credential,
+      @Value("${settlement.commerce.http-timeout}") Duration timeout) {
+    var http = HttpClient.newBuilder().connectTimeout(timeout).build();
+    var factory = new JdkClientHttpRequestFactory(http);
+    factory.setReadTimeout(timeout);
+    return new com.commercesettle.settlement.infrastructure.client.HttpDemoRunSource(
+        builder.baseUrl(baseUrl).requestFactory(factory).build(), credential);
+  }
+
+  @Bean
   ProductSettlementContextReader productSettlementContextReader(
       RestClient.Builder builder,
       @Value("${settlement.commerce.base-url}") String baseUrl,

@@ -33,7 +33,7 @@ class SettlementBatchOperationServiceTest {
   private static final LocalDate DATE = LocalDate.of(2026, 11, 2);
   private static final UUID SELLER = UUID.fromString("00000000-0000-4000-8000-000000000001");
   private static final Prepared PREPARED =
-      new Prepared(SELLER, DATE, null, null, Set.of(UUID.randomUUID()), null);
+      new Prepared(SELLER, DATE, null, null, Set.of(UUID.randomUUID()), null, null);
 
   private final SettlementBatchRepository batches = mock(SettlementBatchRepository.class);
   private final SellerSettlementService sellers = mock(SellerSettlementService.class);

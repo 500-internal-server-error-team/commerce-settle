@@ -37,6 +37,7 @@ public interface AuditLog {
 
   /** 허용한 행위 목록. 새 행위는 감사 계약과 함께 추가한다. */
   enum Action {
+    DEMO_RUN_CREATED,
     PAYOUT_JOB_REPLAYED,
     INBOX_REJUDGEMENT_CREATED,
     INBOX_REJUDGEMENT_PAUSED,

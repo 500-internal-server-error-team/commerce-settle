@@ -62,6 +62,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {
+      "springdoc.paths-to-match=/api/**,/internal/demo-runs/**",
       "management.server.port=0",
       "management.tracing.enabled=true",
       "management.zipkin.tracing.export.enabled=false",
@@ -966,7 +967,18 @@ class OrderIntegrationTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"Order", "OrderPage", "OrderCreate", "Problem", "FieldError"})
+  @ValueSource(
+      strings = {
+        "Order",
+        "OrderPage",
+        "OrderCreate",
+        "Problem",
+        "FieldError",
+        "DemoRunOptions",
+        "DemoRun",
+        "DemoStage",
+        "DemoCapabilities"
+      })
   @DisplayName("DB 주문 런타임 명세의 입력·응답 스키마가 정식 계약을 보존한다")
   void generatedSchemasPreserveCanonicalContracts(String name) throws Exception {
     schema(name);
@@ -1292,7 +1304,17 @@ class OrderIntegrationTest {
   private void matches(String name, JsonNode node) throws Exception {
     var contracts = new java.util.ArrayList<Schema>();
     contracts.add(canonicalSchema(name));
-    if (Set.of("Order", "OrderPage", "OrderCreate", "Problem", "FieldError").contains(name)) {
+    if (Set.of(
+            "Order",
+            "OrderPage",
+            "OrderCreate",
+            "Problem",
+            "FieldError",
+            "DemoRunOptions",
+            "DemoRun",
+            "DemoStage",
+            "DemoCapabilities")
+        .contains(name)) {
       contracts.add(schema(name));
     }
     for (Schema contract : contracts) {

@@ -27,11 +27,19 @@ class DailySettlementLock {
 
   /** 잠금을 잡으면 풀 때 닫을 핸들을, 다른 연결이 쥐고 있으면 빈 값을 돌려준다. */
   Optional<Held> tryAcquire(LocalDate batchDate) {
+    return acquire(NAMESPACE, key(batchDate));
+  }
+
+  Optional<Held> tryAcquire(java.util.UUID runId) {
+    return acquire(NAMESPACE + 1, runId.hashCode());
+  }
+
+  private Optional<Held> acquire(int namespace, int key) {
     Connection connection = null;
     try {
       connection = dataSource.getConnection();
-      if (call(connection, "SELECT pg_try_advisory_lock(?, ?)", batchDate)) {
-        return Optional.of(new Held(connection, batchDate));
+      if (call(connection, "SELECT pg_try_advisory_lock(?, ?)", namespace, key)) {
+        return Optional.of(new Held(connection, namespace, key));
       }
       connection.close();
       return Optional.empty();
@@ -45,11 +53,11 @@ class DailySettlementLock {
     return Math.toIntExact(batchDate.toEpochDay());
   }
 
-  private static boolean call(Connection connection, String sql, LocalDate batchDate)
+  private static boolean call(Connection connection, String sql, int namespace, int key)
       throws SQLException {
     try (PreparedStatement statement = connection.prepareStatement(sql)) {
-      statement.setInt(1, NAMESPACE);
-      statement.setInt(2, key(batchDate));
+      statement.setInt(1, namespace);
+      statement.setInt(2, key);
       try (ResultSet result = statement.executeQuery()) {
         result.next();
         return result.getBoolean(1);
@@ -69,17 +77,19 @@ class DailySettlementLock {
   /** 풀로 돌려주기 전에 잠금을 푼다. 연결이 이미 끊겼으면 DB가 잠금을 풀었으므로 닫기만 한다. */
   static final class Held implements AutoCloseable {
     private final Connection connection;
-    private final LocalDate batchDate;
+    private final int namespace;
+    private final int key;
 
-    private Held(Connection connection, LocalDate batchDate) {
+    private Held(Connection connection, int namespace, int key) {
       this.connection = connection;
-      this.batchDate = batchDate;
+      this.namespace = namespace;
+      this.key = key;
     }
 
     @Override
     public void close() {
       try (connection) {
-        call(connection, "SELECT pg_advisory_unlock(?, ?)", batchDate);
+        call(connection, "SELECT pg_advisory_unlock(?, ?)", namespace, key);
       } catch (SQLException e) {
         throw new DataAccessResourceFailureException("daily settlement lock release failed", e);
       }

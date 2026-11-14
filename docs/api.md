@@ -241,3 +241,12 @@ Commerce는 DB 트랜잭션 밖에서 Payment의 원환불과 `RESTORE` 원장, 
 이 읽기 계약은 `DECLINED` 금융 환불과 `RELEASED` 원예약을 **같은 원환불로 재실행·재활성화하지 않는 불변 종결 사실**로 정의합니다. 재실행 가능한 중간 상태나 UNKNOWN은 종결 증빙이 될 수 없습니다. 선행 구현의 종결 불변식과 스키마를 확인하기 전에는 어댑터를 활성화하지 않습니다. 반복 조회는 분산 트랜잭션이나 변경 가능한 상태의 장기 잠금을 대신하지 않습니다.
 
 최종 저장은 같은 주문 버전을 잠금 아래 재검사하고, 운영자 신원·구매자 확인·소유 서비스 응답 사본·조회 시각을 `refund_closure_evidence`에 보존하는 로컬 트랜잭션입니다. 종결 상태·증빙 reference·감사도 함께 커밋하거나 롤백합니다. 같은 종결 키는 외부 재조회 없이 기존 결과로 연결합니다. 누락·다른 환불·고객/버전/시점 불일치·미확정·해제 전 상태는 409, 인증 설정·통신·선행 스키마 장애는 503이며 주문은 `REFUND_PENDING`을 유지합니다. 검증된 운영 종결만 기존 주문 재개 정책을 적용하며 금융 실패 자체로 PAID·자동 구매확정을 만들지 않습니다.
+
+## 회차별 시연 API
+
+기본 비활성인 전용 환경의 내부 API입니다. 상세 입력·응답·오류는 [OpenAPI](openapi.json), 정책은 [회차별 시연 예외](policies.md#회차별-시연-예외)를 따릅니다. Gateway에 공개하지 않습니다.
+
+- Commerce: `POST /internal/demo-runs`(201+Location), `GET /internal/demo-runs/{runId}`, `GET /internal/demo-runs/capabilities`, `POST /internal/demo-runs/{runId}/freeze`, `/shipments`, `/processing`.
+- 단계 처리는 선택 query `after`와 응답 `nextCursor`로 50건씩 진행하며 처리·대기 건수를 반환합니다. 미도래 주문은 전이하지 않습니다. create 키는 8~128자, 단계 키는 8~80자입니다.
+- Settlement: `POST /internal/demo-settlement-runs`(202+Location, body runId), `GET /internal/demo-settlement-runs/{runId}`, `GET /internal/demo-settlement-runs/capabilities`.
+- 위 작업은 OPERATOR이며 변경 요청에 Idempotency-Key가 필요합니다. Commerce의 `GET /internal/demo-runs/{runId}/settlement-context`만 SERVICE:settlement에 허용합니다. 구매자 주문 생성은 선택 입력 demoRunId로 자신이 만든 주문을 회차에 연결하며 기간을 직접 지정하지 않습니다.

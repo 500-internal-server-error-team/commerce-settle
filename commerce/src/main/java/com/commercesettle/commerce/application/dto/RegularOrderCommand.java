@@ -14,7 +14,8 @@ public record RegularOrderCommand(
     Long expectedEventVersion,
     long expectedTotalAmount,
     ExternalMethod externalMethod,
-    String methodAccountRef) {
+    String methodAccountRef,
+    UUID demoRunId) {
   public enum ExternalMethod {
     CREDIT_CARD,
     DEBIT_CARD,

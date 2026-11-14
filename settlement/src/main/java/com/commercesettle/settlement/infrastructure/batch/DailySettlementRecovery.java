@@ -52,14 +52,31 @@ class DailySettlementRecovery {
 
   /** 실행 중 상태로 남은 일배치의 batchDate. 실제로 실행 중인 것도 포함한다. */
   Set<LocalDate> runningBatchDates() {
-    return running().map(DailySettlementRecovery::batchDateOf).collect(Collectors.toSet());
+    return running()
+        .filter(e -> e.getJobParameters().getString("demoRunId") == null)
+        .map(DailySettlementRecovery::batchDateOf)
+        .collect(Collectors.toSet());
   }
 
   /** 남은 실행이 모두 정체됐으면 FAILED로 정리하고 true를 돌려준다. 하나라도 최근에 갱신됐거나 판정할 수 없으면 바꾸지 않는다. */
   boolean recoverIfStale(LocalDate batchDate) {
+    return recover(
+        execution ->
+            execution.getJobParameters().getString("demoRunId") == null
+                && batchDate.equals(batchDateOf(execution)),
+        batchDate);
+  }
+
+  boolean recoverDemoIfStale(java.util.UUID id) {
+    return recover(
+        execution -> id.toString().equals(execution.getJobParameters().getString("demoRunId")),
+        null);
+  }
+
+  private boolean recover(
+      java.util.function.Predicate<JobExecution> selected, LocalDate batchDate) {
     try {
-      List<JobExecution> executions =
-          running().filter(execution -> batchDate.equals(batchDateOf(execution))).toList();
+      List<JobExecution> executions = running().filter(selected).toList();
       LocalDateTime threshold = LocalDateTime.now().minus(staleAfter);
       if (executions.isEmpty()
           || executions.stream()

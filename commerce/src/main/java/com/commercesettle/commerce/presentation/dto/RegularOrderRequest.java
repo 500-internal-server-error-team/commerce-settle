@@ -27,7 +27,8 @@ public record RegularOrderRequest(
     @JsonProperty(required = true) @NotNull @Min(1) @Max(10_000_000) Long expectedTotalAmount,
     @Schema(nullable = true) @JsonProperty(required = true) ExternalMethod externalMethod,
     @Schema(nullable = true) @JsonProperty(required = true) @Size(min = 1, max = 100)
-        String methodAccountRef) {
+        String methodAccountRef,
+    @Schema(nullable = true, description = "시연 전용 회차. 생략하면 일반 정책") UUID demoRunId) {
   public RegularOrderCommand toCommand() {
     return new RegularOrderCommand(
         productId,
@@ -40,7 +41,8 @@ public record RegularOrderRequest(
         expectedEventVersion,
         expectedTotalAmount,
         externalMethod,
-        methodAccountRef);
+        methodAccountRef,
+        demoRunId);
   }
 
   @Override

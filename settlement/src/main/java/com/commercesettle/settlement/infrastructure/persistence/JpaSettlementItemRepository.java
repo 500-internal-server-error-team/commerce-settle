@@ -65,24 +65,49 @@ class JpaSettlementItemRepository implements SettlementItemRepository {
 
   @Override
   public Set<UUID> findPayableProductIds(UUID sellerId, Instant cutoffAt) {
+    return products(sellerId, cutoffAt, null);
+  }
+
+  @Override
+  public Set<UUID> findDemoPayableProductIds(UUID sellerId, Instant cutoffAt, Set<UUID> itemIds) {
+    if (itemIds.isEmpty()) return Set.of();
+    return products(sellerId, cutoffAt, itemIds);
+  }
+
+  private Set<UUID> products(UUID sellerId, Instant cutoffAt, Set<UUID> itemIds) {
     return new HashSet<>(
         jdbc.queryForList(
-            "SELECT DISTINCT product_id FROM settlement.settlement_items WHERE " + PAYABLE,
-            new MapSqlParameterSource()
-                .addValue("sellerId", sellerId)
-                .addValue("cutoffAt", time(cutoffAt)),
+            "SELECT DISTINCT product_id FROM settlement.settlement_items WHERE "
+                + PAYABLE
+                + (itemIds == null ? "" : " AND id IN (:itemIds)"),
+            new MapSqlParameterSource("sellerId", sellerId)
+                .addValue("cutoffAt", time(cutoffAt))
+                .addValue("itemIds", itemIds),
             UUID.class));
+  }
+
+  @Override
+  public List<ReservedItem> reserveDemoForPayout(
+      UUID sellerId, Instant cutoffAt, UUID payoutId, Instant now, Set<UUID> itemIds) {
+    if (itemIds.isEmpty()) return List.of();
+    return reserve(sellerId, cutoffAt, payoutId, now, itemIds);
   }
 
   @Override
   public List<ReservedItem> reserveForPayout(
       UUID sellerId, Instant cutoffAt, UUID payoutId, Instant now) {
+    return reserve(sellerId, cutoffAt, payoutId, now, null);
+  }
+
+  private List<ReservedItem> reserve(
+      UUID sellerId, Instant cutoffAt, UUID payoutId, Instant now, Set<UUID> itemIds) {
     MapSqlParameterSource params =
         new MapSqlParameterSource()
             .addValue("sellerId", sellerId)
             .addValue("cutoffAt", time(cutoffAt))
             .addValue("payoutId", payoutId)
-            .addValue("now", time(now));
+            .addValue("now", time(now))
+            .addValue("itemIds", itemIds);
     // 다른 트랜잭션이 잡은 항목 잠금은 상한까지만 기다린다. 넘으면 이 판매자의 처리만 롤백한다.
     jdbc.queryForList("SELECT set_config('lock_timeout', '1000', true)", params);
     List<ReservedItem> reserved;
@@ -94,6 +119,7 @@ class JpaSettlementItemRepository implements SettlementItemRepository {
                   + " updated_at = :now, version = version + 1"
                   + " WHERE "
                   + PAYABLE
+                  + (itemIds == null ? "" : " AND id IN (:itemIds)")
                   + " RETURNING id, product_id, net_amount",
               params,
               (rs, row) ->

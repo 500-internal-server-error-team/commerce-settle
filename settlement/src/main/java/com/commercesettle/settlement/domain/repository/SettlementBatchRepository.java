@@ -17,6 +17,8 @@ public interface SettlementBatchRepository {
 
   Optional<SettlementBatch> find(UUID sellerId, LocalDate batchDate, String policyVersion);
 
+  Optional<SettlementBatch> findDemo(UUID sellerId, UUID runId);
+
   /** 판매자의 배치을 생성 시각·ID 내림차순으로 한 페이지 읽는다. */
   List<SettlementBatch> findBySeller(UUID sellerId, int page, int size);
 

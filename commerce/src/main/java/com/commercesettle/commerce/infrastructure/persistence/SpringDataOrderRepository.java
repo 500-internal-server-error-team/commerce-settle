@@ -58,7 +58,7 @@ interface SpringDataOrderRepository extends JpaRepository<Order, UUID> {
           """
           SELECT id FROM (
               SELECT id FROM commerce.orders
-              WHERE :autoShipment AND status = 'PAID' AND fulfillment_status = 'UNSHIPPED'
+              WHERE :autoShipment AND demo_run_id IS NULL AND status = 'PAID' AND fulfillment_status = 'UNSHIPPED'
                 AND delivery_due_at IS NULL
                 AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid))
               UNION ALL
@@ -67,12 +67,12 @@ interface SpringDataOrderRepository extends JpaRepository<Order, UUID> {
                 AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid))
               UNION ALL
               SELECT id FROM commerce.orders
-              WHERE fulfillment_status = 'SHIPPED' AND status IN ('PAID','REFUND_PENDING')
+              WHERE demo_run_id IS NULL AND fulfillment_status = 'SHIPPED' AND status IN ('PAID','REFUND_PENDING')
                 AND delivery_due_at <= :now
                 AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid))
               UNION ALL
               SELECT id FROM commerce.orders
-              WHERE status = 'PAID' AND fulfillment_status = 'DELIVERED' AND refund_deadline_at < :now
+              WHERE demo_run_id IS NULL AND status = 'PAID' AND fulfillment_status = 'DELIVERED' AND refund_deadline_at < :now
                 AND (CAST(:after AS uuid) IS NULL OR id > CAST(:after AS uuid))
           ) due
           ORDER BY id LIMIT :limit

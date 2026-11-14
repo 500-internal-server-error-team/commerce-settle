@@ -61,6 +61,9 @@ public class Order extends AuditableEntity {
   private FulfillmentStatus fulfillmentStatus;
 
   @Embedded private OrderDelivery delivery;
+  private UUID demoRunId;
+  private Integer demoDeliverySeconds;
+  private Integer demoRefundSeconds;
   private Instant shippedAt;
   private Instant deliveryDueAt;
   private Instant deliveredAt;
@@ -333,6 +336,12 @@ public class Order extends AuditableEntity {
   public void ship(Instant now) {
     if (status != Status.PAID || fulfillmentStatus != FulfillmentStatus.UNSHIPPED) throw conflict();
     shippedAt = truncate(now);
+    if (demoRunId != null) {
+      deliveryDueAt = shippedAt.plusSeconds(demoDeliverySeconds);
+      fulfillmentStatus = FulfillmentStatus.SHIPPED;
+      touch(now);
+      return;
+    }
     var due = shippedAt.atZone(ZoneId.of("Asia/Seoul"));
     int remaining = delivery.getDeliveryBusinessDays();
     while (remaining > 0) {
@@ -351,7 +360,7 @@ public class Order extends AuditableEntity {
         || now.isBefore(deliveryDueAt)
         || status != Status.PAID && status != Status.REFUND_PENDING) return false;
     deliveredAt = deliveryDueAt;
-    refundDeadlineAt = deliveredAt.plusSeconds(168 * 3600);
+    refundDeadlineAt = deliveredAt.plusSeconds(demoRunId == null ? 168 * 3600 : demoRefundSeconds);
     fulfillmentStatus = FulfillmentStatus.DELIVERED;
     touch(now);
     return true;
@@ -538,6 +547,22 @@ public class Order extends AuditableEntity {
     CREDIT_CARD,
     DEBIT_CARD,
     EASY_PAY
+  }
+
+  public void configureDemo(UUID runId, int deliverySeconds, int refundSeconds) {
+    if (demoRunId != null
+        || fulfillmentStatus != FulfillmentStatus.UNSHIPPED
+        || deliverySeconds < 1
+        || deliverySeconds > 3600
+        || refundSeconds < 1
+        || refundSeconds > 3600) throw new IllegalArgumentException("Invalid demo policy snapshot");
+    demoRunId = Objects.requireNonNull(runId);
+    demoDeliverySeconds = deliverySeconds;
+    demoRefundSeconds = refundSeconds;
+  }
+
+  public UUID getDemoRunId() {
+    return demoRunId;
   }
 
   public enum Status {

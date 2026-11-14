@@ -5,7 +5,7 @@ import { Select } from './Select';
 import { codeLabel } from './labels';
 
 const labels: Record<string, string> = {
-  productId: '상품 ID', quantity: '수량', eventId: '이벤트 ID', buyerCouponId: '사용할 쿠폰 ID',
+  demoRunId: '시연 회차 ID', productId: '상품 ID', quantity: '수량', eventId: '이벤트 ID', buyerCouponId: '사용할 쿠폰 ID',
   mileageAmount: '사용 마일리지', addressId: '배송지 ID', expectedProductVersion: '확인한 상품 버전',
   expectedEventVersion: '확인한 이벤트 버전', expectedTotalAmount: '확인한 결제 금액',
   externalMethod: '결제수단', methodAccountRef: '결제 시험계정', expectedVersion: '확인한 버전',
@@ -29,6 +29,7 @@ const labels: Record<string, string> = {
 };
 const hints: Record<string, string> = {
   productId: '아래 상품 목록에서 선택하세요. 판매 상품이 없으면 판매자 역할에서 상품과 재고를 먼저 등록하세요.',
+  demoRunId: '전용 시연 환경에서 만든 회차 ID입니다. 생략하면 일반 배송·환불 정책을 적용합니다.',
   eventId: '행사 구매에만 사용합니다. 아래 실제 이벤트 목록에서 선택하세요.',
   buyerCouponId: '현재 구매자가 보유한 쿠폰을 선택하세요. 쿠폰을 사용하지 않으면 사용 안 함을 유지하세요.',
   addressId: '현재 구매자의 배송지를 선택하세요. 계정·설정에서 먼저 등록할 수 있습니다.',
