@@ -6,12 +6,14 @@ import com.commercesettle.payment.domain.model.PaymentJob;
 import com.commercesettle.payment.domain.model.PaymentJobOperation;
 import com.commercesettle.payment.domain.model.PaymentJobStatus;
 import com.commercesettle.payment.domain.repository.PaymentJobRepository;
+import com.commercesettle.payment.infrastructure.messaging.PaymentWorkAvailable;
 import java.sql.Types;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -28,6 +30,12 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
   private final SpringDataPaymentJobRepository repository;
   private final NamedParameterJdbcTemplate jdbc;
   private AsyncObservation observations = AsyncObservation.NOOP;
+  private ApplicationEventPublisher events = event -> {};
+
+  @Autowired
+  void workEvents(ApplicationEventPublisher publisher) {
+    events = publisher;
+  }
 
   JpaPaymentJobRepository(
       SpringDataPaymentJobRepository repository, NamedParameterJdbcTemplate jdbc) {
@@ -41,9 +49,15 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
   }
 
   @Override
+  @Transactional
   public PaymentJob save(PaymentJob job) {
-    if (job.getVersion() == null) job.captureTraceParent(observations.capture());
-    return repository.save(job);
+    boolean created = job.getVersion() == null;
+    if (created) job.captureTraceParent(observations.capture());
+    PaymentJob saved = repository.save(job);
+    if (created && saved.getOperation() == PaymentJobOperation.APPROVE) {
+      events.publishEvent(new PaymentWorkAvailable(PaymentWorkAvailable.Kind.APPROVAL));
+    }
+    return saved;
   }
 
   @Override
@@ -56,6 +70,13 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
   @Transactional
   public Optional<LeasedJob> leaseNext(
       PaymentJobOperation operation, String owner, Duration leaseDuration) {
+    return leaseNext(operation, owner, leaseDuration, LeaseLane.ANY);
+  }
+
+  @Override
+  @Transactional
+  public Optional<LeasedJob> leaseNext(
+      PaymentJobOperation operation, String owner, Duration leaseDuration, LeaseLane lane) {
     TransactionLimits.apply(jdbc.getJdbcTemplate());
     // ix_payment_jobs_lease를 next_run_at 순서로 읽다가 첫 후보에서 멈춘다. 임대는 next_run_at이 지난 작업에만
     // 걸리므로 RUNNING 작업도 next_run_at이 현재 이전이다. 고정 시각 조건만 인덱스 범위로 쓸 수 있다.
@@ -67,6 +88,8 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
                   next_run_at AS queued_due,lease_until AS queued_lease,status AS queued_status
               FROM payment.payment_jobs WHERE operation = :operation
                 AND status IN ('PENDING', 'RETRY', 'RUNNING') AND next_run_at <= statement_timestamp()
+                AND (:lane = 'ANY' OR (:lane = 'NEW' AND status = 'PENDING')
+                     OR (:lane = 'RETRY' AND status IN ('RETRY', 'RUNNING')))
                 AND (status <> 'RUNNING' OR lease_until < clock_timestamp())
               ORDER BY next_run_at, id LIMIT 1 FOR UPDATE SKIP LOCKED)
             UPDATE payment.payment_jobs j
@@ -80,6 +103,7 @@ class JpaPaymentJobRepository implements PaymentJobRepository {
             """,
             new MapSqlParameterSource()
                 .addValue("operation", operation.name())
+                .addValue("lane", lane.name())
                 .addValue("owner", owner)
                 .addValue("token", UUID.randomUUID())
                 .addValue("leaseSeconds", seconds(leaseDuration)),

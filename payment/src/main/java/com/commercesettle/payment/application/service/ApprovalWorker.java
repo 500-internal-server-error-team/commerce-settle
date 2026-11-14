@@ -48,10 +48,18 @@ public class ApprovalWorker {
 
   /** 도래한 작업이 없으면 false를 돌려준다. */
   public boolean runOnce() {
+    return runOnce(PaymentJobRepository.LeaseLane.ANY);
+  }
+
+  public boolean runOnce(PaymentJobRepository.LeaseLane lane) {
     Optional<LeasedJob> leased =
         observations.observe(
             Stage.APPROVAL_LEASE,
-            () -> jobs.leaseNext(PaymentJobOperation.APPROVE, owner, settings.leaseDuration()));
+            () ->
+                lane == PaymentJobRepository.LeaseLane.ANY
+                    ? jobs.leaseNext(PaymentJobOperation.APPROVE, owner, settings.leaseDuration())
+                    : jobs.leaseNext(
+                        PaymentJobOperation.APPROVE, owner, settings.leaseDuration(), lane));
     if (leased.isEmpty()) {
       return false;
     }

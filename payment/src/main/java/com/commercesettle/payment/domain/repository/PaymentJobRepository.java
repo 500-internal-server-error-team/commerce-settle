@@ -24,6 +24,16 @@ public interface PaymentJobRepository {
   Optional<LeasedJob> leaseNext(
       PaymentJobOperation operation, String owner, Duration leaseDuration);
 
+  /** 신규 작업과 재시도·만료 임대의 실행 예산을 나눠 선점한다. */
+  Optional<LeasedJob> leaseNext(
+      PaymentJobOperation operation, String owner, Duration leaseDuration, LeaseLane lane);
+
+  enum LeaseLane {
+    ANY,
+    NEW,
+    RETRY
+  }
+
   /** 이 token의 임대가 {@code minRemaining}보다 더 남아 있는지 확인한다. 외부 호출 직전에 호출 제한 시간을 넘겨 쓴다. */
   boolean holdsLease(UUID jobId, UUID leaseToken, Duration minRemaining);
 

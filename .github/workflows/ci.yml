@@ -120,7 +120,7 @@ jobs:
           - group: settlement
             tasks: ':settlement:test'
           - group: other-services
-            tasks: ':payment:test :finance-mock:test :gateway:test :internal-auth:test :observability:test :demo-control:test'
+            tasks: ':payment:test :finance-mock:test :gateway:test :internal-auth:test :observability:test :worker-runtime:test :demo-control:test'
     steps:
       - *checkout
       - *java

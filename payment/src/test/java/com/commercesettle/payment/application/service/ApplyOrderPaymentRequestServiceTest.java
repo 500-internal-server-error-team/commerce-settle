@@ -1383,6 +1383,12 @@ class ApplyOrderPaymentRequestServiceTest {
     }
 
     @Override
+    public Optional<LeasedJob> leaseNext(
+        PaymentJobOperation operation, String owner, Duration leaseDuration, LeaseLane lane) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
     public boolean holdsLease(UUID jobId, UUID leaseToken, Duration minRemaining) {
       throw new UnsupportedOperationException();
     }

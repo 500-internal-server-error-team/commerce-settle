@@ -1,4 +1,5 @@
 dependencies {
+    implementation project(':worker-runtime')
     implementation project(':observability')
     implementation project(':internal-auth')
     implementation 'org.springframework.boot:spring-boot-starter-web'

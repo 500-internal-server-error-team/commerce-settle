@@ -26,7 +26,8 @@ public class PaymentAcceptedConfiguration {
   @ConditionalOnProperty(name = "app.payment-accepted-processor.enabled", havingValue = "true")
   PaymentAcceptedProcessor paymentAcceptedProcessor(
       PaymentAcceptedService service,
-      @Value("${app.payment-accepted-processor.batch-size:100}") int batchSize) {
-    return new PaymentAcceptedProcessor(service, batchSize);
+      @Value("${app.payment-accepted-processor.batch-size:100}") int batchSize,
+      @Value("${app.payment-accepted-processor.concurrency:2}") int concurrency) {
+    return new PaymentAcceptedProcessor(service, batchSize, concurrency);
   }
 }
