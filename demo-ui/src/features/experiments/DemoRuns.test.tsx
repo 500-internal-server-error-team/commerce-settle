@@ -8,10 +8,10 @@ let client: QueryClient;
 afterEach(() => { cleanup(); client.clear(); vi.unstubAllGlobals(); });
 const id='abcdef00-0000-4000-8000-000000000001';
 const run={id,sellerId:id,productId:id,eventId:null,deliverySeconds:5,refundSeconds:10,frozenAt:'2026-11-14T10:00:00+09:00',orderIds:[id],payableOrderIds:[id],refundedOrderIds:[],pendingCount:0,excludedCount:0};
-function setup(enabled=true) {
+function setup(enabled=true, currentRun=run) {
   const fetch=vi.fn(async (_url: unknown,init?: RequestInit) => {
     const body=JSON.parse(String(init?.body));
-    const data=body.operationId.includes('capabilities')?{enabled}:body.operationId==='get_internal_demo_settlement_run'?null:run;
+    const data=body.operationId.includes('capabilities')?{enabled}:body.operationId==='get_internal_demo_settlement_run'?null:currentRun;
     return new Response(JSON.stringify({upstreamStatus:data===null?404:200,data}));
   });
   vi.stubGlobal('fetch',fetch);
@@ -54,4 +54,22 @@ it('50건 페이지의 cursor를 이어서 보내고 같은 처리 요청 키를
   await waitFor(()=>expect(page).toBe(2));
   const calls=fetch.mock.calls.map(([,init])=>JSON.parse(String(init?.body))).filter(c=>c.operationId==='post_internal_demo_run_processing');
   expect(calls[0].query).toEqual({});expect(calls[1].query).toEqual({after:id});expect(calls[0].idempotencyKey).toBe(calls[1].idempotencyKey);
+});
+
+it('불러온 회차의 고정 옵션을 표시하고 새 회차 준비에 이어 쓴다', async () => {
+  setup(true, { ...run, deliverySeconds: 2, refundSeconds: 3 });
+  await waitFor(()=>expect((screen.getByRole('button',{name:'회차 불러오기'}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.change(screen.getByLabelText('기존 회차 ID'),{target:{value:id}});
+  fireEvent.submit(screen.getByRole('form',{name:'기존 시연 회차 조회'}));
+  await screen.findByText('배송 2초 · 환불 3초');
+  expect((screen.getByLabelText('판매자 ID') as HTMLInputElement).value).toBe(id);
+  expect((screen.getByLabelText('상품 ID') as HTMLInputElement).value).toBe(id);
+  expect((screen.getByLabelText('배송 대기 (초)') as HTMLInputElement).value).toBe('2');
+  expect((screen.getByLabelText('환불 기간 (초)') as HTMLInputElement).value).toBe('3');
+  expect((screen.getByLabelText('배송 대기 (초)').closest('fieldset') as HTMLFieldSetElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button',{name:'새 회차 준비'}));
+  expect((screen.getByLabelText('배송 대기 (초)').closest('fieldset') as HTMLFieldSetElement).disabled).toBe(false);
+  expect((screen.getByLabelText('판매자 ID') as HTMLInputElement).value).toBe(id);
+  expect((screen.getByLabelText('배송 대기 (초)') as HTMLInputElement).value).toBe('2');
+  expect((screen.getByLabelText('환불 기간 (초)') as HTMLInputElement).value).toBe('3');
 });

@@ -69,6 +69,10 @@ export function DemoRuns({ services }: { services: string[] }) {
     await Promise.all([client.invalidateQueries({ queryKey: ['demo-run', runId] }), client.invalidateQueries({ queryKey: ['demo-settlement', runId] })]);
   } });
   const locked = !!runId || !!pendingCreate;
+  const displayOptions: Options = run.data ? {
+    sellerId: run.data.sellerId, productId: run.data.productId, eventId: run.data.eventId,
+    deliverySeconds: run.data.deliverySeconds, refundSeconds: run.data.refundSeconds,
+  } : options;
   const error = action.error ?? run.error ?? settlement.error ?? capabilities.error;
   return <section aria-label="회차별 시연">
     <h3>회차별 시연</h3>
@@ -76,14 +80,14 @@ export function DemoRuns({ services }: { services: string[] }) {
     {!enabled && <p className="caption">{configured ? capabilities.isPending ? '서버의 시연 모드를 확인하는 중입니다.' : '전용 환경에서 Commerce·Settlement의 시연 모드를 켜야 합니다.' : '서버에 Commerce·Settlement 운영 자격을 먼저 설정하세요.'}</p>}
     <form aria-label="시연 회차 생성" onSubmit={e => { e.preventDefault(); action.mutate('create'); }}>
       <fieldset disabled={!enabled || locked || action.isPending} className="fields">
-        <label>판매자 ID<input required value={options.sellerId} pattern={uuid.source} onChange={e => setOptions({ ...options, sellerId: e.target.value })} /></label>
-        <label>상품 ID<input required value={options.productId} pattern={uuid.source} onChange={e => setOptions({ ...options, productId: e.target.value })} /></label>
-        <label>이벤트 ID (선택)<input value={options.eventId ?? ''} pattern={uuid.source} onChange={e => setOptions({ ...options, eventId: e.target.value || null })} /></label>
-        <label>배송 대기 (초)<input required type="number" min="1" max="3600" step="1" value={options.deliverySeconds} onChange={e => setOptions({ ...options, deliverySeconds: Number(e.target.value) })} /></label>
-        <label>환불 기간 (초)<input required type="number" min="1" max="3600" step="1" value={options.refundSeconds} onChange={e => setOptions({ ...options, refundSeconds: Number(e.target.value) })} /></label>
+        <label>판매자 ID<input required value={displayOptions.sellerId} pattern={uuid.source} onChange={e => setOptions({ ...options, sellerId: e.target.value })} /></label>
+        <label>상품 ID<input required value={displayOptions.productId} pattern={uuid.source} onChange={e => setOptions({ ...options, productId: e.target.value })} /></label>
+        <label>이벤트 ID (선택)<input value={displayOptions.eventId ?? ''} pattern={uuid.source} onChange={e => setOptions({ ...options, eventId: e.target.value || null })} /></label>
+        <label>배송 대기 (초)<input required type="number" min="1" max="3600" step="1" value={displayOptions.deliverySeconds} onChange={e => setOptions({ ...options, deliverySeconds: Number(e.target.value) })} /></label>
+        <label>환불 기간 (초)<input required type="number" min="1" max="3600" step="1" value={displayOptions.refundSeconds} onChange={e => setOptions({ ...options, refundSeconds: Number(e.target.value) })} /></label>
       </fieldset>
       <button type="submit" className="primary" disabled={!enabled || !!runId || action.isPending}>{pendingCreate ? '같은 회차 생성 요청 다시 확인' : '시연 회차 만들기'}</button>
-      {locked && <button type="button" disabled={action.isPending} onClick={() => { setRunId(''); setLookup(''); setPendingCreate(null); setProgress(null); keys.current = {}; action.reset(); }}>새 회차 준비</button>}
+      {locked && <button type="button" disabled={action.isPending} onClick={() => { setOptions({ ...displayOptions }); setRunId(''); setLookup(''); setPendingCreate(null); setProgress(null); keys.current = {}; action.reset(); }}>새 회차 준비</button>}
     </form>
     <p className="caption">주문 생성의 시연 회차 ID에 아래 ID를 넣으세요. 매진·결제·환불 처리가 끝난 뒤 대상을 고정하고 발송합니다.</p>
     <form aria-label="기존 시연 회차 조회" onSubmit={e => { e.preventDefault(); setRunId(lookup); action.reset(); }}>
