@@ -8,6 +8,7 @@ import com.commercesettle.commerce.application.exception.AuthenticationFailedExc
 import com.commercesettle.commerce.application.exception.OrderRequestException;
 import com.commercesettle.commerce.application.exception.OrderRequestException.Kind;
 import com.commercesettle.commerce.application.port.AddressCipher;
+import com.commercesettle.commerce.application.port.DemoRunStore.Run;
 import com.commercesettle.commerce.application.port.OrderBenefits;
 import com.commercesettle.commerce.application.port.OrderEventOutbox;
 import com.commercesettle.commerce.domain.exception.BuyerAddressNotFoundException;
@@ -179,12 +180,14 @@ public class OrderService {
             .findById(command.addressId())
             .filter(a -> !a.isDeleted() && a.isOwnedBy(buyerId))
             .orElseThrow(() -> new BuyerAddressNotFoundException(command.addressId()));
+    // 신규·재시도 모두 회차→재고 순서로 잠가 쿠폰 유무에 따른 잠금 역전을 막는다.
+    var demo = demoRuns.lockForNewOrder(command.demoRunId());
     boolean reserveLast = command.eventId() == null && command.buyerCouponId() == null;
     Order saved =
         command.eventId() == null && !reserveLast
             ? inventory.createAndReserve(
                 command.productId(),
-                product -> createOrder(buyerId, orderId, command, address, product))
+                product -> createOrder(buyerId, orderId, command, address, product, demo))
             : createOrder(
                 buyerId,
                 orderId,
@@ -192,7 +195,8 @@ public class OrderService {
                 address,
                 products
                     .findById(command.productId())
-                    .orElseThrow(() -> new ProductNotFoundException(command.productId())));
+                    .orElseThrow(() -> new ProductNotFoundException(command.productId())),
+                demo);
     appendPaymentRequest(saved);
     if (reserveLast) inventory.reserveNewOrder(saved, command.expectedProductVersion());
     return OrderView.from(saved);
@@ -203,7 +207,8 @@ public class OrderService {
       UUID orderId,
       RegularOrderCommand command,
       BuyerAddress address,
-      Product product) {
+      Product product,
+      Run demo) {
     if (!product.isPubliclyVisible()) {
       throw new ProductNotFoundException(command.productId());
     }
@@ -281,7 +286,7 @@ public class OrderService {
             now);
     // 정책 사본과 예정액은 주문 생성 때 고정한다. 이후 정책을 바꿔도 이 주문의 약속은 바뀌지 않는다.
     accrual.current().ifPresent(order::fixMileageAccrual);
-    demoRuns.apply(order, command.demoRunId());
+    demoRuns.apply(order, demo);
     UUID snapshotId = UUID.randomUUID();
     OrderAddress snapshot =
         OrderAddress.snapshot(

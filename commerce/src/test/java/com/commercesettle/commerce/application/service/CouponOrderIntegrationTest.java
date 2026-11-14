@@ -3,11 +3,17 @@ package com.commercesettle.commerce.application.service;
 import static com.commercesettle.commerce.support.ConcurrentTransactions.holdTransaction;
 import static com.commercesettle.commerce.support.ConcurrentTransactions.runConcurrently;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 
+import com.commercesettle.commerce.application.dto.OrderView;
+import com.commercesettle.commerce.application.dto.RegularOrderCommand;
 import com.commercesettle.commerce.application.event.EventEnvelope;
+import com.commercesettle.commerce.application.port.DemoRunStore;
 import com.commercesettle.commerce.domain.model.BuyerCoupon;
 import com.commercesettle.commerce.domain.model.ProductStatus;
 import com.commercesettle.commerce.domain.model.ShippingAddress;
+import com.commercesettle.commerce.domain.repository.ProductInventoryRepository;
 import com.commercesettle.commerce.infrastructure.messaging.PaymentAcceptedListener;
 import com.commercesettle.commerce.support.ConcurrentTransactions.HeldTransaction;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -22,10 +28,15 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
@@ -38,6 +49,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -49,6 +61,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {
       "management.server.port=0",
+      "app.demo.enabled=true",
+      "app.demo.isolated=true",
       "management.tracing.enabled=false",
       "app.coupons.expiry-scheduler-enabled=false",
       "app.auth.session-epoch=00000000-0000-4000-8000-000000000000",
@@ -80,6 +94,13 @@ class CouponOrderIntegrationTest {
   @Autowired OrderResultService results;
   @Autowired PaymentAcceptedService accepted;
   @Autowired TransactionTemplate tx;
+  @Autowired OrderService orderCommands;
+  @Autowired OrderWorkflowService workflow;
+  @Autowired DemoRunService demoRuns;
+
+  @MockitoSpyBean DemoRunStore demoStore;
+  @MockitoSpyBean ProductInventoryRepository inventoryRows;
+
   @Autowired com.commercesettle.commerce.support.JdbcExecutionRecorder sql;
 
   @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods = false)
@@ -92,6 +113,107 @@ class CouponOrderIntegrationTest {
 
   // 금융 관측 기반 접수 제한은 이 시험의 대상이 아니므로 항상 접수한다.
   @MockitoBean OrderAdmissionService admission;
+
+  @ParameterizedTest(name = "재시도={0}")
+  @ValueSource(booleans = {false, true})
+  @DisplayName("시연 쿠폰 주문과 신규·재시도 주문은 회차·재고 경합에도 함께 접수된다")
+  void demoOrdersKeepOneLockOrder(boolean retry) throws Exception {
+    Buyer first = buyer(), second = buyer();
+    UUID product = product();
+    UUID seller =
+        jdbc.queryForObject(
+            "SELECT seller_id FROM commerce.products WHERE id=?", UUID.class, product);
+    UUID run = demoRuns.create("operator:test", key(), seller, product, null, 5, 10).id();
+    UUID coupon = coupons.issueWelcome(first.id(), Instant.now()).getId();
+    var plain = demoCommand(second, product, null, run);
+    var prior = retry ? orderCommands.create(second.id(), key(), plain) : null;
+    if (prior != null)
+      receive("PaymentDeclined", result(prior.id(), UUID.randomUUID(), cycle(prior.id())));
+    long retryVersion = prior == null ? 0 : orderCommands.get(second.id(), prior.id()).version();
+
+    var role = new ThreadLocal<Boolean>();
+    var next = new AtomicInteger();
+    var couponHasRun = new AtomicBoolean();
+    var inventoryHeld = new CountDownLatch(1);
+    var otherRunAttempt = new CountDownLatch(1);
+    var otherRunHeld = new CountDownLatch(1);
+    doAnswer(
+            invocation -> {
+              boolean selected =
+                  run.equals(invocation.getArgument(0))
+                      && Boolean.TRUE.equals(invocation.getArgument(1));
+              if (selected && Boolean.FALSE.equals(role.get())) otherRunAttempt.countDown();
+              Object found = invocation.callRealMethod();
+              if (selected && Boolean.TRUE.equals(role.get())) couponHasRun.set(true);
+              if (selected && Boolean.FALSE.equals(role.get())) otherRunHeld.countDown();
+              return found;
+            })
+        .when(demoStore)
+        .find(eq(run), eq(true));
+    doAnswer(
+            invocation -> {
+              Object found = invocation.callRealMethod();
+              if (Boolean.TRUE.equals(role.get())) {
+                inventoryHeld.countDown();
+                // 기존 순서에서는 상대 회차 선점을 기다려 역전을 만들고, 수정된 순서에서는 상대의 시도까지만 기다린다.
+                var barrier = couponHasRun.get() ? otherRunAttempt : otherRunHeld;
+                assertThat(barrier.await(5, TimeUnit.SECONDS)).isTrue();
+              }
+              return found;
+            })
+        .when(inventoryRows)
+        .findByProductIdForUpdate(eq(product));
+
+    var outcomes =
+        runConcurrently(
+            2,
+            () -> {
+              boolean withCoupon = next.getAndIncrement() == 0;
+              role.set(withCoupon);
+              try {
+                if (withCoupon)
+                  return orderCommands.create(
+                      first.id(), key(), demoCommand(first, product, coupon, run));
+                assertThat(inventoryHeld.await(5, TimeUnit.SECONDS)).isTrue();
+                return retry
+                    ? workflow.retry(second.id(), prior.id(), key(), retryVersion)
+                    : orderCommands.create(second.id(), key(), plain);
+              } finally {
+                role.remove();
+              }
+            });
+
+    assertThat(outcomes).allMatch(OrderView.class::isInstance);
+    assertThat(count("orders where product_id=?", product)).isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT reserved_qty FROM commerce.product_inventory WHERE product_id=?",
+                Long.class,
+                product))
+        .isEqualTo(2L);
+    assertThat(couponStatus(coupon)).isEqualTo("RESERVED");
+    assertThat(
+            count(
+                "outbox where event_type='OrderPaymentRequested' AND aggregate_id IN (SELECT id FROM commerce.orders WHERE product_id=?)",
+                product))
+        .isEqualTo(retry ? 3 : 2);
+  }
+
+  private RegularOrderCommand demoCommand(Buyer buyer, UUID product, UUID coupon, UUID run) {
+    return new RegularOrderCommand(
+        product,
+        1,
+        null,
+        coupon,
+        0,
+        buyer.address(),
+        0,
+        null,
+        coupon == null ? PRICE : PRICE - DISCOUNT,
+        RegularOrderCommand.ExternalMethod.CREDIT_CARD,
+        "test-card",
+        run);
+  }
 
   @Test
   @DisplayName("웰컴 쿠폰은 같은 구매자의 동시·반복 발급에도 한 장이며, 활성 웰컴 캠페인은 하나에 발급 수·약속액이 쌓인다")
