@@ -7,7 +7,7 @@ import time
 
 
 LOCK = threading.Lock()
-STATE = {"active": False, "notifications": []}
+STATE = {"active": False, "api_down": False, "notifications": []}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -16,8 +16,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         with LOCK:
-            if self.path == "/metrics":
-                labels = 'application="payment",consumer="payment.v1"'
+            if self.path in ("/metrics/payment-api", "/metrics/payment-worker", "/metrics/settlement"):
+                if self.path == "/metrics/payment-api" and STATE["api_down"]:
+                    self.send_error(503)
+                    return
+                application, role = ("settlement", "app") if self.path.endswith("settlement") else (
+                    "payment", "api" if self.path.endswith("payment-api") else "worker")
+                labels = f'application="{application}",role="{role}",consumer="{application}.v1"'
+                raw = (f'{application}_quarantine_observed_timestamp_seconds{{{labels}}} {time.time()-1}\n'
+                       f'{application}_quarantine_collection_success{{{labels}}} 1\n').encode()
+            elif self.path == "/metrics":
+                labels = 'application="payment",role="worker",consumer="payment.v1"'
                 active = int(STATE["active"])
                 lines = [
                     f'payment_quarantine_observed_timestamp_seconds{{{labels}}} {time.time()-1}',
@@ -43,6 +52,8 @@ class Handler(BaseHTTPRequestHandler):
                     f'commerce_settle_runtime_event_gap_timestamp_seconds {time.time()-1 if active else 0}',
                     f'commerce_settle_container_oom_killed{{service="payment-worker"}} {active}',
                     f'commerce_settle_container_last_exit_code{{service="payment-worker"}} {137 if active else 0}',
+                    f'commerce_settle_container_last_oom_timestamp_seconds{{service="payment-worker"}} {time.time()-1 if active else 0}',
+                    f'commerce_settle_container_last_abnormal_exit_timestamp_seconds{{service="payment-worker"}} {time.time()-1 if active else 0}',
                     f'commerce_settle_financial_operation_age_seconds{{operation="payment.unknown"}} {901 if active else 0}',
                     f'commerce_settle_financial_operation_observed_timestamp_seconds{{operation="payment.unknown"}} {time.time()-1}',
                     f'commerce_settle_financial_operation_records{{operation="refund.unknown"}} {active}',
@@ -58,6 +69,8 @@ class Handler(BaseHTTPRequestHandler):
                 for operation in ("payout.total", "payout.ready", "payout.unapplied"):
                     observed = time.time() - (100 if active and operation == "payout.ready" else 1)
                     lines.append(f'commerce_settle_business_cohort_observed_timestamp_seconds{{operation="{operation}"}} {observed}')
+                lines.append(f'commerce_settle_business_cohort_cutoff_timestamp_seconds{{operation="payout.unapplied"}} {time.time()-600}')
+                lines.append(f'commerce_settle_business_cohort_snapshot_timestamp_seconds{{operation="payout.unapplied"}} {time.time()-1}')
                 lines.append(f'commerce_settle_business_cohort_capture_complete{{operation="payout.unapplied"}} {0 if active else 1}')
                 for operation, value in (("payout.total", 1), ("payout.ready", 2), ("payout.unapplied", 3)):
                     for metric in ("records", "age_seconds"):
@@ -72,7 +85,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header(
             "Content-Type",
             "text/plain; version=0.0.4; charset=utf-8"
-            if self.path == "/metrics" else "application/json",
+            if self.path.startswith("/metrics") else "application/json",
         )
         self.end_headers()
         self.wfile.write(raw)
@@ -81,7 +94,9 @@ class Handler(BaseHTTPRequestHandler):
         raw = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
         with LOCK:
             if self.path == "/state":
-                STATE["active"] = bool(raw["active"])
+                for key in ("active", "api_down"):
+                    if key in raw:
+                        STATE[key] = bool(raw[key])
             elif self.path == "/alerts":
                 STATE["notifications"].append(raw)
             else:

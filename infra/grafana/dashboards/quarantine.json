@@ -18,7 +18,7 @@
   "panels": [
     {
       "id": 1,
-      "title": "최근 5분 신규 격리",
+      "title": "최근 5분 신규 격리 원문",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -41,7 +41,7 @@
         {
           "refId": "A",
           "expr": "payment:quarantine_captured_recent:max",
-          "legendFormat": "{{consumer}} {{kind}} {{status}}",
+          "legendFormat": "{{consumer}}",
           "instant": true,
           "range": false
         }
@@ -58,7 +58,7 @@
     },
     {
       "id": 2,
-      "title": "소진된 발행 작업",
+      "title": "확인 필요 발행 작업",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -94,11 +94,12 @@
           "fields": "",
           "values": false
         }
-      }
+      },
+      "description": "REVIEW_REQUIRED 상태의 DLT·REPLAY 발행 작업입니다. 격리 원문 건수와 구분합니다."
     },
     {
       "id": 3,
-      "title": "DLT·REPLAY 상태별 작업",
+      "title": "DLT·REPLAY 발행 작업 · 상태별 추이",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -133,7 +134,7 @@
     },
     {
       "id": 4,
-      "title": "도래 후 최장 대기",
+      "title": "격리 발행 작업 · 도래 후 최장 대기",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -156,7 +157,7 @@
         {
           "refId": "A",
           "expr": "payment:quarantine_delivery_overdue_seconds:max",
-          "legendFormat": "{{consumer}} {{kind}} {{status}}"
+          "legendFormat": "{{consumer}} / {{kind}}"
         }
       ],
       "options": {
@@ -168,7 +169,7 @@
     },
     {
       "id": 5,
-      "title": "DB 관측 성공 (1=정상)",
+      "title": "DB 관측 성공 · 인스턴스별",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -191,7 +192,7 @@
         {
           "refId": "A",
           "expr": "payment_quarantine_collection_success",
-          "legendFormat": "{{consumer}} {{kind}} {{status}}",
+          "legendFormat": "{{consumer}} / {{role}} / {{instance}}",
           "instant": true,
           "range": false
         }
@@ -204,11 +205,12 @@
           "fields": "",
           "values": false
         }
-      }
+      },
+      "description": "1은 마지막 DB 관측 성공, 0은 실패 또는 아직 관측 전입니다. 인스턴스별로 구분하고 메트릭 수집 상태는 UP과 함께 확인합니다."
     },
     {
       "id": 6,
-      "title": "마지막 성공 표본의 나이",
+      "title": "마지막 DB 관측 표본의 나이",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -231,7 +233,7 @@
         {
           "refId": "A",
           "expr": "time() - payment_quarantine_observed_timestamp_seconds",
-          "legendFormat": "{{consumer}} {{kind}} {{status}}"
+          "legendFormat": "{{consumer}} / {{role}} / {{instance}}"
         }
       ],
       "options": {
@@ -239,7 +241,8 @@
           "displayMode": "list",
           "placement": "bottom"
         }
-      }
+      },
+      "description": "마지막으로 성공한 DB 관측 시각부터의 경과 초입니다. 45초 초과·미수집을 정상 0으로 해석하지 않습니다."
     },
     {
       "id": 7,
@@ -266,7 +269,7 @@
         {
           "refId": "A",
           "expr": "payment:quarantine_originals:max",
-          "legendFormat": "{{consumer}} {{kind}} {{status}}"
+          "legendFormat": "{{consumer}}"
         }
       ],
       "options": {
@@ -278,7 +281,7 @@
     },
     {
       "id": 8,
-      "title": "결제 관측 대상 생존",
+      "title": "결제 메트릭 수집 대상 · UP",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -301,7 +304,7 @@
         {
           "refId": "A",
           "expr": "up{job=\"commerce-settle\",instance=~\"payment-(api|worker):9091\"}",
-          "legendFormat": "{{consumer}} {{kind}} {{status}}",
+          "legendFormat": "{{instance}}",
           "instant": true,
           "range": false
         }
@@ -314,7 +317,8 @@
           "fields": "",
           "values": false
         }
-      }
+      },
+      "description": "1은 Prometheus의 메트릭 HTTP 수집 성공, 0은 수집 실패입니다. DB 관측 성공이나 업무 정상 상태를 뜻하지 않습니다. 대상 인스턴스를 구분해 확인합니다."
     }
   ]
 }

@@ -798,7 +798,7 @@
       "targets": [
         {
           "expr": "business:cohort_capture_complete{operation=\"payout.unapplied\"}",
-          "legendFormat": "{{reason}} {{__name__}}",
+          "legendFormat": "{{__name__}}",
           "refId": "A"
         }
       ],
@@ -821,7 +821,7 @@
       "targets": [
         {
           "expr": "{__name__=~\"business:cohort_cutoff|business:cohort_snapshot\",operation=\"payout.unapplied\"}",
-          "legendFormat": "{{reason}} {{__name__}}",
+          "legendFormat": "{{__name__}}",
           "refId": "A"
         }
       ],

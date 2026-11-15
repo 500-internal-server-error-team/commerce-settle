@@ -105,12 +105,74 @@ def verify_runtime_dashboards(query):
     host = panels("overview")[8]
     names = {row["metric"]["__name__"] for target in host["targets"] for row in query(target["expr"])}
     assert names == {"commerce_settle_docker_host_cpu_usage_ratio", "commerce_settle_docker_host_memory_available_ratio"}, names
+    for number in (7, 9):
+        panel = panels("overview")[number]
+        rows = until(lambda: query(panel["targets"][0]["expr"]), "required runtime label series was not queryable")
+        legend_names(panel, rows)
     business = panels("business-performance")
     for number, expected in ((15, {"payout.total", "payout.ready"}), (16, {"payout.total", "payout.ready"}),
                              (19, {"payout.unapplied"}), (22, {"payout.unapplied"})):
         actual = {row["metric"]["operation"] for target in business[number]["targets"] for row in query(target["expr"])}
         assert actual == expected, (number, actual)
+    for number in (20, 21):
+        panel = business[number]
+        rows = until(lambda: query(panel["targets"][0]["expr"]), "required cohort label series was not queryable")
+        legend_names(panel, rows)
 
+
+
+def legend_names(panel, rows):
+    template = panel["targets"][0]["legendFormat"]
+    required = set(re.findall(r"{{([^}]+)}}", template))
+    names = []
+    assert rows, (panel["id"], "no returned series")
+    for row in rows:
+        labels = row["metric"]
+        assert required <= labels.keys(), (panel["id"], required, labels)
+        names.append(re.sub(r"{{([^}]+)}}", lambda match: labels[match[1]], template))
+    assert len(names) == len(set(names)), (panel["id"], "ambiguous legends", names)
+    return names
+
+
+def verify_quarantine_dashboards(query, definitions, fixture):
+    expected = {"payment-quarantine": ("결제", {"payment-api:9091", "payment-worker:9091"}),
+                "settlement-quarantine": ("정산", {"settlement:9091"})}
+    rendered = {}
+    for uid, (service, instances) in expected.items():
+        panels = {panel["id"]: panel for panel in definitions[uid]["panels"]}
+        assert service in panels[8]["title"] and not any(
+            other in panels[8]["title"] for other in ("결제", "정산") if other != service), (uid, panels[8]["title"])
+        rendered[uid] = {}
+        for number in (5, 6, 8):
+            panel = panels[number]
+            expression = panel["targets"][0]["expr"]
+            def rows():
+                return [row for row in query(expression) if row["metric"].get("instance") in instances]
+            until(lambda: {row["metric"]["instance"] for row in rows()} == instances,
+                  "quarantine health instances were not all scraped")
+            actual = rows()
+            rendered[uid][number] = legend_names(panel, actual)
+            if uid == "payment-quarantine":
+                broken = deepcopy(panel)
+                broken["targets"][0]["legendFormat"] = "{{consumer}}" if number != 8 else "{{consumer}} {{kind}} {{status}}"
+                try:
+                    legend_names(broken, actual)
+                except AssertionError:
+                    pass
+                else:
+                    raise AssertionError("missing or ambiguous quarantine health labels passed")
+    payment = definitions["payment-quarantine"]
+    up = next(panel for panel in payment["panels"] if panel["id"] == 8)
+    try:
+        http(fixture + "/state", {"api_down": True})
+        until(lambda: {row["metric"]["instance"]: float(row["value"][1]) for row in query(up["targets"][0]["expr"])}
+              == {"payment-api:9091": 0, "payment-worker:9091": 1}, "API-only scrape failure was not isolated")
+        legend_names(up, query(up["targets"][0]["expr"]))
+    finally:
+        http(fixture + "/state", {"api_down": False})
+    until(lambda: {row["metric"]["instance"]: float(row["value"][1]) for row in query(up["targets"][0]["expr"])}
+          == {"payment-api:9091": 1, "payment-worker:9091": 1}, "API scrape did not recover")
+    print("PASS quarantine health legends and target names " + json.dumps(rendered, ensure_ascii=False))
 
 
 def verify_jdbc_probe(port, application, role):
@@ -328,8 +390,8 @@ def verify():
         ))
         financial = (ROOT / "infra/prometheus/financial.rules.yml").read_text()
         selected = [block for block in re.findall(r"(?ms)^      - (?:record|alert):.*?(?=^      - |^  - name:|\Z)", financial)
-                    if re.match(r"      - (?:record: financial:operation_(?:current|age|records)|alert: Financial(?:Unknown|RefundUnknown)|record: business:(?:source|cohort_source|cohort_capture_complete)|alert: Business(?:ObservationUnavailable|CohortObservationUnavailable|CohortPopulationUnverified))\n", block)]
-        assert len(selected) == 12
+                    if re.match(r"      - (?:record: financial:operation_(?:current|age|records)|alert: Financial(?:Unknown|RefundUnknown)|record: business:(?:source|cohort_source|cohort_capture_complete|cohort_cutoff|cohort_snapshot)|alert: Business(?:ObservationUnavailable|CohortObservationUnavailable|CohortPopulationUnverified))\n", block)]
+        assert len(selected) == 14
         runtime = (ROOT / "infra/prometheus/runtime.rules.yml").read_text()
         (directory / "runtime.integration.rules.yml").write_text(integration_rules(re.sub(r"(?m)^(\s+)for: [^\n]+$", r"\1for: 2s", runtime)))
         (directory / "financial.integration.rules.yml").write_text(integration_rules(
@@ -340,6 +402,12 @@ def verify():
             "rule_files: [/etc/prometheus/integration.rules.yml, /etc/prometheus/notification.integration.rules.yml, /etc/prometheus/runtime.integration.rules.yml, /etc/prometheus/financial.integration.rules.yml]\n"
             "alerting:\n  alertmanagers:\n    - static_configs:\n        - targets: [alertmanager:9093]\n"
             "scrape_configs:\n  - job_name: commerce-settle\n    static_configs:\n      - targets: [fixture:8000]\n"
+            "      - targets: [fixture:8000]\n"
+            "        labels: {instance: 'payment-api:9091', __metrics_path__: /metrics/payment-api}\n"
+            "      - targets: [fixture:8000]\n"
+            "        labels: {instance: 'payment-worker:9091', __metrics_path__: /metrics/payment-worker}\n"
+            "      - targets: [fixture:8000]\n"
+            "        labels: {instance: 'settlement:9091', __metrics_path__: /metrics/settlement}\n"
         )
 
         def mount(source, target):
@@ -450,6 +518,9 @@ def verify():
                 return http(proxy_url + "/api/v1/query?" + urlencode({"query": expression}), authorization=authorization)["data"]["result"]
             until(lambda: query("commerce_settle_docker_host_cpu_usage_ratio"), "host fixture was not scraped")
             verify_runtime_dashboards(query)
+            definitions = {uid: http(grafana + "/api/dashboards/uid/" + uid, authorization=authorization)["dashboard"]
+                           for uid in ("payment-quarantine", "settlement-quarantine")}
+            verify_quarantine_dashboards(query, definitions, fixture)
             assert all(target.get("instant") and not target.get("range") for panel in dashboard["dashboard"]["panels"] if panel["type"] == "stat" for target in panel["targets"])
             until(lambda: http(prometheus + "/api/v1/query?query=payment:quarantine_originals:max")["data"]["result"], "metrics were not scraped and recorded")
             until(lambda: http(alertmanager + "/api/v2/status"), "Alertmanager was not ready")
