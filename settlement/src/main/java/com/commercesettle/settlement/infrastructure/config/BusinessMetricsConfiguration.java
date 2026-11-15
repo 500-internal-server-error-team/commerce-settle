@@ -104,7 +104,21 @@ public class BusinessMetricsConfiguration {
   }
 
   private static String cohort(boolean ready) {
-    String start = ready ? "s.ready_at" : CONFIRMATION;
+    String start = ready ? "s.ready_at" : "confirmation.confirmed_at";
+    String confirmation =
+        ready
+            ? ""
+            : """
+              LEFT JOIN (
+                SELECT DISTINCT ON (e.item_id) e.item_id,
+                  (i.payload->'payload'->>'confirmedAt')::timestamptz confirmed_at
+                FROM settlement.settlement_entries e
+                JOIN settlement.inbox i ON i.event_id=e.source_event_id
+                  AND i.result_ref=e.item_id AND i.event_type='PaymentConfirmed' AND i.status='APPLIED'
+                WHERE e.reversal_of IS NULL AND e.leg='SELLER'
+                ORDER BY e.item_id, i.created_at, e.created_at, e.id, i.id
+              ) confirmation ON confirmation.item_id=s.id
+              """;
     return """
         WITH reasons(reason) AS (VALUES ('purchase_pending'), ('refund_pending'), ('batch_wait'),
           ('payout_pending'), ('payout_unknown'), ('payout_declined'), ('refunded')),
@@ -120,6 +134,9 @@ public class BusinessMetricsConfiguration {
         + """
           started_at FROM settlement.settlement_items s
           LEFT JOIN settlement.payouts p ON p.id=s.payout_id
+        """
+        + confirmation
+        + """
           WHERE s.status <> 'PAID' AND (p.succeeded_at IS NULL OR s.status='REFUNDED')
         """
         + (ready ? " AND s.ready_at IS NOT NULL" : "")
