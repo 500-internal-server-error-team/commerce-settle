@@ -790,6 +790,10 @@ Grafana의 `commerce-settle / Runtime overview` 대시보드와 Prometheus 데�
 | `async_queue_backoff_seconds` | 실패 기록부터 다음 실행 가능 시각까지의 계획된 재시도 대기입니다. |
 | `async_queue_ready_delay_seconds` | 실행 가능 시각부터 실제 선점까지의 지연. 슬롯·폴링·적체 원인을 백오프와 구분합니다. |
 | `jdbc_query_seconds` (`stage`) | Commerce·Payment·Settlement·Finance Mock의 JDBC 쿼리 실행. 현재 단계가 없으면 `unscoped`입니다. 결과 매핑·Java 처리·flush·커밋을 포함하는 전체 트랜잭션 시간과 구분합니다. |
+| `hikaricp_connections_active`·`max`·`pending` | 기존 Hikari 연결 풀의 사용·상한·획득 대기 스레드 수. Financial processing에서 서비스·역할·인스턴스·풀을 구분하고 SQL·비동기 대기와 같은 시각을 대조합니다. |
+| `hikaricp_connections_acquire_seconds_sum/count` | 완료된 연결 획득의 평균 초. 진행 중 대기는 완료 전 Timer에 들어오지 않으므로 `pending`과 함께 읽습니다. 별도 histogram이나 새 수집기를 추가하지 않습니다. |
+
+DB 풀 표시는 scrape 성공과 0~45초 이내 표본을 요구합니다. 획득 완료 표본이 없거나 수집이 끊긴 창은 정상 0으로 채우지 않습니다. SQL 실행은 연결 획득 이후의 다른 경계이며, pending만으로 잠금 SQL을 확정하지 않습니다. HTTP 요청률·응답은 Business performance에, 전체/Worker SQL은 Financial processing의 서비스·역할별 SQL 표시에 모읍니다. Runtime overview의 CPU·heap·컨테이너·호스트 표시는 각 자원 범위를 유지하며 두 상세 화면으로 연결합니다.
 
 Timer의 `_count`·`_sum`·`_bucket`은 Trace 샘플링과 별도로 수집합니다. `process`·하위 단계·SQL은 시간이 겹치므로 합산하지 않습니다. 음수 대기 표본은 제외하며 서버 시각 동기화가 필요합니다. Histogram의 p95/p99는 버킷 근사값이며, 대기 Timer의 유한 버킷 상한은 5분입니다. 그보다 긴 대기는 count·sum과 기존 도래 지연 gauge·개별 trace로 함께 확인합니다. 기존 행의 추적 부모는 NULL이고, 과거 재시도 종류를 판단할 수 없으면 `kind=unknown`으로 실행 가능 시각 이후만 측정합니다. 수동 재처리는 원래 trace 부모를 유지하지만 새 대기 회차의 변경 시각부터 셉니다.
 
@@ -804,6 +808,8 @@ JDBC 바인딩 값·쿼리 로그·행별 ResultSet 작업은 비활성화합니
 컨테이너 관측은 `docker-metrics-proxy`의 프로젝트·서비스 allowlist와 GET 경계를 사용합니다. 수집기는 전체 메모리 사용량을 실제 컨테이너 한도로 나누며, CPU는 quota가 있으면 `basis=quota`, 없으면 Docker 호스트 공유 용량 기준 `basis=host_shared`로 구분합니다. quota 경보에는 공유 기준을 넣지 않습니다. OOM·비정상 종료는 현재 상태와 최근 5분 이벤트를 함께 보며, 수집기 시작 시 이전 이벤트 관측 범위를 입증할 수 없는 구간과 60초 넘게 중단되어 이벤트 조회 구간이 빠진 경우를 최근 5분의 관측 공백으로 경보합니다. Engine 이벤트 보관/호출 실패로 모든 과거 종료를 복구할 수는 없습니다. 관측 시각이 오래되면 값 대신 수집 장애 경보를 확인합니다. 자원 경보는 금융 접수 gate의 새로운 입력으로 사용하지 않습니다.
 
 `python3 -B scripts/test_observability.py`는 production 규칙의 경계·지속 시간·수집 누락을 promtool로 검사하고 실제 Prometheus·Grafana·Alertmanager에서 통제한 표본의 발생·억제·복구 전달을 확인합니다. 외부 Slack 전송은 하지 않습니다. `python3 -B scripts/smoke_financial_flow.py`는 실제 업무 수집·Zipkin 연결과 여섯 전송 구간의 소유 DB 건수, 과거 준비 항목 두 건의 실제 지급·분포·저장 부모의 Zipkin 연결·Grafana 데이터소스 조회를 대조합니다. cgroup v2의 전용 시험 컨테이너에서 자식의 커널 OOM kill 증가와 실제 Docker OOM 이벤트 수집을 확인한 뒤 137 종료·production 경보를 대조합니다. 시험 리소스는 종료 시 제거합니다.
+
+`./gradlew :payment:test --tests '*PaymentJdbcObservationIntegrationTest'`는 기존 Spring/Hikari/PostgreSQL 시험에서 실제 SQL 지연·풀 점유·연결 대기·후속 비동기 대기를 만들고, 격리한 Prometheus 수집과 Grafana의 실제 조회 결과를 대조합니다. Commerce/app·Payment/worker와 정상 Payment/api를 구분하며 필수 풀 시계열 누락·잘못된 역할·scrape 실패·오래된 표본·표본 부족 p99를 거절합니다. 위 고정 fixture 시험의 대체가 아니며 기본 Gradle test·CI 경로에서도 실행합니다. 이 시험은 공유 ECS 배포나 200 TPS 처리량 검증을 수행하지 않습니다.
 
 #### ECS 실험의 관측 연결
 
