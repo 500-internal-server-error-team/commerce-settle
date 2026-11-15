@@ -30,6 +30,37 @@ DB 잠금 원인을 판정하는 시험은 대기/보유 PID·쿼리 식별자 �
 3. 관측 사실·원인 가설·판정·다음 행동을 구분합니다. 도구 종료, 목표 주입 달성, 성능·정합성 통과와 분석 마감을 따로 기록합니다. 원인을 확정하지 못해도 실패 회차와 부족한 증거를 보존하며, 추가 확인의 대상·방법·완료 조건을 남깁니다. 결론은 검토한 경로·입력·측정 범위에 한정합니다.
 4. 실행별 입력·명령·버전/SHA·원장·지표 조회식/시간 구간·필요한 trace/로그·대조 결과를 기존 결과 경로에 보존하고 보고에서 연결합니다. 검토자가 접근할 수 있는 비밀정보 제거 근거를 제공하고, 접근 제한·보존 한도는 명시합니다. 시험용 상품·세션·프로세스·컨테이너와 공유 EC2는 해당 실행 절차대로 정리하거나 유지 담당·종료 조건을 남깁니다. 실패 기록과 필수 복구 근거는 정리로 삭제하지 않습니다.
 
+## 배포 실험 단일 명령
+
+[experiment.py](experiment.py)는 **이미 켜진 ECS 서비스**의 기존 주문 실행기·성능 capture·금융 대조를 연결합니다. 서버 기동·재배포·DB 초기화·관측 재설치는 수행하지 않습니다. 공유 환경의 다른 실험이 종료되고 시험 시간이 확보된 뒤 실행합니다.
+
+성공한 배포 workflow의 `deployment.json`과 `conditions.json`을 준비합니다. 조건 파일은 기존 metadata의 `conditions` 객체에서 `workload`, `datasetSha256`, `mix`, `scenario`를 지정한 JSON입니다. 초기 데이터 SHA와 시나리오는 실제 시험 조건을 기록합니다. 실행기는 현재 Task revision·실행 image digest를 배포 기록과 대조하고, CPU·메모리·허용된 풀/동시성·PG 설정을 관측해 metadata를 작성합니다. 임의의 Task 환경이나 비밀 값은 저장하지 않습니다. 초기 데이터·호스트 시계·외부 의존성의 모든 조건을 자동 검증하는 도구는 아닙니다.
+
+이미지를 유지하고 승인된 운영 설정만 바꿔 Task revision이 달라졌다면 원본 배포 기록을 보존합니다. 설정 적용자가 같은 source·image와 변경 후 검증한 `registered` revision을 묶은 별도 적용 기록을 실험 결과와 함께 남기고 그 파일을 전달합니다. 원본 기록의 SHA와 설정 변경 근거를 연결하며, Task revision 불일치를 무시하거나 다른 실험의 원본 기록을 덮어쓰지 않습니다.
+
+```bash
+python3 -B tests/load/experiment.py \
+  --base-url https://SERVICE_DOMAIN --prometheus https://PROMETHEUS_DOMAIN \
+  --deployment-record work/deployment.json --conditions work/conditions.json \
+  --app-ssh USER@APP_HOST --tps 2 --seconds 60
+```
+
+Mac의 Docker와 기존 앱 SSH 접속을 사용합니다. `--app-ssh`를 생략하면 기존 `RECONCILE_SSH` 또는 `LOAD_APP_SSH`를 사용하며, 모두 없으면 지정한 URL에 직접 접속합니다. 키는 기존 `LOAD_SSH_KEY`로 전달합니다. SSH가 선택되면 앱 호스트의 Python 3와 Docker 조회로 서비스별 실행 컨테이너 1개·Task revision·image digest·health·설정을 확인하므로 로컬 AWS 자격은 필요하지 않습니다. 이 호스트 관측은 ECS 제어 영역의 desired/pending 수나 rollout 완료를 확인하지 않으며 metadata에 관측 출처와 범위를 남깁니다. SSH가 없는 실행만 기존 AWS CLI 조회 권한으로 ECS 서비스·Task 상태를 확인합니다. SSH는 읽기 전용 관측과 대조 HTTP 요청에 사용하며 서버에 파일을 설치하거나 포트를 열지 않습니다. 기본 대조 주소는 **앱 호스트 기준** Settlement `127.0.0.1:8084`, Payment API `:8082`, finance-mock `:8085`이며, 다른 포트·기존 터널은 `--settlement-url`, `--payment-url`, `--finance-url`로 지정합니다. 로컬 HTTP와 원격 HTTPS를 지원하고 리디렉션을 따르지 않습니다.
+
+Prometheus에는 기존 `PERFORMANCE_AUTH_USER`·`PERFORMANCE_AUTH_PASSWORD`를 전달합니다. SSH의 기본 루프백 대조 주소에서는 명시한 환경 자격이 없으면 선택한 Settlement 컨테이너의 기존 `PAYMENT_SETTLEMENT_CREDENTIAL`·`FINANCE_MOCK_SETTLEMENT_CREDENTIAL`과 `SPRING_APPLICATION_JSON`에 등록된 operator 1개의 자격을 호스트 안에서 사용합니다. 자격 원문을 Mac으로 반환하지 않습니다. 다른 주소나 operator가 여러 개인 환경에서는 기존 `SETTLEMENT_OPERATOR_CREDENTIAL`·`PAYMENT_SETTLEMENT_CREDENTIAL`·`FINANCE_MOCK_SETTLEMENT_CREDENTIAL`을 명시합니다. SSH를 사용하지 않을 때도 이 세 환경 자격이 필요합니다. 기존 `LOAD_REMOTE_DOCKER`(예: `sudo docker`)를 재사용합니다. 자격을 새로 발급하거나 명령 인자·조건 파일에 넣지 않습니다. 구매자·판매자 세션과 k6 자원은 아래 주문 실행기의 기존 계약을 따릅니다. 서비스·인증·관측에 연결할 수 없으면 대상·원인·설정 후 재실행 안내와 함께 실패 종료합니다. `--check-only`는 연결·배포 일치만 확인하고 주문을 생성하지 않습니다.
+
+결과는 기존 ignored `tests/load/work/experiment-<ID>/`에 저장합니다. `load/`에는 기존 원장·요약이, 상위에는 `metadata.json`, `execution.json`, `monitor.json`, `performance.json`, `reconciliation-run.json`, `reconciliation.json`, 최종 `result.json`이 남습니다. 단계에 도달하지 못하면 해당 결과 파일은 없으며, 최종 요약에 실패 단계와 원본 SHA가 남습니다. `--output-dir`은 새 폴더만 허용합니다.
+
+실행 전과 부하 중 15초마다 서비스 `UP`·critical 경보·선택한 DB 업무 지표와 대조 Worker 관측의 원본 시각(45초 이내)을 확인합니다. 기존 [정산 대조 설정](../../docs/development.md#정산-대조-실행과-재개)의 operator 등록과 `SETTLEMENT_RECONCILIATION_ENABLED=true`가 필요합니다. 현행 서비스의 이 스위치는 매일 10:30 대조와 누락 회차 자동 생성도 켜므로 활성화 전에 운영 범위를 확인합니다. 실행기가 서버 설정을 바꾸지는 않습니다. 관측 연결 실패나 경보 발생 시 추가 주입을 중단하고 기존 실행기로 배출·상품/세션 정리를 수행합니다. 측정창이 있으면 그 **원래 종료 시각**으로 capture를 시도합니다. 수집·부하가 실패해도 금융 대조는 시도하며 새 주문이나 지급으로 복구하지 않습니다. 대조 마감은 배출 뒤 한 번 고정하고 기존 **10분 안전 여유**를 기다립니다. 기본 `--reconcile-timeout 900`초에는 이 대기도 포함됩니다. 대기·미확정·격리·조회 불가는 성공이 아니며, 서버의 원래 회차·원장과 결과를 보존합니다.
+
+```bash
+python3 -B tests/load/experiment.py --resume tests/load/work/experiment-ORIGINAL_ID
+```
+
+재개는 원래 실험 루트에 지정합니다. 원래 대상·조건·대조 마감을 유지하며 주문 실행기의 `--resume`으로 기존 거래만 조회합니다. 새 결과는 `recovery-<ID>/`에 저장하고 최초 실패 결과는 바꾸지 않습니다. 원래 마감의 POST는 기존 대조 회차를 생성·재개하는 멱등 호출이며 금융 거래를 만들지 않습니다. 장애를 해결하지 않은 채 재개해도 실패·대기를 성공으로 바꾸지 않습니다.
+
+`result.json`은 주입·주문 배출·수집·금융 대조·선택 비교를 따로 기록합니다. `completed`는 이 도구의 연결 단계 성공이며 **200 TPS 성능 합격이 아닙니다**. DB 창과 발생기 창의 차이, 환경 전체 집계와 실행 원장 모집단, 배출 후 PAID와 측정 구간의 결제 확정 TPS를 구분합니다. 정산 최초 반영과 지급 성공도 구분하며 지급 왕복은 실행하지 않습니다. 지속 성능은 아래 기준의 모집단·시계·적체 추세·오류·재고/금액 검증을 갖출 때까지 `UNVERIFIED`입니다. `--compare BEFORE_PERFORMANCE_JSON`을 지정했을 때만 기존 compare를 실행하며 비교 불충분도 성공으로 합치지 않습니다.
+
 ## Mac에서 공개 HTTPS 주문 부하 시험
 
 [order_load.py](order_load.py)는 공개 API로 주문을 준비하고 [orders.js](orders.js)를 Mac의 Docker k6에서 실행합니다. 요청은 **공개 HTTPS → Caddy → Gateway → 주문 API**를 거칩니다. Node.js나 서버의 k6 배포는 필요하지 않습니다. Python 3·실행 중인 Docker Desktop과 접근 가능한 배포 주소를 준비한 뒤 저장소 루트에서 실행합니다.

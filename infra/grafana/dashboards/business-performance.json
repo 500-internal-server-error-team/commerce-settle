@@ -2,7 +2,7 @@
   "uid": "commerce-settle-business-performance",
   "title": "commerce-settle / 업무 완료·전구간 성능 비교",
   "schemaVersion": 40,
-  "version": 1,
+  "version": 2,
   "refresh": "15s",
   "timezone": "Asia/Seoul",
   "tags": [
@@ -600,7 +600,7 @@
     },
     {
       "id": 13,
-      "title": "HTTP 요청 / 초",
+      "title": "HTTP 요청 / 초 · 서비스·인스턴스·상태",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -621,16 +621,16 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (application,uri,method) (rate(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s]))",
-          "legendFormat": "현재 {{application}} {{method}} {{uri}}"
+          "expr": "sum by (application,role,instance,uri,method,status) (rate(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s]))",
+          "legendFormat": "현재 {{application}} / {{role}} / {{instance}} {{method}} {{uri}} HTTP {{status}}"
         },
         {
           "refId": "B",
-          "expr": "sum by (application,uri,method) (rate(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s] offset $comparison_offset))",
-          "legendFormat": "기준 {{application}} {{method}} {{uri}}"
+          "expr": "sum by (application,role,instance,uri,method,status) (rate(http_server_requests_seconds_count{application=~\"$application\",uri!~\"/actuator.*\"}[${window}s] offset $comparison_offset))",
+          "legendFormat": "이전 ($comparison_offset) {{application}} / {{role}} / {{instance}} {{method}} {{uri}} HTTP {{status}}"
         }
       ],
-      "description": "서버가 수신한 요청 시도 기준입니다. 발생기 타임아웃·연결 실패는 발생기 결과에서 별도로 확인합니다. 무요청/미수집은 정상 0%로 해석하지 않습니다."
+      "description": "서버가 수신한 요청 시도이며 업무 완료 TPS와 다릅니다. 발생기 타임아웃·연결 실패는 발생기 결과로 확인하고, 무요청/미수집을 정상 0으로 해석하지 않습니다. Runtime overview의 인스턴스별 요청률과 Financial processing의 Gateway 상태별 요청률을 이곳으로 모아 서비스 선택으로 역할·인스턴스·경로·상태의 현재/이전 구간을 대조합니다."
     },
     {
       "id": 14,
@@ -798,7 +798,7 @@
       "targets": [
         {
           "expr": "business:cohort_capture_complete{operation=\"payout.unapplied\"}",
-          "legendFormat": "{{reason}} {{__name__}}",
+          "legendFormat": "{{__name__}}",
           "refId": "A"
         }
       ],
@@ -821,7 +821,7 @@
       "targets": [
         {
           "expr": "{__name__=~\"business:cohort_cutoff|business:cohort_snapshot\",operation=\"payout.unapplied\"}",
-          "legendFormat": "{{reason}} {{__name__}}",
+          "legendFormat": "{{__name__}}",
           "refId": "A"
         }
       ],

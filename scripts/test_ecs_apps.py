@@ -89,6 +89,8 @@ class FakeAws:
             return {}
         if service == "sts":
             return {"Account": ACCOUNT}
+        if (service, operation) == ("ssm", "put-parameter"):
+            return {"Version": 1}
         if operation == "describe-services":
             names = arguments[arguments.index("--services") + 1:]
             return {"services": [copy.deepcopy(self.services[name.removeprefix("commerce-settle-")])
@@ -268,6 +270,80 @@ class RenderTest(unittest.TestCase):
 
 
 class DeployTest(unittest.TestCase):
+    def test_operator_secret_uses_private_temporary_file_and_only_existing_parameter_is_tolerated(self):
+        for code in ("ParameterAlreadyExists", "AccessDeniedException"):
+            error = subprocess.CalledProcessError(1, ["aws"], stderr=f"An error occurred ({code})")
+            paths = []
+            def fail(command, **kwargs):
+                path = Path(command[command.index("--cli-input-json") + 1].removeprefix("file://"))
+                paths.append(path)
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(json.loads(path.read_text()), {"Value": "synthetic-private"})
+                raise error
+            with self.subTest(code=code), patch.object(deployment.subprocess, "run", side_effect=fail) as run:
+                if code == "ParameterAlreadyExists":
+                    self.assertEqual(deployment.Aws(REGION)("ssm", "put-parameter",
+                                     payload={"Value": "synthetic-private"}), {"AlreadyExists": True})
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "AWS ssm put-parameter failed"):
+                        deployment.Aws(REGION)("ssm", "put-parameter", payload={"Value": "synthetic-private"})
+            self.assertNotIn("synthetic-private", " ".join(run.call_args.args[0]))
+            self.assertTrue(paths)
+            self.assertTrue(all(not path.exists() for path in paths))
+
+    def test_operator_bootstrap_is_explicit_encrypted_and_never_recorded(self):
+        aws = FakeAws()
+        parameter = PREFIX + "settlement/SPRING_APPLICATION_JSON"
+        baseline = deployment.rollback_baseline(aws.services, "commerce-cluster", IMAGES, REGION,
+                settlement_operator_parameter=parameter, bootstrap_settlement_operator=True)
+        saved = []
+        with patch.object(deployment.secrets, "token_urlsafe", return_value="synthetic-" + "A" * 43):
+            result = deployment.deploy(aws, "commerce-cluster", IMAGES, REGION, lambda: None,
+                lambda row: saved.append(copy.deepcopy(row)), baseline,
+                settlement_operator_parameter=parameter, bootstrap_settlement_operator=True)
+        put = next(payload for op, _, payload in aws.calls if op == "put-parameter")
+        self.assertEqual((put["Type"], put["Overwrite"]), ("SecureString", False))
+        self.assertEqual(put["Name"], "/commerce-settle/app/settlement/SPRING_APPLICATION_JSON")
+        self.assertNotIn("synthetic-", json.dumps(saved))
+        self.assertTrue(result["operator_bootstrap"]["created"])
+        ops = [op for op, _, _ in aws.calls]
+        self.assertLess(ops.index("put-parameter"), ops.index("register-task-definition"))
+
+    def test_operator_binding_only_adds_existing_ssm_reference_to_settlement(self):
+        aws = FakeAws()
+        _, original = deployment.prepare(aws, "commerce-cluster", IMAGES, REGION)
+        parameter = PREFIX + "settlement/SPRING_APPLICATION_JSON"
+        _, changed = deployment.prepare(aws, "commerce-cluster", IMAGES, REGION,
+                                         settlement_operator_parameter=parameter)
+        expected = copy.deepcopy(original)
+        expected["settlement"]["containerDefinitions"][0]["secrets"].append(
+            {"name": "SPRING_APPLICATION_JSON", "valueFrom": parameter})
+        self.assertEqual(changed, expected)
+        self.assertFalse(any(op in {"put-parameter", "register-task-definition", "update-service"}
+                             for op, _, _ in aws.calls))
+
+    def test_operator_reference_cannot_clobber_config_or_use_another_account(self):
+        parameter = PREFIX + "settlement/SPRING_APPLICATION_JSON"
+        for kind in ("inline", "other-secret", "other-account"):
+            aws = FakeAws()
+            c = aws.tasks[aws.services["settlement"]["taskDefinition"]]["containerDefinitions"][0]
+            if kind == "inline":
+                c["environment"].append({"name": "SPRING_APPLICATION_JSON", "value": "{}"})
+            if kind == "other-secret":
+                c["secrets"].append({"name": "SPRING_APPLICATION_JSON", "valueFrom": parameter + "-other"})
+            selected = parameter.replace(ACCOUNT, "999999999999") if kind == "other-account" else parameter
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                deployment.prepare(aws, "commerce-cluster", IMAGES, REGION,
+                                     settlement_operator_parameter=selected)
+
+    def test_changed_operator_intent_rejects_baseline_before_registration(self):
+        aws = FakeAws()
+        baseline = deployment.rollback_baseline(aws.services, "commerce-cluster", IMAGES, REGION)
+        with self.assertRaisesRegex(RuntimeError, "baseline differs"):
+            deployment.deploy(aws, "commerce-cluster", IMAGES, REGION, lambda: None, lambda _: None,
+                              baseline, settlement_operator_parameter=PREFIX + "settlement/SPRING_APPLICATION_JSON")
+        self.assertFalse(any(op == "register-task-definition" for op, _, _ in aws.calls))
+
     def test_already_applied_database_capacity_is_not_restarted_on_app_release(self):
         aws = FakeAws()
         previous = aws.services["postgres"]["taskDefinition"]

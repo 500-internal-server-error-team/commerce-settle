@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
+from types import SimpleNamespace
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -64,6 +66,40 @@ class ApiFixture:
             self.logouts.append(token)
             return {}
         raise AssertionError((method, path))
+
+
+class CohortSnapshotTest(unittest.TestCase):
+    def test_deployed_cohort_does_not_scan_buyer_history(self):
+        class Api:
+            cohort_data_ssh = "ubuntu@data.test"
+            def call(self, *args, **kwargs):
+                raise AssertionError("Buyer-wide history must not be scanned")
+        ident = "f208b1bc-a7ad-4ddf-aee1-27ddb2539007"
+        row = {"id": ident, "status": "PAID"}
+        with patch.object(load.subprocess, "run", return_value=SimpleNamespace(
+                returncode=0, stdout=json.dumps(row) + "\n", stderr="")):
+            found, complete, error = load.orders_for_product(Api(), "buyer", ident, time.monotonic() + 20)
+        self.assertEqual(found, {ident: {"status": "PAID"}})
+        self.assertTrue(complete)
+        self.assertIsNone(error)
+
+    def test_failed_or_partial_database_query_is_not_complete(self):
+        ident = "f208b1bc-a7ad-4ddf-aee1-27ddb2539007"
+        for result in (SimpleNamespace(returncode=1, stdout="", stderr="private"),
+                       SimpleNamespace(returncode=0, stdout='{bad json', stderr="")):
+            with self.subTest(result=result), patch.object(load.subprocess, "run", return_value=result):
+                found, complete, error = load.database_orders("ubuntu@data.test", ident, time.monotonic() + 20)
+            self.assertFalse(complete)
+            self.assertEqual(found, {})
+            self.assertTrue(error)
+            self.assertNotIn("private", json.dumps(error))
+
+    def test_invalid_product_or_ssh_target_never_reaches_shell(self):
+        for host, product in (("-oProxyCommand=evil", "f208b1bc-a7ad-4ddf-aee1-27ddb2539007"),
+                              ("ubuntu@data.test", "x';DELETE FROM commerce.orders;--")):
+            with self.subTest(host=host), patch.object(load.subprocess, "run") as shell, self.assertRaises(ValueError):
+                load.database_orders(host, product, time.monotonic() + 20)
+            shell.assert_not_called()
 
 
 class PreparationTest(unittest.TestCase):

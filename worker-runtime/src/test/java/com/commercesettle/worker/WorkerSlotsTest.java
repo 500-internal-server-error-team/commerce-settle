@@ -3,6 +3,8 @@ package com.commercesettle.worker;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import java.io.File;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -13,6 +15,45 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class WorkerSlotsTest {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  @DisplayName("배정 중 큐 잠금을 기다려도 독립 가상 스레드는 계속 진행한다")
+  void doesNotPinCarriersWhileDispatchWaits(boolean afterEmpty) throws Exception {
+    String classpath =
+        Path.of(WorkerSlots.class.getProtectionDomain().getCodeSource().getLocation().toURI())
+            + File.pathSeparator
+            + Path.of(
+                WorkerSlotsPinningProbe.class
+                    .getProtectionDomain()
+                    .getCodeSource()
+                    .getLocation()
+                    .toURI());
+    var process =
+        new ProcessBuilder(
+                Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                "-XX:ActiveProcessorCount=2",
+                "-Djdk.virtualThreadScheduler.parallelism=2",
+                "-cp",
+                classpath,
+                WorkerSlotsPinningProbe.class.getName(),
+                Boolean.toString(afterEmpty))
+            .redirectErrorStream(true)
+            .start();
+    try {
+      assertThat(process.waitFor(15, TimeUnit.SECONDS)).isTrue();
+      assertThat(process.exitValue())
+          .as(
+              new String(
+                  process.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8))
+          .isZero();
+    } finally {
+      if (process.isAlive()) {
+        process.destroyForcibly();
+        assertThat(process.waitFor(5, TimeUnit.SECONDS)).isTrue();
+      }
+    }
+  }
+
   @Test
   @DisplayName("4096슬롯도 유휴 복구 때는 네 번만 조회한다")
   void boundsIdleRecoveryProbes() throws Exception {

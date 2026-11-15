@@ -66,6 +66,7 @@ jobs:
           python3 -B -m unittest discover -s tests/load -p 'test_payment_load.py'
           python3 -B -m unittest discover -s tests/load -p 'test_order_load.py'
           python3 -B -m unittest discover -s tests/load -p 'test_performance.py'
+          python3 -B -m unittest discover -s tests/load -p 'test_experiment.py'
           python3 -B -m unittest discover -s tests/load -p 'test_resource_sample.py'
       - name: Check Java formatting and Checkstyle (main and test)
         run: ./gradlew --no-daemon --parallel --continue spotlessCheck checkstyleMain checkstyleTest
@@ -324,6 +325,8 @@ jobs:
       ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
       PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
       DEMO_AUTO_SHIPMENT: ${{ vars.APP_DEMO_AUTO_SHIPMENT_ENABLED || 'preserve' }}
+      SETTLEMENT_OPERATOR_PARAMETER: ${{ vars.SETTLEMENT_OPERATOR_PARAMETER || 'preserve' }}
+      BOOTSTRAP_SETTLEMENT_OPERATOR: ${{ vars.BOOTSTRAP_SETTLEMENT_OPERATOR || 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -352,7 +355,9 @@ jobs:
             --cluster "$ECS_CLUSTER" --region "$AWS_REGION" \
             --images-directory work/images --release "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" \
             --public-url "$PUBLIC_BASE_URL" --record work/rollback-plan.json --prepare-only \
-            --demo-auto-shipment "$DEMO_AUTO_SHIPMENT"
+            --demo-auto-shipment "$DEMO_AUTO_SHIPMENT" \
+            --settlement-operator-parameter "$SETTLEMENT_OPERATOR_PARAMETER" \
+            --bootstrap-settlement-operator "$BOOTSTRAP_SETTLEMENT_OPERATOR"
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import hashlib
           from pathlib import Path
@@ -374,7 +379,9 @@ jobs:
             --images-directory work/images --release "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" \
             --public-url "$PUBLIC_BASE_URL" --record work/deployment.json \
             --baseline work/rollback-plan.json --baseline-sha256 "$BASELINE_SHA256" \
-            --demo-auto-shipment "$DEMO_AUTO_SHIPMENT"
+            --demo-auto-shipment "$DEMO_AUTO_SHIPMENT" \
+            --settlement-operator-parameter "$SETTLEMENT_OPERATOR_PARAMETER" \
+            --bootstrap-settlement-operator "$BOOTSTRAP_SETTLEMENT_OPERATOR"
       - name: Keep deployment and rollback references
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
