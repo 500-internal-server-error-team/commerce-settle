@@ -2,7 +2,7 @@
   "uid": "commerce-settle-payment-worker",
   "title": "commerce-settle / Financial processing",
   "schemaVersion": 39,
-  "version": 3,
+  "version": 4,
   "refresh": "15s",
   "timezone": "Asia/Seoul",
   "time": {
@@ -144,7 +144,7 @@
     },
     {
       "id": 5,
-      "title": "SQL 실행 · 단계별 평균",
+      "title": "DB 풀 사용 연결 / 상한",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -158,26 +158,26 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "short"
         }
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (stage) (rate(jdbc_query_seconds_sum{application=\"payment\",role=\"worker\"}[${window}s])) / sum by (stage) (rate(jdbc_query_seconds_count{application=\"payment\",role=\"worker\"}[${window}s]))",
-          "legendFormat": "현재 {{stage}}"
+          "expr": "(hikaricp_connections_active{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"} and on (job,instance) (up{job=\"commerce-settle\"} == 1)) and (time() - timestamp(hikaricp_connections_active{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"}) >= 0) and (time() - timestamp(hikaricp_connections_active{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"}) <= 45)",
+          "legendFormat": "사용 {{application}} / {{role}} / {{instance}} / {{pool}}"
         },
         {
           "refId": "B",
-          "expr": "sum by (stage) (rate(jdbc_query_seconds_sum{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset)) / sum by (stage) (rate(jdbc_query_seconds_count{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset))",
-          "legendFormat": "이전 ($comparison_offset) {{stage}}"
+          "expr": "(hikaricp_connections_max{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"} and on (job,instance) (up{job=\"commerce-settle\"} == 1)) and (time() - timestamp(hikaricp_connections_max{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"}) >= 0) and (time() - timestamp(hikaricp_connections_max{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"}) <= 45)",
+          "legendFormat": "상한 {{application}} / {{role}} / {{instance}} / {{pool}}"
         }
       ],
-      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+      "description": "실제 Spring/Hikari 계측을 재사용합니다. instance·application·role·pool별로 읽고 같은 시각의 SQL 실행·비동기 대기와 대조합니다. scrape 실패 또는 45초 초과·미래 표본은 제외하며 No data를 정상 0으로 해석하지 않습니다."
     },
     {
       "id": 6,
-      "title": "SQL 실행 · 단계별 p95",
+      "title": "DB 풀 연결 획득 대기 중",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -191,22 +191,121 @@
       },
       "fieldConfig": {
         "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(hikaricp_connections_pending{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"} and on (job,instance) (up{job=\"commerce-settle\"} == 1)) and (time() - timestamp(hikaricp_connections_pending{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"}) >= 0) and (time() - timestamp(hikaricp_connections_pending{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"}) <= 45)",
+          "legendFormat": "{{application}} / {{role}} / {{instance}} / {{pool}}"
+        }
+      ],
+      "description": "실제 Spring/Hikari 계측을 재사용합니다. instance·application·role·pool별로 읽고 같은 시각의 SQL 실행·비동기 대기와 대조합니다. scrape 실패 또는 45초 초과·미래 표본은 제외하며 No data를 정상 0으로 해석하지 않습니다. 현재 연결을 얻지 못한 스레드 수입니다. SQL 실행·잠금 대기와 다른 경계이며 잠금 원인은 별도 DB 증거로 확인합니다."
+    },
+    {
+      "id": 21,
+      "title": "DB 풀 연결 획득 · 완료 표본 평균",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
           "unit": "s"
         }
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(jdbc_query_seconds_bucket{application=\"payment\",role=\"worker\"}[${window}s])))",
-          "legendFormat": "현재 {{stage}}"
+          "expr": "(rate(hikaricp_connections_acquire_seconds_sum{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"}[${window}s]) / rate(hikaricp_connections_acquire_seconds_count{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"}[${window}s])) and (rate(hikaricp_connections_acquire_seconds_count{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"}[${window}s]) > 0) and on (job,instance,application,role,pool) ((hikaricp_connections_acquire_seconds_sum{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"} and on (job,instance) (up{job=\"commerce-settle\"} == 1)) and (time() - timestamp(hikaricp_connections_acquire_seconds_sum{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"}) >= 0) and (time() - timestamp(hikaricp_connections_acquire_seconds_sum{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"}) <= 45)) and on (job,instance,application,role,pool) ((hikaricp_connections_acquire_seconds_count{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"} and on (job,instance) (up{job=\"commerce-settle\"} == 1)) and (time() - timestamp(hikaricp_connections_acquire_seconds_count{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"}) >= 0) and (time() - timestamp(hikaricp_connections_acquire_seconds_count{job=\"commerce-settle\",application=~\"commerce|payment|settlement|finance-mock\"}) <= 45))",
+          "legendFormat": "{{application}} / {{role}} / {{instance}} / {{pool}}"
+        }
+      ],
+      "description": "실제 Spring/Hikari 계측을 재사용합니다. instance·application·role·pool별로 읽고 같은 시각의 SQL 실행·비동기 대기와 대조합니다. scrape 실패 또는 45초 초과·미래 표본은 제외하며 No data를 정상 0으로 해석하지 않습니다. 완료된 연결 획득의 평균 초입니다. 진행 중인 대기는 완료 전 Timer에 들어오지 않으므로 pending과 함께 읽습니다. 획득 표본이 없는 창은 표시하지 않습니다. Hikari histogram을 가정하지 않습니다."
+    },
+    {
+      "id": 17,
+      "title": "SQL 실행 · 서비스/역할별 평균·p95",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le,application,role,instance,stage) (rate(jdbc_query_seconds_bucket[${window}s])))",
+          "legendFormat": "현재 p95 {{application}} / {{role}} / {{instance}} / {{stage}}"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le,stage) (rate(jdbc_query_seconds_bucket{application=\"payment\",role=\"worker\"}[${window}s] offset $comparison_offset)))",
-          "legendFormat": "이전 ($comparison_offset) {{stage}}"
+          "expr": "histogram_quantile(0.95, sum by (le,application,role,instance,stage) (rate(jdbc_query_seconds_bucket[${window}s] offset $comparison_offset)))",
+          "legendFormat": "이전 ($comparison_offset) p95 {{application}} / {{role}} / {{instance}} / {{stage}}"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (application,role,instance,stage) (rate(jdbc_query_seconds_sum[${window}s])) / sum by (application,role,instance,stage) (rate(jdbc_query_seconds_count[${window}s]))",
+          "legendFormat": "현재 평균 {{application}} / {{role}} / {{instance}} / {{stage}}"
+        },
+        {
+          "refId": "D",
+          "expr": "sum by (application,role,instance,stage) (rate(jdbc_query_seconds_sum[${window}s] offset $comparison_offset)) / sum by (application,role,instance,stage) (rate(jdbc_query_seconds_count[${window}s] offset $comparison_offset))",
+          "legendFormat": "이전 ($comparison_offset) 평균 {{application}} / {{role}} / {{instance}} / {{stage}}"
         }
       ],
-      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
+      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다. SQL 실행은 연결 획득 이후이며 연결 풀 대기·전체 트랜잭션 시간과 합산하지 않습니다. Worker 전용 SQL 패널의 평균·p95도 이곳에서 같은 role로 조회합니다."
+    },
+    {
+      "id": 18,
+      "title": "전체 SQL 실행 · p99",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le,application,role,instance,stage) (rate(jdbc_query_seconds_bucket[${window}s]))) and on (application,role,instance,stage) (sum by (application,role,instance,stage) (increase(jdbc_query_seconds_count[${window}s])) >= 10000)",
+          "legendFormat": "현재 {{application}} / {{role}} / {{instance}} / {{stage}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.99, sum by (le,application,role,instance,stage) (rate(jdbc_query_seconds_bucket[${window}s] offset $comparison_offset))) and on (application,role,instance,stage) (sum by (application,role,instance,stage) (increase(jdbc_query_seconds_count[${window}s] offset $comparison_offset)) >= 10000)",
+          "legendFormat": "이전 ($comparison_offset) {{application}} / {{role}} / {{instance}} / {{stage}}"
+        }
+      ],
+      "description": "동일 집계 창의 유효 표본 1만 건 이상에서만 p99를 표시합니다. 예열·배출을 제외한 같은 조건의 측정창으로 비교하세요. 실행 횟수는 업무 완료량과 다릅니다."
     },
     {
       "id": 7,
@@ -217,8 +316,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 0,
-        "y": 24,
+        "x": 12,
+        "y": 32,
         "w": 12,
         "h": 8
       },
@@ -250,8 +349,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
-        "y": 24,
+        "x": 0,
+        "y": 40,
         "w": 12,
         "h": 8
       },
@@ -283,8 +382,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 0,
-        "y": 32,
+        "x": 12,
+        "y": 40,
         "w": 12,
         "h": 8
       },
@@ -316,8 +415,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
-        "y": 32,
+        "x": 0,
+        "y": 48,
         "w": 12,
         "h": 8
       },
@@ -349,8 +448,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 0,
-        "y": 40,
+        "x": 12,
+        "y": 48,
         "w": 12,
         "h": 8
       },
@@ -382,8 +481,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
-        "y": 40,
+        "x": 0,
+        "y": 56,
         "w": 12,
         "h": 8
       },
@@ -415,8 +514,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 0,
-        "y": 48,
+        "x": 12,
+        "y": 56,
         "w": 12,
         "h": 8
       },
@@ -448,8 +547,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
-        "y": 48,
+        "x": 0,
+        "y": 64,
         "w": 12,
         "h": 8
       },
@@ -481,8 +580,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 0,
-        "y": 56,
+        "x": 12,
+        "y": 64,
         "w": 12,
         "h": 8
       },
@@ -514,8 +613,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
-        "y": 56,
+        "x": 0,
+        "y": 72,
         "w": 12,
         "h": 8
       },
@@ -539,72 +638,6 @@
       "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
     },
     {
-      "id": 17,
-      "title": "전체 SQL 실행 · p95",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 64,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[${window}s])))",
-          "legendFormat": "현재 {{application}} {{stage}}"
-        },
-        {
-          "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[${window}s] offset $comparison_offset)))",
-          "legendFormat": "이전 ($comparison_offset) {{application}} {{stage}}"
-        }
-      ],
-      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
-    },
-    {
-      "id": 18,
-      "title": "전체 SQL 실행 · p99",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 64,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.99, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[${window}s]))) and on (application,stage) (sum by (application,stage) (increase(jdbc_query_seconds_count[${window}s])) >= 10000)",
-          "legendFormat": "현재 {{application}} {{stage}}"
-        },
-        {
-          "refId": "B",
-          "expr": "histogram_quantile(0.99, sum by (le,application,stage) (rate(jdbc_query_seconds_bucket[${window}s] offset $comparison_offset))) and on (application,stage) (sum by (application,stage) (increase(jdbc_query_seconds_count[${window}s] offset $comparison_offset)) >= 10000)",
-          "legendFormat": "이전 ($comparison_offset) {{application}} {{stage}}"
-        }
-      ],
-      "description": "동일 집계 창의 유효 표본 1만 건 이상에서만 p99를 표시합니다. 예열·배출을 제외한 같은 조건의 측정창으로 비교하세요. 실행 횟수는 업무 완료량과 다릅니다."
-    },
-    {
       "id": 19,
       "title": "비동기 실행 횟수 / 초 · 완료 TPS와 별도",
       "type": "timeseries",
@@ -613,7 +646,7 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 0,
+        "x": 12,
         "y": 72,
         "w": 12,
         "h": 8
@@ -646,8 +679,8 @@
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
-        "y": 72,
+        "x": 0,
+        "y": 80,
         "w": 12,
         "h": 8
       },
@@ -666,39 +699,6 @@
           "refId": "B",
           "expr": "(sum by (application,operation) (rate(async_work_seconds_count{error!=\"none\"}[${window}s] offset $comparison_offset)) or on (application,operation) (0 * sum by (application,operation) (rate(async_work_seconds_count[${window}s] offset $comparison_offset)))) / sum by (application,operation) (rate(async_work_seconds_count[${window}s] offset $comparison_offset))",
           "legendFormat": "이전 ($comparison_offset) {{application}} {{operation}}"
-        }
-      ],
-      "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
-    },
-    {
-      "id": 21,
-      "title": "Gateway 요청 / 초",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 80,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (status) (rate(http_server_requests_seconds_count{application=\"gateway\"}[${window}s]))",
-          "legendFormat": "현재 HTTP {{status}}"
-        },
-        {
-          "refId": "B",
-          "expr": "sum by (status) (rate(http_server_requests_seconds_count{application=\"gateway\"}[${window}s] offset $comparison_offset))",
-          "legendFormat": "이전 ($comparison_offset) HTTP {{status}}"
         }
       ],
       "description": "현재 시간 구간과 comparison_offset 이전 구간입니다. 실행 조건과 배포 revision이 같은 기준인지 확인하고, 데이터 없음은 0으로 해석하지 않습니다."
@@ -748,7 +748,7 @@
         "x": 0,
         "y": 88,
         "w": 12,
-        "h": 7
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -832,7 +832,7 @@
         "x": 12,
         "y": 88,
         "w": 12,
-        "h": 7
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -889,9 +889,9 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 95,
+        "y": 96,
         "w": 12,
-        "h": 7
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -931,9 +931,9 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 95,
+        "y": 96,
         "w": 12,
-        "h": 7
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -973,7 +973,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 102,
+        "y": 104,
         "w": 12,
         "h": 8
       },
@@ -1007,7 +1007,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 102,
+        "y": 104,
         "w": 12,
         "h": 8
       },
@@ -1041,7 +1041,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 110,
+        "y": 112,
         "w": 12,
         "h": 8
       },
@@ -1070,7 +1070,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 110,
+        "y": 112,
         "w": 12,
         "h": 8
       },
@@ -1154,5 +1154,19 @@
       }
     ]
   },
-  "description": "현재 구간과 선택한 간격 이전 구간을 겹쳐 비교합니다. 같은 부하·시나리오·자원·표본 길이의 실행만 비교하고 revision·이미지·실행 시간을 함께 기록하세요. 과거 계측이 없는 구간은 빈 값이며 0이 아닙니다."
+  "description": "현재 구간과 선택한 간격 이전 구간을 겹쳐 비교합니다. 같은 부하·시나리오·자원·표본 길이의 실행만 비교하고 revision·이미지·실행 시간을 함께 기록하세요. 과거 계측이 없는 구간은 빈 값이며 0이 아닙니다.",
+  "links": [
+    {
+      "title": "HTTP 처리량·응답 → Business performance",
+      "type": "link",
+      "url": "/d/commerce-settle-business-performance",
+      "keepTime": true
+    },
+    {
+      "title": "CPU·heap·컨테이너·호스트 → Runtime overview",
+      "type": "link",
+      "url": "/d/commerce-settle-overview",
+      "keepTime": true
+    }
+  ]
 }
