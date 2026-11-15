@@ -66,8 +66,12 @@ def local_request(base, path, credential, body=None):
     handlers = [NoRedirect()]
     if parsed.hostname in ("localhost", "127.0.0.1", "::1"):
         handlers.append(ProxyHandler({}))
-    with build_opener(*handlers).open(Request(base.rstrip("/") + path, data=data, headers=headers), timeout=10) as response:
-        return json.load(response)
+    try:
+        with build_opener(*handlers).open(Request(base.rstrip("/") + path, data=data, headers=headers), timeout=10) as response:
+            return json.load(response)
+    except ValueError:
+        # HTTP/header errors can include the complete Authorization value.
+        raise ValueError("Invalid reconciliation HTTP request or response; check URL, credential format and JSON response") from None
 
 
 def request(base, path, credential, body=None, *, credential_name=None):
