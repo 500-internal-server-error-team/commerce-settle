@@ -389,7 +389,56 @@ def ledger_from(directory):
     return value
 
 
+def database_orders(host, product, deadline, costs=None):
+    """Read only this run's unique product; never export DB credentials or scan buyer history."""
+    if not re.fullmatch(r"[A-Za-z0-9_.]+@[A-Za-z0-9.-]+", host):
+        raise ValueError("cohort data SSH must be one user@host")
+    product = str(uuid.UUID(product))
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return {}, False, None
+    if costs is not None:
+        costs["queries"] += 1
+        costs["source"] = "postgresql_product_cohort"
+        costs["host"] = host
+    command = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+               "-o", "ConnectTimeout=10"]
+    if os.environ.get("LOAD_SSH_KEY"):
+        command += ["-i", os.environ["LOAD_SSH_KEY"]]
+    if os.environ.get("LOAD_DATA_SSH_KNOWN_HOSTS"):
+        command += ["-o", "UserKnownHostsFile=" + os.environ["LOAD_DATA_SSH_KNOWN_HOSTS"]]
+    command += [host, "bash", "-s"]
+    timeout_ms = max(1, min(10000, int(remaining * 1000)))
+    remote_seconds = max(1, min(20, int(remaining - 1)))
+    script = ("set -eu\n"
+              "c=$(sudo docker ps --filter label=com.amazonaws.ecs.container-name=postgres -q)\n"
+              "test -n \"$c\"\n"
+              "sudo docker exec -e PGCONNECT_TIMEOUT=5 -e 'PGOPTIONS=-c default_transaction_read_only=on "
+              f"-c statement_timeout={timeout_ms} -c application_name=commerce-load-cohort' \"$c\" "
+              f"timeout -s KILL {remote_seconds}s psql -X -qAt -v ON_ERROR_STOP=1 -U postgres -d commerce -c "
+              f"\"SELECT json_build_object('id',id,'status',status) FROM commerce.orders WHERE product_id='{product}'::uuid\"\n")
+    try:
+        observed = subprocess.run(command, input=script, capture_output=True, text=True,
+                                  timeout=min(30, remaining))
+        if observed.returncode:
+            return {}, False, {"source": "postgresql_product_cohort", "errorType": "SSH_OR_QUERY_FAILED"}
+        result = {}
+        for line in observed.stdout.splitlines():
+            row = json.loads(line)
+            ident = str(uuid.UUID(row["id"]))
+            if ident in result or not isinstance(row["status"], str) or not re.fullmatch(r"[A-Z_]{1,40}", row["status"]):
+                raise ValueError("Invalid cohort snapshot")
+            result[ident] = {"status": row["status"]}
+        if costs is not None:
+            costs["scannedOrders"] += len(result)
+        return result, True, None
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as error:
+        return {}, False, {"source": "postgresql_product_cohort", "errorType": type(error).__name__}
+
+
 def orders_for_product(api, buyer, product, deadline, costs=None):
+    if getattr(api, "cohort_data_ssh", None):
+        return database_orders(api.cohort_data_ssh, product, deadline, costs)
     result = {}
     page = 0
     while True:
@@ -543,6 +592,8 @@ def parser():
     result.add_argument("--generator-memory-mib", type=int, default=1536)
     result.add_argument("--generator-cpus", type=float, default=2)
     result.add_argument("--prepare-only", action="store_true")
+    result.add_argument("--cohort-data-ssh",
+                        help="Deployed PostgreSQL user@host: read only this run's product orders, avoiding buyer history")
     result.add_argument("--output-dir", type=Path)
     result.add_argument("--resume", type=Path, help="기존 원장을 읽어 새 recovery 하위 폴더에 관측. 추가 주문 없음")
     result.add_argument("--performance-metadata", type=Path,
@@ -601,6 +652,14 @@ def main(argv=None):
     except OSError:
         arguments.error("새 결과 폴더를 만들 수 없습니다. 기존 결과 폴더를 덮어쓰지 않습니다.")
     api, owned, sessions = Api(target), [], {}
+    if original:
+        saved_host = resumed_plan.get("cohortDataSsh")
+        if args.cohort_data_ssh and args.cohort_data_ssh != saved_host:
+            arguments.error("Resume keeps the original cohort observation host")
+        args.cohort_data_ssh = saved_host
+    elif args.cohort_data_ssh is None:
+        args.cohort_data_ssh = os.environ.get("LOAD_COHORT_DATA_SSH")
+    api.cohort_data_ssh = args.cohort_data_ssh
     plan, buyer, seller = resumed_plan or {}, None, None
     ledger_root = original or directory
     report = {"startedAt": now(), "baseUrl": target, "runId": run_id, "k6Image": K6_IMAGE,
@@ -655,7 +714,7 @@ def main(argv=None):
             plan = prepare(api, buyer, seller, run_id, total)
             plan.update(plannedOrders=args.rate * args.seconds, warmupOrders=args.rate * args.warmup_seconds,
                         measurementSeconds=args.seconds, warmupSeconds=args.warmup_seconds,
-                        allowPgDeclines=args.allow_pg_declines)
+                        allowPgDeclines=args.allow_pg_declines, cohortDataSsh=args.cohort_data_ssh)
             write_json(directory / "plan.json", plan)
             body = prepare_order(api, buyer, seller, plan)
             write_json(directory / "order.json", body)
