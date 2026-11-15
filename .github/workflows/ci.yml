@@ -66,6 +66,7 @@ jobs:
           python3 -B -m unittest discover -s tests/load -p 'test_payment_load.py'
           python3 -B -m unittest discover -s tests/load -p 'test_order_load.py'
           python3 -B -m unittest discover -s tests/load -p 'test_performance.py'
+          python3 -B -m unittest discover -s tests/load -p 'test_experiment.py'
           python3 -B -m unittest discover -s tests/load -p 'test_resource_sample.py'
       - name: Check Java formatting and Checkstyle (main and test)
         run: ./gradlew --no-daemon --parallel --continue spotlessCheck checkstyleMain checkstyleTest

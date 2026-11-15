@@ -15,6 +15,7 @@
 | 테스트 형식·시나리오·중복·실행 경계 | [테스트 작성](CONTRIBUTING.md#테스트-작성) |
 | DB·스키마·삭제·제약 조건 | [DB 정책](docs/migrations.md) |
 | 실행·접속·검증·종료 | [개발 환경](docs/development.md) |
+| 켜진 배포 환경의 부하·수집·금융 대조 | [단일 실험 명령](tests/load/README.md#배포-실험-단일-명령) |
 | 문서 추가·분류·이동·통합·구현 상태 갱신 | [문서 구조와 기준 위치](CONTRIBUTING.md#문서-구조와-기준-위치), [문서 추가와 갱신](CONTRIBUTING.md#문서-추가와-갱신) |
 | 문서·주석·커밋·PR 작성과 리뷰 | [문서와 기록](CONTRIBUTING.md#문서와-기록) |
 | 최종 검토·변경 필요성 검토·간결화·윤문 | [review-change 스킬](.agents/skills/review-change/SKILL.md) |

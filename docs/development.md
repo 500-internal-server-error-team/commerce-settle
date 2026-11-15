@@ -963,6 +963,8 @@ curl http://localhost:18083/mock/accounts/ACCOUNT_ID \
 
 ## 정산 대조 실행과 재개
 
+켜진 ECS 환경에서 주문 부하부터 동일 구간 지표 수집·금융 대조·결과 저장까지 연결하려면 [배포 실험 단일 명령](../tests/load/README.md#배포-실험-단일-명령)을 사용합니다. 성공한 배포 기록·초기 데이터/시나리오 조건과 기존 조회·SSH·서비스 자격이 필요합니다. `--check-only`로 주문 없이 연결을 확인하고, 다른 공용 실험이 끝난 뒤 낮은 부하부터 실행합니다. 자동 기동이나 초기화는 하지 않으며, 실행기 연결 성공과 실제 200 TPS 합격을 구분합니다.
+
 새 빈 DB에 [현재 DDL](migrations.md)을 적용하고 `python3 scripts/init_env.py`로 추가된 `PAYMENT_SETTLEMENT_CREDENTIAL`을 준비합니다. 기존 DB·사용자 데모를 초기화하지 않습니다. Settlement의 `SETTLEMENT_RECONCILIATION_ENABLED=true`와 Payment API의 같은 수신 자격, Payment API→Finance Mock의 기존 `FINANCE_MOCK_PAYMENT_CREDENTIAL`이 필요합니다. 기본 Compose는 이 자격을 전달하며 일일 대조 활성화는 별도 opt-in입니다. 운영자는 인스턴스의 `app.internal-auth.senders`에 `operator:<식별자>`를 설정합니다. Gateway·구매자·판매자에게 공개하지 않습니다.
 
 `POST /internal/settlement-reconciliations`에 `{"cutoffAt":"2026-11-03T10:00:00+09:00"}`를 보내면 202와 회차 ID를 받습니다. 같은 마감 재요청은 같은 회차를 반환합니다. 202는 대조 완료가 아닙니다. `GET /internal/settlement-reconciliations/{runId}`, `/results?page=0&size=100`, `/history`로 고정 대상·진행·원인·최근 실행 이력을 확인합니다. 요청 마감은 안전 여유 10분 이전이어야 합니다.
