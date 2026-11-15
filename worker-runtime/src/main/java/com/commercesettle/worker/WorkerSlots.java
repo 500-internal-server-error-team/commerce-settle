@@ -8,18 +8,20 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 /** DB에 저장된 작업을 슬롯마다 독립적으로 처리한다. 메모리에는 작업 대신 합쳐진 깨움 신호만 둔다. */
 public final class WorkerSlots implements AutoCloseable {
+  private final ReentrantLock stateLock = new ReentrantLock();
   private static final int RECOVERY_PROBES = 4;
   private final BooleanSupplier next;
   private final Consumer<RuntimeException> failure;
   private final int batchSize;
   private final ThreadPoolExecutor executor;
   private final Slot[] slots;
-  // pending, idle 및 슬롯 상태는 실행기 모니터로 함께 보호한다.
+  // pending, idle 및 슬롯 상태를 같은 잠금으로 보호한다.
   private final ArrayDeque<Slot> idle = new ArrayDeque<>();
   // 모든 슬롯이 바쁠 때도 슬롯 수만큼의 배정 수요를 유지하고 그 이상의 신호는 합친다.
   private int pending;
@@ -55,10 +57,13 @@ public final class WorkerSlots implements AutoCloseable {
   /** 신호 한 건은 가용 슬롯 하나를 깨운다. 모두 바쁘면 신호를 대기열에 남겨 다음 가용 슬롯에 넘긴다. */
   public void wakeUp() {
     RuntimeException rejected;
-    synchronized (this) {
+    stateLock.lock();
+    try {
       if (stopping) return;
       pending = Math.min(slots.length, pending + 1);
       rejected = dispatchPending();
+    } finally {
+      stateLock.unlock();
     }
     report(rejected);
   }
@@ -66,7 +71,8 @@ public final class WorkerSlots implements AutoCloseable {
   /** 유휴 복구 조회는 소수로 제한한다. 실제 작업을 발견하면 가용 슬롯으로 처리를 확장한다. */
   public void recover() {
     List<RuntimeException> rejected = new ArrayList<>();
-    synchronized (this) {
+    stateLock.lock();
+    try {
       if (stopping) return;
       int probes = Math.min(RECOVERY_PROBES, slots.length);
       pending = Math.max(pending, probes);
@@ -81,15 +87,20 @@ public final class WorkerSlots implements AutoCloseable {
         RuntimeException error = start(idle.removeFirst());
         if (error != null) rejected.add(error);
       }
+    } finally {
+      stateLock.unlock();
     }
     rejected.forEach(this::report);
   }
 
   private void expand() {
     RuntimeException rejected = null;
-    synchronized (this) {
+    stateLock.lock();
+    try {
       // 이미 실행 중인 슬롯은 계속 처리하므로, 가용 슬롯이 없으면 새 조회 수요를 만들지 않는다.
       if (!stopping && !idle.isEmpty()) rejected = start(idle.removeFirst());
+    } finally {
+      stateLock.unlock();
     }
     report(rejected);
   }
@@ -119,8 +130,11 @@ public final class WorkerSlots implements AutoCloseable {
 
   @Override
   public void close() throws InterruptedException {
-    synchronized (this) {
+    stateLock.lock();
+    try {
       stopping = true;
+    } finally {
+      stateLock.unlock();
     }
     executor.shutdown();
     try {
@@ -147,20 +161,26 @@ public final class WorkerSlots implements AutoCloseable {
         throw error;
       } finally {
         RuntimeException rejected;
-        synchronized (WorkerSlots.this) {
+        stateLock.lock();
+        try {
           running = false;
           if (!stopping && !paused) idle.addLast(this);
           // 마지막 빈 조회 뒤 들어온 신호는 먼저 비어 있던 슬롯에도 인계할 수 있다.
           rejected = dispatchPending();
+        } finally {
+          stateLock.unlock();
         }
         report(rejected);
       }
     }
 
     private void pause() {
-      synchronized (WorkerSlots.this) {
+      stateLock.lock();
+      try {
         paused = true;
         pending = Math.min(slots.length, pending + 1);
+      } finally {
+        stateLock.unlock();
       }
     }
 
