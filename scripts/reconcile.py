@@ -7,24 +7,67 @@ import argparse
 from collections import Counter
 import json
 import os
+import subprocess
 import time
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+from urllib.parse import urlencode, urlsplit
+from urllib.request import Request, HTTPRedirectHandler, build_opener
 
 
-def request(base, path, credential, body=None):
-    if not credential:
-        raise ValueError("Required service/operator credential is missing")
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, *args):
+        return None
+
+
+def local_request(base, path, credential, body=None):
+    parsed = urlsplit(base)
+    if (parsed.scheme not in ("https", "http") or not parsed.hostname
+            or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or parsed.path not in ("", "/")
+            or parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1", "::1")):
+        raise ValueError("Use HTTPS or loopback HTTP, without embedded credentials")
     headers = {"Authorization": "Bearer " + credential}
     data = None
     if body is not None:
         headers["Content-Type"] = "application/json"
         data = json.dumps(body).encode()
-    with urlopen(Request(base.rstrip("/") + path, data=data, headers=headers), timeout=10) as response:
+    with build_opener(NoRedirect()).open(Request(base.rstrip("/") + path, data=data, headers=headers), timeout=10) as response:
         return json.load(response)
 
 
-def verify(args):
+def request(base, path, credential, body=None):
+    if not credential:
+        raise ValueError("Required service/operator credential is missing")
+    host = os.environ.get("RECONCILE_SSH")
+    if not host:
+        return local_request(base, path, credential, body)
+    if host.startswith("-") or any(char.isspace() for char in host):
+        raise ValueError("RECONCILE_SSH must be one SSH destination")
+    # Reuse the existing app SSH identity. Payload/credentials travel over stdin, never argv or disk.
+    command = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+    if os.environ.get("LOAD_SSH_KEY"):
+        command += ["-i", os.environ["LOAD_SSH_KEY"]]
+    script = ("import json,sys\nfrom urllib.error import HTTPError\n"
+              "exec(json.loads(sys.stdin.readline()))\nargs=json.load(sys.stdin)\n"
+              "try:\n print(json.dumps({'ok':True,'value':local_request(*args)}))\n"
+              "except HTTPError as e:\n print(json.dumps({'ok':False,'status':e.code}))\n")
+    import inspect
+    import shlex
+    source = ("import json\nfrom urllib.parse import urlsplit\n"
+              "from urllib.request import Request, HTTPRedirectHandler, build_opener\n"
+              + inspect.getsource(NoRedirect) + "\n" + inspect.getsource(local_request))
+    command += [host, "python3 -c " + shlex.quote(script)]
+    result = subprocess.run(command, input=json.dumps(source) + "\n" + json.dumps([base, path, credential, body]),
+                            text=True, capture_output=True, timeout=25)
+    if result.returncode:
+        raise RuntimeError("Reconciliation SSH/HTTP failed; check the app SSH identity, running service and credential")
+    result = json.loads(result.stdout)
+    if not result["ok"]:
+        raise HTTPError(base, result["status"], "Remote HTTP failed", {}, None)
+    return result["value"]
+
+
+def verify(args, *, on_run=None, on_result=None):
     operator = os.environ.get("SETTLEMENT_OPERATOR_CREDENTIAL")
     service = os.environ.get("PAYMENT_SETTLEMENT_CREDENTIAL")
     finance = os.environ.get("FINANCE_MOCK_SETTLEMENT_CREDENTIAL")
@@ -37,6 +80,8 @@ def verify(args):
         if not args.cutoff_at:
             raise ValueError("Supply --cutoff-at or --run-id")
         run = request(args.settlement_url, path, operator, {"cutoffAt": args.cutoff_at})
+    if on_run:
+        on_run(run)
     detail = path + "/" + run["id"]
     deadline = time.monotonic() + args.timeout
     while run["status"] not in ("COMPLETED", "REVIEW_REQUIRED", "WAITING", "UNVERIFIED"):
@@ -44,6 +89,8 @@ def verify(args):
             raise TimeoutError("Reconciliation remains queued/running; resume with --run-id " + run["id"])
         time.sleep(1)
         run = request(args.settlement_url, detail, operator)
+        if on_run:
+            on_run(run)
     summary = {"run": run, "results": request(args.settlement_url, detail + "/results?size=100", operator)}
     # Both directions use the exact run snapshot, including when recovering an old run.
     if not run["snapshotAt"]:
@@ -83,7 +130,10 @@ def verify(args):
     summary["paymentOwner"] = summaries
     summary["financeOwner"] = request(args.finance_url, "/mock/reconciliation-integrity", finance)
     failed |= any(value != 0 for value in summary["financeOwner"]["checks"].values())
-    print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
+    if on_result:
+        on_result(summary)
+    else:
+        print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
     return 1 if failed else 0
 
 
