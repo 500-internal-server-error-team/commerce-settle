@@ -103,6 +103,26 @@ class ExperimentTest(unittest.TestCase):
         self.assertIn("manually", stderr.getvalue())
         self.assertEqual(e.read(self.out / "result.json")["failure"]["phase"], "preflight")
 
+    def test_legacy_resume_ignores_new_environment_cohort_host(self):
+        self.flow(load_code=1)
+        self.assertEqual(e.main(self.argv), 1)
+        path = self.out / "execution.json"
+        saved = e.read(path)
+        saved["arguments"].pop("cohort_data_ssh", None)
+        e.order_load.write_json(path, saved)
+        with patch.dict(os.environ, {"LOAD_COHORT_DATA_SSH": "other@unapproved.test"}):
+            self.assertEqual(e.main(["--resume", str(self.out)]), 1)
+        self.assertNotIn("--cohort-data-ssh", self.commands[-1])
+        self.assertIsNone(self.loader.call_args.args[1].cohort_data_ssh)
+
+    def test_new_resume_restores_original_cohort_host(self):
+        self.flow(load_code=1)
+        self.assertEqual(e.main(self.argv + ["--cohort-data-ssh", "owned@data.test"]), 1)
+        with patch.dict(os.environ, {"LOAD_COHORT_DATA_SSH": "other@unapproved.test"}):
+            self.assertEqual(e.main(["--resume", str(self.out)]), 1)
+        command = self.commands[-1]
+        self.assertEqual(command[command.index("--cohort-data-ssh") + 1], "owned@data.test")
+
     def test_invalid_credential_never_reaches_stderr_or_saved_failure(self):
         marker = "synthetic-credential-" + "A" * 43
         def preflight(args):
@@ -135,9 +155,11 @@ class ExperimentTest(unittest.TestCase):
     def test_observation_failure_interrupts_owned_load_once(self):
         process = Mock()
         process.wait.side_effect = [subprocess.TimeoutExpired("load", 15), 130]
-        with patch.object(e.subprocess, "Popen", return_value=process), \
+        with patch.object(e.subprocess, "Popen", return_value=process) as child, \
+                patch.dict(os.environ, {"LOAD_COHORT_DATA_SSH": "other@unapproved.test"}), \
                 patch.object(e, "monitor", side_effect=RuntimeError("critical")):
             self.assertEqual(e.run_load(["load"], Mock(), self.root)[0], 130)
+        self.assertIsNone(child.call_args.kwargs["env"].get("LOAD_COHORT_DATA_SSH"))
         process.send_signal.assert_called_once_with(e.signal.SIGINT)
 
     def test_up_services_do_not_hide_missing_business_observations(self):

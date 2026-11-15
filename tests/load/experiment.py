@@ -236,12 +236,24 @@ def preflight(args):
           "/internal/payment-reconciliation-checks?" + reconcile.urlencode({"cutoffAt": cutoff, "size": 1}), os.environ.get(CREDENTIALS[1]), credential_name=CREDENTIALS[1]))
     probe("Finance reconciliation", args.finance_url, lambda: reconcile.request(args.finance_url,
           "/mock/reconciliation-integrity", os.environ.get(CREDENTIALS[2]), credential_name=CREDENTIALS[2]))
-    return probe("Prometheus", args.prometheus, lambda: monitor(args.prometheus, args.seconds))
+    cohort_host = getattr(args, "cohort_data_ssh", None)
+    if cohort_host:
+        def cohort_auth():
+            _, complete, error = order_load.database_orders(
+                cohort_host, "00000000-0000-4000-8000-000000000000", time.monotonic() + 20)
+            if not complete or error:
+                raise RuntimeError("Read-only cohort query failed")
+        probe("Product cohort snapshot", cohort_host, cohort_auth)
+    result = probe("Prometheus", args.prometheus, lambda: monitor(args.prometheus, args.seconds))
+    result["cohortDataSsh"] = cohort_host
+    return result
 
 
 def run_load(command, args, directory):
     observations = []
-    process = subprocess.Popen(command, start_new_session=True)
+    environment = os.environ.copy()
+    environment.pop("LOAD_COHORT_DATA_SSH", None)  # The saved/selected host is passed only in argv.
+    process = subprocess.Popen(command, start_new_session=True, env=environment)
     failure = None
     try:
         while True:
@@ -292,6 +304,8 @@ def parser():
     p.add_argument("--payment-url", default="http://127.0.0.1:8082")
     p.add_argument("--finance-url", default="http://127.0.0.1:8085")
     p.add_argument("--app-ssh", default=os.environ.get("RECONCILE_SSH") or os.environ.get("LOAD_APP_SSH"))
+    p.add_argument("--cohort-data-ssh", default=os.environ.get("LOAD_COHORT_DATA_SSH"),
+                   help="Read-only PostgreSQL cohort snapshot over existing data-host SSH")
     p.add_argument("--tps", type=int, default=2)
     p.add_argument("--seconds", type=int, choices=(60, 300, 900), default=60)
     p.add_argument("--warmup-seconds", type=int, default=0)
@@ -324,6 +338,7 @@ def main(argv=None):
         saved = read(original / "execution.json")
         for key, value in saved["arguments"].items():
             setattr(args, key, value)
+        args.cohort_data_ssh = saved["arguments"].get("cohort_data_ssh")
     elif not all((args.base_url, args.deployment_record, args.conditions, args.prometheus)):
         p.error("Supply --base-url, --deployment-record, --conditions and --prometheus")
     for key in ("base_url", "prometheus", "settlement_url", "payment_url", "finance_url"):
@@ -336,7 +351,7 @@ def main(argv=None):
     directory.mkdir(parents=True, mode=0o700)
     report = {"startedAt": order_load.now(), "completed": False, "phase": "preflight", "stages": {}}
     execution = read(original / "execution.json") if original else {
-        "arguments": {k: getattr(args, k) for k in ("base_url", "prometheus", "settlement_url", "payment_url", "finance_url", "app_ssh")}}
+        "arguments": {k: getattr(args, k) for k in ("base_url", "prometheus", "settlement_url", "payment_url", "finance_url", "app_ssh", "cohort_data_ssh")}}
     if original and execution.get("comparison"):
         args.compare = Path(execution["comparison"]["path"])
     if args.app_ssh:
@@ -373,6 +388,8 @@ def main(argv=None):
         report["phase"] = "load"
         load_root = original / "load" if original else directory / "load"
         command = [sys.executable, "-B", str(ROOT / "tests/load/order_load.py")]
+        if args.cohort_data_ssh:
+            command += ["--cohort-data-ssh", args.cohort_data_ssh]
         if original:
             before = set(load_root.glob("recovery-*"))
             command += ["--resume", str(load_root), "--drain-seconds", str(args.drain_seconds)]
