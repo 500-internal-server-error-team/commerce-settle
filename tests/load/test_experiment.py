@@ -103,6 +103,19 @@ class ExperimentTest(unittest.TestCase):
         self.assertIn("manually", stderr.getvalue())
         self.assertEqual(e.read(self.out / "result.json")["failure"]["phase"], "preflight")
 
+    def test_invalid_credential_never_reaches_stderr_or_saved_failure(self):
+        marker = "synthetic-credential-" + "A" * 43
+        def preflight(args):
+            return e.reconcile.request(args.settlement_url, "/check", marker + "\n")
+        with patch.object(e, "preflight", side_effect=preflight), \
+                patch.object(e, "run_load") as load, \
+                patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.assertEqual(e.main(self.argv), 1)
+        load.assert_not_called()
+        self.assertNotIn(marker, stderr.getvalue())
+        self.assertNotIn(marker, (self.out / "result.json").read_text())
+        self.assertIn("credential format", stderr.getvalue())
+
     def test_resume_cannot_claim_connection_only_success(self):
         with patch("sys.stderr", new_callable=io.StringIO), self.assertRaises(SystemExit) as error:
             e.main(["--resume", str(self.out), "--check-only"])
@@ -262,6 +275,24 @@ class ExperimentTest(unittest.TestCase):
 
 
 class ReconciliationTransportTest(unittest.TestCase):
+    def test_invalid_header_credentials_are_redacted_for_direct_and_transferred_ssh_requests(self):
+        marker = "synthetic-credential-" + "A" * 43
+        real_run = subprocess.run
+        def ssh(command, **kwargs):
+            result = real_run(shlex.split(command[-1]), **kwargs)
+            self.assertNotIn(marker, result.stdout)
+            self.assertNotIn(marker, result.stderr)
+            return result
+        for remote in (False, True):
+            for suffix in ("\n", "\r\ninvalid", "\u2028"):
+                with self.subTest(remote=remote, suffix=repr(suffix)), \
+                        patch.dict(os.environ, {"RECONCILE_SSH": "test@host" if remote else ""}), \
+                        patch.object(e.reconcile.subprocess, "run", side_effect=ssh), \
+                        self.assertRaises(ValueError) as error:
+                    e.reconcile.request("http://127.0.0.1:1", "/check", marker + suffix)
+                self.assertNotIn(marker, str(error.exception))
+                self.assertIn("credential format", str(error.exception))
+
     def test_authenticated_direct_and_ssh_http_preserve_cutoff_and_checkpoint(self):
         calls = []
         cutoff = "2020-01-01T00:00:00+00:00"
@@ -274,6 +305,10 @@ class ReconciliationTransportTest(unittest.TestCase):
                 self.do_GET()
             def do_GET(self):
                 calls.append((self.command, self.path, self.headers.get("Authorization")))
+                if self.path == "/unauthorized":
+                    self.send_response(401)
+                    self.end_headers()
+                    return
                 if self.path.endswith("results?size=100"):
                     value = {"items": []}
                 elif "payment-reconciliation-checks" in self.path:
@@ -314,6 +349,11 @@ class ReconciliationTransportTest(unittest.TestCase):
                     checkpoints, results = [], []
                     with patch.dict(os.environ, env, clear=True), patch.object(e.reconcile.subprocess, "run", side_effect=ssh):
                         self.assertEqual(e.reconcile.verify(args, on_run=checkpoints.append, on_result=results.append), 0)
+                        with self.assertRaises(e.HTTPError) as error:
+                            e.reconcile.request(base, "/unauthorized", None if automatic else "secret-token",
+                                                credential_name=e.CREDENTIALS[0])
+                        self.assertEqual(error.exception.code, 401)
+                        error.exception.close()
                     self.assertEqual(checkpoints[0]["id"], "fixed")
                     self.assertEqual(results[0]["paymentOwner"]["PAYMENT"]["counts"], {"MATCH": 1})
             self.assertTrue(all(token == "Bearer secret-token" for _, _, token in calls))
