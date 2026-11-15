@@ -4,9 +4,12 @@ Never starts services or deploys. Resume only drains the original order ledger a
 """
 import argparse
 from datetime import datetime, timezone
+import inspect
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -24,8 +27,95 @@ import reconcile
 from render_ecs_apps import SERVICES, module_for
 
 OPERATIONS = ["payment.confirmed", "order.settlement.applied", "payment.settlement.applied"]
-CREDENTIALS = ("SETTLEMENT_OPERATOR_CREDENTIAL", "PAYMENT_SETTLEMENT_CREDENTIAL",
-               "FINANCE_MOCK_SETTLEMENT_CREDENTIAL")
+CREDENTIALS = reconcile.CREDENTIALS
+
+
+def docker_observation(names, docker_command):
+    """Runs on the selected app host; only the allowlisted observation leaves that host."""
+    import json
+    import subprocess
+
+    def docker(*args):
+        return subprocess.run([*docker_command, *args], capture_output=True, text=True,
+                              check=True, timeout=10).stdout
+
+    observed = {}
+    for name in names:
+        stage = "list"
+        try:
+            ids = docker("ps", "-q", "--filter", "label=com.amazonaws.ecs.container-name=" + name).split()
+            stage = "container-count"
+            if len(ids) != 1:
+                raise ValueError("Expected one running app container")
+            stage = "container"
+            container = json.loads(docker("inspect", ids[0]))[0]
+            stage = "image"
+            image = json.loads(docker("image", "inspect", container["Image"]))[0]
+        except Exception as error:
+            return {"failure": {"service": name, "stage": stage, "type": type(error).__name__}}
+        labels = container["Config"].get("Labels", {})
+        settings = {}
+        for entry in container["Config"].get("Env", []):
+            key, _, value = entry.partition("=")
+            if key in ("PAYMENT_SCENARIO_VERSION", "PAYMENT_APPROVAL_GATEWAY") or key.endswith(("_DB_POOL_SIZE", "_CONCURRENCY")):
+                settings[key] = value
+        capacity = container["HostConfig"]
+        observed[name] = {
+            "cluster": labels.get("com.amazonaws.ecs.cluster"),
+            "family": labels.get("com.amazonaws.ecs.task-definition-family"),
+            "version": labels.get("com.amazonaws.ecs.task-definition-version"),
+            "taskArn": labels.get("com.amazonaws.ecs.task-arn"),
+            "running": container["State"].get("Running"),
+            "health": container["State"].get("Health", {}).get("Status"),
+            "imageDigests": image.get("RepoDigests", []),
+            "resources": {key: capacity.get(key, 0) for key in
+                          ("CpuShares", "NanoCpus", "CpuQuota", "CpuPeriod", "Memory", "MemoryReservation")},
+            "runtime": {"settings": settings}}
+    return {"services": observed}
+
+
+def observe_host_deployment(record, conditions, rate, warmup, host):
+    if record.get("status") != "success":
+        raise ValueError("Use a successful deployment.json from the running release")
+    if host.startswith("-") or any(char.isspace() for char in host):
+        raise ValueError("Select one app SSH destination")
+    command = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+    if os.environ.get("LOAD_SSH_KEY"):
+        command += ["-i", os.environ["LOAD_SSH_KEY"]]
+    docker_command = shlex.split(os.environ.get("LOAD_REMOTE_DOCKER", "docker"))
+    if not docker_command:
+        raise ValueError("LOAD_REMOTE_DOCKER must select an existing Docker command")
+    source = ("import json\n" + inspect.getsource(docker_observation) +
+              "\nprint(json.dumps(docker_observation(" + repr(list(SERVICES)) + ", " + repr(docker_command) + ")))\n")
+    command += [host, "python3 -"]
+    result = subprocess.run(command, input=source, capture_output=True, text=True, timeout=150)
+    if result.returncode:
+        raise RuntimeError("App host observation failed; check existing SSH, Python 3 and Docker read access")
+    payload = json.loads(result.stdout)
+    if "failure" in payload:
+        failure = payload["failure"]
+        raise RuntimeError("App host observation failed for " + failure["service"] + " at " +
+                           failure["stage"] + " (" + failure["type"] + "); check the selected host and existing Docker command")
+    observed = payload["services"]
+    if set(observed) != set(SERVICES):
+        raise ValueError("App host did not identify all six running services")
+    for name, item in observed.items():
+        arn = record["registered"][name]
+        identity = arn.split(":task-definition/", 1)
+        cluster = record["cluster"].rsplit("/", 1)[-1]
+        task_pattern = re.escape(identity[0] + ":task/") + "(?:" + re.escape(cluster) + "/)?[a-f0-9]{32}"
+        if (len(identity) != 2 or str(item["family"]) + ":" + str(item["version"]) != identity[1]
+                or item["cluster"] != cluster
+                or not re.fullmatch(task_pattern, str(item["taskArn"]))
+                or item["running"] is not True or item["health"] != "healthy"
+                or record["images"][module_for(name)] not in item["imageDigests"]):
+            raise ValueError("Running app revision/image/health differs from deployment record: " + name)
+    metadata = deployment_metadata(record, conditions, rate, warmup,
+        {name: item["resources"] for name, item in observed.items()},
+        {name: item["runtime"] for name, item in observed.items()})
+    metadata["deploymentObservation"] = {"source": "app-host", "ecsServiceRollout": "NOT_QUERIED",
+        "tasks": {name: item["taskArn"] for name, item in observed.items()}}
+    return metadata
 
 
 def read(path):
@@ -75,6 +165,10 @@ def observe_deployment(record, conditions, rate, warmup, aws):
                        if k.endswith(("_DB_POOL_SIZE", "_CONCURRENCY")))
         runtime[name] = {"settings": {
             v["name"]: v["value"] for v in container.get("environment", []) if v["name"] in allowed}}
+    return deployment_metadata(record, conditions, rate, warmup, resources, runtime)
+
+
+def deployment_metadata(record, conditions, rate, warmup, resources, runtime):
     metadata = {"revision": record["commit"], "imageDigests": {
         name: image.split("@", 1)[1] for name, image in record["images"].items()},
         "conditions": {**conditions, "arrivalRate": rate, "warmupSeconds": warmup,
@@ -99,13 +193,17 @@ def monitor(prometheus, window):
         prometheus, 'business:source{window="' + str(window) + '"}', at))
     if any(sources.get(op) is None or not 0 <= at - sources[op] <= 45 for op in OPERATIONS):
         raise RuntimeError("Prometheus: selected DB business observations are missing/stale/future")
+    reconciliation = performance.one(performance.query(
+        prometheus, 'commerce_settle_reconciliation_observed_timestamp_seconds{job="commerce-settle"}', at))
+    if reconciliation is None or not 0 <= at - reconciliation <= 45:
+        raise RuntimeError("Settlement reconciliation observations are missing/stale; check SETTLEMENT_RECONCILIATION_ENABLED and its scrape before load")
     return {"observedAt": at, "serviceTargets": len(up), "criticalAlerts": 0,
-            "businessSources": {op: sources[op] for op in OPERATIONS}}
+            "businessSources": {op: sources[op] for op in OPERATIONS}, "reconciliationSource": reconciliation}
 
 
 def preflight(args):
     for name in CREDENTIALS:
-        if not os.environ.get(name):
+        if not args.app_ssh and not os.environ.get(name):
             raise ValueError("Set existing " + name + " in the environment")
     api, owned = order_load.Api(args.base_url), []
     def probe(label, target, action):
@@ -128,16 +226,16 @@ def preflight(args):
         try:
             reconcile.request(args.settlement_url,
                               "/internal/settlement-reconciliations/00000000-0000-4000-8000-000000000000",
-                              os.environ[CREDENTIALS[0]])
+                              os.environ.get(CREDENTIALS[0]), credential_name=CREDENTIALS[0])
         except HTTPError as error:
             if error.code != 404:
                 raise
     probe("Settlement operator", args.settlement_url, settlement_auth)
     cutoff = datetime.fromtimestamp(time.time() - 601, timezone.utc).isoformat()
     probe("Payment reconciliation", args.payment_url, lambda: reconcile.request(args.payment_url,
-          "/internal/payment-reconciliation-checks?" + reconcile.urlencode({"cutoffAt": cutoff, "size": 1}), os.environ[CREDENTIALS[1]]))
+          "/internal/payment-reconciliation-checks?" + reconcile.urlencode({"cutoffAt": cutoff, "size": 1}), os.environ.get(CREDENTIALS[1]), credential_name=CREDENTIALS[1]))
     probe("Finance reconciliation", args.finance_url, lambda: reconcile.request(args.finance_url,
-          "/mock/reconciliation-integrity", os.environ[CREDENTIALS[2]]))
+          "/mock/reconciliation-integrity", os.environ.get(CREDENTIALS[2]), credential_name=CREDENTIALS[2]))
     return probe("Prometheus", args.prometheus, lambda: monitor(args.prometheus, args.seconds))
 
 
@@ -193,7 +291,7 @@ def parser():
     p.add_argument("--settlement-url", default="http://127.0.0.1:8084")
     p.add_argument("--payment-url", default="http://127.0.0.1:8082")
     p.add_argument("--finance-url", default="http://127.0.0.1:8085")
-    p.add_argument("--app-ssh", default=os.environ.get("RECONCILE_SSH", os.environ.get("LOAD_APP_SSH")))
+    p.add_argument("--app-ssh", default=os.environ.get("RECONCILE_SSH") or os.environ.get("LOAD_APP_SSH"))
     p.add_argument("--tps", type=int, default=2)
     p.add_argument("--seconds", type=int, choices=(60, 300, 900), default=60)
     p.add_argument("--warmup-seconds", type=int, default=0)
@@ -260,8 +358,12 @@ def main(argv=None):
             metadata = read(original / "metadata.json")
         else:
             record = read(args.deployment_record)
-            metadata = observe_deployment(record, read(args.conditions), args.tps, args.warmup_seconds,
-                                          deployment.Aws(record["region"]))
+            conditions = read(args.conditions)
+            if args.app_ssh:
+                metadata = observe_host_deployment(record, conditions, args.tps, args.warmup_seconds, args.app_ssh)
+            else:
+                metadata = observe_deployment(record, conditions, args.tps, args.warmup_seconds,
+                                              deployment.Aws(record["region"]))
         order_load.write_json(directory / "metadata.json", metadata)
         order_load.write_json(directory / "execution.json", execution)
         report["stages"].setdefault("preflight", "PASS")

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,6 +18,9 @@ from test_performance import metadata
 
 class ExperimentTest(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ, {"RECONCILE_SSH": "", "LOAD_APP_SSH": ""})
+        environment.start()
+        self.addCleanup(environment.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -129,6 +133,14 @@ class ExperimentTest(unittest.TestCase):
                 self.assertRaisesRegex(RuntimeError, "business observations"):
             e.monitor("http://localhost:9090", 60)
 
+    def test_healthy_business_sources_do_not_hide_disabled_financial_reconciliation(self):
+        up = [{"value": [1000, "1"]}] * 6
+        sources = [{"metric": {"operation": operation}, "value": [1000, "1000"]} for operation in e.OPERATIONS]
+        with patch.object(e.time, "time", return_value=1000), \
+                patch.object(e.performance, "query", side_effect=[up, [], sources, []]), \
+                self.assertRaisesRegex(RuntimeError, "SETTLEMENT_RECONCILIATION_ENABLED"):
+            e.monitor("http://localhost:9090", 60)
+
     def test_deployment_image_mismatch_is_rejected(self):
         record = {"status": "success", "cluster": "test", "commit": "a"*40,
                   "registered": {name: "arn:" + name for name in e.SERVICES},
@@ -137,6 +149,81 @@ class ExperimentTest(unittest.TestCase):
         with patch.object(e.deployment, "describe", return_value={name: {} for name in e.SERVICES}), \
                 patch.object(e.deployment, "require_stable"), self.assertRaisesRegex(ValueError, "image differs"):
             e.observe_deployment(record, metadata()["conditions"], 2, 0, aws)
+
+    def test_existing_app_ssh_observes_running_release_without_local_aws_credentials(self):
+        self.flow()
+        with patch.object(e, "observe_host_deployment", return_value=metadata()) as observe, \
+                patch.object(e.deployment, "Aws", side_effect=AssertionError("local AWS must not be required")):
+            self.assertEqual(e.main(self.argv + ["--app-ssh", "app@host"]), 0)
+        self.assertEqual(observe.call_args.args[-1], "app@host")
+
+    def test_empty_reconcile_ssh_keeps_existing_load_app_ssh_without_aws(self):
+        self.flow()
+        with patch.dict(os.environ, {"RECONCILE_SSH": "", "LOAD_APP_SSH": "app@host"}), \
+                patch.object(e, "observe_host_deployment", return_value=metadata()) as observe, \
+                patch.object(e.deployment, "Aws", side_effect=AssertionError("existing SSH must be used")):
+            self.assertEqual(e.main(self.argv), 0)
+        self.assertEqual(observe.call_args.args[-1], "app@host")
+
+    def test_host_observation_verifies_identity_image_health_and_excludes_secrets(self):
+        record = {"status": "success", "cluster": "cluster", "commit": "a" * 40,
+                  "registered": {name: "arn:aws:ecs:ap-northeast-2:123456789012:task-definition/commerce-settle-" + name + ":7"
+                                 for name in e.SERVICES},
+                  "images": {name: "registry/" + name + "@sha256:" + "a" * 64 for name in e.performance.IMAGES}}
+        rows = {}
+        for name in e.SERVICES:
+            rows[name] = {"Image": name, "State": {"Running": True, "Health": {"Status": "healthy"}},
+                "HostConfig": {"Memory": 536870912, "CpuShares": 64},
+                "Config": {"Env": ["DB_PASSWORD=must-stay-on-host", "PAYMENT_DB_POOL_SIZE=8"], "Labels": {
+                    "com.amazonaws.ecs.cluster": "cluster", "com.amazonaws.ecs.task-definition-family": "commerce-settle-" + name,
+                    "com.amazonaws.ecs.task-definition-version": "7", "com.amazonaws.ecs.task-arn":
+                    "arn:aws:ecs:ap-northeast-2:123456789012:task/cluster/" + "b" * 32}}}
+        images = dict(record["images"])
+        duplicate = False
+        def docker(command, **kwargs):
+            self.assertEqual(command[:2], ["sudo", "docker"])
+            command = command[1:]
+            if command[1] == "ps":
+                output = command[-1].rsplit("=", 1)[-1]
+                if duplicate:
+                    output += " " + output
+            elif command[1] == "inspect":
+                output = json.dumps([rows[command[-1]]])
+            else:
+                output = json.dumps([{"RepoDigests": [images[e.module_for(command[-1])]]}])
+            return subprocess.CompletedProcess(command, 0, output)
+        # Execute the exact function sent to SSH with a Docker response fixture.
+        def ssh(command, **kwargs):
+            namespace = {}
+            output = io.StringIO()
+            with patch.object(subprocess, "run", side_effect=docker), patch("sys.stdout", output):
+                exec(kwargs["input"], namespace)
+            self.assertNotIn("must-stay-on-host", output.getvalue())
+            return subprocess.CompletedProcess(command, 0, output.getvalue())
+        with patch.dict(os.environ, {"LOAD_REMOTE_DOCKER": "sudo docker"}), patch.object(e.subprocess, "run", side_effect=ssh):
+            actual = e.observe_host_deployment(record, metadata()["conditions"], 2, 0, "app@host")
+            self.assertEqual(actual["conditions"]["runtime"]["gateway"]["settings"], {"PAYMENT_DB_POOL_SIZE": "8"})
+            self.assertEqual(actual["deploymentObservation"]["ecsServiceRollout"], "NOT_QUERIED")
+            for field, value in (("com.amazonaws.ecs.cluster", "other"),
+                                 ("com.amazonaws.ecs.task-definition-version", "8"),
+                                 ("com.amazonaws.ecs.task-arn", "arn:aws:ecs:ap-northeast-2:999999999999:task/" + "b" * 32)):
+                with self.subTest(field=field):
+                    labels = rows["gateway"]["Config"]["Labels"]
+                    before = labels[field]
+                    labels[field] = value
+                    with self.assertRaisesRegex(ValueError, "differs from deployment record"):
+                        e.observe_host_deployment(record, metadata()["conditions"], 2, 0, "app@host")
+                    labels[field] = before
+            rows["gateway"]["State"]["Health"]["Status"] = "unhealthy"
+            with self.assertRaisesRegex(ValueError, "differs from deployment record"):
+                e.observe_host_deployment(record, metadata()["conditions"], 2, 0, "app@host")
+            rows["gateway"]["State"]["Health"]["Status"] = "healthy"
+            images["gateway"] = "registry/gateway@sha256:" + "f" * 64
+            with self.assertRaisesRegex(ValueError, "differs from deployment record"):
+                e.observe_host_deployment(record, metadata()["conditions"], 2, 0, "app@host")
+            duplicate = True
+            with self.assertRaisesRegex(RuntimeError, "gateway at container-count"):
+                e.observe_host_deployment(record, metadata()["conditions"], 2, 0, "app@host")
 
     def test_pending_reconciliation_preserves_run_before_snapshot_failure(self):
         checkpoints = []
@@ -211,16 +298,58 @@ class ReconciliationTransportTest(unittest.TestCase):
             remote = shlex.split(command[-1])
             return real_run(remote, **kwargs)
         try:
-            for remote in (False, True):
-                env = {key: "secret-token" for key in e.CREDENTIALS}
-                if remote:
-                    env["RECONCILE_SSH"] = "test@host"
-                checkpoints, results = [], []
-                with patch.dict(os.environ, env, clear=True), patch.object(e.reconcile.subprocess, "run", side_effect=ssh):
-                    self.assertEqual(e.reconcile.verify(args, on_run=checkpoints.append, on_result=results.append), 0)
-                self.assertEqual(checkpoints[0]["id"], "fixed")
-                self.assertEqual(results[0]["paymentOwner"]["PAYMENT"]["counts"], {"MATCH": 1})
+            with tempfile.TemporaryDirectory() as temp:
+                docker = Path(temp) / "docker.py"
+                senders = {"[operator:experiment]": {"current": "secret-token"}}
+                environment = ["SPRING_APPLICATION_JSON=" + json.dumps({"app": {"internal-auth": {"senders": senders}}})]
+                environment += [key + "=secret-token" for key in e.CREDENTIALS[1:]]
+                docker.write_text("import json,sys\nprint('settlement' if sys.argv[1]=='ps' else " +
+                                  repr(json.dumps([{"Config": {"Env": environment}}])) + ")\n")
+                cases = [(False, False), (True, False), (True, True)]
+                docker_command = shlex.join([sys.executable, str(docker)])
+                for remote, automatic in cases:
+                    env = {} if automatic else {key: "secret-token" for key in e.CREDENTIALS}
+                    if remote:
+                        env.update(RECONCILE_SSH="test@host", LOAD_REMOTE_DOCKER=docker_command)
+                    checkpoints, results = [], []
+                    with patch.dict(os.environ, env, clear=True), patch.object(e.reconcile.subprocess, "run", side_effect=ssh):
+                        self.assertEqual(e.reconcile.verify(args, on_run=checkpoints.append, on_result=results.append), 0)
+                    self.assertEqual(checkpoints[0]["id"], "fixed")
+                    self.assertEqual(results[0]["paymentOwner"]["PAYMENT"]["counts"], {"MATCH": 1})
             self.assertTrue(all(token == "Bearer secret-token" for _, _, token in calls))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_automatic_host_credential_is_not_forwarded_to_another_host(self):
+        with patch.dict(os.environ, {"RECONCILE_SSH": "app@host"}), \
+                patch.object(e.reconcile.subprocess, "run") as ssh, \
+                self.assertRaisesRegex(ValueError, "loopback"):
+            e.reconcile.request("https://other.example", "/internal/settlement-reconciliations", None,
+                                credential_name=e.CREDENTIALS[0])
+        ssh.assert_not_called()
+
+    def test_loopback_credentials_do_not_use_an_environment_proxy(self):
+        intercepted = []
+        class Proxy(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                intercepted.append(self.headers.get("Authorization"))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"{}")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        proxy = "http://127.0.0.1:" + str(server.server_port)
+        try:
+            with patch.dict(os.environ, {"http_proxy": proxy, "HTTP_PROXY": proxy,
+                    "https_proxy": proxy, "HTTPS_PROXY": proxy, "no_proxy": "", "NO_PROXY": ""}), \
+                    self.assertRaises(e.URLError):
+                e.reconcile.local_request("http://127.0.0.1:1", "/check", "synthetic-operator")
+            self.assertEqual(intercepted, [])
         finally:
             server.shutdown()
             server.server_close()
