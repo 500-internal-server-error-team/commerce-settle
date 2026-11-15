@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import secrets
 import subprocess
 import tempfile
 import time
@@ -45,6 +46,9 @@ class Aws:
                     timeout=timeout if timeout is not None else (660 if operation == "wait" else 60),
                 )
         except subprocess.CalledProcessError as error:
+            if (service, operation) == ("ssm", "put-parameter") and re.search(
+                    r"\(ParameterAlreadyExists\)", error.stderr or ""):
+                return {"AlreadyExists": True}
             if (service, operation) == ("ecr", "get-lifecycle-policy") and re.search(
                     r"\(LifecyclePolicyNotFoundException\)", error.stderr or ""):
                 return {}
@@ -141,11 +145,19 @@ def wait_for(aws, cluster, name, task):
             time.sleep(min(15, remaining))
 
 
-def prepare(aws, cluster, images, region, demo_auto_shipment=None, profile=None):
+def prepare(aws, cluster, images, region, demo_auto_shipment=None, profile=None,
+            settlement_operator_parameter=None):
     profile = capacity_profile() if profile is None else profile
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,255}", cluster):
         raise ValueError("an explicit ECS cluster name is required")
     account = image_identity(images["gateway"])[0]
+    if settlement_operator_parameter is not None and not re.fullmatch(
+            rf"arn:aws:ssm:{re.escape(region)}:{account}:parameter/commerce-settle/app/"
+            r"[A-Za-z0-9_./-]+/SPRING_APPLICATION_JSON", settlement_operator_parameter):
+        raise ValueError("Settlement operator configuration must reference this account/region's app JSON parameter")
+    if settlement_operator_parameter is not None and any(
+            part in {"", ".", ".."} for part in settlement_operator_parameter.split(":parameter/", 1)[1].split("/")):
+        raise ValueError("Settlement configuration parameter requires an exact nonempty path")
     if aws("sts", "get-caller-identity").get("Account") != account:
         raise RuntimeError("caller and release image accounts differ")
     services = describe(aws, cluster, ORDER)
@@ -183,6 +195,16 @@ def prepare(aws, cluster, images, region, demo_auto_shipment=None, profile=None)
         if name != "postgres":
             containers[0]["image"] = images[module_for(name)]
         apply_capacity(containers[0], name, profile)
+        if name == "settlement" and settlement_operator_parameter is not None:
+            container = containers[0]
+            if any(row["name"] == "SPRING_APPLICATION_JSON" for row in container.get("environment", [])):
+                raise ValueError("preserve the existing inline Settlement configuration")
+            bound = [row for row in container.get("secrets", []) if row["name"] == "SPRING_APPLICATION_JSON"]
+            if bound and (len(bound) != 1 or bound[0]["valueFrom"] != settlement_operator_parameter):
+                raise ValueError("preserve the existing Settlement configuration parameter")
+            if not bound:
+                container.setdefault("secrets", []).append(
+                    {"name": "SPRING_APPLICATION_JSON", "valueFrom": settlement_operator_parameter})
         if "memory" in task:
             task["memory"] = str(max(int(task["memory"]), sum(c.get("memory", 0) for c in task["containerDefinitions"])))
         if name == "postgres":
@@ -228,22 +250,28 @@ def verify_https(origin):
                 raise RuntimeError("public Gateway OpenAPI response is missing")
 
 
-def rollback_baseline(services, cluster, images, region, demo_auto_shipment=None, profile=None):
+def rollback_baseline(services, cluster, images, region, demo_auto_shipment=None, profile=None,
+                      settlement_operator_parameter=None, bootstrap_settlement_operator=False):
     profile = capacity_profile() if profile is None else profile
     return {
         "status": "prepared", "cluster": cluster, "region": region,
         "previous": {name: value["taskDefinition"] for name, value in services.items()},
         "images": images,
         "demo_auto_shipment": demo_auto_shipment,
+        "settlement_operator_parameter": settlement_operator_parameter,
+        "bootstrap_settlement_operator": bootstrap_settlement_operator,
         "capacity_profile_sha256": hashlib.sha256(json.dumps(
             profile, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
     }
 
 
-def deploy(aws, cluster, images, region, verify, save, baseline, demo_auto_shipment=None):
+def deploy(aws, cluster, images, region, verify, save, baseline, demo_auto_shipment=None,
+           settlement_operator_parameter=None, bootstrap_settlement_operator=False):
     profile = capacity_profile()
-    services, tasks = prepare(aws, cluster, images, region, demo_auto_shipment, profile)
-    expected = rollback_baseline(services, cluster, images, region, demo_auto_shipment, profile)
+    services, tasks = prepare(aws, cluster, images, region, demo_auto_shipment, profile,
+                              settlement_operator_parameter)
+    expected = rollback_baseline(services, cluster, images, region, demo_auto_shipment, profile,
+                                 settlement_operator_parameter, bootstrap_settlement_operator)
     if any(baseline.get(key) != value for key, value in expected.items()):
         raise RuntimeError("saved rollback baseline differs from the current release or services")
     record = {
@@ -254,6 +282,19 @@ def deploy(aws, cluster, images, region, verify, save, baseline, demo_auto_shipm
     }
     save(record)
     try:
+        if bootstrap_settlement_operator:
+            if settlement_operator_parameter is None:
+                raise ValueError("operator bootstrap requires its explicit SSM JSON parameter")
+            # Only an explicit bootstrap writes a credential; never overwrite an existing source.
+            value = json.dumps({"app": {"internal-auth": {"senders": {
+                "[operator:experiment]": {"current": secrets.token_urlsafe(32)}}}}})
+            created = aws("ssm", "put-parameter", payload={
+                "Name": "/" + settlement_operator_parameter.split(":parameter/", 1)[1],
+                "Description": "Settlement reconciliation operator; canonical lab bootstrap",
+                "Value": value, "Type": "SecureString", "KeyId": "alias/aws/ssm", "Overwrite": False})
+            record["operator_bootstrap"] = {"created": not created.get("AlreadyExists", False),
+                                             "parameter": settlement_operator_parameter}
+            save(record)
         for name in ORDER:
             if name not in tasks:
                 continue
@@ -447,10 +488,19 @@ def main():
     parser.add_argument("--baseline-sha256")
     parser.add_argument("--demo-auto-shipment", choices=("true", "false", "preserve"),
                         default="preserve")
+    parser.add_argument("--settlement-operator-parameter", default="preserve",
+                        help="Existing SSM SecureString app JSON ARN; default preserves current settings, never creates credentials")
+    parser.add_argument("--bootstrap-settlement-operator", choices=("true", "false"), default="false",
+                        help="Explicit lab bootstrap: create missing encrypted operator JSON without overwriting existing credentials")
     args = parser.parse_args()
     demo_auto_shipment = (None if args.demo_auto_shipment == "preserve"
                           else args.demo_auto_shipment == "true")
+    settlement_operator_parameter = (None if args.settlement_operator_parameter == "preserve"
+                                     else args.settlement_operator_parameter)
+    bootstrap_settlement_operator = args.bootstrap_settlement_operator == "true"
     try:
+        if bootstrap_settlement_operator and settlement_operator_parameter is None:
+            raise ValueError("operator bootstrap requires an explicit SSM JSON parameter")
         origin = public_origin(args.public_url)
         images = read_images(args.images_directory, args.release, args.commit, args.region)
 
@@ -484,13 +534,15 @@ def main():
         if args.prepare_only:
             profile = capacity_profile()
             services, _ = prepare(Aws(args.region), args.cluster, images, args.region,
-                                  demo_auto_shipment, profile)
+                                  demo_auto_shipment, profile, settlement_operator_parameter)
             save(rollback_baseline(services, args.cluster, images, args.region,
-                                   demo_auto_shipment, profile))
+                                   demo_auto_shipment, profile, settlement_operator_parameter,
+                                   bootstrap_settlement_operator))
             print("Rollback baseline prepared; no AWS changes made.")
             return 0
         record = deploy(aws, args.cluster, images, args.region,
-               lambda: verify_https(origin), save, baseline, demo_auto_shipment)
+               lambda: verify_https(origin), save, baseline, demo_auto_shipment,
+               settlement_operator_parameter, bootstrap_settlement_operator)
         finish_cleanup(aws, record, save)
     except (Exception, KeyboardInterrupt) as error:
         # The record contains only image/revision references, never task environments.

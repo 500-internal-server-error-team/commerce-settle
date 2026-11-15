@@ -411,6 +411,23 @@ class BusinessMetricsIntegrationTest {
   }
 
   @Test
+  void payoutTotalDoesNotRepeatOriginLookupForEveryUnpaidItem() throws Exception {
+    for (int i = 0; i < 32; i++) fact(12);
+    String plan =
+        jdbc.queryForObject(
+            "EXPLAIN (ANALYZE, FORMAT JSON) "
+                + BusinessMetricsConfiguration.cohorts().get("payout.total"),
+            String.class);
+    assertThat(maxSubplanLoops(new ObjectMapper().readTree(plan))).isLessThanOrEqualTo(1);
+  }
+
+  private static long maxSubplanLoops(com.fasterxml.jackson.databind.JsonNode node) {
+    long loops = node.has("Subplan Name") ? node.path("Actual Loops").asLong() : 0;
+    for (var child : node) loops = Math.max(loops, maxSubplanLoops(child));
+    return loops;
+  }
+
+  @Test
   void payoutCountsEachItemOnceAndKeepsUnpaidAndRefundTerminalCohortsSeparate() {
     UUID paid = fact(12), unpaid = fact(15), refunded = fact(20), missing = fact(25);
     jdbc.update("DELETE FROM settlement.inbox WHERE result_ref=?", missing);
