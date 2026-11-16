@@ -1045,7 +1045,7 @@ Payment 요청·승인 및 Commerce 접수·결과 처리기는 전용 실행 �
 
 `PAYMENT_APPROVAL_CONCURRENCY`(1~1024)는 전체 승인 슬롯 상한이며, 그 안에서 `PAYMENT_APPROVAL_RETRY_CONCURRENCY`(기본 1, 1~64·전체 상한 미만)를 재시도·만료 임대에 남깁니다. 전체 동시성 1은 기존처럼 신규·재시도를 한 슬롯에서 처리합니다. 전체 상한과 인스턴스 수를 곱한 값을 PG별 허용량·HTTP 자원과 비교하고 신규 승인 목표에는 예약 슬롯을 제외한 예산을 사용합니다. `목표 외부 승인 TPS × 평균 PG 응답시간(초) ÷ 목표 이용률`은 필요한 진행 중 호출 수의 산정 출발점이며, 조회·재시도와 DB 병목을 별도로 반영해야 합니다. JDBC 풀은 짧은 선점·준비·결과 반영과 다른 업무의 동시 사용으로 산정합니다. PG 호출 동안 커넥션을 반환하므로 PG 슬롯 수를 JDBC 풀 이하로 고정하지 않습니다. 설정 상한은 자원 사용이나 목표 TPS를 보장하지 않습니다.
 
-Commerce는 `COMMERCE_PAYMENT_ACCEPTED_CONCURRENCY`와 `COMMERCE_ORDER_RESULT_CONCURRENCY`(각 1~64, 기본 2)로 접수·결과 반영을 조정합니다. 두 처리기의 합과 주문 API·Outbox가 같은 JDBC 풀을 사용하므로 연결 대기와 Inbox 준비 후 지연을 함께 확인합니다. 같은 주문의 잠금·멱등성·선행 결과 대기와 이벤트별 트랜잭션은 유지합니다.
+Commerce는 `COMMERCE_PAYMENT_ACCEPTED_CONCURRENCY`와 `COMMERCE_ORDER_RESULT_CONCURRENCY`(각 1~64, 기본 2)로 접수·결과 반영을 조정합니다. Outbox 발행은 `COMMERCE_OUTBOX_MAX_IN_FLIGHT`(1~64, 기본 8)로 동시에 전송·발행 완료 기록 중인 이벤트 수를 조정하며, 미발행 `commerce.outbox` 적체와 도래 지연으로 확인합니다. 두 처리기의 합과 주문 API·Outbox가 같은 JDBC 풀을 사용하므로 연결 대기와 Inbox 준비 후 지연을 함께 확인합니다. 같은 주문의 잠금·멱등성·선행 결과 대기와 이벤트별 트랜잭션은 유지합니다.
 
 
 Listener·Outbox를 활성화했을 때의 기본 동시성·연결 풀은 다음과 같습니다. JDBC 값은 JVM별 상한이며, 인스턴스를 늘리면 합산해 DB·외부 대역 한도와 비교합니다.
