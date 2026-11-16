@@ -22,7 +22,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 public class OutboxConfiguration {
   @Bean(defaultCandidate = false)
   ThreadPoolTaskExecutor outboxExecutor(@Value("${app.outbox.max-in-flight:8}") int maxInFlight) {
-    if (maxInFlight < 1) {
+    if (maxInFlight < 1 || maxInFlight > 64) {
       throw new IllegalArgumentException("Invalid outbox executor limit");
     }
     var executor = new ThreadPoolTaskExecutor();

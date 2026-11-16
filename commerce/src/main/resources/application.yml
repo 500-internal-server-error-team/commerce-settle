@@ -198,7 +198,8 @@ app:
   outbox:
     enabled: ${APP_OUTBOX_ENABLED:false}
     recovery-interval-ms: 1000
-    max-in-flight: 8
+    # 동시에 Kafka 전송·발행 완료 기록 중인 이벤트 상한(1~64). 결과 기록이 주문 API와 같은 JDBC 풀을 쓴다.
+    max-in-flight: ${COMMERCE_OUTBOX_MAX_IN_FLIGHT:8}
     lease-ms: 240000
     max-attempts: 10
   auth:
