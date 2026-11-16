@@ -23,6 +23,26 @@ if (!order || Array.isArray(order) || typeof order !== 'object'
   throw new Error('ORDER_FILE에는 로그인 본문이 아닌 견적·주소를 반영한 주문 본문이 필요합니다.');
 }
 
+// 다중 구매자·상품: 반복 i는 구매자 i % N(BUYER_TOKENS·addressIds)과 상품 i % M(products)으로 주문한다.
+const tokens = __ENV.BUYER_TOKENS ? __ENV.BUYER_TOKENS.split(',') : [__ENV.BUYER_TOKEN];
+let variants = null;
+if (__ENV.ORDER_VARIANTS_FILE) {
+  try {
+    variants = JSON.parse(open(__ENV.ORDER_VARIANTS_FILE));
+  } catch (_) {
+    throw new Error('ORDER_VARIANTS_FILE에 유효한 JSON 파일을 지정하세요.');
+  }
+  if (!variants || !Array.isArray(variants.products) || variants.products.length < 1
+      || variants.products.some((p) => !p || !p.productId || !Number.isInteger(p.expectedProductVersion)
+        || !Number.isInteger(p.expectedTotalAmount) || p.expectedTotalAmount < 1)
+      || !Array.isArray(variants.addressIds) || variants.addressIds.length !== tokens.length
+      || variants.addressIds.some((a) => !a) || tokens.some((t) => !t)) {
+    throw new Error('ORDER_VARIANTS_FILE의 products·addressIds와 BUYER_TOKENS 수를 확인하세요.');
+  }
+} else if (tokens.length !== 1) {
+  throw new Error('BUYER_TOKENS에는 ORDER_VARIANTS_FILE이 필요합니다.');
+}
+
 const baseUrl = (__ENV.BASE_URL || '').replace(/\/+$/, '');
 const rate = Number(__ENV.RATE || 200);
 const seconds = Number(__ENV.DURATION_SECONDS || 60);
@@ -68,12 +88,17 @@ export default function () {
       measurementEnd: new Date(exec.scenario.startTime + seconds * 1000).toISOString(),
     }));
   }
+  const buyerIndex = iteration % tokens.length;
+  const payload = variants
+    ? JSON.stringify(Object.assign({}, order, variants.products[iteration % variants.products.length],
+      { addressId: variants.addressIds[buyerIndex] }))
+    : body;
   const startedAt = new Date().toISOString();
   console.log('ORDER_START ' + JSON.stringify({ phase, iteration, startedAt }));
-  const response = http.post(`${baseUrl}/api/orders`, body, {
+  const response = http.post(`${baseUrl}/api/orders`, payload, {
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${__ENV.BUYER_TOKEN}`,
+      Authorization: `Bearer ${tokens[buyerIndex]}`,
       'Idempotency-Key': `${__ENV.RUN_ID}-${phase === 'measurement' ? 'load' : 'warmup'}-${iteration}`,
     },
     tags: { name: 'POST /api/orders' },
@@ -95,7 +120,7 @@ export default function () {
     status: response.status, orderId: id, code, traceId,
     clientErrorCode: response.error_code || null,
     clientError: response.error
-      ? String(response.error).split(__ENV.BUYER_TOKEN).join('<redacted>')
+      ? tokens.reduce((text, token) => text.split(token).join('<redacted>'), String(response.error))
         .replace(/https?:\/\/\S+/g, '<url>').replace(/[\r\n]/g, ' ').slice(0, 200)
       : null,
     durationMs: response.timings.duration,
