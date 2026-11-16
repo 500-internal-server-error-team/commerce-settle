@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -161,28 +162,64 @@ def session_for(api, kind, owned, sessions, budget):
     return session["token"]
 
 
-def prepare(api, buyer, seller, run_id, planned):
+TEST_ADDRESS = {"recipient": "k6 시험", "phone": "000-0000-0000", "postalCode": "00001",
+                "addressLine1": "가상시 부하 시험용 주소", "addressLine2": "", "isDefault": False}
+
+
+def prepare(api, buyer, seller, run_id, planned, products=1):
     key = lambda operation: run_id + "-" + operation
     addresses = api.call("GET", "/api/buyers/me/addresses?size=100", token=buyer)["items"]
     if addresses:
         address = addresses[0]
     else:
-        address = api.call("POST", "/api/buyers/me/addresses", {
-            "recipient": "k6 시험", "phone": "000-0000-0000", "postalCode": "00001",
-            "addressLine1": "가상시 부하 시험용 주소", "addressLine2": "",
-            "isDefault": False,
-        }, buyer, key("address"))
-    product = api.call("POST", "/api/sellers/me/products", {
-        "name": "k6-" + run_id, "unitPrice": 1000, "status": "ON_SALE",
-    }, seller, key("product"))
+        address = api.call("POST", "/api/buyers/me/addresses", TEST_ADDRESS, buyer, key("address"))
+    ids = []
+    for index in range(products):
+        suffix = "" if index == 0 else "-" + str(index)
+        product = api.call("POST", "/api/sellers/me/products", {
+            "name": "k6-" + run_id + suffix, "unitPrice": 1000, "status": "ON_SALE",
+        }, seller, key("product" + suffix))
+        ids.append(product["id"])
+    # 반복 i는 상품 i % products로 가므로 상품당 최대 ceil(planned / products)건이다.
+    per_product = math.ceil(planned / products)
     plan = {"runId": run_id, "baseUrl": api.base, "createdAt": now(),
-            "productId": product["id"], "addressId": address["id"],
-            "plannedOrders": planned, "stockPrepared": planned + 1 + max(100, planned // 10)}
+            "productId": ids[0], "addressId": address["id"],
+            "plannedOrders": planned, "stockPrepared": per_product + 1 + max(100, per_product // 10)}
+    if products > 1:
+        plan["productIds"] = ids
     return plan
 
 
-def prepare_order(api, buyer, seller, plan):
-    product = plan["productId"]
+def register_buyers(api, run_id, count, owned, sessions):
+    """공개 가입 API로 이번 실행 전용 구매자를 만든다. 비밀번호는 메모리에만 둔다."""
+    buyers = []
+    for index in range(count):
+        email = "k6-" + run_id[:16] + "-" + format(index, "04d") + "@example.test"
+        password = secrets.token_urlsafe(24)
+        key = run_id + "-buyer-" + str(index)
+        account = api.call("POST", "/api/buyers", {"email": email, "password": password,
+                                                   "displayName": "k6 " + str(index)}, key=key)
+        session = api.call("POST", "/api/buyer-sessions", {"email": email, "password": password})
+        token = session.get("token")
+        if not isinstance(token, str) or len(token) < 32:
+            raise RuntimeError("가입 구매자 로그인 응답에 유효한 token이 없습니다.")
+        owned.append(token)
+        expiry = timestamp(session["expiresAt"])
+        sessions.setdefault("_issued", {})[token] = expiry
+        address = api.call("POST", "/api/buyers/me/addresses", TEST_ADDRESS, token, key + "-address")
+        buyers.append({"accountId": account["id"], "addressId": address["id"],
+                       "token": token, "expiry": expiry})
+    return buyers
+
+
+def require_crowd_sessions(crowd, seconds):
+    # 가입 구매자 세션은 비밀번호를 다시 쓰지 않으므로 갱신하지 않는다.
+    if any(buyer["expiry"] - time.time() < seconds + 30 for buyer in crowd):
+        raise RuntimeError("가입 구매자 세션이 다음 단계보다 먼저 만료됩니다.")
+
+
+def prepare_order(api, buyer, seller, plan, product=None):
+    product = product or plan["productId"]
     inventory_path = "/api/sellers/me/products/" + product + "/inventory"
     inventory = api.call("GET", inventory_path, token=seller)
     # 새로 만든 상품만 준비한다. 기존 공유 상품의 가용량·예약량을 덮어쓰지 않는다.
@@ -192,7 +229,7 @@ def prepare_order(api, buyer, seller, plan):
     api.call("POST", inventory_path + "-adjustments", {
         "delta": plan["stockPrepared"], "expectedVersion": inventory["version"],
         "reason": "k6 주문 부하 시험 준비",
-    }, seller, plan["runId"] + "-inventory")
+    }, seller, plan["runId"] + "-inventory" + ("" if product == plan["productId"] else "-" + product))
     quote_input = {"productId": product, "quantity": 1, "eventId": None,
                    "buyerCouponId": None, "mileageAmount": 0, "externalMethod": "CREDIT_CARD"}
     quote = api.call("POST", "/api/order-quotes", quote_input, buyer)
@@ -259,6 +296,8 @@ def cleanup_container(name, run_id):
 def inject(base, buyer, plan, directory, args, phase="measurement"):
     target, network = docker_target(base)
     name = "cs-orders-" + plan["runId"] + "-" + phase
+    tokens = [buyer] if isinstance(buyer, str) else list(buyer)
+    buyer = tokens[0]
     environment = {**os.environ, "BASE_URL": target, "BUYER_TOKEN": buyer,
                    "RUN_ID": plan["runId"], "RATE": str(args.rate),
                    "ORDER_FILE": "/work/order.json",
@@ -271,8 +310,13 @@ def inject(base, buyer, plan, directory, args, phase="measurement"):
                "--cpus", str(getattr(args, "generator_cpus", 2)),
                "-v", str(Path(__file__).parent) + ":/scripts:ro",
                "-v", str(directory) + ":/work"]
-    for key in ("BASE_URL", "BUYER_TOKEN", "RUN_ID", "RATE", "ORDER_FILE", "DURATION_SECONDS",
-                "PRE_ALLOCATED_VUS", "MAX_VUS", "LOAD_PHASE"):
+    keys = ["BASE_URL", "BUYER_TOKEN", "RUN_ID", "RATE", "ORDER_FILE", "DURATION_SECONDS",
+            "PRE_ALLOCATED_VUS", "MAX_VUS", "LOAD_PHASE"]
+    if (directory / "order-variants.json").is_file():
+        # 토큰은 파일·명령 인자에 쓰지 않고 환경 변수 이름만 전달한다.
+        environment.update(BUYER_TOKENS=",".join(tokens), ORDER_VARIANTS_FILE="/work/order-variants.json")
+        keys += ["BUYER_TOKENS", "ORDER_VARIANTS_FILE"]
+    for key in keys:
         command += ["-e", key]
     summary_name = "k6-summary.json" if phase == "measurement" else "k6-warmup-summary.json"
     command += [K6_IMAGE, "run", "--quiet", "--log-format=raw", "--log-output=stdout",
@@ -284,7 +328,8 @@ def inject(base, buyer, plan, directory, args, phase="measurement"):
             process = subprocess.Popen(command, env=environment, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT, text=True)
             for line in process.stdout:
-                line = line.replace(buyer, "<redacted>")
+                for token in tokens:
+                    line = line.replace(token, "<redacted>")
                 if line.startswith(("ORDER_PHASE ", "ORDER_START ", "ORDER ")):
                     started = line.startswith("ORDER_START ")
                     # Keep malformed payloads too: a missing row must remain a collection failure.
@@ -437,8 +482,15 @@ def database_orders(host, product, deadline, costs=None):
 
 
 def orders_for_product(api, buyer, product, deadline, costs=None):
+    wanted = {product} if isinstance(product, str) else set(product)
     if getattr(api, "cohort_data_ssh", None):
-        return database_orders(api.cohort_data_ssh, product, deadline, costs)
+        result = {}
+        for item in sorted(wanted):
+            part, complete, error = database_orders(api.cohort_data_ssh, item, deadline, costs)
+            result.update(part)
+            if not complete:
+                return result, False, error
+        return result, True, None
     result = {}
     page = 0
     while True:
@@ -455,7 +507,7 @@ def orders_for_product(api, buyer, product, deadline, costs=None):
             for order in items:
                 if costs is not None:
                     costs["scannedOrders"] += 1
-                if order["productId"] == product:
+                if order["productId"] in wanted:
                     result[order["id"]] = {"status": order["status"]}
         except ApiError as error:
             return result, False, error.evidence()
@@ -478,9 +530,18 @@ def drain(api, buyer, plan, ledger, seconds, checkpoint=None):
                         "count": ledger["invalidRows"]})
     if plan.get("smokeAttempted") and not plan.get("smokeOrderId") and not plan.get("smokeRejected"):
         unknown.append({"phase": "smoke", "iteration": 0, "reason": "acceptance_unknown"})
+    tokens = [buyer] if isinstance(buyer, str) else list(buyer)
+    if getattr(api, "cohort_data_ssh", None):
+        tokens = tokens[:1]  # 상품 기준 DB 조회는 구매자와 무관하므로 한 번만 읽는다.
+    products = plan.get("productIds") or [plan["productId"]]
     while True:
         scan_started = time.monotonic()
-        found, snapshot_complete, error = orders_for_product(api, buyer, plan["productId"], deadline, costs)
+        found, snapshot_complete, error = {}, True, None
+        for token in tokens:  # 주문 목록은 구매자 본인만 조회할 수 있다.
+            part, snapshot_complete, error = orders_for_product(api, token, products, deadline, costs)
+            found.update(part)
+            if not snapshot_complete:
+                break
         orders.update(found)  # A partial/error snapshot never erases previously observed orders.
         smoke_seen = orders.get(plan.get("smokeOrderId"), smoke_seen)
         orders.pop(plan.get("smokeOrderId"), None)
@@ -583,6 +644,10 @@ def parser():
     result.add_argument("--allow-pg-declines", action="store_true",
                         help="기획 PG 거절을 PAID와 별도 종결로 허용. 실제 PG 결과·재고 복구·확정 TPS는 별도 대조")
     result.add_argument("--seconds", type=int, default=60)
+    result.add_argument("--buyers", type=int, default=1,
+                        help="구매자 수: 1..500 (기본 1). 2 이상이면 공개 가입 API로 실행 전용 구매자를 추가")
+    result.add_argument("--products", type=int, default=1,
+                        help="시험 상품 수: 1..200 (기본 1). 반복 i는 구매자 i%%N·상품 i%%M으로 주문")
     result.add_argument("--warmup-seconds", type=int, default=0)
     result.add_argument("--pre-allocated-vus", type=int,
                         help="사전 VU 수 (기본 max(400, TPS×2))")
@@ -641,6 +706,14 @@ def main(argv=None):
             or not 1 <= args.pre_allocated_vus <= args.max_vus <= 10000
             or not 1 <= args.smoke_timeout <= 300 or not 0 <= args.drain_seconds <= 900):
         arguments.error("tps=1..2000, seconds=1..900, warmup=0..300, VU=1..10000, smoke=1..300초, drain=0..900초 범위입니다.")
+    if not 1 <= args.buyers <= 500 or not 1 <= args.products <= 200:
+        arguments.error("buyers=1..500, products=1..200 범위입니다.")
+    if original and (args.buyers > 1 or args.products > 1 or resumed_plan.get("buyerCount", 1) > 1):
+        # 가입 구매자의 세션·비밀번호를 보존하지 않으므로 다른 프로세스에서 주문을 조회할 수 없다.
+        arguments.error("다중 구매자 실행은 --resume을 지원하지 않습니다.")
+    if args.buyers > 1 and (args.smoke_timeout + args.warmup_seconds + args.seconds
+                            + args.drain_seconds * (2 if args.warmup_seconds else 1) + 180 > 1500):
+        arguments.error("가입 구매자 세션(30분)은 갱신하지 않으므로 전체 단계 예산이 1500초 이하여야 합니다.")
     run_id = resumed_plan["runId"] if original else uuid.uuid4().hex
     requested = (original / ("recovery-" + uuid.uuid4().hex) if original else
                  args.output_dir or ROOT / "tests/load/work" / ("orders-" + run_id)).absolute()
@@ -660,7 +733,8 @@ def main(argv=None):
     elif args.cohort_data_ssh is None:
         args.cohort_data_ssh = os.environ.get("LOAD_COHORT_DATA_SSH")
     api.cohort_data_ssh = args.cohort_data_ssh
-    plan, buyer, seller = resumed_plan or {}, None, None
+    plan, buyer, seller, crowd = resumed_plan or {}, None, None, []
+    everyone = lambda: [extra["token"] for extra in crowd] or [buyer]
     ledger_root = original or directory
     report = {"startedAt": now(), "baseUrl": target, "runId": run_id, "k6Image": K6_IMAGE,
               "rate": args.rate, "durationSeconds": args.seconds, "passed": False,
@@ -711,16 +785,33 @@ def main(argv=None):
                                             "warmupSeconds": plan.get("warmupSeconds")})
         else:
             total = args.rate * (args.seconds + args.warmup_seconds)
-            plan = prepare(api, buyer, seller, run_id, total)
+            plan = prepare(api, buyer, seller, run_id, total, args.products)
             plan.update(plannedOrders=args.rate * args.seconds, warmupOrders=args.rate * args.warmup_seconds,
                         measurementSeconds=args.seconds, warmupSeconds=args.warmup_seconds,
-                        allowPgDeclines=args.allow_pg_declines, cohortDataSsh=args.cohort_data_ssh)
+                        allowPgDeclines=args.allow_pg_declines, cohortDataSsh=args.cohort_data_ssh,
+                        buyerCount=args.buyers)
             write_json(directory / "plan.json", plan)
+            if args.buyers > 1:
+                # 주문 이력이 없는 새 구매자만 주문해 배출 대조가 이번 실행의 주문만 읽게 한다.
+                print(f"시험 구매자 {args.buyers}명 가입·로그인·배송지 등록 중", flush=True)
+                crowd = register_buyers(api, run_id, args.buyers, owned, sessions)
+                plan["addedBuyers"] = [{key: extra[key] for key in ("accountId", "addressId")}
+                                       for extra in crowd]
+                plan["addressId"] = crowd[0]["addressId"]
+                write_json(directory / "plan.json", plan)
             body = prepare_order(api, buyer, seller, plan)
             write_json(directory / "order.json", body)
+            if args.buyers > 1 or args.products > 1:
+                variants = [body] + [prepare_order(api, buyer, seller, plan, product)
+                                     for product in plan["productIds"][1:]] if args.products > 1 else [body]
+                write_json(directory / "order-variants.json", {
+                    "products": [{key: value[key] for key in
+                                  ("productId", "expectedProductVersion", "expectedTotalAmount")}
+                                 for value in variants],
+                    "addressIds": [extra["addressId"] for extra in crowd] or [plan["addressId"]]})
             plan["smokeAttempted"] = True
             write_json(directory / "plan.json", plan)
-            plan["smokeOrderId"] = smoke(api, buyer, body, run_id, args.smoke_timeout, plan,
+            plan["smokeOrderId"] = smoke(api, everyone()[0], body, run_id, args.smoke_timeout, plan,
                                         lambda: write_json(directory / "plan.json", plan))
             plan["smokePaid"] = plan.get("smokeStatus") == "PAID"
             write_json(directory / "plan.json", plan)
@@ -734,7 +825,8 @@ def main(argv=None):
                 report["phase"] = phase
                 duration = args.warmup_seconds if phase == "warmup" else args.seconds
                 buyer = session_for(api, "BUYER", owned, sessions, duration + 30)
-                phase_code = inject(target, buyer, plan, directory, args, phase)
+                require_crowd_sessions(crowd, duration + args.drain_seconds)
+                phase_code = inject(target, everyone(), plan, directory, args, phase)
                 report.setdefault("k6PhaseExitCodes", {})[phase] = phase_code
                 if phase == "measurement":
                     code = phase_code
@@ -748,7 +840,7 @@ def main(argv=None):
                     check_coverage(warm_ledger, warm_summary, "warmup")
                     report["warmupInjectionPassed"] = injection_passed(
                         plan, warm_ledger, warm_summary, phase_code, "warmup")
-                    warm = drain(api, buyer, plan, warm_ledger, args.drain_seconds,
+                    warm = drain(api, everyone(), plan, warm_ledger, args.drain_seconds,
                                  lambda value: write_json(directory / "warmup-states.json", value))
                     if (not report["warmupInjectionPassed"] or warm["recoveryRequired"]
                             or not warm["drainComplete"]
@@ -802,7 +894,7 @@ def main(argv=None):
                                 "reason": "injection_interrupted_without_complete_coverage"})
                 report.update(k6ExitCode=code, droppedIterations=metric(summary, "dropped_iterations", "count"))
                 buyer = session_for(api, "BUYER", owned, sessions, args.drain_seconds + 30)
-                observed = drain(api, buyer, plan, ledger, args.drain_seconds,
+                observed = drain(api, everyone(), plan, ledger, args.drain_seconds,
                                  lambda value: write_json(directory / "order-states.json", value))
                 report.update(drainComplete=observed["drainComplete"],
                               unresolvedRequests=observed["unresolvedRequests"],
@@ -826,20 +918,27 @@ def main(argv=None):
                 if isinstance(error, ApiError):
                     report["drainFailureEvidence"] = error.evidence()
         if plan and seller and not (args.prepare_only and exit_code == 0):
-            path = "/api/sellers/me/products/" + plan["productId"]
-            try:
-                seller = session_for(api, "SELLER", owned, sessions, 30)
-                product = api.call("GET", path, token=seller)
-                if product.get("status") != "STOPPED":
-                    api.call("PUT", path, {"name": product["name"], "unitPrice": product["unitPrice"],
-                                          "status": "STOPPED", "expectedVersion": product["version"]},
-                             seller, run_id + "-stop-product")
-            except Exception as error:
-                cleanup_errors.append("시험 상품 판매 중지 미확인: " + type(error).__name__)
-            try:
-                report["inventoryObservation"] = api.call("GET", path + "/inventory", token=seller)
-            except Exception as error:
-                cleanup_errors.append("시험 재고 관측 미확인: " + type(error).__name__)
+            ids = plan.get("productIds") or [plan["productId"]]
+            for product_id in ids:
+                path = "/api/sellers/me/products/" + product_id
+                suffix = "" if product_id == plan["productId"] else "-" + product_id
+                try:
+                    seller = session_for(api, "SELLER", owned, sessions, 30)
+                    product = api.call("GET", path, token=seller)
+                    if product.get("status") != "STOPPED":
+                        api.call("PUT", path, {"name": product["name"], "unitPrice": product["unitPrice"],
+                                              "status": "STOPPED", "expectedVersion": product["version"]},
+                                 seller, run_id + "-stop-product" + suffix)
+                except Exception as error:
+                    cleanup_errors.append("시험 상품 판매 중지 미확인: " + type(error).__name__)
+                try:
+                    inventory = api.call("GET", path + "/inventory", token=seller)
+                    if len(ids) == 1:
+                        report["inventoryObservation"] = inventory
+                    else:
+                        report.setdefault("inventoryObservations", {})[product_id] = inventory
+                except Exception as error:
+                    cleanup_errors.append("시험 재고 관측 미확인: " + type(error).__name__)
         for token in owned:
             try:
                 api.call("DELETE", "/api/sessions/current", token=token)
@@ -862,7 +961,8 @@ def main(argv=None):
         if body_path.is_file():
             try:
                 body = json.loads(body_path.read_text())
-                report["workload"] = {"buyerCount": 1, "productCount": 1,
+                report["workload"] = {"buyerCount": plan.get("buyerCount", 1),
+                                      "productCount": len(plan.get("productIds") or [1]),
                     **{key: body.get(key) for key in ("quantity", "externalMethod", "mileageAmount", "eventId", "buyerCouponId")}}
             except (OSError, ValueError, AttributeError) as error:
                 report["workloadUnverified"] = type(error).__name__

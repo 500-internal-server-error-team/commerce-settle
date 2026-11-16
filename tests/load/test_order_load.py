@@ -980,5 +980,151 @@ process.stdout.write(JSON.stringify(results));
         self.assertNotIn("secret", str(caught.exception))
 
 
+class SpreadFixture(ApiFixture):
+    """가입 구매자·여러 상품을 구분하는 대역. 토큰·주소·상품 ID를 요청마다 새로 만든다."""
+
+    def __init__(self, base):
+        super().__init__(base)
+        self.signups, self.products = [], []
+
+    def call(self, method, path, body=None, token=None, key=None):
+        if path == "/api/buyers":
+            assert set(body) == set(SCHEMAS["BuyerRegistration"]["required"]) and len(body["password"]) >= 12
+            self.signups.append((body["email"], key))
+            return {"id": "account-" + str(len(self.signups))}
+        if path == "/api/buyer-sessions":
+            self.calls.append((method, path, None, token, key))
+            assert set(body) == set(SCHEMAS["LoginRequest"]["required"])
+            index = [email for email, _ in self.signups].index(body["email"])
+            return {"token": "crowd-" + str(index) + "-" * 40,
+                    "expiresAt": (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()}
+        if path == "/api/buyers/me/addresses" and method == "POST":
+            self.calls.append((method, path, body, token, key))
+            assert set(body) == set(SCHEMAS["AddressCreate"]["required"])
+            return {"id": "address-" + token[:7]}
+        if path == "/api/sellers/me/products" and method == "POST":
+            super().call(method, path, body, token, key)
+            self.products.append("product" if not self.products else "product-" + str(len(self.products)))
+            return {"id": self.products[-1]}
+        if path.startswith("/api/sellers/me/products/") and not path.endswith(("/inventory", "-adjustments")):
+            self.calls.append((method, path, body, token, key))
+            return {} if method == "PUT" else {"name": "owned", "unitPrice": 1200, "version": 9}
+        return super().call(method, path, body, token, key)
+
+
+class SpreadTest(unittest.TestCase):
+    def test_products_split_inventory_by_round_robin_share(self):
+        api = SpreadFixture("https://load.test")
+        plan = load.prepare(api, "buyer", "seller", "run", 12000, products=3)
+        self.assertEqual(plan["productIds"], ["product", "product-1", "product-2"])
+        self.assertEqual(plan["productId"], "product")
+        self.assertEqual(plan["stockPrepared"], 4000 + 1 + 400)
+        keys = [key for _, path, _, _, key in api.calls if path == "/api/sellers/me/products"]
+        self.assertEqual(len(set(keys)), 3)
+
+    def test_prepare_only_signs_up_buyers_and_writes_variants_without_tokens(self):
+        fixture = SpreadFixture("https://load.test")
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}, clear=True), \
+                patch.object(load, "Api", return_value=fixture), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            target = Path(tmp) / "run"
+            code = load.main(["--base-url", fixture.base, "--prepare-only", "--tps", "10", "--seconds", "6",
+                              "--buyers", "3", "--products", "2", "--output-dir", str(target)])
+            variants = json.loads((target / "order-variants.json").read_text())
+            plan = json.loads((target / "plan.json").read_text())
+            stored = "".join(path.read_text() for path in target.iterdir())
+        self.assertEqual(code, 0)
+        # 이력이 쌓인 fixture 구매자 대신 새 구매자만 주문한다.
+        self.assertEqual(len(fixture.signups), 3)
+        self.assertEqual(len({key for _, key in fixture.signups}), 3)
+        self.assertEqual([p["productId"] for p in variants["products"]], ["product", "product-1"])
+        self.assertEqual(variants["addressIds"], ["address-crowd-0", "address-crowd-1", "address-crowd-2"])
+        smoke = [call for call in fixture.calls if call[:2] == ("POST", "/api/orders")]
+        self.assertEqual(smoke[0][3], "crowd-0" + "-" * 40)
+        self.assertEqual(smoke[0][2]["addressId"], "address-crowd-0")
+        self.assertEqual(plan["buyerCount"], 3)
+        self.assertEqual(len(plan["addedBuyers"]), 3)
+        self.assertNotIn("crowd-0" + "-" * 40, stored)
+        self.assertNotIn("password", stored)
+        # 가입 구매자 세션도 자체 발급이므로 로그아웃한다.
+        self.assertEqual(len(fixture.logouts), 5)
+
+    def test_drain_reads_every_buyer_and_every_test_product(self):
+        class Orders:
+            def call(self, method, path, token=None, **kwargs):
+                return {"totalPages": 1, "items": [
+                    {"id": token + "-a", "productId": "p1", "status": "PAID"},
+                    {"id": token + "-b", "productId": "p2", "status": "PAID"},
+                    {"id": token + "-other", "productId": "unrelated", "status": "PAID"}]}
+        ledger = load.read_ledger(map(json.dumps, [
+            row for n, ident in enumerate(["b1-a", "b1-b", "b2-a", "b2-b"]) for row in (
+                {"event": "started", "iteration": n, "startedAt": "2026-11-13T00:00:00Z"},
+                {"event": "completed", "iteration": n, "startedAt": "2026-11-13T00:00:00Z",
+                 "status": 201, "orderId": ident})]))
+        value = load.drain(Orders(), ["b1", "b2"], {"productId": "p1", "productIds": ["p1", "p2"]}, ledger, 30)
+        self.assertTrue(value["drainComplete"])
+        self.assertEqual(value["states"], {"PAID": 4})
+        self.assertEqual(value["queryCosts"]["queries"], 2)
+
+    def test_cohort_drain_reads_each_product_once_regardless_of_buyers(self):
+        class Cohort:
+            cohort_data_ssh = "ubuntu@data.test"
+
+            def call(self, *args, **kwargs):
+                raise AssertionError("cohort drain must not scan buyer history")
+        seen = []
+
+        def database_orders(host, product, deadline, costs=None):
+            seen.append(product)
+            costs["queries"] += 1
+            return {product + "-order": {"status": "PAID"}}, True, None
+        ledger = load.read_ledger(map(json.dumps, [
+            row for n, ident in enumerate(["p1-order", "p2-order"]) for row in (
+                {"event": "started", "iteration": n, "startedAt": "2026-11-13T00:00:00Z"},
+                {"event": "completed", "iteration": n, "startedAt": "2026-11-13T00:00:00Z",
+                 "status": 201, "orderId": ident})]))
+        with patch.object(load, "database_orders", side_effect=database_orders):
+            value = load.drain(Cohort(), ["b1", "b2", "b3"], {"productId": "p1", "productIds": ["p1", "p2"]},
+                               ledger, 30)
+        self.assertTrue(value["drainComplete"])
+        self.assertEqual(sorted(seen), ["p1", "p2"])
+
+    def test_inject_passes_all_tokens_by_environment_and_redacts_each(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        process = Mock(stdout=["leak first-token second-token\n"])
+        process.wait.return_value = 0
+        process.poll.return_value = 0
+        args = SimpleNamespace(rate=2, seconds=3, pre_allocated_vus=4, max_vus=12)
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, \
+                patch.object(load.subprocess, "Popen", return_value=process) as start, \
+                patch.object(load, "cleanup_container"), contextlib.redirect_stdout(output):
+            (Path(tmp) / "order-variants.json").write_text("{}")
+            load.inject("https://load.test", ["first-token", "second-token"], {"runId": "run"}, Path(tmp), args)
+        command = start.call_args.args[0]
+        environment = start.call_args.kwargs["env"]
+        self.assertEqual(environment["BUYER_TOKEN"], "first-token")
+        self.assertEqual(environment["BUYER_TOKENS"], "first-token,second-token")
+        self.assertEqual(environment["ORDER_VARIANTS_FILE"], "/work/order-variants.json")
+        self.assertNotIn("second-token", " ".join(command))
+        self.assertNotIn("token", output.getvalue())
+
+    def test_multi_buyer_rejects_resume_and_unrenewable_budget_before_api(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(load, "Api") as api, \
+                contextlib.redirect_stderr(io.StringIO()):
+            original = Path(tmp) / "orig"
+            original.mkdir()
+            (original / "plan.json").write_text(json.dumps({"runId": "r", "baseUrl": "https://load.test",
+                                                            "buyerCount": 3}))
+            for argv in (["--resume", str(original)],
+                         ["--base-url", "https://load.test", "--buyers", "2", "--seconds", "900"],
+                         ["--base-url", "https://load.test", "--buyers", "501"]):
+                with self.assertRaises(SystemExit):
+                    load.main(argv)
+            api.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
