@@ -11,6 +11,7 @@ import com.commercesettle.commerce.application.port.AddressCipher;
 import com.commercesettle.commerce.application.port.DemoRunStore.Run;
 import com.commercesettle.commerce.application.port.OrderBenefits;
 import com.commercesettle.commerce.application.port.OrderEventOutbox;
+import com.commercesettle.commerce.application.port.OrderStockHint;
 import com.commercesettle.commerce.domain.exception.BuyerAddressNotFoundException;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.exception.VersionConflictException;
@@ -59,6 +60,7 @@ public class OrderService {
   private final TransactionTemplate replayReads;
   private final MileageAccrualSettings accrual;
   private final DemoRunService demoRuns;
+  private final OrderStockHint stockHint;
 
   public OrderService(
       OrderRepository orders,
@@ -76,6 +78,7 @@ public class OrderService {
       PlatformTransactionManager manager,
       MileageAccrualSettings accrual,
       DemoRunService demoRuns,
+      OrderStockHint stockHint,
       @Value("${app.orders.simulation-seed:67}") long seed) {
     this.orders = orders;
     this.accounts = accounts;
@@ -95,20 +98,27 @@ public class OrderService {
     this.replayReads.setReadOnly(true);
     this.accrual = accrual;
     this.demoRuns = demoRuns;
+    this.stockHint = stockHint;
   }
 
   /**
-   * 일반 주문은 바로 주문 트랜잭션을 실행한다. 신규 선착순 이벤트 주문은 짧은 읽기 트랜잭션에서 기존 멱등 결과·본문 충돌과 신규 거절(접수 제한·입력·매진/종료)을 먼저
-   * 판정한 뒤, DB 커넥션 없이 이벤트별 동시 실행 슬롯을 받고 주문 트랜잭션을 실행한다. 슬롯은 트랜잭션이 끝난 뒤 반납한다.
+   * 일반 주문은 시험용 힌트를 트랜잭션 밖에서 조회한다. 신규 선착순 이벤트 주문은 짧은 읽기 트랜잭션에서 기존 멱등 결과·본문 충돌과 신규 거절(접수
+   * 제한·입력·매진/종료)을 먼저 판정한 뒤, DB 커넥션 없이 이벤트별 동시 실행 슬롯을 받고 주문 트랜잭션을 실행한다. 슬롯은 트랜잭션이 끝난 뒤 반납한다.
    */
   @Transactional(propagation = Propagation.NEVER)
   public OrderView create(UUID buyerId, String key, RegularOrderCommand command) {
-    if (command.eventId() == null)
-      return transactions.execute(status -> createInTransaction(buyerId, key, command));
+    if (command.eventId() == null) {
+      boolean checkStockWithoutLock =
+          command.buyerCouponId() == null
+              && command.demoRunId() == null
+              && stockHint.suggestsShortage(command.productId(), command.quantity());
+      return transactions.execute(
+          status -> createInTransaction(buyerId, key, command, checkStockWithoutLock));
+    }
     var prior = replayReads.execute(status -> precheckEventOrder(buyerId, key, command));
     if (prior.isPresent()) return prior.get();
     try (var permit = eventSlots.acquire(command.eventId())) {
-      return transactions.execute(status -> createInTransaction(buyerId, key, command));
+      return transactions.execute(status -> createInTransaction(buyerId, key, command, false));
     }
   }
 
@@ -133,7 +143,8 @@ public class OrderService {
     return Optional.empty();
   }
 
-  private OrderView createInTransaction(UUID buyerId, String key, RegularOrderCommand command) {
+  private OrderView createInTransaction(
+      UUID buyerId, String key, RegularOrderCommand command, boolean checkStockWithoutLock) {
     // 주문끼리는 공유하고 주소·계정 변경의 배타 잠금과는 충돌해, 검사와 사본 생성 사이의 변경을 막는다.
     accounts
         .findBuyerForOrder(buyerId)
@@ -144,7 +155,7 @@ public class OrderService {
         createRequest(buyerId, key, command),
         orderId,
         201,
-        recordId -> createNew(buyerId, orderId, command),
+        recordId -> createNew(buyerId, orderId, command, checkStockWithoutLock),
         existingId -> OrderView.from(owned(buyerId, existingId)));
   }
 
@@ -170,7 +181,8 @@ public class OrderService {
             command.demoRunId()));
   }
 
-  private OrderView createNew(UUID buyerId, UUID orderId, RegularOrderCommand command) {
+  private OrderView createNew(
+      UUID buyerId, UUID orderId, RegularOrderCommand command, boolean checkStockWithoutLock) {
     admission.requireAdmission();
     validateRegular(command);
     // 매진·종료된 이벤트는 멱등 기록 뒤, 주문·주소 사본을 만들기 전에 거절한다. 같은 키의 기존 주문 재요청은 위에서 원래 결과를 돌려받는다.
@@ -198,7 +210,9 @@ public class OrderService {
                     .orElseThrow(() -> new ProductNotFoundException(command.productId())),
                 demo);
     appendPaymentRequest(saved);
-    if (reserveLast) inventory.reserveNewOrder(saved, command.expectedProductVersion());
+    if (reserveLast) {
+      inventory.reserveNewOrder(saved, command.expectedProductVersion(), checkStockWithoutLock);
+    }
     return OrderView.from(saved);
   }
 

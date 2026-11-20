@@ -361,3 +361,14 @@ python3 -B -m unittest discover -s tests/load -p test_performance.py
 LOAD_NAMESPACE=r1 python3 -B tests/load/payment_load.py ramp --run r1-baseline-1   --stages 300:30 --mix card,mixed,easy,mileage --drain 300
 LOAD_NAMESPACE=r1 python3 -B tests/load/payment_load.py reconcile --runs r1-baseline-1
 ```
+
+
+## 시험 상품의 Redis 재고 힌트 비교
+
+기본값은 비활성입니다. 격리된 시험 환경에서만 Commerce 설정 `APP_ORDERS_STOCK_HINT_PRODUCT`에 일반 시험 상품 UUID를 지정합니다. Redis 운영자 계정으로 `SET commerce-settle:order-stock-hint:<상품 UUID> 100 EX 300`을 실행해 해당 회차의 시험 수량을 준비합니다. Commerce Redis ACL은 이 키 패턴에 접근할 수 있어야 합니다. 기존 ECS 데이터 Task는 태그 앱 배포와 별도로 관리되므로 현재 ACL을 먼저 확인합니다.
+
+재고 힌트 수량은 PostgreSQL 재고와 별도이며 예약 실패, 멱등 재시도, 입고에 맞춰 보정하지 않습니다. Lua가 부족을 알린 경우에도 Commerce는 주문 멱등성과 조건을 검사한 뒤 PostgreSQL의 동일 상품 버전과 가용 수량을 잠금 없이 확인합니다. PostgreSQL에도 재고가 부족할 때만 재고 행 쓰기 잠금 없이 기존 HTTP 409 `INVENTORY_INSUFFICIENT`를 돌려줍니다. DB에 재고가 있거나 Redis 키를 읽을 수 없을 때는 기존 DB 예약으로 진행합니다.
+
+동일한 이미지·인스턴스·DB 초기 조건에서 60초간 초당 200건을 일정하게 보냅니다. 유한 재고 시험 상품과 충분한 재고의 정상 상품에 같은 비율로 요청을 분배합니다. 각 회차의 실제 도착 수를 확인하고 정상 상품 p99, 예상된 품절 응답, 재고 쓰기 잠금 대기, Payment DB 확정 건수를 비교합니다. 이 시험의 품절 응답은 정상 주문 성공률에서 별도로 집계합니다. `experiment.py`의 15분 결제 확정 200 TPS 시험은 충분한 정상 재고로 별도 실행합니다.
+
+회차 종료 후 시험용 Redis 키를 지우고 Commerce 설정을 비웁니다.

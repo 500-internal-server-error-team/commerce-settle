@@ -2,6 +2,7 @@ package com.commercesettle.commerce.application.service;
 
 import com.commercesettle.commerce.domain.exception.EventAdmissionClosedException;
 import com.commercesettle.commerce.domain.exception.EventAdmissionClosedException.Reason;
+import com.commercesettle.commerce.domain.exception.InsufficientInventoryException;
 import com.commercesettle.commerce.domain.exception.ProductNotFoundException;
 import com.commercesettle.commerce.domain.exception.SaleEventNotFoundException;
 import com.commercesettle.commerce.domain.exception.VersionConflictException;
@@ -93,11 +94,19 @@ public class InventoryReservationService {
   }
 
   /** 주문·주소·Outbox를 준비한 뒤, 최신 상품 검증과 재고 예약만 잠금 아래 수행한다. 실패하면 전체 주문을 롤백한다. */
-  public void reserveNewOrder(Order order, long expectedProductVersion) {
+  public void reserveNewOrder(
+      Order order, long expectedProductVersion, boolean checkStockWithoutLock) {
     if (order.getEventId() != null || order.getBuyerCouponId() != null) {
       throw new IllegalArgumentException("late reservation requires a couponless regular order");
     }
     UUID productId = order.getProductId();
+    if (checkStockWithoutLock
+        && inventories
+            .findOrderableAvailableQuantity(productId, expectedProductVersion)
+            .filter(quantity -> quantity < order.getQuantity())
+            .isPresent()) {
+      throw new InsufficientInventoryException(productId);
+    }
     ProductInventory inventory = lockInventory(productId);
     long version =
         products

@@ -4,8 +4,10 @@ import static com.commercesettle.commerce.support.ConcurrentTransactions.holdTra
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.when;
 
 import com.commercesettle.commerce.application.port.AddressCipher;
+import com.commercesettle.commerce.application.port.OrderStockHint;
 import com.commercesettle.commerce.domain.model.ProductStatus;
 import com.commercesettle.commerce.domain.model.ShippingAddress;
 import com.commercesettle.commerce.domain.repository.OrderRepository;
@@ -83,6 +85,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @Import(OrderIntegrationTest.SqlRecording.class)
 class OrderIntegrationTest {
   @MockitoBean OrderAdmissionService admission;
+  @MockitoBean OrderStockHint stockHint;
   @MockitoBean com.commercesettle.commerce.infrastructure.cache.RedisRunIdAuthGate authGate;
   static final String GATEWAY_CREDENTIAL = "test-gateway-credential-0123456789abcdef0123";
   private static final ShippingAddress SHIPPING =
@@ -142,6 +145,65 @@ class OrderIntegrationTest {
     assertThat(conflict.inventoryLocks()).isZero();
     assertInventory(f.product(), 1, 1);
     assertThat(count("inventory_reservations", "product_id", f.product())).isEqualTo(1);
+  }
+
+  @Test
+  @DisplayName("품절 힌트는 실제 재고 부족의 쓰기 잠금을 건너뛰고 멱등 재요청과 재입고를 보존한다")
+  void skipsInventoryLockOnlyWhenDatabaseConfirmsStockShortage() {
+    var f = fixture(100);
+    var body = body(f).put("quantity", 10).put("expectedTotalAmount", 100_000);
+    String firstKey = key();
+    var first = post(f.buyer(), firstKey, body);
+    assertThat(first.getStatusCode().value()).isEqualTo(201);
+    for (int i = 1; i < 10; i++) {
+      assertThat(post(f.buyer(), key(), body).getStatusCode().value()).isEqualTo(201);
+    }
+
+    var baseline = sql.measure(() -> post(f.buyer(), key(), body));
+    problem(baseline.result(), 409, "INVENTORY_INSUFFICIENT");
+    assertThat(baseline.inventoryLocks()).isEqualTo(1);
+
+    long addressCount =
+        jdbc.queryForObject("select count(*) from commerce.order_addresses", Long.class);
+    long outboxCount = jdbc.queryForObject("select count(*) from commerce.outbox", Long.class);
+    String rejectedKey = key();
+    when(stockHint.suggestsShortage(f.product(), 10)).thenReturn(true);
+    var soldOut = sql.measure(() -> post(f.buyer(), rejectedKey, body));
+    problem(soldOut.result(), 409, "INVENTORY_INSUFFICIENT");
+    assertThat(soldOut.inventoryLocks()).isZero();
+    assertInventory(f.product(), 0, 100);
+    assertThat(count("orders", "buyer_id", f.buyer())).isEqualTo(10);
+    assertThat(jdbc.queryForObject("select count(*) from commerce.order_addresses", Long.class))
+        .isEqualTo(addressCount);
+    assertThat(jdbc.queryForObject("select count(*) from commerce.outbox", Long.class))
+        .isEqualTo(outboxCount);
+    assertThat(
+            jdbc.queryForObject(
+                "select count(*) from commerce.idempotency_records where actor_id=? and operation='ORDER_CREATE'",
+                Long.class,
+                f.buyer().toString()))
+        .isEqualTo(10);
+
+    var replay = sql.measure(() -> post(f.buyer(), firstKey, body));
+    assertThat(replay.result().getStatusCode().value()).isEqualTo(201);
+    assertThat(replay.result().getBody()).isEqualTo(first.getBody());
+    assertThat(replay.inventoryLocks()).isZero();
+    problem(
+        post(f.buyer(), firstKey, body.deepCopy().put("methodAccountRef", "different-card")),
+        409,
+        "COMMON_IDEMPOTENCY_CONFLICT");
+
+    long inventoryVersion =
+        jdbc.queryForObject(
+            "select version from commerce.product_inventory where product_id = ?",
+            Long.class,
+            f.product());
+    catalog.adjustAvailable(f.seller(), f.product(), key(), 10, inventoryVersion, "시험 재입고");
+    var restocked = sql.measure(() -> post(f.buyer(), rejectedKey, body));
+    assertThat(restocked.result().getStatusCode().value()).isEqualTo(201);
+    assertThat(restocked.inventoryLocks()).isEqualTo(1);
+    assertInventory(f.product(), 0, 110);
+    assertThat(count("inventory_reservations", "product_id", f.product())).isEqualTo(11);
   }
 
   @Test
