@@ -40,7 +40,7 @@ services:
       SETTLEMENT_REDIS_PASSWORD: ${SETTLEMENT_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
       FINANCE_MOCK_REDIS_PASSWORD: ${FINANCE_MOCK_REDIS_PASSWORD:?Run python3 scripts/init_env.py}
     # default is the operator account. Apps get their own users: Gateway reads auth sessions only,
-    # Commerce writes auth keys, and the others have no key access until they own a key pattern.
+    # Commerce writes auth and order stock hint keys. The other apps have no key access.
     # Keyless commands bypass key patterns, so Commerce gets EVAL/EVALSHA without SCRIPT/FUNCTION
     # and loses key listing and database switching.
     command:
@@ -51,7 +51,7 @@ services:
         --user gateway on ">$$GATEWAY_REDIS_PASSWORD" resetkeys
         "%R~commerce-settle:auth:session:*" "%R~commerce-settle:auth:subject:*"
         resetchannels -@all +evalsha_ro +eval_ro +hmget +time +info
-        --user commerce on ">$$COMMERCE_REDIS_PASSWORD" resetkeys "~commerce-settle:auth:*"
+        --user commerce on ">$$COMMERCE_REDIS_PASSWORD" resetkeys "~commerce-settle:auth:*" "~commerce-settle:order-stock-hint:*"
         resetchannels -@all +@connection +@read +@write +eval +evalsha -@dangerous -@admin
         -function -scan -randomkey -dbsize -select +info +time
         --user payment on ">$$PAYMENT_REDIS_PASSWORD" resetkeys resetchannels -@all +@connection -@dangerous +info
@@ -187,6 +187,7 @@ services:
       <<: *app-env
       SETTLEMENT_COMMERCE_CREDENTIAL: ${SETTLEMENT_COMMERCE_CREDENTIAL:?Run python3 scripts/init_env.py}
       SETTLEMENT_URL: ${SETTLEMENT_URL:-http://settlement:8080}
+      APP_ORDERS_STOCK_HINT_PRODUCT: ${APP_ORDERS_STOCK_HINT_PRODUCT:-}
       COMMERCE_RETENTION_ENABLED: ${COMMERCE_RETENTION_ENABLED:-false}
       APP_ORDER_WORKFLOW_ENABLED: ${APP_ORDER_WORKFLOW_ENABLED:-false}
       APP_DEMO_AUTO_SHIPMENT_ENABLED: ${APP_DEMO_AUTO_SHIPMENT_ENABLED:-false}

@@ -10,6 +10,9 @@ public interface ProductInventoryRepository {
 
   Optional<ProductInventory> findByProductId(UUID productId);
 
+  /** 판매 중인 동일 상품 버전의 가용 수량을 잠금 없이 읽는다. */
+  Optional<Long> findOrderableAvailableQuantity(UUID productId, long productVersion);
+
   /** 수량을 바꾸는 모든 흐름이 같은 재고 행 잠금을 거치도록 쓰기 잠금으로 조회한다. */
   Optional<ProductInventory> findByProductIdForUpdate(UUID productId);
 }

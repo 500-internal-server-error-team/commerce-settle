@@ -29,6 +29,11 @@ class JpaProductInventoryRepository implements ProductInventoryRepository {
   }
 
   @Override
+  public Optional<Long> findOrderableAvailableQuantity(UUID productId, long productVersion) {
+    return inventories.findOrderableAvailableQuantity(productId, productVersion);
+  }
+
+  @Override
   public Optional<ProductInventory> findByProductIdForUpdate(UUID productId) {
     TransactionLimits.apply(jdbc);
     return inventories.findLockedByProductId(productId);
